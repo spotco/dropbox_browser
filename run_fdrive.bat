@@ -1,1 +1,1 @@
-python dropbox_browser.py --remote dropbox: --local-root "F:\Dropbox
+python dropbox_browser.py --remote dropbox: --local-root F:\Dropbox
