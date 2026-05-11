@@ -24,6 +24,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 APP_TITLE = "Dropbox Browser"
 MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
+TEMP_DIR = Path(__file__).with_name("Temp")
 
 
 class BrowserError(Exception):
@@ -47,6 +48,11 @@ def find_default_config() -> str | None:
         value = pointer.read_text(encoding="utf-8").strip()
         return os.path.expandvars(value) if value else None
     return None
+
+
+def upload_temp_dir() -> Path:
+    TEMP_DIR.mkdir(exist_ok=True)
+    return TEMP_DIR
 
 
 def clean_rel_path(raw: str | None) -> str:
@@ -337,7 +343,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(length)
         filename, data = parse_multipart_file(body, boundary, "file")
 
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(delete=False, dir=upload_temp_dir()) as tmp:
             tmp.write(data)
             tmp_path = Path(tmp.name)
         try:
