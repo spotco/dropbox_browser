@@ -1,1 +1,0 @@
-%APPDATA%\rclone\rclone.conf
