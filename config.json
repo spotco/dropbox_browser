@@ -1,3 +1,5 @@
 {
-  "RCloneConfig": "%APPDATA%\\rclone\\rclone.conf"
+  "RCloneConfig": "%APPDATA%\\rclone\\rclone.conf",
+  "LogRcloneCommands": true,
+  "LogHttpRequests": true
 }

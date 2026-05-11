@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json as _json
 import mimetypes
 from pathlib import Path
 import shutil
@@ -11,6 +12,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from . import MAX_UPLOAD_BYTES
+from . import logstore
 from .config import upload_temp_dir
 from .errors import BrowserError
 from .paths import clean_rel_path, remote_target, safe_join_local
@@ -35,6 +37,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.serve_file(parsed.query, inline=True)
             elif parsed.path == "/download":
                 self.serve_file(parsed.query, inline=False)
+            elif parsed.path == "/logs":
+                self.serve_logs(parsed.query)
             else:
                 raise BrowserError(HTTPStatus.NOT_FOUND, "Not found.")
         except BrowserError as exc:
@@ -95,6 +99,17 @@ class RequestHandler(BaseHTTPRequestHandler):
             proc.stdout.close()
             proc.wait(timeout=30)
 
+    def serve_logs(self, query: str) -> None:
+        params = parse_qs(query)
+        since = int(params.get("since", ["0"])[0])
+        entries = logstore.entries_since(since)
+        body = _json.dumps({"entries": entries}).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def handle_upload(self, query: str) -> None:
         params = parse_qs(query)
         rel_path = clean_rel_path(params.get("path", [""])[0])
@@ -139,5 +154,15 @@ class RequestHandler(BaseHTTPRequestHandler):
     def render_error(self, status: HTTPStatus, message: str) -> None:
         self.send_html(status, error_html(status, message))
 
+    def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
+        # Don't log the /logs polling endpoint to avoid noise.
+        if self.path.startswith("/logs"):
+            return
+        super().log_request(code, size)
+
     def log_message(self, fmt: str, *args: object) -> None:
-        sys.stderr.write("[%s] %s\n" % (time.strftime("%H:%M:%S"), fmt % args))
+        msg = fmt % args
+        ts = time.strftime("%H:%M:%S")
+        logstore.append("request", msg)
+        if getattr(self.server, "log_requests", True):
+            sys.stderr.write("[%s] %s\n" % (ts, msg))
