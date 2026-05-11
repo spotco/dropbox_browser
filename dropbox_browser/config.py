@@ -18,9 +18,11 @@ def find_default_rclone() -> str:
 
 
 def find_default_config() -> str | None:
-    pointer = PROJECT_ROOT / "config_location.txt"
+    import json
+    pointer = PROJECT_ROOT / "config.json"
     if pointer.exists():
-        value = pointer.read_text(encoding="utf-8").strip()
+        data = json.loads(pointer.read_text(encoding="utf-8"))
+        value = data.get("RCloneConfig", "").strip()
         return os.path.expandvars(value) if value else None
     return None
 

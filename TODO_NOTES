@@ -1,4 +1,3 @@
-- config_location.txt to a json config file
 - add folder sort by date, non-blocking with cache
 - add sort by size (and calculate folder size, cached)
 - cache dropbox only/uploaded status, and immediately stop if any diffs found (does hash exist?)

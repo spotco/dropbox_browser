@@ -12,7 +12,7 @@ No Python web framework is required.
 - `rclone` configured with a Dropbox remote
 
 This repository includes `rclone.exe`. The server defaults to reading the rclone
-config path from `config_location.txt` when that file exists.
+config path from `config.json` (`RCloneConfig` property) when that file exists.
 
 ## Run
 
