@@ -61,6 +61,14 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
       <tbody>{rows or '<tr><td colspan="6" class="empty">This folder is empty.</td></tr>'}</tbody>
     </table>
   </main>
+  <div id="log-panel">
+    <div id="log-toolbar" onclick="toggleLog()">
+      <span id="log-arrow">&#9660;</span>
+      <span id="log-title">Server Log</span>
+    </div>
+    <div id="log-entries"></div>
+  </div>
+  <script>{LOG_JS}</script>
 </body>
 </html>"""
 
@@ -234,4 +242,113 @@ th {
   border-radius: 6px;
   padding: 10px 12px;
 }
+#log-panel {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: #1a1f2e;
+  color: #c8d0db;
+  font-family: monospace;
+  font-size: 12px;
+  z-index: 100;
+  border-top: 2px solid #3a4a5e;
+  display: flex;
+  flex-direction: column;
+  max-height: 240px;
+}
+#log-panel.collapsed {
+  max-height: none;
+}
+#log-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  background: #252b3a;
+  border-bottom: 1px solid #3a4a5e;
+  cursor: pointer;
+  user-select: none;
+  flex-shrink: 0;
+}
+#log-arrow {
+  color: #607080;
+  font-size: 10px;
+}
+#log-title {
+  font-weight: bold;
+  font-size: 11px;
+  color: #8fa3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+#log-entries {
+  overflow-y: auto;
+  flex: 1;
+  padding: 4px 12px 6px;
+}
+#log-panel.collapsed #log-entries {
+  display: none;
+}
+.log-entry {
+  padding: 1px 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.5;
+}
+.log-ts {
+  color: #4a5a6a;
+}
+.log-kind-rclone {
+  color: #7ec8e3;
+}
+.log-kind-request {
+  color: #7ec87e;
+}
+"""
+
+
+LOG_JS = r"""
+(function () {
+  var nextIndex = 0;
+  var collapsed = false;
+  var panel = document.getElementById('log-panel');
+  var entries = document.getElementById('log-entries');
+  var arrow = document.getElementById('log-arrow');
+
+  function toggleLog() {
+    collapsed = !collapsed;
+    panel.classList.toggle('collapsed', collapsed);
+    arrow.innerHTML = collapsed ? '&#9654;' : '&#9660;';
+  }
+  window.toggleLog = toggleLog;
+
+  function esc(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function poll() {
+    fetch('/logs?since=' + nextIndex)
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        data.entries.forEach(function (e) {
+          nextIndex = Math.max(nextIndex, e.index + 1);
+          var div = document.createElement('div');
+          div.className = 'log-entry';
+          div.innerHTML =
+            '<span class="log-ts">[' + esc(e.ts) + ']</span> ' +
+            '<span class="log-kind-' + esc(e.kind) + '">' + esc(e.kind) + '</span> ' +
+            esc(e.message);
+          entries.appendChild(div);
+        });
+        if (data.entries.length > 0 && !collapsed) {
+          entries.scrollTop = entries.scrollHeight;
+        }
+      })
+      .catch(function () {})
+      .then(function () { setTimeout(poll, 2000); });
+  }
+
+  setTimeout(poll, 500);
+}());
 """
