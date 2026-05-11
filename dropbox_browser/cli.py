@@ -6,6 +6,7 @@ import sys
 from http.server import ThreadingHTTPServer
 
 from .config import find_default_config, find_default_rclone, load_app_config
+from .foldercache import FolderCacheManager
 from .handlers import RequestHandler
 from .rclone import RcloneClient
 from .services import DropboxBrowser
@@ -30,7 +31,12 @@ def main() -> int:
 
     app_config = load_app_config()
     rclone = RcloneClient(args.rclone, args.rclone_config, log_commands=bool(app_config["LogRcloneCommands"]))
-    app = DropboxBrowser(rclone, args.remote, args.local_root)
+    folder_cache = FolderCacheManager(
+        rclone,
+        workers=int(app_config["FolderCacheWorkers"]),
+        ttl_hours=float(app_config["FolderCacheTTLHours"]),
+    )
+    app = DropboxBrowser(rclone, args.remote, args.local_root, folder_cache=folder_cache)
     server = ThreadingHTTPServer((args.host, args.port), RequestHandler)
     server.app = app  # type: ignore[attr-defined]
     server.log_requests = bool(app_config["LogHttpRequests"])  # type: ignore[attr-defined]

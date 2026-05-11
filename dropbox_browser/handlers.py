@@ -3,6 +3,7 @@ from __future__ import annotations
 import json as _json
 import mimetypes
 from pathlib import Path
+import posixpath
 import shutil
 import sys
 import tempfile
@@ -15,6 +16,7 @@ from . import MAX_UPLOAD_BYTES
 from . import logstore
 from .config import upload_temp_dir
 from .errors import BrowserError
+from .formatting import display_date, human_size
 from .paths import clean_rel_path, remote_target, safe_join_local
 from .services import DropboxBrowser
 from .uploads import parse_multipart_file
@@ -39,6 +41,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.serve_file(parsed.query, inline=False)
             elif parsed.path == "/logs":
                 self.serve_logs(parsed.query)
+            elif parsed.path == "/folder-info":
+                self.serve_folder_info(parsed.query)
             else:
                 raise BrowserError(HTTPStatus.NOT_FOUND, "Not found.")
         except BrowserError as exc:
@@ -68,7 +72,27 @@ class RequestHandler(BaseHTTPRequestHandler):
             direction = "asc"
 
         entries = self.app.sort_entries(self.app.list_entries(rel_path), sort_key, direction)
-        self.send_html(HTTPStatus.OK, page_html(self.app, rel_path, entries, sort_key, direction, params.get("msg", [""])[0]))
+
+        # Build folder cache map; trigger background fetch for uncached/incomplete folders.
+        folder_cache_map: dict = {}
+        cache = self.app.folder_cache
+        if cache:
+            page_time = time.time()
+            cache.notify_page_load(page_time)
+            for entry in entries:
+                if entry["is_dir"]:
+                    child = posixpath.join(rel_path, entry["name"]) if rel_path else entry["name"]
+                    full_remote = remote_target(self.app.remote, child)
+                    cached_data = cache.get(full_remote)
+                    folder_cache_map[entry["name"]] = cached_data
+                    if cached_data is None or not cached_data.get("complete"):
+                        cache.request(full_remote, page_time)
+
+        self.send_html(
+            HTTPStatus.OK,
+            page_html(self.app, rel_path, entries, sort_key, direction,
+                      params.get("msg", [""])[0], folder_cache_map or None),
+        )
 
     def serve_file(self, query: str, inline: bool) -> None:
         params = parse_qs(query)
@@ -104,6 +128,40 @@ class RequestHandler(BaseHTTPRequestHandler):
         since = int(params.get("since", ["0"])[0])
         entries = logstore.entries_since(since)
         body = _json.dumps({"entries": entries}).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def serve_folder_info(self, query: str) -> None:
+        params = parse_qs(query)
+        paths_str = params.get("paths", [""])[0]
+        rel_paths = [p for p in paths_str.split(",") if p]
+        cache = self.app.folder_cache
+        results: dict = {}
+        for rel_path in rel_paths:
+            if not cache:
+                results[rel_path] = {"status": "unavailable"}
+                continue
+            full_remote = remote_target(self.app.remote, rel_path)
+            st = cache.status(full_remote)
+            if st in ("complete", "partial"):
+                data = cache.get(full_remote) or {}
+                sz = data.get("size")
+                fc = data.get("file_count")
+                results[rel_path] = {
+                    "status": st,
+                    "complete": data.get("complete", st == "complete"),
+                    "size_display": human_size(sz) if sz is not None else "—",
+                    "count_display": f"{fc:,} files" if fc is not None else "",
+                    "date_display": display_date(data.get("newest_mtime")),
+                }
+            else:
+                # calculating or pending — ensure it's queued
+                cache.request(full_remote)
+                results[rel_path] = {"status": "calculating", "complete": False}
+        body = _json.dumps({"results": results}).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -155,8 +213,8 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_html(status, error_html(status, message))
 
     def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
-        # Don't log the /logs polling endpoint to avoid noise.
-        if self.path.startswith("/logs"):
+        # Don't log polling endpoints to avoid noise.
+        if self.path.startswith("/logs") or self.path.startswith("/folder-info"):
             return
         super().log_request(code, size)
 

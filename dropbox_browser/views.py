@@ -9,8 +9,8 @@ from . import APP_TITLE
 from .formatting import display_date, file_type, human_size, status_class
 
 
-def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: str, direction: str, msg: str) -> str:
-    rows = "\n".join(entry_row(rel_path, entry) for entry in entries)
+def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: str, direction: str, msg: str, folder_cache_map: dict | None = None) -> str:
+    rows = "\n".join(entry_row(rel_path, entry, folder_cache_map or {}) for entry in entries)
     crumbs = breadcrumbs(rel_path)
     upload_action = "/upload?" + urlencode({"path": rel_path})
     local_note = (
@@ -68,7 +68,9 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
     </div>
     <div id="log-entries"></div>
   </div>
+  <script>{SETTINGS_JS}</script>
   <script>{LOG_JS}</script>
+  <script>{FOLDER_JS}</script>
 </body>
 </html>"""
 
@@ -85,31 +87,47 @@ def breadcrumbs(rel_path: str) -> str:
     return " / ".join(links)
 
 
-def entry_row(rel_path: str, row: dict[str, Any]) -> str:
+def entry_row(rel_path: str, row: dict[str, Any], folder_cache_map: dict | None = None) -> str:
     name = row["name"]
     child_path = posixpath.join(rel_path, name) if rel_path else name
     status = "Both" if row["remote"] and row["local"] else "Dropbox only" if row["remote"] else "Local only"
-    size = row.get("remote_size") if row.get("remote_size") is not None else row.get("local_size")
-    size_text = "" if row["is_dir"] else human_size(size or 0)
-    date_value = max(row.get("remote_mtime") or 0, row.get("local_mtime") or 0) or None
-    type_text = file_type(name, row["is_dir"])
+    is_dir = row["is_dir"]
+    type_text = file_type(name, is_dir)
 
-    if row["is_dir"]:
+    if is_dir:
+        cached = (folder_cache_map or {}).get(name)
+        if cached is not None:
+            complete = cached.get("complete", False)
+            sz = human_size(cached["size"]) if cached.get("size") is not None else "—"
+            ct = f' ({cached["file_count"]:,} files)' if cached.get("file_count") is not None else ""
+            spinner = '' if complete else '<span class="spinner"></span> '
+            size_td = f'<td class="col-size">{spinner}{html.escape(sz + ct)}</td>'
+            date_td = f'<td class="col-date">{spinner}{display_date(cached.get("newest_mtime"))}</td>'
+        else:
+            pending_cell = '<span class="folder-pending"><span class="spinner"></span> calculating\u2026</span>'
+            size_td = f'<td class="col-size">{pending_cell}</td>'
+            date_td = f'<td class="col-date">{pending_cell}</td>'
+        row_attrs = f' data-folder-path="{html.escape(child_path)}"'
         name_html = f'<a class="name" href="/?{urlencode({"path": child_path})}">[dir] {html.escape(name)}</a>'
-        actions = ""
+        actions_td = '<td class="actions"></td>'
     else:
         source = "remote" if row["remote"] else "local"
+        size = row.get("remote_size") if row.get("remote_size") is not None else row.get("local_size")
+        date_value = max(row.get("remote_mtime") or 0, row.get("local_mtime") or 0) or None
+        size_td = f'<td class="col-size">{human_size(size or 0)}</td>'
+        date_td = f'<td class="col-date">{display_date(date_value)}</td>'
+        row_attrs = ""
         query = urlencode({"path": child_path, "source": source})
         name_html = f'<a class="name" href="/file?{query}">{html.escape(name)}</a>'
-        actions = f'<a href="/file?{query}">Preview</a> <a href="/download?{query}">Download</a>'
+        actions_td = f'<td class="actions"><a href="/file?{query}">Preview</a> <a href="/download?{query}">Download</a></td>'
 
-    return f"""<tr>
+    return f"""<tr{row_attrs}>
   <td>{name_html}</td>
   <td>{html.escape(type_text)}</td>
   <td><span class="status {status_class(status)}">{status}</span></td>
-  <td>{size_text}</td>
-  <td>{display_date(date_value)}</td>
-  <td class="actions">{actions}</td>
+  {size_td}
+  {date_td}
+  {actions_td}
 </tr>"""
 
 
@@ -305,21 +323,69 @@ th {
 .log-kind-request {
   color: #7ec87e;
 }
+.folder-pending {
+  color: #607080;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 2px solid #d0d8e0;
+  border-top-color: #0b63b6;
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes pending-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}
+"""
+
+
+SETTINGS_JS = r"""
+var Settings = (function () {
+  var PREFIX = 'dropbox-browser.';
+  return {
+    get: function (key, defaultVal) {
+      try {
+        var v = localStorage.getItem(PREFIX + key);
+        return v === null ? defaultVal : JSON.parse(v);
+      } catch (e) { return defaultVal; }
+    },
+    set: function (key, val) {
+      try { localStorage.setItem(PREFIX + key, JSON.stringify(val)); } catch (e) {}
+    }
+  };
+}());
 """
 
 
 LOG_JS = r"""
 (function () {
-  var nextIndex = 0;
-  var collapsed = false;
+  var collapsed = Settings.get('log-collapsed', false);
   var panel = document.getElementById('log-panel');
   var entries = document.getElementById('log-entries');
   var arrow = document.getElementById('log-arrow');
 
-  function toggleLog() {
-    collapsed = !collapsed;
+  function applyCollapsed() {
     panel.classList.toggle('collapsed', collapsed);
     arrow.innerHTML = collapsed ? '&#9654;' : '&#9660;';
+  }
+  applyCollapsed();
+
+  var nextIndex = 0;
+
+  function toggleLog() {
+    collapsed = !collapsed;
+    Settings.set('log-collapsed', collapsed);
+    applyCollapsed();
   }
   window.toggleLog = toggleLog;
 
@@ -347,6 +413,63 @@ LOG_JS = r"""
       })
       .catch(function () {})
       .then(function () { setTimeout(poll, 2000); });
+  }
+
+  setTimeout(poll, 500);
+}());
+"""
+
+
+FOLDER_JS = r"""
+(function () {
+  var folderRows = {};
+  document.querySelectorAll('tr[data-folder-path]').forEach(function (row) {
+    folderRows[row.getAttribute('data-folder-path')] = row;
+  });
+  var pending = Object.keys(folderRows);
+  if (pending.length === 0) return;
+
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  var spinnerHtml = '<span class="spinner"></span> ';
+
+  function applyResult(relPath, info) {
+    var row = folderRows[relPath];
+    if (!row) return;
+    var sizeCell = row.querySelector('.col-size');
+    var dateCell = row.querySelector('.col-date');
+    var prefix = info.complete ? '' : spinnerHtml;
+    if (sizeCell) {
+      var sizeText = esc(info.size_display || '—');
+      if (info.count_display) sizeText += ' <span style="color:#607080">(' + esc(info.count_display) + ')</span>';
+      sizeCell.innerHTML = prefix + sizeText;
+    }
+    if (dateCell) dateCell.innerHTML = prefix + esc(info.date_display || '');
+  }
+
+  function poll() {
+    if (pending.length === 0) return;
+    fetch('/folder-info?paths=' + pending.map(encodeURIComponent).join(','))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var stillPending = [];
+        pending.forEach(function (relPath) {
+          var info = data.results[relPath];
+          if (!info || info.status === 'unavailable') return;
+          if (info.status === 'calculating') {
+            stillPending.push(relPath);
+          } else {
+            // 'partial' or 'complete' — both have display data
+            applyResult(relPath, info);
+            if (!info.complete) stillPending.push(relPath);
+          }
+        });
+        pending = stillPending;
+        if (pending.length > 0) setTimeout(poll, 2000);
+      })
+      .catch(function () { if (pending.length > 0) setTimeout(poll, 5000); });
   }
 
   setTimeout(poll, 500);

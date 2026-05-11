@@ -11,10 +11,11 @@ from .rclone import RcloneClient
 
 
 class DropboxBrowser:
-    def __init__(self, rclone: RcloneClient, remote: str, local_root: Path | None):
+    def __init__(self, rclone: RcloneClient, remote: str, local_root: Path | None, folder_cache: Any = None):
         self.rclone = rclone
         self.remote = remote
         self.local_root = local_root.resolve() if local_root else None
+        self.folder_cache = folder_cache
 
     def list_entries(self, rel_path: str) -> list[dict[str, Any]]:
         merged: dict[str, dict[str, Any]] = {}

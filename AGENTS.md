@@ -36,11 +36,18 @@ http://127.0.0.1:8000/
 - `dropbox_browser/services.py` - Dropbox/local listing merge, sorting, and
   create-only upload rules.
 - `dropbox_browser/uploads.py` - multipart upload parsing.
+- `dropbox_browser/foldercache.py` - background thread pool for recursive folder
+  size/date/count caching; writes JSON files to `Cache/`.
+- `dropbox_browser/logstore.py` - thread-safe in-memory log ring buffer for
+  the browser log panel.
 - `dropbox_browser/views.py` - server-rendered HTML/CSS.
 - `README.md` - user-facing setup and usage notes.
-- `config_location.txt` - points to the rclone config path. This may contain
-  Windows environment variables such as `%APPDATA%\rclone\rclone.conf`; the app
-  expands them.
+- `config.json` - rclone config path and logging/cache options (`RCloneConfig`,
+  `LogRcloneCommands`, `LogHttpRequests`, `FolderCacheWorkers`,
+  `FolderCacheTTLHours`). May contain Windows environment variables such as
+  `%APPDATA%\rclone\rclone.conf`; the app expands them.
+- `Cache/` - folder metadata cache (JSON files keyed by SHA-256 of remote
+  path). Ignored by git.
 - `rclone.exe` - bundled Windows rclone binary, currently tracked.
 - `rclone.1` - bundled rclone manpage, currently tracked.
 - `Temp/` - local upload staging directory. It is ignored by git.
@@ -105,6 +112,7 @@ approval for persistent background server starts.
 
 ## Git/GitHub Notes
 
+- Do not `git add`, `git commit`, or `git push` without an explicit human request.
 - The repository remote is:
 
 ```text
