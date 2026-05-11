@@ -20,8 +20,23 @@ http://127.0.0.1:8000/
 
 ## Repository Layout
 
-- `dropbox_browser.py` - stdlib HTTP server, Dropbox/local listing merge, upload
-  handling, preview/download streaming, and inline HTML/CSS.
+- `dropbox_browser.py` - compatibility entry point that calls
+  `dropbox_browser.cli.main`.
+- `dropbox_browser/cli.py` - argument parsing and HTTP server startup.
+- `dropbox_browser/config.py` - project paths, default rclone discovery, config
+  path expansion, and upload temp directory selection.
+- `dropbox_browser/errors.py` - HTTP-aware application exception.
+- `dropbox_browser/formatting.py` - display formatting for dates, sizes, file
+  types, and status CSS classes.
+- `dropbox_browser/handlers.py` - stdlib HTTP request routing and response
+  streaming.
+- `dropbox_browser/paths.py` - local and remote path normalization/safety
+  helpers.
+- `dropbox_browser/rclone.py` - rclone subprocess adapter.
+- `dropbox_browser/services.py` - Dropbox/local listing merge, sorting, and
+  create-only upload rules.
+- `dropbox_browser/uploads.py` - multipart upload parsing.
+- `dropbox_browser/views.py` - server-rendered HTML/CSS.
 - `README.md` - user-facing setup and usage notes.
 - `config_location.txt` - points to the rclone config path. This may contain
   Windows environment variables such as `%APPDATA%\rclone\rclone.conf`; the app
@@ -31,6 +46,8 @@ http://127.0.0.1:8000/
 - `Temp/` - local upload staging directory. It is ignored by git.
 - `.dropbox-browser-temp/` - local process/log scratch directory. It is ignored
   by git.
+- `TODO_NOTES` - human-owned future feature notes. Do not edit it unless the
+  user explicitly asks.
 
 ## Runtime Behavior
 
@@ -71,6 +88,7 @@ Useful checks:
 
 ```powershell
 python -m py_compile dropbox_browser.py
+python -m compileall -q dropbox_browser.py dropbox_browser
 python dropbox_browser.py --help
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/ -TimeoutSec 30
 ```
@@ -105,7 +123,17 @@ https://github.com/spotco/dropbox_browser
 
 - Keep the app dependency-free for Python web serving.
 - Prefer conservative, direct stdlib code over introducing a framework.
-- Keep UI interactions simple and server-rendered.
+- Keep UI interactions server-rendered unless a feature needs client-side state.
 - Avoid expensive Dropbox recursion during normal page loads.
 - Treat `.gitignore`, `run_local.bat`, and any untracked local tooling as
   user-owned unless the user asks to modify them.
+- Place new features in the module that owns the behavior:
+  - listing, status comparison, upload rules, caching decisions:
+    `dropbox_browser/services.py`;
+  - rclone command execution and future progress/log capture:
+    `dropbox_browser/rclone.py`;
+  - request routes, streaming behavior, and response status:
+    `dropbox_browser/handlers.py`;
+  - generated HTML, icons, search controls, preview controls, and map links:
+    `dropbox_browser/views.py`;
+  - config-file evolution and path locations: `dropbox_browser/config.py`.
