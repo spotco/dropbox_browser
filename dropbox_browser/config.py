@@ -13,6 +13,8 @@ _APP_CONFIG_DEFAULTS: dict = {
     "RCloneConfig": "",
     "LogRcloneCommands": True,
     "LogHttpRequests": True,
+    "FolderCacheWorkers": 4,
+    "FolderCacheTTLHours": 24,
 }
 
 
