@@ -15,6 +15,7 @@ _APP_CONFIG_DEFAULTS: dict = {
     "LogHttpRequests": True,
     "FolderCacheWorkers": 4,
     "FolderCacheTTLHours": 24,
+    "ListingCacheTTLMinutes": 30,
 }
 
 

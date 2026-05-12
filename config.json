@@ -3,5 +3,6 @@
   "LogRcloneCommands": true,
   "LogHttpRequests": true,
   "FolderCacheWorkers": 4,
-  "FolderCacheTTLHours": 24
+  "FolderCacheTTLHours": 24,
+  "ListingCacheTTLMinutes": 30
 }

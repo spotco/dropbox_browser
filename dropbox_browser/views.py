@@ -13,6 +13,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
     rows = "\n".join(entry_row(rel_path, entry, folder_cache_map or {}) for entry in entries)
     crumbs = breadcrumbs(rel_path)
     upload_action = "/upload?" + urlencode({"path": rel_path})
+    refresh_href = "/?" + urlencode({"path": rel_path, "sort": sort_key, "dir": direction, "refresh": "1"})
     local_note = (
         f"Comparing with {html.escape(str(app.local_root))}"
         if app.local_root
@@ -40,7 +41,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
     <div class="meta">{html.escape(app.remote)} / {html.escape(rel_path)} - {local_note}</div>
   </header>
   <main>
-    <nav class="breadcrumbs">{crumbs}</nav>
+    <nav class="breadcrumbs">{crumbs} <a class="refresh-link" href="{refresh_href}" title="Bypass listing cache and reload from Dropbox">&#8635; refresh</a></nav>
     {msg_html}
     <form class="upload" action="{upload_action}" method="post" enctype="multipart/form-data">
       <input type="file" name="file" required>
@@ -168,6 +169,15 @@ main {
 .breadcrumbs {
   margin-bottom: 16px;
   font-size: 15px;
+}
+.refresh-link {
+  margin-left: 12px;
+  font-size: 13px;
+  color: #666;
+  opacity: 0.75;
+}
+.refresh-link:hover {
+  opacity: 1;
 }
 a {
   color: #0b63b6;

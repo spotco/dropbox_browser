@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 
 from .config import PROJECT_ROOT
 from .formatting import parse_rclone_time
+from .listingcache import ListingCacheManager
 from .priorityqueue import PriorityQueue
 
 CACHE_DIR = PROJECT_ROOT / "Cache" / "FolderInfo"
@@ -44,9 +45,10 @@ DFS_MAX_DEPTH = 3
 
 
 class FolderCacheManager:
-    def __init__(self, rclone: "RcloneClient", workers: int, ttl_hours: float):
+    def __init__(self, rclone: "RcloneClient", workers: int, ttl_hours: float, listing_cache: ListingCacheManager | None = None):
         self.rclone = rclone
         self.ttl_seconds = ttl_hours * 3600
+        self.listing_cache = listing_cache
         # Priority tuple: (-page_time, depth, path, page_time)
         # Newer page_time → more-negative first element → dequeued first.
         # Within same page_time, lower depth → dequeued first (DFS up to DFS_MAX_DEPTH).
@@ -195,32 +197,40 @@ class FolderCacheManager:
                 self._queue.task_done()
 
     def _compute(self, remote_path: str, page_time: float, depth: int) -> None:
-        """Fetch direct children via lsjson, update state, queue subfolders."""
-        proc = self.rclone.run("lsjson", "--", remote_path)
+        """Fetch direct children via lsjson (or listing cache), update state, queue subfolders."""
+        items = None
+        if self.listing_cache:
+            items = self.listing_cache.get(remote_path)
+        if items is None:
+            proc = self.rclone.run("lsjson", "--", remote_path)
+            if proc.returncode == 0 and proc.stdout.strip():
+                try:
+                    items = json.loads(proc.stdout.decode("utf-8"))
+                    if self.listing_cache:
+                        self.listing_cache.set(remote_path, items)
+                except Exception:
+                    items = []
+            else:
+                items = []
 
         direct_size = 0
         direct_count = 0
         direct_mtime: float | None = None
         subfolders: list[str] = []
 
-        if proc.returncode == 0 and proc.stdout.strip():
-            try:
-                items = json.loads(proc.stdout.decode("utf-8"))
-                for item in items:
-                    t = parse_rclone_time(item.get("ModTime"))
-                    if t and (direct_mtime is None or t > direct_mtime):
-                        direct_mtime = t
-                    if item.get("IsDir"):
-                        sf_name = item.get("Path") or item.get("Name", "")
-                        if sf_name:
-                            subfolders.append(remote_path.rstrip("/") + "/" + sf_name)
-                    else:
-                        sz = item.get("Size") or 0
-                        if sz > 0:
-                            direct_size += sz
-                        direct_count += 1
-            except Exception:
-                pass
+        for item in items:
+            t = parse_rclone_time(item.get("ModTime"))
+            if t and (direct_mtime is None or t > direct_mtime):
+                direct_mtime = t
+            if item.get("IsDir"):
+                sf_name = item.get("Path") or item.get("Name", "")
+                if sf_name:
+                    subfolders.append(remote_path.rstrip("/") + "/" + sf_name)
+            else:
+                sz = item.get("Size") or 0
+                if sz > 0:
+                    direct_size += sz
+                direct_count += 1
 
         # Read cached data for subfolders *before* acquiring the lock.
         sf_cached: dict[str, dict | None] = {sf: self.get(sf) for sf in subfolders}
