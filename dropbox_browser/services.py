@@ -70,6 +70,11 @@ class DropboxBrowser:
                 primary = file_type(row["name"], row["is_dir"])
             elif sort_key == "date":
                 primary = max(row.get("remote_mtime") or 0, row.get("local_mtime") or 0)
+            elif sort_key == "size":
+                if row["is_dir"]:
+                    primary = row.get("cached_size") or 0
+                else:
+                    primary = row.get("remote_size") or row.get("local_size") or 0
             else:
                 primary = name
             return (primary, name)

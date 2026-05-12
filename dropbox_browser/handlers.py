@@ -66,14 +66,15 @@ class RequestHandler(BaseHTTPRequestHandler):
         rel_path = clean_rel_path(params.get("path", [""])[0])
         sort_key = params.get("sort", ["name"])[0]
         direction = params.get("dir", ["asc"])[0]
-        if sort_key not in {"name", "type", "date"}:
+        if sort_key not in {"name", "type", "date", "size"}:
             sort_key = "name"
         if direction not in {"asc", "desc"}:
             direction = "asc"
 
-        entries = self.app.sort_entries(self.app.list_entries(rel_path), sort_key, direction)
+        entries = self.app.list_entries(rel_path)
 
-        # Build folder cache map; trigger background fetch for uncached/incomplete folders.
+        # Build folder cache map; stamp cached_size onto folder entries so
+        # sort_entries can sort by size.  Trigger background fetch as needed.
         folder_cache_map: dict = {}
         cache = self.app.folder_cache
         if cache:
@@ -85,8 +86,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                     full_remote = remote_target(self.app.remote, child)
                     cached_data = cache.get(full_remote)
                     folder_cache_map[entry["name"]] = cached_data
+                    entry["cached_size"] = cached_data.get("size") if cached_data else None
                     if cached_data is None or not cached_data.get("complete"):
                         cache.request(full_remote, page_time)
+
+        entries = self.app.sort_entries(entries, sort_key, direction)
 
         self.send_html(
             HTTPStatus.OK,
