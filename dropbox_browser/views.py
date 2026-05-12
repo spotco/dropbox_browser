@@ -53,7 +53,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
           <th>{sort_link("Name", "name")}</th>
           <th>{sort_link("Type", "type")}</th>
           <th>Status</th>
-          <th>Size</th>
+          <th>{sort_link("Size", "size")}</th>
           <th>{sort_link("Date", "date")}</th>
           <th>Actions</th>
         </tr>

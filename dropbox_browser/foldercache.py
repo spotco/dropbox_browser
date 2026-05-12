@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import queue
 import threading
 import time
 from pathlib import Path
@@ -34,8 +33,9 @@ if TYPE_CHECKING:
 
 from .config import PROJECT_ROOT
 from .formatting import parse_rclone_time
+from .priorityqueue import PriorityQueue
 
-CACHE_DIR = PROJECT_ROOT / "Cache"
+CACHE_DIR = PROJECT_ROOT / "Cache" / "FolderInfo"
 
 
 class FolderCacheManager:
@@ -45,7 +45,7 @@ class FolderCacheManager:
         # Priority is -page_time so that a newer page load (larger unix time)
         # produces a more-negative value and is therefore dequeued first.
         # Tuple: (-page_time, remote_path, page_time)
-        self._queue: queue.PriorityQueue[tuple[float, str, float]] = queue.PriorityQueue()
+        self._queue: PriorityQueue = PriorityQueue()
         self._lock = threading.Lock()
 
         # Maps path → best (most-recent) page_time we have queued for it.
@@ -62,7 +62,7 @@ class FolderCacheManager:
         self._parent: dict[str, str] = {}
         self._child_contrib: dict[str, dict] = {}
 
-        CACHE_DIR.mkdir(exist_ok=True)
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
         for _ in range(max(1, workers)):
             t = threading.Thread(target=self._worker, daemon=True)
             t.start()
@@ -129,6 +129,12 @@ class FolderCacheManager:
         with self._lock:
             if page_time > self._min_page_time:
                 self._min_page_time = page_time
+
+    def current_queue_count(self) -> int:
+        """Return the number of queued items belonging to the current page."""
+        with self._lock:
+            min_pt = self._min_page_time
+        return self._queue.count_matching(lambda item: item[2] >= min_pt)
 
     def request(self, remote_path: str, page_time: float | None = None) -> None:
         """Enqueue a folder for background computation at the given page timestamp.

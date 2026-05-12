@@ -36,9 +36,23 @@ def find_default_rclone() -> str:
     return found or "rclone"
 
 
+def _rclone_default_config() -> Path | None:
+    """Return the path rclone uses by default when --config is not supplied."""
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        return Path(appdata) / "rclone" / "rclone.conf"
+    return None
+
+
 def find_default_config() -> str | None:
     value = load_app_config().get("RCloneConfig", "").strip()
-    return os.path.expandvars(value) if value else None
+    if not value:
+        return None
+    resolved = Path(os.path.expandvars(value)).resolve()
+    default = _rclone_default_config()
+    if default is not None and resolved == default.resolve():
+        return None  # matches rclone's own default; omit --config
+    return str(resolved)
 
 
 def upload_temp_dir() -> Path:

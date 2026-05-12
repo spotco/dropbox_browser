@@ -36,6 +36,7 @@ def main() -> int:
         workers=int(app_config["FolderCacheWorkers"]),
         ttl_hours=float(app_config["FolderCacheTTLHours"]),
     )
+    rclone.pending_count_fn = folder_cache.current_queue_count
     app = DropboxBrowser(rclone, args.remote, args.local_root, folder_cache=folder_cache)
     server = ThreadingHTTPServer((args.host, args.port), RequestHandler)
     server.app = app  # type: ignore[attr-defined]

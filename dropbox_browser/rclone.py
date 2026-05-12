@@ -7,7 +7,7 @@ import time
 from http import HTTPStatus
 from pathlib import Path
 import subprocess
-from typing import Any
+from typing import Any, Callable
 
 from . import logstore
 from .errors import BrowserError
@@ -18,6 +18,9 @@ class RcloneClient:
         self.executable = executable
         self.config = config
         self.log_commands = log_commands
+        # Optional callback that returns the number of items still queued for
+        # the current page.  Set externally after construction.
+        self.pending_count_fn: Callable[[], int] | None = None
 
     def command(self, *args: str) -> list[str]:
         cmd = [self.executable]
@@ -26,17 +29,17 @@ class RcloneClient:
         cmd += list(args)
         return cmd
 
-    def _log_command(self, cmd: list[str]) -> None:
-        msg = shlex.join(cmd)
+    def _log_command(self, cmd: list[str], suffix: str = "") -> None:
+        msg = shlex.join(cmd) + suffix
         logstore.append("rclone", msg)
         if self.log_commands:
             sys.stderr.write("[%s] %s\n" % (time.strftime("%H:%M:%S"), msg))
 
     def run(self, *args: str, input_file: Any | None = None) -> subprocess.CompletedProcess[bytes]:
         cmd = self.command(*args)
-        self._log_command(cmd)
+        t0 = time.monotonic()
         try:
-            return subprocess.run(
+            result = subprocess.run(
                 cmd,
                 stdin=input_file,
                 stdout=subprocess.PIPE,
@@ -45,6 +48,11 @@ class RcloneClient:
             )
         except FileNotFoundError as exc:
             raise BrowserError(HTTPStatus.INTERNAL_SERVER_ERROR, f"rclone was not found: {exc}") from exc
+        elapsed = time.monotonic() - t0
+        pending = self.pending_count_fn() if self.pending_count_fn else 0
+        pending_str = f"{pending} pending" if pending else "0 pending"
+        self._log_command(cmd, suffix=f"  [{elapsed:.2f}s, {pending_str}]")
+        return result
 
     def lsjson(self, target: str) -> list[dict[str, Any]]:
         proc = self.run("lsjson", "--", target)
