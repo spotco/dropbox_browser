@@ -70,7 +70,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         if direction not in {"asc", "desc"}:
             direction = "asc"
 
-        entries = self.app.list_entries(rel_path)
+        entries = self.app.list_entries(rel_path, force_refresh=params.get("refresh", [""])[0] == "1")
 
         # Build folder cache map; stamp cached_size onto folder entries so
         # sort_entries can sort by size.  Trigger background fetch as needed.

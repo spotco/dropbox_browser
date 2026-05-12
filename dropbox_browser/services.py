@@ -6,21 +6,32 @@ from typing import Any
 
 from .errors import BrowserError
 from .formatting import file_type, parse_rclone_time
+from .listingcache import ListingCacheManager
 from .paths import child_remote_path, remote_target, safe_join_local
 from .rclone import RcloneClient
 
 
 class DropboxBrowser:
-    def __init__(self, rclone: RcloneClient, remote: str, local_root: Path | None, folder_cache: Any = None):
+    def __init__(self, rclone: RcloneClient, remote: str, local_root: Path | None, folder_cache: Any = None, listing_cache: ListingCacheManager | None = None):
         self.rclone = rclone
         self.remote = remote
         self.local_root = local_root.resolve() if local_root else None
         self.folder_cache = folder_cache
+        self.listing_cache = listing_cache
 
-    def list_entries(self, rel_path: str) -> list[dict[str, Any]]:
+    def list_entries(self, rel_path: str, force_refresh: bool = False) -> list[dict[str, Any]]:
         merged: dict[str, dict[str, Any]] = {}
+        remote = remote_target(self.remote, rel_path)
 
-        for item in self.rclone.lsjson(remote_target(self.remote, rel_path)):
+        remote_items = None
+        if self.listing_cache and not force_refresh:
+            remote_items = self.listing_cache.get(remote)
+        if remote_items is None:
+            remote_items = self.rclone.lsjson(remote)
+            if self.listing_cache:
+                self.listing_cache.set(remote, remote_items)
+
+        for item in remote_items:
             name = item.get("Name") or item.get("Path") or ""
             if not name or "/" in name:
                 continue
@@ -102,3 +113,5 @@ class DropboxBrowser:
             raise BrowserError(HTTPStatus.CONFLICT, reason or "That name already exists.")
         remote_file = child_remote_path(rel_path, filename)
         self.rclone.copy_file_to_remote(temp_file, remote_target(self.remote, remote_file))
+        if self.listing_cache:
+            self.listing_cache.invalidate(remote_target(self.remote, rel_path))

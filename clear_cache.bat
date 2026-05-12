@@ -1,2 +1,4 @@
-del /q Cache\FolderInfo\*.json 2>nul && echo Cache cleared. || echo Cache already empty or not found.
+del /q Cache\FolderInfo\*.json 2>nul
+del /q Cache\ListingCache\*.json 2>nul
+echo Cache cleared.
 pause
