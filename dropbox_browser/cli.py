@@ -8,6 +8,7 @@ from http.server import ThreadingHTTPServer
 from .config import find_default_config, find_default_rclone, load_app_config
 from .foldercache import FolderCacheManager
 from .handlers import RequestHandler
+from . import logoutput
 from .rclone import RcloneClient
 from .services import DropboxBrowser
 
@@ -36,7 +37,7 @@ def main() -> int:
         workers=int(app_config["FolderCacheWorkers"]),
         ttl_hours=float(app_config["FolderCacheTTLHours"]),
     )
-    rclone.pending_count_fn = folder_cache.current_queue_count
+    rclone.progress_fn = folder_cache.current_progress
     app = DropboxBrowser(rclone, args.remote, args.local_root, folder_cache=folder_cache)
     server = ThreadingHTTPServer((args.host, args.port), RequestHandler)
     server.app = app  # type: ignore[attr-defined]
@@ -45,8 +46,10 @@ def main() -> int:
     print(f"Serving {args.remote} at http://{args.host}:{args.port}/")
     if args.local_root:
         print(f"Comparing with local folder: {args.local_root.resolve()}")
+    logoutput.start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nStopped.")
     return 0
+

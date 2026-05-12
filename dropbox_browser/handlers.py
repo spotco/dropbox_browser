@@ -5,7 +5,6 @@ import mimetypes
 from pathlib import Path
 import posixpath
 import shutil
-import sys
 import tempfile
 import time
 from http import HTTPStatus
@@ -13,7 +12,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from . import MAX_UPLOAD_BYTES
-from . import logstore
+from . import logoutput, logstore
 from .config import upload_temp_dir
 from .errors import BrowserError
 from .formatting import display_date, human_size
@@ -130,8 +129,8 @@ class RequestHandler(BaseHTTPRequestHandler):
     def serve_logs(self, query: str) -> None:
         params = parse_qs(query)
         since = int(params.get("since", ["0"])[0])
-        entries = logstore.entries_since(since)
-        body = _json.dumps({"entries": entries}).encode("utf-8")
+        since_upd = int(params.get("since_upd", ["0"])[0])
+        body = _json.dumps(logstore.entries_since(since, since_upd)).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -211,10 +210,24 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
-        self.wfile.write(encoded)
+        try:
+            self.wfile.write(encoded)
+        except (ConnectionAbortedError, BrokenPipeError):
+            pass  # client navigated away; response not needed
 
     def render_error(self, status: HTTPStatus, message: str) -> None:
-        self.send_html(status, error_html(status, message))
+        try:
+            self.send_html(status, error_html(status, message))
+        except (ConnectionAbortedError, BrokenPipeError):
+            pass
+
+    def log_error(self, fmt: str, *args: object) -> None:  # type: ignore[override]
+        """Suppress connection-abort tracebacks; log other errors normally."""
+        msg = fmt % args
+        if "ConnectionAbortedError" in msg or "BrokenPipeError" in msg or "10053" in msg:
+            logoutput.log_plain(time.strftime("%H:%M:%S"), "client disconnected before response sent")
+            return
+        super().log_error(fmt, *args)  # type: ignore[misc]
 
     def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
         # Don't log polling endpoints to avoid noise.
@@ -227,4 +240,4 @@ class RequestHandler(BaseHTTPRequestHandler):
         ts = time.strftime("%H:%M:%S")
         logstore.append("request", msg)
         if getattr(self.server, "log_requests", True):
-            sys.stderr.write("[%s] %s\n" % (ts, msg))
+            logoutput.log_plain(ts, msg)

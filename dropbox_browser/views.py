@@ -323,6 +323,12 @@ th {
 .log-kind-request {
   color: #7ec87e;
 }
+.log-slow {
+  color: #c8a832;
+}
+.log-very-slow {
+  color: #e05050;
+}
 .folder-pending {
   color: #607080;
   font-size: 12px;
@@ -381,6 +387,7 @@ LOG_JS = r"""
   applyCollapsed();
 
   var nextIndex = 0;
+  var nextUpdateSeq = 0;
 
   function toggleLog() {
     collapsed = !collapsed;
@@ -393,19 +400,33 @@ LOG_JS = r"""
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
+  function buildEntry(e) {
+    return '<span class="log-ts">[' + esc(e.ts) + ']</span> ' +
+      '<span class="log-kind-' + esc(e.kind) + '">' + esc(e.kind) + '</span> ' +
+      esc(e.message);
+  }
+
+  function applyEntry(div, e) {
+    var slowClass = e.elapsed >= 5 ? ' log-very-slow' : e.elapsed >= 1 ? ' log-slow' : '';
+    div.className = 'log-entry' + slowClass;
+    div.innerHTML = buildEntry(e);
+  }
+
   function poll() {
-    fetch('/logs?since=' + nextIndex)
+    fetch('/logs?since=' + nextIndex + '&since_upd=' + nextUpdateSeq)
       .then(function (r) { return r.json(); })
       .then(function (data) {
+        if (data.update_seq !== undefined) nextUpdateSeq = data.update_seq;
         data.entries.forEach(function (e) {
           nextIndex = Math.max(nextIndex, e.index + 1);
           var div = document.createElement('div');
-          div.className = 'log-entry';
-          div.innerHTML =
-            '<span class="log-ts">[' + esc(e.ts) + ']</span> ' +
-            '<span class="log-kind-' + esc(e.kind) + '">' + esc(e.kind) + '</span> ' +
-            esc(e.message);
+          div.setAttribute('data-id', e.index);
+          applyEntry(div, e);
           entries.appendChild(div);
+        });
+        (data.updates || []).forEach(function (e) {
+          var div = entries.querySelector('[data-id="' + e.index + '"]');
+          if (div) applyEntry(div, e);
         });
         if (data.entries.length > 0 && !collapsed) {
           entries.scrollTop = entries.scrollHeight;

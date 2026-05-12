@@ -37,22 +37,29 @@ from .priorityqueue import PriorityQueue
 
 CACHE_DIR = PROJECT_ROOT / "Cache" / "FolderInfo"
 
+# Folders up to this many levels deep from the page root are processed
+# depth-first so individual folder stats become complete sooner.
+# Folders deeper than this share the same effective priority (no deeper DFS).
+DFS_MAX_DEPTH = 3
+
 
 class FolderCacheManager:
     def __init__(self, rclone: "RcloneClient", workers: int, ttl_hours: float):
         self.rclone = rclone
         self.ttl_seconds = ttl_hours * 3600
-        # Priority is -page_time so that a newer page load (larger unix time)
-        # produces a more-negative value and is therefore dequeued first.
-        # Tuple: (-page_time, remote_path, page_time)
+        # Priority tuple: (-page_time, depth, path, page_time)
+        # Newer page_time → more-negative first element → dequeued first.
+        # Within same page_time, lower depth → dequeued first (DFS up to DFS_MAX_DEPTH).
         self._queue: PriorityQueue = PriorityQueue()
         self._lock = threading.Lock()
 
         # Maps path → best (most-recent) page_time we have queued for it.
-        # Used to avoid re-queuing at equal or stale priority.
         self._in_progress: dict[str, float] = {}
         # Tracks the newest page_time seen; workers skip items older than this.
         self._min_page_time: float = 0.0
+        # Progress counters for the current page (reset when _min_page_time advances).
+        self._page_dispatched: int = 0
+        self._page_completed: int = 0
         self._acc: dict[str, dict] = {}
         # Maps path → page_time at which _compute last ran for it.
         # Used to deduplicate duplicate queue entries for the same page_time
@@ -120,31 +127,24 @@ class FolderCacheManager:
         return "pending"
 
     def notify_page_load(self, page_time: float) -> None:
-        """Advance _min_page_time for pages that have no folder entries.
-
-        request() updates _min_page_time when it is called, but a page
-        consisting entirely of files never calls request().  This ensures
-        old background work is still cancelled when navigating to such a page.
-        """
+        """Advance _min_page_time for pages that have no folder entries."""
         with self._lock:
-            if page_time > self._min_page_time:
-                self._min_page_time = page_time
+            self._advance_page_time(page_time)
 
-    def current_queue_count(self) -> int:
-        """Return the number of queued items belonging to the current page."""
+    def _advance_page_time(self, page_time: float) -> None:
+        """Update _min_page_time and reset progress counters.  Lock must be held."""
+        if page_time > self._min_page_time:
+            self._min_page_time = page_time
+            self._page_dispatched = 0
+            self._page_completed = 0
+
+    def current_progress(self) -> tuple[int, int]:
+        """Return (completed, dispatched) counts for the current page."""
         with self._lock:
-            min_pt = self._min_page_time
-        return self._queue.count_matching(lambda item: item[2] >= min_pt)
+            return (self._page_completed, self._page_dispatched)
 
     def request(self, remote_path: str, page_time: float | None = None) -> None:
-        """Enqueue a folder for background computation at the given page timestamp.
-
-        Newer page loads get a more-negative priority value and are therefore
-        dequeued before older queued items at the same integer priority.
-        Always re-inserts when page_time is newer than whatever is already
-        queued, ensuring navigation to a new page immediately outranks stale
-        background work from a previous page.
-        """
+        """Enqueue a folder at depth 0 (page-level) for background computation."""
         if page_time is None:
             page_time = time.time()
         data = self.get(remote_path)
@@ -152,11 +152,11 @@ class FolderCacheManager:
             return
         with self._lock:
             if self._in_progress.get(remote_path, 0.0) >= page_time:
-                return  # already queued at equal or better priority
+                return
             self._in_progress[remote_path] = page_time
-            if page_time > self._min_page_time:
-                self._min_page_time = page_time
-        self._queue.put((-page_time, remote_path, page_time))
+            self._advance_page_time(page_time)
+            self._page_dispatched += 1
+        self._queue.put((-page_time, 0, remote_path, page_time))
 
     # ------------------------------------------------------------------
     # Worker
@@ -164,14 +164,20 @@ class FolderCacheManager:
 
     def _worker(self) -> None:
         while True:
-            _priority, remote_path, page_time = self._queue.get()
+            _priority, depth, remote_path, page_time = self._queue.get()
             try:
                 with self._lock:
                     stale = page_time < self._min_page_time
                     already_done = self._direct_done.get(remote_path, 0.0) >= page_time
-                if stale or already_done:
+                if stale:
                     continue
-                self._compute(remote_path, page_time)
+                if already_done:
+                    with self._lock:
+                        self._page_completed += 1
+                    continue
+                self._compute(remote_path, page_time, depth)
+                with self._lock:
+                    self._page_completed += 1
             except Exception:
                 # On failure treat as empty so the parent tree can still complete.
                 with self._lock:
@@ -182,12 +188,13 @@ class FolderCacheManager:
                     self._write_cache(remote_path, complete=True)
                     self._propagate(remote_path)
                     self._on_subtree_complete(remote_path)
+                    self._page_completed += 1
             finally:
                 with self._lock:
                     self._in_progress.pop(remote_path, None)
                 self._queue.task_done()
 
-    def _compute(self, remote_path: str, page_time: float) -> None:
+    def _compute(self, remote_path: str, page_time: float, depth: int) -> None:
         """Fetch direct children via lsjson, update state, queue subfolders."""
         proc = self.rclone.run("lsjson", "--", remote_path)
 
@@ -249,8 +256,10 @@ class FolderCacheManager:
                 else:
                     self._pending_children[remote_path].add(sf)
                     if self._direct_done.get(sf, 0.0) < page_time and self._in_progress.get(sf, 0.0) < page_time:
+                        child_depth = min(depth + 1, DFS_MAX_DEPTH)
                         self._in_progress[sf] = page_time
-                        self._queue.put((-page_time, sf, page_time))
+                        self._page_dispatched += 1
+                        self._queue.put((-page_time, child_depth, sf, page_time))
 
             if complete:
                 self._on_subtree_complete(remote_path)
