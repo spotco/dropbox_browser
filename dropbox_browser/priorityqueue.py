@@ -59,3 +59,14 @@ class PriorityQueue:
         """Return the number of queued items for which predicate returns True."""
         with self._lock:
             return sum(1 for item in self._heap if predicate(item))
+
+    def remove_matching(self, predicate: Callable[[Any], bool]) -> list[Any]:
+        """Remove and return queued items for which predicate returns True."""
+        with self._not_empty:
+            removed = [item for item in self._heap if predicate(item)]
+            if not removed:
+                return []
+            self._heap = [item for item in self._heap if not predicate(item)]
+            heapq.heapify(self._heap)
+            self._unfinished = max(0, self._unfinished - len(removed))
+            return removed

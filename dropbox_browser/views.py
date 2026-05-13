@@ -96,19 +96,24 @@ def entry_row(rel_path: str, row: dict[str, Any], folder_cache_map: dict | None 
     type_text = file_type(name, is_dir)
 
     if is_dir:
-        cached = (folder_cache_map or {}).get(name)
-        if cached is not None:
-            complete = cached.get("complete", False)
-            sz = human_size(cached["size"]) if cached.get("size") is not None else "—"
-            ct = f' ({cached["file_count"]:,} files)' if cached.get("file_count") is not None else ""
-            spinner = '' if complete else '<span class="spinner"></span> '
-            size_td = f'<td class="col-size">{spinner}{html.escape(sz + ct)}</td>'
-            date_td = f'<td class="col-date">{spinner}{display_date(cached.get("newest_mtime"))}</td>'
+        if row["remote"]:
+            cached = (folder_cache_map or {}).get(name)
+            if cached is not None:
+                complete = cached.get("complete", False)
+                sz = human_size(cached["size"]) if cached.get("size") is not None else "—"
+                ct = f' ({cached["file_count"]:,} files)' if cached.get("file_count") is not None else ""
+                spinner = '' if complete else '<span class="spinner"></span> '
+                size_td = f'<td class="col-size">{spinner}{html.escape(sz + ct)}</td>'
+                date_td = f'<td class="col-date">{spinner}{display_date(cached.get("newest_mtime"))}</td>'
+            else:
+                pending_cell = '<span class="folder-pending"><span class="spinner"></span> calculating\u2026</span>'
+                size_td = f'<td class="col-size">{pending_cell}</td>'
+                date_td = f'<td class="col-date">{pending_cell}</td>'
+            row_attrs = f' data-folder-path="{html.escape(child_path)}"'
         else:
-            pending_cell = '<span class="folder-pending"><span class="spinner"></span> calculating\u2026</span>'
-            size_td = f'<td class="col-size">{pending_cell}</td>'
-            date_td = f'<td class="col-date">{pending_cell}</td>'
-        row_attrs = f' data-folder-path="{html.escape(child_path)}"'
+            size_td = '<td class="col-size">—</td>'
+            date_td = f'<td class="col-date">{display_date(row.get("local_mtime"))}</td>'
+            row_attrs = ""
         name_html = f'<a class="name" href="/?{urlencode({"path": child_path})}">[dir] {html.escape(name)}</a>'
         actions_td = '<td class="actions"></td>'
     else:
