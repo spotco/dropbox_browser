@@ -70,17 +70,19 @@ class RequestHandler(BaseHTTPRequestHandler):
         if direction not in {"asc", "desc"}:
             direction = "asc"
 
+        cache = self.app.folder_cache
+        page_time = time.time()
+        if cache:
+            cache.notify_page_load(page_time)
+
         entries = self.app.list_entries(rel_path, force_refresh=params.get("refresh", [""])[0] == "1")
 
         # Build folder cache map; stamp cached_size onto folder entries so
         # sort_entries can sort by size.  Trigger background fetch as needed.
         folder_cache_map: dict = {}
-        cache = self.app.folder_cache
         if cache:
-            page_time = time.time()
-            cache.notify_page_load(page_time)
             for entry in entries:
-                if entry["is_dir"]:
+                if entry["is_dir"] and entry["remote"]:
                     child = posixpath.join(rel_path, entry["name"]) if rel_path else entry["name"]
                     full_remote = remote_target(self.app.remote, child)
                     cached_data = cache.get(full_remote)

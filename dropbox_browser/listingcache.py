@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
 from pathlib import Path
 
+from .cacheio import write_json_atomic
 from .config import PROJECT_ROOT
 
 CACHE_DIR = PROJECT_ROOT / "Cache" / "ListingCache"
@@ -19,6 +21,7 @@ CACHE_DIR = PROJECT_ROOT / "Cache" / "ListingCache"
 class ListingCacheManager:
     def __init__(self, ttl_minutes: float = 30):
         self.ttl_seconds = ttl_minutes * 60
+        self._lock = threading.Lock()
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     def _cache_path(self, remote_path: str) -> Path:
@@ -41,11 +44,13 @@ class ListingCacheManager:
     def set(self, remote_path: str, items: list[dict]) -> None:
         """Write items to cache."""
         data = {"remote_path": remote_path, "items": items, "cached_at": time.time()}
-        self._cache_path(remote_path).write_text(json.dumps(data), encoding="utf-8")
+        with self._lock:
+            write_json_atomic(self._cache_path(remote_path), data)
 
     def invalidate(self, remote_path: str) -> None:
         """Delete the cached listing (e.g. after a successful upload)."""
-        try:
-            self._cache_path(remote_path).unlink(missing_ok=True)
-        except Exception:
-            pass
+        with self._lock:
+            try:
+                self._cache_path(remote_path).unlink(missing_ok=True)
+            except Exception:
+                pass

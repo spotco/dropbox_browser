@@ -21,21 +21,31 @@ class DropboxBrowser:
 
     def list_entries(self, rel_path: str, force_refresh: bool = False) -> list[dict[str, Any]]:
         merged: dict[str, dict[str, Any]] = {}
+        merged_keys: dict[str, str] = {}
         remote = remote_target(self.remote, rel_path)
+        local_folder = safe_join_local(self.local_root, rel_path) if self.local_root else None
 
         remote_items = None
         if self.listing_cache and not force_refresh:
             remote_items = self.listing_cache.get(remote)
         if remote_items is None:
-            remote_items = self.rclone.lsjson(remote)
-            if self.listing_cache:
-                self.listing_cache.set(remote, remote_items)
+            try:
+                remote_items = self.rclone.lsjson(remote)
+            except BrowserError:
+                if not (local_folder and local_folder.exists() and local_folder.is_dir()):
+                    raise
+                remote_items = []
+            else:
+                if self.listing_cache:
+                    self.listing_cache.set(remote, remote_items)
 
         for item in remote_items:
             name = item.get("Name") or item.get("Path") or ""
             if not name or "/" in name:
                 continue
             is_dir = bool(item.get("IsDir"))
+            key = name.casefold()
+            merged_keys[key] = name
             merged[name] = {
                 "name": name,
                 "is_dir": is_dir,
@@ -47,13 +57,14 @@ class DropboxBrowser:
                 "local_mtime": None,
             }
 
-        if self.local_root:
-            local_folder = safe_join_local(self.local_root, rel_path)
+        if local_folder:
             if local_folder.exists() and local_folder.is_dir():
                 for child in local_folder.iterdir():
                     stat = child.stat()
+                    key = merged_keys.get(child.name.casefold(), child.name)
+                    merged_keys.setdefault(child.name.casefold(), key)
                     row = merged.setdefault(
-                        child.name,
+                        key,
                         {
                             "name": child.name,
                             "is_dir": child.is_dir(),
@@ -71,6 +82,15 @@ class DropboxBrowser:
                     row["local_mtime"] = stat.st_mtime
 
         return list(merged.values())
+
+    def invalidate_folder_metadata(self, rel_path: str) -> None:
+        """Invalidate cached folder totals for this folder and its ancestors."""
+        if not self.folder_cache:
+            return
+        parts = [part for part in rel_path.split("/") if part]
+        rel_paths = ["/".join(parts[:i]) for i in range(len(parts), -1, -1)]
+        for path in rel_paths:
+            self.folder_cache.invalidate(remote_target(self.remote, path))
 
     def sort_entries(self, entries: list[dict[str, Any]], sort_key: str, direction: str) -> list[dict[str, Any]]:
         reverse = direction == "desc"
@@ -115,3 +135,4 @@ class DropboxBrowser:
         self.rclone.copy_file_to_remote(temp_file, remote_target(self.remote, remote_file))
         if self.listing_cache:
             self.listing_cache.invalidate(remote_target(self.remote, rel_path))
+        self.invalidate_folder_metadata(rel_path)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import threading
 import time
 from http import HTTPStatus
 from pathlib import Path
@@ -12,6 +13,42 @@ from . import logoutput, logstore
 from .errors import BrowserError
 
 
+class RcloneCancelled(Exception):
+    """Raised when a cancelable background rclone command is terminated."""
+
+
+class RcloneCancelToken:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._cancelled = False
+        self._process: subprocess.Popen[bytes] | None = None
+
+    @property
+    def cancelled(self) -> bool:
+        with self._lock:
+            return self._cancelled
+
+    def attach(self, process: subprocess.Popen[bytes]) -> bool:
+        with self._lock:
+            self._process = process
+            return not self._cancelled
+
+    def detach(self, process: subprocess.Popen[bytes]) -> None:
+        with self._lock:
+            if self._process is process:
+                self._process = None
+
+    def cancel(self) -> None:
+        with self._lock:
+            self._cancelled = True
+            process = self._process
+        if process is not None and process.poll() is None:
+            try:
+                process.kill()
+            except OSError:
+                pass
+
+
 class RcloneClient:
     def __init__(self, executable: str, config: str | None, log_commands: bool = True):
         self.executable = executable
@@ -20,6 +57,8 @@ class RcloneClient:
         # Optional callback returning (completed, dispatched) for the current page.
         # Set externally after construction.
         self.progress_fn: Callable[[], tuple[int, int]] | None = None
+        self._lsjson_inflight_guard = threading.Lock()
+        self._lsjson_inflight: dict[str, dict[str, Any]] = {}
 
     def command(self, *args: str) -> list[str]:
         cmd = [self.executable]
@@ -53,20 +92,105 @@ class RcloneClient:
             ts = time.strftime("%H:%M:%S")
             logoutput.log_plain(ts, msg)
 
-    def run(self, *args: str, input_file: Any | None = None) -> subprocess.CompletedProcess[bytes]:
+    def _lsjson_target(self, args: tuple[str, ...]) -> str | None:
+        if len(args) >= 3 and args[0] == "lsjson" and args[-2] == "--":
+            return args[-1]
+        return None
+
+    def _run_cancelable(
+        self,
+        cmd: list[str],
+        input_file: Any | None,
+        cancel_token: RcloneCancelToken,
+    ) -> subprocess.CompletedProcess[bytes]:
+        if cancel_token.cancelled:
+            raise RcloneCancelled()
+        process = subprocess.Popen(
+            cmd,
+            stdin=input_file,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if not cancel_token.attach(process):
+            try:
+                process.kill()
+            except OSError:
+                pass
+        try:
+            stdout, stderr = process.communicate()
+            if cancel_token.cancelled:
+                raise RcloneCancelled()
+            return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
+        finally:
+            cancel_token.detach(process)
+            if cancel_token.cancelled and process.poll() is None:
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+
+    def run(
+        self,
+        *args: str,
+        input_file: Any | None = None,
+        cancel_token: RcloneCancelToken | None = None,
+    ) -> subprocess.CompletedProcess[bytes]:
+        lsjson_target = self._lsjson_target(args)
+        if lsjson_target is not None and input_file is None and cancel_token is None:
+            with self._lsjson_inflight_guard:
+                inflight = self._lsjson_inflight.get(lsjson_target)
+                if inflight is None:
+                    inflight = {"event": threading.Event(), "result": None, "error": None}
+                    self._lsjson_inflight[lsjson_target] = inflight
+                    owner = True
+                else:
+                    owner = False
+            if not owner:
+                inflight["event"].wait()
+                if inflight["error"] is not None:
+                    raise inflight["error"]
+                return inflight["result"]
+        else:
+            inflight = None
+            owner = False
+
         cmd = self.command(*args)
         logstore_id, logoutput_id = self._log_start(cmd)
         t0 = time.monotonic()
         try:
-            result = subprocess.run(
-                cmd,
-                stdin=input_file,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-            )
+            if cancel_token is not None:
+                result = self._run_cancelable(cmd, input_file, cancel_token)
+            else:
+                result = subprocess.run(
+                    cmd,
+                    stdin=input_file,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
         except FileNotFoundError as exc:
-            raise BrowserError(HTTPStatus.INTERNAL_SERVER_ERROR, f"rclone was not found: {exc}") from exc
+            error = BrowserError(HTTPStatus.INTERNAL_SERVER_ERROR, f"rclone was not found: {exc}")
+            if inflight is not None:
+                inflight["error"] = error
+            raise error from exc
+        except RcloneCancelled as exc:
+            if inflight is not None:
+                inflight["error"] = exc
+            elapsed = time.monotonic() - t0
+            suffix = f"  [{elapsed:.2f}s, canceled]"
+            self._log_complete(cmd, suffix, elapsed, logstore_id, logoutput_id)
+            raise
+        except Exception as exc:
+            if inflight is not None:
+                inflight["error"] = exc
+            raise
+        finally:
+            if inflight is not None and owner:
+                if "result" in locals():
+                    inflight["result"] = result
+                inflight["event"].set()
+                with self._lsjson_inflight_guard:
+                    self._lsjson_inflight.pop(lsjson_target, None)
         elapsed = time.monotonic() - t0
         if self.progress_fn:
             done, total = self.progress_fn()
@@ -107,4 +231,3 @@ class RcloneClient:
             )
         except FileNotFoundError as exc:
             raise BrowserError(HTTPStatus.INTERNAL_SERVER_ERROR, f"rclone was not found: {exc}") from exc
-
