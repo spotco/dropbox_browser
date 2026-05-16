@@ -42,6 +42,8 @@ http://127.0.0.1:8000/
   size/date/count caching; writes JSON files to `Cache/`.
 - `dropbox_browser/logstore.py` - thread-safe in-memory log ring buffer for
   the browser log panel.
+- `dropbox_browser/namekeys.py` - filename comparison keys for matching Dropbox
+  names with local Windows-safe Unicode replacement names.
 - `dropbox_browser/views.py` - server-rendered HTML/CSS.
 - `tests/` - stdlib `unittest` coverage for app behavior and folder-cache
   workers, using simulated rclone responses and isolated temp/cache paths.
@@ -95,6 +97,20 @@ http://127.0.0.1:8000/
 
 - Dropbox folder `ModTime` values returned by `rclone lsjson` may be placeholders
   such as `2000-01-01T00:00:00Z`.
+- Dropbox names may contain characters that Windows cannot store in local file
+  names, especially `*`. Local Windows copies may use visually similar
+  fullwidth Unicode replacements such as `＊` (`U+FF0A FULLWIDTH ASTERISK`) for
+  Dropbox `*` (`U+002A ASTERISK`), as seen with names like `*NSYNC` or
+  `f*ck`.
+- Local/Dropbox filename comparisons must use
+  `dropbox_browser.namekeys.filename_compare_key`, which applies Unicode NFKC
+  normalization before `casefold()`. This makes Dropbox `*` compare equal to
+  local `＊`, and similarly handles other fullwidth compatibility characters.
+- Do not reconstruct an existing local path from the Dropbox display name when a
+  row matched by `filename_compare_key`. Use the actual local path captured from
+  the filesystem (`row["local_path"]`) or resolve each path segment through the
+  local filesystem with the same comparison key. Otherwise copy/open actions can
+  produce impossible Windows paths like `F:\...\*NSYNC - Bye Bye Bye.mp3`.
 - A recursive "newest child inside folder" date mode was tested and removed
   because it made browsing too slow to be usable on large Dropbox folders.
 - Keep folder date sorting based on the direct listing only unless a faster
@@ -266,7 +282,7 @@ Implementation plan:
    `rclone lsjson -- remote:path`. Compare direct Dropbox child names/types/sizes
    against the direct local folder listing:
    - case-insensitive name matching should follow the current listing merge
-     behavior (`casefold`) unless a future decision changes it;
+     behavior (`filename_compare_key`) unless a future decision changes it;
    - direct name/type/size differences immediately mark that folder and its
      ancestors as `has_diffs`;
    - if no direct differences exist, recursively queued child folders continue

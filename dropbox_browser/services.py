@@ -8,8 +8,19 @@ from .errors import BrowserError
 from .formatting import file_type, parse_rclone_time
 from .ignored import is_ignored_name
 from .listingcache import ListingCacheManager
+from .namekeys import filename_compare_key
 from .paths import child_remote_path, remote_target, safe_join_local
 from .rclone import RcloneClient
+
+
+def diff_label(status: str | None) -> str:
+    return {
+        "synced": "Synced",
+        "has_diffs": "Has Diffs",
+        "dropbox_only": "Dropbox Only",
+        "local_only": "Local Only",
+        "loading": "Loading",
+    }.get(status or "", "Loading")
 
 
 class DropboxBrowser:
@@ -45,10 +56,13 @@ class DropboxBrowser:
             if not name or "/" in name or is_ignored_name(name):
                 continue
             is_dir = bool(item.get("IsDir"))
-            key = name.casefold()
+            key = filename_compare_key(name)
             merged_keys[key] = name
             merged[name] = {
                 "name": name,
+                "remote_name": name,
+                "local_name": None,
+                "local_path": None,
                 "is_dir": is_dir,
                 "remote": True,
                 "local": False,
@@ -64,12 +78,16 @@ class DropboxBrowser:
                     if is_ignored_name(child.name):
                         continue
                     stat = child.stat()
-                    key = merged_keys.get(child.name.casefold(), child.name)
-                    merged_keys.setdefault(child.name.casefold(), key)
+                    compare_key = filename_compare_key(child.name)
+                    key = merged_keys.get(compare_key, child.name)
+                    merged_keys.setdefault(compare_key, key)
                     row = merged.setdefault(
                         key,
                         {
                             "name": child.name,
+                            "remote_name": None,
+                            "local_name": child.name,
+                            "local_path": str(child),
                             "is_dir": child.is_dir(),
                             "remote": False,
                             "local": False,
@@ -80,11 +98,35 @@ class DropboxBrowser:
                         },
                     )
                     row["local"] = True
+                    row["local_name"] = child.name
+                    row["local_path"] = str(child)
                     row["is_dir"] = bool(row["is_dir"] or child.is_dir())
                     row["local_size"] = None if child.is_dir() else stat.st_size
                     row["local_mtime"] = stat.st_mtime
 
         return list(merged.values())
+
+    def local_display_path(self, rel_path: str) -> Path | None:
+        """Return the actual local path for a displayed Dropbox-relative path.
+
+        Names shown in the browser may come from Dropbox, while Windows local
+        files can use compatibility replacements for characters such as ``*``.
+        Walk each segment with the same comparison key used by listings so copy
+        actions use the path that actually exists on disk when possible.
+        """
+        if self.local_root is None:
+            return None
+        current = self.local_root
+        for part in [part for part in rel_path.split("/") if part]:
+            if not current.exists() or not current.is_dir():
+                return current / part
+            wanted = filename_compare_key(part)
+            try:
+                match = next((child for child in current.iterdir() if filename_compare_key(child.name) == wanted), None)
+            except OSError:
+                match = None
+            current = match if match is not None else current / part
+        return current
 
     def invalidate_folder_metadata(self, rel_path: str) -> None:
         """Invalidate cached folder totals for this folder and its ancestors."""
@@ -109,6 +151,8 @@ class DropboxBrowser:
                     primary = row.get("cached_size") or 0
                 else:
                     primary = row.get("remote_size") or row.get("local_size") or 0
+            elif sort_key == "status":
+                primary = row.get("status_label") or ""
             else:
                 primary = name
             return (primary, name)
@@ -116,6 +160,34 @@ class DropboxBrowser:
         folders = sorted((row for row in entries if row["is_dir"]), key=key, reverse=reverse)
         files = sorted((row for row in entries if not row["is_dir"]), key=key, reverse=reverse)
         return folders + files
+
+    def status_label_for_entry(
+        self,
+        row: dict[str, Any],
+        folder_cache_map: dict | None = None,
+        current_folder_cache: dict | None = None,
+    ) -> str:
+        status = "Both" if row["remote"] and row["local"] else "Dropbox Only" if row["remote"] else "Local Only"
+        if self.local_root is None:
+            return status
+
+        name = row["name"]
+        if row["is_dir"]:
+            if not row["remote"]:
+                return "Local Only"
+            if not row["local"]:
+                return "Dropbox Only"
+            cached = (folder_cache_map or {}).get(name)
+            if cached is not None and cached.get("diff_complete"):
+                return diff_label(cached.get("diff_status"))
+            return "Loading"
+
+        if not row["remote"]:
+            return "Local Only"
+        if not row["local"]:
+            return "Dropbox Only"
+        file_status = ((current_folder_cache or {}).get("file_statuses") or {}).get(name, {})
+        return diff_label(file_status.get("diff_status"))
 
     def file_statuses_for_entries(self, entries: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
         """Compute direct file diff status from the live merged listing.

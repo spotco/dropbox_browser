@@ -38,12 +38,13 @@ from .config import PROJECT_ROOT
 from .formatting import parse_rclone_time
 from .ignored import is_ignored_name
 from .listingcache import ListingCacheManager
+from .namekeys import filename_compare_key
 from .priorityqueue import PriorityQueue
 from .rclone import RcloneCancelled, RcloneCancelToken
 from . import workertrace
 
 CACHE_DIR = PROJECT_ROOT / "Cache" / "FolderInfo"
-DIFF_CACHE_SCHEMA_VERSION = 5
+DIFF_CACHE_SCHEMA_VERSION = 6
 DIFF_LOADING = "loading"
 DIFF_SYNCED = "synced"
 DIFF_HAS_DIFFS = "has_diffs"
@@ -600,7 +601,7 @@ class FolderCacheManager:
             name = item.get("Name") or item.get("Path") or ""
             if not name or "/" in name or is_ignored_name(name):
                 continue
-            remote_children[name.casefold()] = item
+            remote_children[filename_compare_key(name)] = item
             t = parse_rclone_time(item.get("ModTime"))
             if t and (direct_mtime is None or t > direct_mtime):
                 direct_mtime = t
@@ -622,7 +623,7 @@ class FolderCacheManager:
         if local_folder is not None and local_folder.exists() and local_folder.is_dir():
             try:
                 local_children = {
-                    child.name.casefold(): child
+                    filename_compare_key(child.name): child
                     for child in local_folder.iterdir()
                     if not is_ignored_name(child.name)
                 }

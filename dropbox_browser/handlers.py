@@ -71,7 +71,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         rel_path = clean_rel_path(params.get("path", [""])[0])
         sort_key = params.get("sort", ["name"])[0]
         direction = params.get("dir", ["asc"])[0]
-        if sort_key not in {"name", "type", "date", "size"}:
+        if sort_key not in {"name", "type", "date", "size", "status"}:
             sort_key = "name"
         if direction not in {"asc", "desc"}:
             direction = "asc"
@@ -114,6 +114,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                     entry["cached_size"] = cached_data.get("size") if cached_data else None
                     if cached_data is None or not cached_data.get("complete"):
                         cache.request(full_remote, page_time)
+
+        for entry in entries:
+            entry["status_label"] = self.app.status_label_for_entry(entry, folder_cache_map, current_folder_cache)
 
         entries = self.app.sort_entries(entries, sort_key, direction)
 
