@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import posixpath
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
@@ -22,6 +23,11 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
     )
     msg_html = f'<p class="notice">{html.escape(msg)}</p>' if msg else ""
     current_folder_js = json.dumps(rel_path)
+    sync_toggle = (
+        '<label class="sync-toggle"><input type="checkbox" id="sync-enabled"> Enable sync</label>'
+        if app.local_root
+        else ""
+    )
 
     def sort_link(label: str, key: str) -> str:
         next_dir = "desc" if sort_key == key and direction == "asc" else "asc"
@@ -43,7 +49,10 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
     <div class="meta">{html.escape(app.remote)} / {html.escape(rel_path)} - {local_note}</div>
   </header>
   <main>
-    <nav class="breadcrumbs">{crumbs} <a class="refresh-link" href="{refresh_href}" title="Bypass listing cache and reload from Dropbox">&#8635; refresh</a></nav>
+    <div class="topbar">
+      <nav class="breadcrumbs">{crumbs} <a class="refresh-link" href="{refresh_href}" title="Bypass listing cache and reload from Dropbox">&#8635; refresh</a></nav>
+      {sync_toggle}
+    </div>
     {msg_html}
     <form class="upload" action="{upload_action}" method="post" enctype="multipart/form-data">
       <input type="file" name="file" required>
@@ -58,12 +67,22 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
           <th>Status</th>
           <th>{sort_link("Size", "size")}</th>
           <th>{sort_link("Date", "date")}</th>
-          <th>Actions</th>
+          <th>View</th>
+          <th>Sync</th>
         </tr>
       </thead>
-      <tbody>{rows or '<tr><td colspan="6" class="empty">This folder is empty.</td></tr>'}</tbody>
+      <tbody>{rows or '<tr><td colspan="7" class="empty">This folder is empty.</td></tr>'}</tbody>
     </table>
   </main>
+  <div id="sync-popup" class="sync-popup hidden">
+    <div class="sync-popup-head">
+      <strong>Sync</strong>
+      <button type="button" id="sync-popup-hide">Hide</button>
+    </div>
+    <div id="sync-popup-message">Waiting</div>
+    <div id="sync-popup-command"></div>
+    <div class="sync-progress"><div id="sync-progress-bar"></div></div>
+  </div>
   <div id="log-panel">
     <div id="log-toolbar" onclick="toggleLog()">
       <span id="log-arrow">&#9660;</span>
@@ -74,6 +93,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
   <script>{SETTINGS_JS}</script>
   <script>{LOG_JS}</script>
   <script>var CURRENT_FOLDER_PATH = {current_folder_js};</script>
+  <script>{SYNC_JS}</script>
   <script>{FOLDER_JS}</script>
 </body>
 </html>"""
@@ -96,8 +116,50 @@ def _diff_label(status: str | None) -> str:
         "synced": "Synced",
         "has_diffs": "Has Diffs",
         "dropbox_only": "Dropbox Only",
+        "local_only": "Local Only",
         "loading": "Loading",
     }.get(status or "", "Loading")
+
+
+def _sync_buttons(rel_path: str, kind: str, status: str) -> str:
+    directions: list[tuple[str, str]] = []
+    if status == "Local Only":
+        directions.append(("local_to_dropbox", "Copy Local -> Dropbox"))
+    elif status == "Dropbox Only":
+        directions.append(("dropbox_to_local", "Copy Dropbox -> Local"))
+    elif status == "Has Diffs":
+        directions.append(("local_to_dropbox", "Copy Local -> Dropbox"))
+        directions.append(("dropbox_to_local", "Copy Dropbox -> Local"))
+    forms = []
+    for direction, label in directions:
+        forms.append(
+            '<form class="sync-form" action="/sync" method="post">'
+            f'<input type="hidden" name="path" value="{html.escape(rel_path)}">'
+            f'<input type="hidden" name="kind" value="{html.escape(kind)}">'
+            f'<input type="hidden" name="direction" value="{html.escape(direction)}">'
+            '<input type="hidden" name="sync_enabled" value="0">'
+            f'<button type="submit">{html.escape(label)}</button>'
+            '</form>'
+        )
+    return "".join(forms)
+
+
+def _sync_cell(rel_path: str, kind: str, status: str, enabled: bool) -> str:
+    attrs = f' data-sync-path="{html.escape(rel_path)}" data-sync-kind="{html.escape(kind)}"'
+    buttons = _sync_buttons(rel_path, kind, status) if enabled else ""
+    return f'<td class="sync"{attrs}>{buttons}</td>'
+
+
+def _copy_parent_button(app: Any, child_path: str, is_dir: bool) -> str:
+    if not app.local_root:
+        return ""
+    local_path = app.local_root / Path(*child_path.split("/"))
+    parent = local_path if is_dir else local_path.parent
+    return (
+        f'<button type="button" class="copy-parent" data-copy-path="{html.escape(str(parent))}">'
+        'Copy Folder Path'
+        '</button>'
+    )
 
 
 def entry_row(app: Any, rel_path: str, row: dict[str, Any], folder_cache_map: dict | None = None, current_folder_cache: dict | None = None) -> str:
@@ -107,6 +169,7 @@ def entry_row(app: Any, rel_path: str, row: dict[str, Any], folder_cache_map: di
     is_dir = row["is_dir"]
     type_text = file_type(name, is_dir)
     status_attrs = ""
+    sync_enabled = bool(app.local_root)
 
     if is_dir:
         if row["remote"]:
@@ -137,7 +200,9 @@ def entry_row(app: Any, rel_path: str, row: dict[str, Any], folder_cache_map: di
             date_td = f'<td class="col-date">{display_date(row.get("local_mtime"))}</td>'
             row_attrs = ""
         name_html = f'<a class="name" href="/?{urlencode({"path": child_path})}">[dir] {html.escape(name)}</a>'
-        actions_td = '<td class="actions"></td>'
+        copy_button = _copy_parent_button(app, child_path, True) if row["local"] else ""
+        view_td = f'<td class="view-actions">{copy_button}</td>'
+        sync_td = _sync_cell(child_path, "folder", status, sync_enabled)
     else:
         source = "remote" if row["remote"] else "local"
         if app.local_root:
@@ -156,7 +221,9 @@ def entry_row(app: Any, rel_path: str, row: dict[str, Any], folder_cache_map: di
         row_attrs = status_attrs
         query = urlencode({"path": child_path, "source": source})
         name_html = f'<a class="name" href="/file?{query}">{html.escape(name)}</a>'
-        actions_td = f'<td class="actions"><a href="/file?{query}">Preview</a> <a href="/download?{query}">Download</a></td>'
+        copy_button = _copy_parent_button(app, child_path, False) if row["local"] else ""
+        view_td = f'<td class="view-actions"><a href="/file?{query}">Preview</a> <a href="/download?{query}">Download</a>{copy_button}</td>'
+        sync_td = _sync_cell(child_path, "file", status, sync_enabled)
 
     return f"""<tr{row_attrs}>
   <td>{name_html}</td>
@@ -164,7 +231,8 @@ def entry_row(app: Any, rel_path: str, row: dict[str, Any], folder_cache_map: di
   <td><span class="status {status_class(status)}">{status}</span></td>
   {size_td}
   {date_td}
-  {actions_td}
+  {view_td}
+  {sync_td}
 </tr>"""
 
 
@@ -202,9 +270,23 @@ main {
   margin: 0 auto;
   padding: 24px;
 }
-.breadcrumbs {
+.topbar {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
   margin-bottom: 16px;
+}
+.breadcrumbs {
   font-size: 15px;
+}
+.sync-toggle {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 .refresh-link {
   margin-left: 12px;
@@ -292,11 +374,91 @@ th {
   background: #eef2f6;
   color: #4a5565;
 }
-.actions {
+.view-actions,
+.sync {
   white-space: nowrap;
 }
-.actions a + a {
+.view-actions a + a,
+.view-actions a + button {
   margin-left: 10px;
+}
+.copy-parent {
+  background: #eef2f6;
+  color: #1f2933;
+  font-size: 12px;
+  padding: 5px 8px;
+}
+.copy-parent.copied {
+  background: #e7f5ec;
+  color: #17633a;
+}
+.sync-form {
+  display: none;
+  margin: 0 0 4px;
+}
+body.sync-enabled .sync-form {
+  display: block;
+}
+.sync-form button {
+  font-size: 12px;
+  padding: 5px 8px;
+}
+.sync-form button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.sync-popup {
+  background: #ffffff;
+  border: 1px solid #b9c4d0;
+  border-radius: 6px;
+  bottom: 260px;
+  box-shadow: 0 8px 24px rgba(20, 30, 40, 0.16);
+  max-width: 460px;
+  padding: 10px 12px;
+  position: fixed;
+  right: 18px;
+  width: calc(100% - 36px);
+  z-index: 120;
+}
+.sync-popup.hidden {
+  display: none;
+}
+.sync-popup-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.sync-popup-head button {
+  background: #eef2f6;
+  color: #1f2933;
+  padding: 5px 8px;
+}
+#sync-popup-message {
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+#sync-popup-command {
+  color: #607080;
+  font-family: monospace;
+  font-size: 12px;
+  margin-bottom: 8px;
+  overflow-wrap: anywhere;
+}
+.sync-progress {
+  background: #e7ebef;
+  border-radius: 999px;
+  height: 9px;
+  overflow: hidden;
+}
+#sync-progress-bar {
+  background: #174a7c;
+  height: 100%;
+  width: 0;
+}
+#sync-progress-bar.running {
+  animation: sync-indeterminate 1.1s linear infinite;
+  width: 35%;
 }
 .empty {
   color: #607080;
@@ -402,6 +564,10 @@ th {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+@keyframes sync-indeterminate {
+  0%   { margin-left: -35%; }
+  100% { margin-left: 100%; }
+}
 @keyframes pending-pulse {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.35; }
@@ -495,6 +661,182 @@ LOG_JS = r"""
 """
 
 
+SYNC_JS = r"""
+(function () {
+  var toggle = document.getElementById('sync-enabled');
+  var popup = document.getElementById('sync-popup');
+  var hide = document.getElementById('sync-popup-hide');
+  var message = document.getElementById('sync-popup-message');
+  var command = document.getElementById('sync-popup-command');
+  var bar = document.getElementById('sync-progress-bar');
+
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function labelForDirection(direction) {
+    if (direction === 'local_to_dropbox') return 'Copy Local -> Dropbox';
+    return 'Copy Dropbox -> Local';
+  }
+
+  function directionsForStatus(status) {
+    if (status === 'Local Only') return ['local_to_dropbox'];
+    if (status === 'Dropbox Only') return ['dropbox_to_local'];
+    if (status === 'Has Diffs') return ['local_to_dropbox', 'dropbox_to_local'];
+    return [];
+  }
+
+  function renderCell(relPath, kind, status) {
+    return directionsForStatus(status).map(function (direction) {
+      return '<form class="sync-form" action="/sync" method="post">' +
+        '<input type="hidden" name="path" value="' + esc(relPath) + '">' +
+        '<input type="hidden" name="kind" value="' + esc(kind) + '">' +
+        '<input type="hidden" name="direction" value="' + esc(direction) + '">' +
+        '<input type="hidden" name="sync_enabled" value="0">' +
+        '<button type="submit">' + esc(labelForDirection(direction)) + '</button>' +
+        '</form>';
+    }).join('');
+  }
+
+  window.SyncControls = { renderCell: renderCell };
+
+  function setSyncBusy(busy) {
+    document.querySelectorAll('.sync-form button').forEach(function (button) {
+      button.disabled = busy;
+    });
+  }
+
+  function applyToggle() {
+    var enabled = !!(toggle && toggle.checked);
+    document.body.classList.toggle('sync-enabled', enabled);
+    document.querySelectorAll('input[name="sync_enabled"]').forEach(function (input) {
+      input.value = enabled ? '1' : '0';
+    });
+  }
+
+  if (toggle) {
+    toggle.checked = Settings.get('sync-enabled', false);
+    toggle.addEventListener('change', function () {
+      Settings.set('sync-enabled', toggle.checked);
+      applyToggle();
+    });
+    applyToggle();
+  }
+
+  if (hide) {
+    hide.addEventListener('click', function () {
+      popup.classList.add('hidden');
+    });
+  }
+
+  function showPopup(text, cmd) {
+    if (!popup) return;
+    popup.classList.remove('hidden');
+    message.textContent = text;
+    command.textContent = cmd || '';
+    bar.className = 'running';
+    bar.style.background = '#174a7c';
+    bar.style.marginLeft = '';
+    bar.style.width = '';
+  }
+
+  function finishPopup(text, cmd, ok) {
+    if (!popup) return;
+    popup.classList.remove('hidden');
+    message.textContent = text;
+    command.textContent = cmd || '';
+    bar.className = '';
+    bar.style.marginLeft = '0';
+    bar.style.width = '100%';
+    bar.style.background = ok ? '#17633a' : '#8a1f1f';
+  }
+
+  function pollStatus(id) {
+    fetch('/sync-status?id=' + encodeURIComponent(id))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        command.textContent = data.command || data.label || '';
+        if (data.status === 'complete') {
+          finishPopup(data.message || 'Sync complete', data.command || data.label || '', true);
+          setTimeout(function () { window.location.reload(); }, 700);
+          return;
+        }
+        if (data.status === 'error') {
+          setSyncBusy(false);
+          finishPopup(data.message || 'Sync failed', data.command || data.label || '', false);
+          return;
+        }
+        message.textContent = data.message || 'Sync running';
+        setTimeout(function () { pollStatus(id); }, 800);
+      })
+      .catch(function () { setTimeout(function () { pollStatus(id); }, 1500); });
+  }
+
+  document.addEventListener('submit', function (event) {
+    var form = event.target;
+    if (!form || !form.classList || !form.classList.contains('sync-form')) return;
+    event.preventDefault();
+    if (!toggle || !toggle.checked) return;
+    if (form.getAttribute('data-sync-running') === '1') return;
+    applyToggle();
+    form.setAttribute('data-sync-running', '1');
+    setSyncBusy(true);
+    var data = new FormData(form);
+    var cmd = labelForDirection(data.get('direction')) + ': ' + data.get('path');
+    showPopup('Sync running', cmd);
+    fetch('/sync', {
+      method: 'POST',
+      body: new URLSearchParams(data)
+    })
+      .then(function (r) {
+        if (!r.ok) throw new Error('Sync request failed');
+        return r.json();
+      })
+      .then(function (payload) { pollStatus(payload.id); })
+      .catch(function (err) {
+        form.removeAttribute('data-sync-running');
+        setSyncBusy(false);
+        finishPopup(err.message || 'Sync failed', cmd, false);
+      });
+  });
+
+  document.addEventListener('click', function (event) {
+    var button = event.target;
+    if (!button || !button.classList || !button.classList.contains('copy-parent')) return;
+    var path = button.getAttribute('data-copy-path') || '';
+    if (!path) return;
+
+    function markCopied() {
+      var original = button.textContent;
+      button.textContent = 'Copied';
+      button.classList.add('copied');
+      setTimeout(function () {
+        button.textContent = original;
+        button.classList.remove('copied');
+      }, 1200);
+    }
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(path).then(markCopied).catch(function () {});
+    } else {
+      var input = document.createElement('textarea');
+      input.value = path;
+      input.setAttribute('readonly', '');
+      input.style.position = 'fixed';
+      input.style.left = '-9999px';
+      document.body.appendChild(input);
+      input.select();
+      try {
+        document.execCommand('copy');
+        markCopied();
+      } catch (e) {}
+      document.body.removeChild(input);
+    }
+  });
+}());
+"""
+
+
 FOLDER_JS = r"""
 (function () {
   var folderRows = {};
@@ -520,6 +862,7 @@ FOLDER_JS = r"""
     if (status === 'synced') return 'Synced';
     if (status === 'has_diffs') return 'Has Diffs';
     if (status === 'dropbox_only') return 'Dropbox Only';
+    if (status === 'local_only') return 'Local Only';
     return 'Loading';
   }
 
@@ -536,6 +879,14 @@ FOLDER_JS = r"""
     cell.textContent = label;
   }
 
+  function findSyncCell(relPath) {
+    var cells = document.querySelectorAll('.sync[data-sync-path]');
+    for (var i = 0; i < cells.length; i++) {
+      if (cells[i].getAttribute('data-sync-path') === relPath) return cells[i];
+    }
+    return null;
+  }
+
   function applyResult(relPath, info) {
     var row = folderRows[relPath];
     if (!row) return;
@@ -543,7 +894,12 @@ FOLDER_JS = r"""
     var dateCell = row.querySelector('.col-date');
     var statusCell = row.querySelector('.status');
     var prefix = info.complete ? '' : spinnerHtml;
-    if (statusCell && info.diff_complete) applyStatusCell(statusCell, labelForDiff(info.diff_status));
+    if (statusCell && info.diff_complete) {
+      var label = labelForDiff(info.diff_status);
+      applyStatusCell(statusCell, label);
+      var syncCell = findSyncCell(relPath);
+      if (syncCell && window.SyncControls) syncCell.innerHTML = window.SyncControls.renderCell(relPath, 'folder', label);
+    }
     if (sizeCell) {
       var sizeText = esc(info.size_display || '—');
       if (info.count_display) sizeText += ' <span style="color:#607080">(' + esc(info.count_display) + ')</span>';
@@ -557,7 +913,12 @@ FOLDER_JS = r"""
     Object.keys(fileStatusCells).forEach(function (relPath) {
       var name = relPath.split('/').pop();
       var statusInfo = info.file_statuses[name];
-      if (statusInfo) applyStatusCell(fileStatusCells[relPath], labelForDiff(statusInfo.diff_status));
+      if (statusInfo) {
+        var label = labelForDiff(statusInfo.diff_status);
+        applyStatusCell(fileStatusCells[relPath], label);
+        var syncCell = findSyncCell(relPath);
+        if (syncCell && window.SyncControls) syncCell.innerHTML = window.SyncControls.renderCell(relPath, 'file', label);
+      }
     });
   }
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 import threading
 import time
 from urllib.parse import quote
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 from dropbox_browser.foldercache import FolderCacheManager
 from dropbox_browser.listingcache import ListingCacheManager
@@ -108,6 +110,86 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertTrue(any(event["event"] == "job_queued" for event in events))
         self.assertTrue(any(event["event"] == "subtree_complete" and event.get("remote_path") == "dropbox:sub" for event in events))
 
+    def test_ignored_metadata_files_are_not_listed_or_compared(self) -> None:
+        local_root = self.create_local_root({
+            "music/.DS_Store": b"mac metadata",
+            "music/Thumbs.db": b"windows thumbnails",
+            "music/desktop.ini": b"windows folder metadata",
+            "music/ehthumbs.db": b"windows media thumbnails",
+            "music/._song.mp3": b"mac resource fork",
+            "music/song.mp3": b"audio",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:music": [SimulatedLsjsonResponse(items=[
+                remote_file_item(".DS_Store", local_root / "music" / ".DS_Store"),
+                remote_file_item("Thumbs.db", local_root / "music" / "Thumbs.db"),
+                remote_file_item("desktop.ini", local_root / "music" / "desktop.ini"),
+                remote_file_item("ehthumbs.db", local_root / "music" / "ehthumbs.db"),
+                remote_file_item("._song.mp3", local_root / "music" / "._song.mp3"),
+                remote_file_item("song.mp3", local_root / "music" / "song.mp3"),
+            ])],
+        })
+        app = self._build_app(rclone, local_root=local_root)
+
+        with TestServer(app) as server:
+            html = server.get_text("/?path=music")
+            results = self._wait_folder_info(
+                server,
+                current="music",
+                predicate=lambda data: data.get("music", {}).get("file_statuses", {}).get("song.mp3"),
+            )
+            info = results["music"]
+
+        self.assertIn("song.mp3", html)
+        self.assertNotIn(".DS_Store", html)
+        self.assertNotIn("Thumbs.db", html)
+        self.assertNotIn("desktop.ini", html)
+        self.assertNotIn("ehthumbs.db", html)
+        self.assertNotIn("._song.mp3", html)
+        self.assertEqual(info.get("file_statuses", {}).get("song.mp3", {}).get("diff_status"), "synced")
+        self.assertNotIn(".DS_Store", info.get("file_statuses", {}))
+        self.assertNotIn("Thumbs.db", info.get("file_statuses", {}))
+        self.assertNotIn("._song.mp3", info.get("file_statuses", {}))
+
+    def test_ignored_metadata_files_do_not_create_folder_cache_diffs(self) -> None:
+        local_root = self.create_local_root({
+            "music/song.mp3": b"audio",
+            "music/.DS_Store": b"local mac metadata",
+            "music/Thumbs.db": b"local windows metadata",
+            "music/._song.mp3": b"local mac resource fork",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:music": [SimulatedLsjsonResponse(items=[
+                remote_file_item("song.mp3", local_root / "music" / "song.mp3"),
+                {
+                    "Name": "desktop.ini",
+                    "Path": "desktop.ini",
+                    "IsDir": False,
+                    "Size": 12,
+                    "ModTime": "2024-01-01T12:00:00Z",
+                },
+                {
+                    "Name": "._remote.mp3",
+                    "Path": "._remote.mp3",
+                    "IsDir": False,
+                    "Size": 9,
+                    "ModTime": "2024-01-01T12:00:00Z",
+                },
+            ])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+        cache = app.folder_cache
+        assert cache is not None
+
+        cache.request("dropbox:music", time.time())
+        data = wait_until(
+            lambda: cache.get("dropbox:music") if (cache.get("dropbox:music") or {}).get("complete") else None,
+            description="ignored metadata folder completion",
+        )
+
+        self.assertEqual(data["diff_status"], "synced")
+        self.assertEqual(data["file_statuses"], {"song.mp3": {"diff_status": "synced"}})
+
     def test_slow_background_folder_reports_calculating_then_completes(self) -> None:
         local_root = self.create_local_root({
             "shared.txt": b"root data",
@@ -138,6 +220,83 @@ class AppBehaviorTests(IsolatedPathsTestCase):
 
         self.assertEqual(results["slow"]["diff_status"], "synced")
         self.assertTrue(results["slow"]["complete"])
+
+    def test_local_file_size_change_overrides_stale_synced_folder_cache(self) -> None:
+        local_root = self.create_local_root({
+            "dropbox_browser_test/audio_urls.txt": b"old urls",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:dropbox_browser_test": [SimulatedLsjsonResponse(items=[
+                remote_file_item("audio_urls.txt", local_root / "dropbox_browser_test" / "audio_urls.txt"),
+            ])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            server.get_text("/?path=dropbox_browser_test")
+            results = self._wait_folder_info(
+                server,
+                current="dropbox_browser_test",
+                predicate=lambda data: data.get("dropbox_browser_test", {}).get("diff_complete"),
+            )
+            self.assertEqual(
+                results["dropbox_browser_test"]["file_statuses"]["audio_urls.txt"]["diff_status"],
+                "synced",
+            )
+
+            (local_root / "dropbox_browser_test" / "audio_urls.txt").write_bytes(b"changed local urls")
+            html = server.get_text("/?path=dropbox_browser_test")
+            info = server.get_json("/folder-info?current=dropbox_browser_test")["results"]["dropbox_browser_test"]
+
+        self.assertIn('data-file-status-path="dropbox_browser_test/audio_urls.txt"', html)
+        self.assertIn("Has Diffs", html)
+        self.assertEqual(info["file_statuses"]["audio_urls.txt"]["diff_status"], "has_diffs")
+
+    def test_manual_refresh_invalidates_current_folder_metadata_cache(self) -> None:
+        local_root = self.create_local_root({
+            "dropbox_browser_test/audio_urls.txt": b"old urls",
+        })
+        changed_remote = {
+            "Name": "audio_urls.txt",
+            "Path": "audio_urls.txt",
+            "IsDir": False,
+            "Size": len(b"changed remote urls"),
+            "ModTime": "2024-01-01T12:00:00Z",
+        }
+        rclone = SimulatedRclone({
+            "dropbox:dropbox_browser_test": [
+                SimulatedLsjsonResponse(items=[
+                    remote_file_item("audio_urls.txt", local_root / "dropbox_browser_test" / "audio_urls.txt"),
+                ]),
+                SimulatedLsjsonResponse(items=[changed_remote]),
+            ],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+        cache = app.folder_cache
+        assert cache is not None
+
+        with TestServer(app) as server:
+            server.get_text("/?path=dropbox_browser_test")
+            self._wait_folder_info(
+                server,
+                current="dropbox_browser_test",
+                predicate=lambda data: data.get("dropbox_browser_test", {}).get("diff_status") == "synced",
+            )
+
+            html = server.get_text("/?path=dropbox_browser_test&refresh=1")
+            data = wait_until(
+                lambda: cache.get("dropbox:dropbox_browser_test")
+                if (cache.get("dropbox:dropbox_browser_test") or {}).get("diff_status") == "has_diffs"
+                else None,
+                description="refreshed folder diff recompute",
+            )
+
+        self.assertIn("Has Diffs", html)
+        self.assertEqual(data["file_statuses"]["audio_urls.txt"]["diff_status"], "has_diffs")
+        self.assertGreaterEqual(
+            sum(1 for call in rclone.calls if call["target"] == "dropbox:dropbox_browser_test"),
+            2,
+        )
 
     def test_same_page_reload_does_not_rerun_identical_child_listing(self) -> None:
         local_root = self.create_local_root({
@@ -507,3 +666,183 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertEqual(data["diff_status"], "dropbox_only")
         self.assertEqual(data["size"], 7)
         self.assertEqual(data["file_count"], 1)
+
+    def test_sync_controls_render_in_separate_view_and_sync_columns(self) -> None:
+        local_root = self.create_local_root({
+            "local.txt": b"local",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            html = server.get_text("/")
+
+        self.assertIn("<th>View</th>", html)
+        self.assertIn("<th>Sync</th>", html)
+        self.assertIn('id="sync-enabled"', html)
+        self.assertIn("Copy Local -&gt; Dropbox", html)
+        self.assertIn("body.sync-enabled .sync-form", html)
+        self.assertIn("Settings.get('sync-enabled', false)", html)
+        self.assertIn("Settings.set('sync-enabled', toggle.checked)", html)
+        self.assertIn("setSyncBusy(true)", html)
+        self.assertIn("button.disabled = busy", html)
+
+    def test_view_column_can_copy_local_parent_folder_path(self) -> None:
+        local_root = self.create_local_root({
+            "both.txt": b"both",
+            "local.txt": b"local",
+            "folder/inside.txt": b"inside",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[
+                remote_file_item("both.txt", local_root / "both.txt"),
+                {
+                    "Name": "remote.txt",
+                    "Path": "remote.txt",
+                    "IsDir": False,
+                    "Size": 6,
+                    "ModTime": "2024-01-01T12:00:00Z",
+                },
+            ])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            html = server.get_text("/")
+
+        self.assertIn('class="copy-parent"', html)
+        self.assertIn(f'data-copy-path="{local_root}"', html)
+        self.assertIn("navigator.clipboard.writeText(path)", html)
+        self.assertIn("document.execCommand('copy')", html)
+        remote_row = html.split('remote.txt</a></td>', 1)[1].split("</tr>", 1)[0]
+        self.assertNotIn("copy-parent", remote_row)
+
+    def test_sync_post_requires_enabled_guard(self) -> None:
+        local_root = self.create_local_root({
+            "local.txt": b"local",
+        })
+        rclone = SimulatedRclone({})
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            body = b"path=local.txt&kind=file&direction=local_to_dropbox&sync_enabled=0"
+            request = Request(
+                server.base_url + "/sync",
+                data=body,
+                method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            with self.assertRaises(HTTPError) as ctx:
+                urlopen(request, timeout=5)
+
+        self.assertEqual(ctx.exception.code, 403)
+        ctx.exception.close()
+
+    def test_sync_local_only_file_copies_local_to_dropbox(self) -> None:
+        local_root = self.create_local_root({
+            "local.txt": b"local",
+        })
+        rclone = SimulatedRclone({})
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            payload = server.post_json("/sync", {
+                "path": "local.txt",
+                "kind": "file",
+                "direction": "local_to_dropbox",
+                "sync_enabled": "1",
+            })
+            result = wait_until(
+                lambda: server.get_json("/sync-status?id=" + payload["id"])
+                if server.get_json("/sync-status?id=" + payload["id"]).get("status") != "running"
+                else None,
+                description="local-to-dropbox sync completion",
+            )
+
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(rclone.cat_data["dropbox:local.txt"], b"local")
+        self.assertTrue(any(call["args"][0] == "copyto" and call["target"] == "dropbox:local.txt" for call in rclone.calls))
+
+    def test_sync_dropbox_only_file_copies_dropbox_to_local(self) -> None:
+        local_root = self.create_local_root({})
+        rclone = SimulatedRclone(cat_data={
+            "dropbox:remote.txt": b"remote",
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            payload = server.post_json("/sync", {
+                "path": "remote.txt",
+                "kind": "file",
+                "direction": "dropbox_to_local",
+                "sync_enabled": "1",
+            })
+            result = wait_until(
+                lambda: server.get_json("/sync-status?id=" + payload["id"])
+                if server.get_json("/sync-status?id=" + payload["id"]).get("status") != "running"
+                else None,
+                description="dropbox-to-local sync completion",
+            )
+
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual((local_root / "remote.txt").read_bytes(), b"remote")
+        self.assertTrue(any(call["args"][0] == "copyto" and call["target"] == str(local_root / "remote.txt") for call in rclone.calls))
+
+    def test_sync_local_folder_copies_recursively_to_dropbox(self) -> None:
+        local_root = self.create_local_root({
+            "folder/a.txt": b"a",
+            "folder/nested/b.txt": b"b",
+        })
+        rclone = SimulatedRclone({})
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            payload = server.post_json("/sync", {
+                "path": "folder",
+                "kind": "folder",
+                "direction": "local_to_dropbox",
+                "sync_enabled": "1",
+            })
+            result = wait_until(
+                lambda: server.get_json("/sync-status?id=" + payload["id"])
+                if server.get_json("/sync-status?id=" + payload["id"]).get("status") != "running"
+                else None,
+                description="local-folder sync completion",
+            )
+
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(rclone.cat_data["dropbox:folder/a.txt"], b"a")
+        self.assertEqual(rclone.cat_data["dropbox:folder/nested/b.txt"], b"b")
+        self.assertTrue(any(call["args"][0] == "copy" and call["target"] == "dropbox:folder" for call in rclone.calls))
+
+    def test_sync_dropbox_folder_copies_recursively_to_local_without_delete(self) -> None:
+        local_root = self.create_local_root({
+            "folder/local-only.txt": b"keep",
+        })
+        rclone = SimulatedRclone(cat_data={
+            "dropbox:folder/a.txt": b"a",
+            "dropbox:folder/nested/b.txt": b"b",
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            payload = server.post_json("/sync", {
+                "path": "folder",
+                "kind": "folder",
+                "direction": "dropbox_to_local",
+                "sync_enabled": "1",
+            })
+            result = wait_until(
+                lambda: server.get_json("/sync-status?id=" + payload["id"])
+                if server.get_json("/sync-status?id=" + payload["id"]).get("status") != "running"
+                else None,
+                description="dropbox-folder sync completion",
+            )
+
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual((local_root / "folder" / "a.txt").read_bytes(), b"a")
+        self.assertEqual((local_root / "folder" / "nested" / "b.txt").read_bytes(), b"b")
+        self.assertEqual((local_root / "folder" / "local-only.txt").read_bytes(), b"keep")
+        self.assertTrue(any(call["args"][0] == "copy" and call["target"] == str(local_root / "folder") for call in rclone.calls))

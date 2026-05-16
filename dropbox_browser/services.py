@@ -6,6 +6,7 @@ from typing import Any
 
 from .errors import BrowserError
 from .formatting import file_type, parse_rclone_time
+from .ignored import is_ignored_name
 from .listingcache import ListingCacheManager
 from .paths import child_remote_path, remote_target, safe_join_local
 from .rclone import RcloneClient
@@ -41,7 +42,7 @@ class DropboxBrowser:
 
         for item in remote_items:
             name = item.get("Name") or item.get("Path") or ""
-            if not name or "/" in name:
+            if not name or "/" in name or is_ignored_name(name):
                 continue
             is_dir = bool(item.get("IsDir"))
             key = name.casefold()
@@ -60,6 +61,8 @@ class DropboxBrowser:
         if local_folder:
             if local_folder.exists() and local_folder.is_dir():
                 for child in local_folder.iterdir():
+                    if is_ignored_name(child.name):
+                        continue
                     stat = child.stat()
                     key = merged_keys.get(child.name.casefold(), child.name)
                     merged_keys.setdefault(child.name.casefold(), key)
@@ -114,6 +117,31 @@ class DropboxBrowser:
         files = sorted((row for row in entries if not row["is_dir"]), key=key, reverse=reverse)
         return folders + files
 
+    def file_statuses_for_entries(self, entries: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+        """Compute direct file diff status from the live merged listing.
+
+        Folder subtree status is cached, but file rows can be compared cheaply
+        from the current direct Dropbox listing and local stat data. This keeps
+        local edits made outside the browser from being hidden by stale folder
+        cache entries.
+        """
+        if self.local_root is None:
+            return {}
+        statuses: dict[str, dict[str, str]] = {}
+        for row in entries:
+            if row["is_dir"]:
+                continue
+            name = row["name"]
+            if not row["remote"]:
+                statuses[name] = {"diff_status": "local_only", "reason": f"Local only: {name}"}
+            elif not row["local"]:
+                statuses[name] = {"diff_status": "dropbox_only", "reason": f"Dropbox only: {name}"}
+            elif (row.get("remote_size") or 0) != (row.get("local_size") or 0):
+                statuses[name] = {"diff_status": "has_diffs", "reason": f"Size differs: {name}"}
+            else:
+                statuses[name] = {"diff_status": "synced"}
+        return statuses
+
     def name_exists_in_folder(self, rel_path: str, filename: str) -> tuple[bool, str | None]:
         remote_file = child_remote_path(rel_path, filename)
         if self.rclone.exists(remote_target(self.remote, remote_file)):
@@ -136,3 +164,43 @@ class DropboxBrowser:
         if self.listing_cache:
             self.listing_cache.invalidate(remote_target(self.remote, rel_path))
         self.invalidate_folder_metadata(rel_path)
+
+    def sync_item(self, rel_path: str, direction: str, kind: str) -> None:
+        if self.local_root is None:
+            raise BrowserError(HTTPStatus.BAD_REQUEST, "Local comparison is not configured.")
+        if direction not in {"local_to_dropbox", "dropbox_to_local"}:
+            raise BrowserError(HTTPStatus.BAD_REQUEST, "Unsupported sync direction.")
+        if kind not in {"file", "folder"}:
+            raise BrowserError(HTTPStatus.BAD_REQUEST, "Unsupported sync item type.")
+
+        local_path = safe_join_local(self.local_root, rel_path)
+        remote_path = remote_target(self.remote, rel_path)
+        if direction == "local_to_dropbox":
+            if kind == "folder":
+                if not local_path.is_dir():
+                    raise BrowserError(HTTPStatus.NOT_FOUND, "Local folder not found.")
+                self.rclone.copy_folder_overwrite(local_path, remote_path)
+            else:
+                if not local_path.is_file():
+                    raise BrowserError(HTTPStatus.NOT_FOUND, "Local file not found.")
+                self.rclone.copy_file_overwrite(local_path, remote_path)
+        else:
+            if kind == "folder":
+                local_path.mkdir(parents=True, exist_ok=True)
+                self.rclone.copy_folder_overwrite(remote_path, local_path)
+            else:
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                self.rclone.copy_file_overwrite(remote_path, local_path)
+
+        # Sync is copy-only: it overwrites destination files selected by the
+        # user, but intentionally never deletes destination-only files.
+        parent_rel = str(Path(rel_path).parent).replace("\\", "/")
+        if parent_rel == ".":
+            parent_rel = ""
+        if self.listing_cache:
+            self.listing_cache.invalidate(remote_target(self.remote, parent_rel))
+            if kind == "folder":
+                self.listing_cache.invalidate(remote_path)
+        self.invalidate_folder_metadata(parent_rel)
+        if kind == "folder":
+            self.invalidate_folder_metadata(rel_path)

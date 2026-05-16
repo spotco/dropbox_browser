@@ -12,7 +12,8 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from subprocess import CompletedProcess
 from typing import Any
-from urllib.request import urlopen
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 from unittest.mock import patch
 
 from dropbox_browser.errors import BrowserError
@@ -108,12 +109,46 @@ class SimulatedRclone:
     ) -> CompletedProcess[bytes]:
         if input_file is not None:
             raise AssertionError("SimulatedRclone does not support stdin input")
-        if not args or args[0] != "lsjson":
+        if not args:
             raise AssertionError(f"Unsupported simulated rclone command: {args!r}")
-        target = args[-1]
-        response = self._execute_lsjson(target, args, cancel_token)
-        stdout = b"{invalid json" if response.invalid_json else json.dumps(copy.deepcopy(response.items) or []).encode("utf-8")
-        return CompletedProcess(list(args), response.returncode, stdout, response.stderr)
+        if args[0] == "lsjson":
+            target = args[-1]
+            response = self._execute_lsjson(target, args, cancel_token)
+            stdout = b"{invalid json" if response.invalid_json else json.dumps(copy.deepcopy(response.items) or []).encode("utf-8")
+            return CompletedProcess(list(args), response.returncode, stdout, response.stderr)
+        if args[0] == "copyto":
+            source = args[-2]
+            destination = args[-1]
+            self._record_call(destination, args, cancelable=cancel_token is not None)
+            source_path = Path(source)
+            destination_path = Path(destination)
+            if source_path.exists():
+                self.cat_data[destination] = source_path.read_bytes()
+            elif source in self.cat_data:
+                destination_path.parent.mkdir(parents=True, exist_ok=True)
+                destination_path.write_bytes(self.cat_data[source])
+            return CompletedProcess(list(args), 0, b"", b"")
+        if args[0] == "copy":
+            source = args[-2]
+            destination = args[-1]
+            self._record_call(destination, args, cancelable=cancel_token is not None)
+            source_path = Path(source)
+            destination_path = Path(destination)
+            if source_path.exists() and source_path.is_dir():
+                for child in source_path.rglob("*"):
+                    if child.is_file():
+                        rel = child.relative_to(source_path).as_posix()
+                        self.cat_data[destination.rstrip("/") + "/" + rel] = child.read_bytes()
+            else:
+                prefix = source.rstrip("/") + "/"
+                for remote_path, data in list(self.cat_data.items()):
+                    if remote_path.startswith(prefix):
+                        rel = remote_path[len(prefix):]
+                        target = destination_path.joinpath(*rel.split("/"))
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(data)
+            return CompletedProcess(list(args), 0, b"", b"")
+        raise AssertionError(f"Unsupported simulated rclone command: {args!r}")
 
     def lsjson(self, target: str) -> list[dict[str, Any]]:
         response = self._execute_lsjson(target, ("lsjson", "--", target), cancel_token=None)
@@ -127,6 +162,12 @@ class SimulatedRclone:
 
     def copy_file_to_remote(self, source: Path, destination: str) -> None:
         self.cat_data[destination] = source.read_bytes()
+
+    def copy_file_overwrite(self, source: str | Path, destination: str | Path) -> None:
+        self.run("copyto", "--", str(source), str(destination))
+
+    def copy_folder_overwrite(self, source: str | Path, destination: str | Path) -> None:
+        self.run("copy", "--", str(source), str(destination))
 
     def open_cat(self, target: str) -> SimulatedCatProcess:
         if target not in self.cat_data:
@@ -170,6 +211,17 @@ class TestServer:
 
     def get_json(self, path: str) -> dict[str, Any]:
         return json.loads(self.get_text(path))
+
+    def post_json(self, path: str, data: dict[str, str]) -> dict[str, Any]:
+        body = urlencode(data).encode("utf-8")
+        request = Request(
+            self.base_url + path,
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        with urlopen(request, timeout=5) as response:
+            return json.loads(response.read().decode("utf-8"))
 
 
 class IsolatedPathsTestCase(unittest.TestCase):
