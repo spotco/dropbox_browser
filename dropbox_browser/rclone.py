@@ -59,6 +59,8 @@ class RcloneClient:
         self.progress_fn: Callable[[], tuple[int, int]] | None = None
         self._lsjson_inflight_guard = threading.Lock()
         self._lsjson_inflight: dict[str, dict[str, Any]] = {}
+        self._stream_log_guard = threading.Lock()
+        self._stream_logs: dict[int, tuple[list[str], int, int, float]] = {}
 
     def command(self, *args: str) -> list[str]:
         cmd = [self.executable]
@@ -222,12 +224,43 @@ class RcloneClient:
 
     def open_cat(self, target: str) -> subprocess.Popen[bytes]:
         cmd = self.command("cat", "--", target)
-        self._log_plain_cmd(cmd)
+        logstore_id, logoutput_id = self._log_start(cmd)
+        started_at = time.monotonic()
         try:
-            return subprocess.Popen(
+            process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
+            with self._stream_log_guard:
+                self._stream_logs[id(process)] = (cmd, logstore_id, logoutput_id, started_at)
+            return process
         except FileNotFoundError as exc:
+            elapsed = time.monotonic() - started_at
+            self._log_complete(cmd, f"  [{elapsed:.2f}s, error]", elapsed, logstore_id, logoutput_id)
             raise BrowserError(HTTPStatus.INTERNAL_SERVER_ERROR, f"rclone was not found: {exc}") from exc
+
+    def finish_cat(self, process: subprocess.Popen[bytes], stream_error: Exception | None = None) -> None:
+        with self._stream_log_guard:
+            state = self._stream_logs.pop(id(process), None)
+        if state is None:
+            return
+        cmd, logstore_id, logoutput_id, started_at = state
+        elapsed = time.monotonic() - started_at
+        stderr_text = ""
+        if process.stderr is not None:
+            try:
+                stderr_text = process.stderr.read().decode("utf-8", "replace").strip()
+            except Exception:
+                stderr_text = ""
+        if stream_error is not None:
+            if isinstance(stream_error, (BrokenPipeError, ConnectionAbortedError)):
+                suffix = f"  [{elapsed:.2f}s, client disconnected]"
+            else:
+                suffix = f"  [{elapsed:.2f}s, error]"
+        elif process.returncode and process.returncode != 0:
+            detail = f": {stderr_text}" if stderr_text else ""
+            suffix = f"  [{elapsed:.2f}s, error rc={process.returncode}{detail}]"
+        else:
+            suffix = f"  [{elapsed:.2f}s, streamed]"
+        self._log_complete(cmd, suffix, elapsed, logstore_id, logoutput_id)

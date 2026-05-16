@@ -41,6 +41,8 @@ http://127.0.0.1:8000/
 - `dropbox_browser/logstore.py` - thread-safe in-memory log ring buffer for
   the browser log panel.
 - `dropbox_browser/views.py` - server-rendered HTML/CSS.
+- `tests/` - stdlib `unittest` coverage for app behavior and folder-cache
+  workers, using simulated rclone responses and isolated temp/cache paths.
 - `README.md` - user-facing setup and usage notes.
 - `config.json` - rclone config path and logging/cache options (`RCloneConfig`,
   `LogRcloneCommands`, `LogHttpRequests`, `FolderCacheWorkers`,
@@ -97,8 +99,15 @@ Useful checks:
 python -m py_compile dropbox_browser.py
 python -m compileall -q dropbox_browser.py dropbox_browser
 python dropbox_browser.py --help
+python -m unittest discover -s tests -v
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/ -TimeoutSec 30
 ```
+
+The background-worker regression suite lives under `tests/` and uses a fake
+`rclone` implementation rather than the real binary. The main coverage file is
+`tests/test_app_behavior.py`; it exercises normal page loads, `/folder-info`
+polling, slow background listings, page changes during in-flight work,
+background worker failures, and common diff cases.
 
 Run with local comparison:
 
@@ -145,3 +154,92 @@ https://github.com/spotco/dropbox_browser
   - generated HTML, icons, search controls, preview controls, and map links:
     `dropbox_browser/views.py`;
   - config-file evolution and path locations: `dropbox_browser/config.py`.
+
+## Planned: Recursive Diff Status Cache
+
+Goal: the table Status column should show Dropbox/local diff status for both
+folders and files when `--local-root` is configured. Folder status should be
+computed by the existing background folder-cache jobs, not by synchronous page
+loads.
+
+Planned status labels:
+
+- `Loading` - a remote folder is still being computed by background jobs.
+- `Synced` - local and Dropbox item names, item types, and file sizes match for
+  that item/subtree.
+- `Has Diffs` - the local subtree and Dropbox subtree differ by item presence,
+  item type, or file size.
+- `Local Only` - an item exists locally but not on Dropbox.
+- `Dropbox Only` - an item exists on Dropbox but not locally.
+
+Resolved design decisions:
+
+- `Synced` means the visible item/subtree matches by names, item types, and
+  file sizes. Modification time differences do not make an item unsynced for
+  this feature.
+- Compare files by size only once names and item types match; do not perform
+  local Dropbox content hashing for this feature.
+- Store folder/subtree diff status in the existing folder cache JSON.
+- Treat old folder cache files that do not include the current diff fields as
+  stale and recompute them.
+- Exit as soon as any diff is found. Once a folder is known to have diffs, write
+  that state, report it through the UI, and stop any further recursive
+  traversals for that subtree.
+- Local-only folders should show `Local Only` immediately. Do not create
+  recursive cache jobs for local-only folder contents.
+- Dropbox-only folders should show `Dropbox Only`, not `Has Diffs`, when the
+  matching local folder is absent or the folder contents are entirely
+  Dropbox-side-only.
+- Same-name file-vs-folder conflicts should display `Has Diffs`; store the
+  specific reason internally if useful for debugging.
+
+Implementation plan:
+
+1. Reuse `FolderCacheManager` as the background worker for folder diff status.
+   This is the simplest fit because it already performs the recursive Dropbox
+   traversal, writes partial/complete JSON cache files, supports cancellation,
+   and is already polled by `/folder-info`.
+2. Pass local comparison context into `FolderCacheManager` from `cli.py`
+   (`local_root` and base `remote`) so a remote cache path can be mapped back to
+   the matching local folder with `safe_join_local`.
+3. Extend each folder cache accumulator and cache JSON file with diff fields,
+   for example:
+   - `diff_status`: one of `loading`, `synced`, `has_diffs`,
+     `local_only`, `dropbox_only`;
+   - optional debug/count fields such as `local_only_count`,
+     `dropbox_only_count`, and `first_diff_path`.
+4. In `_compute`, fetch direct Dropbox children with:
+   `rclone lsjson -- remote:path`. Compare direct Dropbox child names/types/sizes
+   against the direct local folder listing:
+   - case-insensitive name matching should follow the current listing merge
+     behavior (`casefold`) unless a future decision changes it;
+   - direct name/type/size differences immediately mark that folder and its
+     ancestors as `has_diffs`;
+   - if no direct differences exist, recursively queued child folders continue
+     determining whether the whole subtree is still size-synced.
+5. Stop traversal early for a subtree after the first difference
+   is found. Once a folder is known to have diffs, write that status to cache and
+   propagate it upward. Size/date/count cache values may remain partial in this
+   case; fast diff status is more important for this feature than completing
+   metadata totals after a diff has already been proven.
+6. Keep file-row status synchronous for existence/type/size where available:
+   - both sides present: `Synced`;
+   - only local present: `Local Only`;
+   - only Dropbox present: `Dropbox Only`.
+7. For folder rows, `views.py` should render status from the folder cache map:
+   - missing or incomplete diff data: `Loading`;
+   - complete diff data: `Synced` or `Has Diffs`;
+   - local-only folder rows can show `Local Only` immediately because no Dropbox
+     background job exists for them.
+8. Extend `/folder-info` and `FOLDER_JS` so polling updates the Status cell at
+   the same time it updates size/date cells.
+9. Invalidate diff cache data anywhere existing folder metadata is invalidated,
+   especially after successful uploads.
+10. Add focused tests for direct name/type/size comparison, early exit, recursive propagation,
+    local-only/dropbox-only rows, and cache serialization. If no test harness
+    exists yet, add small stdlib `unittest` coverage around the pure comparison
+    helpers first.
+
+Remaining design questions before implementation:
+
+- None currently known.

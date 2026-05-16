@@ -41,4 +41,9 @@ def status_class(status: str) -> str:
         "Both": "both",
         "Dropbox only": "remote",
         "Local only": "local",
+        "Dropbox Only": "remote",
+        "Local Only": "local",
+        "Synced": "both",
+        "Has Diffs": "diff",
+        "Loading": "loading",
     }.get(status, "")

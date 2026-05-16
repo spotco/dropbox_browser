@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import time
 import tempfile
 from pathlib import Path
 from typing import Any
+
+_REPLACE_RETRIES = 8
+_REPLACE_RETRY_DELAY_SECONDS = 0.02
 
 
 def write_json_atomic(path: Path, data: Any) -> None:
@@ -19,7 +23,16 @@ def write_json_atomic(path: Path, data: Any) -> None:
         ) as tmp:
             json.dump(data, tmp)
             tmp_path = Path(tmp.name)
-        tmp_path.replace(path)
+        delay = _REPLACE_RETRY_DELAY_SECONDS
+        for attempt in range(_REPLACE_RETRIES):
+            try:
+                tmp_path.replace(path)
+                break
+            except PermissionError:
+                if attempt == _REPLACE_RETRIES - 1:
+                    raise
+                time.sleep(delay)
+                delay *= 2
     finally:
         if tmp_path is not None:
             try:

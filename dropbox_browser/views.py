@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import posixpath
 from typing import Any
 from urllib.parse import urlencode
@@ -9,8 +10,8 @@ from . import APP_TITLE
 from .formatting import display_date, file_type, human_size, status_class
 
 
-def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: str, direction: str, msg: str, folder_cache_map: dict | None = None) -> str:
-    rows = "\n".join(entry_row(rel_path, entry, folder_cache_map or {}) for entry in entries)
+def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: str, direction: str, msg: str, folder_cache_map: dict | None = None, current_folder_cache: dict | None = None) -> str:
+    rows = "\n".join(entry_row(app, rel_path, entry, folder_cache_map or {}, current_folder_cache or {}) for entry in entries)
     crumbs = breadcrumbs(rel_path)
     upload_action = "/upload?" + urlencode({"path": rel_path})
     refresh_href = "/?" + urlencode({"path": rel_path, "sort": sort_key, "dir": direction, "refresh": "1"})
@@ -20,6 +21,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         else "Local comparison disabled"
     )
     msg_html = f'<p class="notice">{html.escape(msg)}</p>' if msg else ""
+    current_folder_js = json.dumps(rel_path)
 
     def sort_link(label: str, key: str) -> str:
         next_dir = "desc" if sort_key == key and direction == "asc" else "asc"
@@ -71,6 +73,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
   </div>
   <script>{SETTINGS_JS}</script>
   <script>{LOG_JS}</script>
+  <script>var CURRENT_FOLDER_PATH = {current_folder_js};</script>
   <script>{FOLDER_JS}</script>
 </body>
 </html>"""
@@ -88,16 +91,33 @@ def breadcrumbs(rel_path: str) -> str:
     return " / ".join(links)
 
 
-def entry_row(rel_path: str, row: dict[str, Any], folder_cache_map: dict | None = None) -> str:
+def _diff_label(status: str | None) -> str:
+    return {
+        "synced": "Synced",
+        "has_diffs": "Has Diffs",
+        "dropbox_only": "Dropbox Only",
+        "loading": "Loading",
+    }.get(status or "", "Loading")
+
+
+def entry_row(app: Any, rel_path: str, row: dict[str, Any], folder_cache_map: dict | None = None, current_folder_cache: dict | None = None) -> str:
     name = row["name"]
     child_path = posixpath.join(rel_path, name) if rel_path else name
-    status = "Both" if row["remote"] and row["local"] else "Dropbox only" if row["remote"] else "Local only"
+    status = "Both" if row["remote"] and row["local"] else "Dropbox Only" if row["remote"] else "Local Only"
     is_dir = row["is_dir"]
     type_text = file_type(name, is_dir)
+    status_attrs = ""
 
     if is_dir:
         if row["remote"]:
             cached = (folder_cache_map or {}).get(name)
+            if app.local_root:
+                if not row["local"]:
+                    status = "Dropbox Only"
+                elif cached is not None and cached.get("diff_complete"):
+                    status = _diff_label(cached.get("diff_status"))
+                else:
+                    status = "Loading"
             if cached is not None:
                 complete = cached.get("complete", False)
                 sz = human_size(cached["size"]) if cached.get("size") is not None else "—"
@@ -111,6 +131,8 @@ def entry_row(rel_path: str, row: dict[str, Any], folder_cache_map: dict | None 
                 date_td = f'<td class="col-date">{pending_cell}</td>'
             row_attrs = f' data-folder-path="{html.escape(child_path)}"'
         else:
+            if app.local_root:
+                status = "Local Only"
             size_td = '<td class="col-size">—</td>'
             date_td = f'<td class="col-date">{display_date(row.get("local_mtime"))}</td>'
             row_attrs = ""
@@ -118,11 +140,20 @@ def entry_row(rel_path: str, row: dict[str, Any], folder_cache_map: dict | None 
         actions_td = '<td class="actions"></td>'
     else:
         source = "remote" if row["remote"] else "local"
+        if app.local_root:
+            if not row["remote"]:
+                status = "Local Only"
+            elif not row["local"]:
+                status = "Dropbox Only"
+            else:
+                file_status = ((current_folder_cache or {}).get("file_statuses") or {}).get(name, {})
+                status = _diff_label(file_status.get("diff_status"))
+                status_attrs = f' data-file-status-path="{html.escape(child_path)}"'
         size = row.get("remote_size") if row.get("remote_size") is not None else row.get("local_size")
         date_value = max(row.get("remote_mtime") or 0, row.get("local_mtime") or 0) or None
         size_td = f'<td class="col-size">{human_size(size or 0)}</td>'
         date_td = f'<td class="col-date">{display_date(date_value)}</td>'
-        row_attrs = ""
+        row_attrs = status_attrs
         query = urlencode({"path": child_path, "source": source})
         name_html = f'<a class="name" href="/file?{query}">{html.escape(name)}</a>'
         actions_td = f'<td class="actions"><a href="/file?{query}">Preview</a> <a href="/download?{query}">Download</a></td>'
@@ -252,6 +283,14 @@ th {
 .status.local {
   background: #fff2cf;
   color: #76520b;
+}
+.status.diff {
+  background: #fde8e8;
+  color: #8a1f1f;
+}
+.status.loading {
+  background: #eef2f6;
+  color: #4a5565;
 }
 .actions {
   white-space: nowrap;
@@ -462,8 +501,14 @@ FOLDER_JS = r"""
   document.querySelectorAll('tr[data-folder-path]').forEach(function (row) {
     folderRows[row.getAttribute('data-folder-path')] = row;
   });
+  var fileStatusCells = {};
+  document.querySelectorAll('tr[data-file-status-path]').forEach(function (row) {
+    var cell = row.querySelector('.status');
+    if (cell) fileStatusCells[row.getAttribute('data-file-status-path')] = cell;
+  });
   var pending = Object.keys(folderRows);
-  if (pending.length === 0) return;
+  var pollCurrent = Object.keys(fileStatusCells).length > 0;
+  if (pending.length === 0 && !pollCurrent) return;
 
   function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -471,12 +516,34 @@ FOLDER_JS = r"""
 
   var spinnerHtml = '<span class="spinner"></span> ';
 
+  function labelForDiff(status) {
+    if (status === 'synced') return 'Synced';
+    if (status === 'has_diffs') return 'Has Diffs';
+    if (status === 'dropbox_only') return 'Dropbox Only';
+    return 'Loading';
+  }
+
+  function classForLabel(label) {
+    if (label === 'Synced') return 'status both';
+    if (label === 'Has Diffs') return 'status diff';
+    if (label === 'Dropbox Only') return 'status remote';
+    if (label === 'Local Only') return 'status local';
+    return 'status loading';
+  }
+
+  function applyStatusCell(cell, label) {
+    cell.className = classForLabel(label);
+    cell.textContent = label;
+  }
+
   function applyResult(relPath, info) {
     var row = folderRows[relPath];
     if (!row) return;
     var sizeCell = row.querySelector('.col-size');
     var dateCell = row.querySelector('.col-date');
+    var statusCell = row.querySelector('.status');
     var prefix = info.complete ? '' : spinnerHtml;
+    if (statusCell && info.diff_complete) applyStatusCell(statusCell, labelForDiff(info.diff_status));
     if (sizeCell) {
       var sizeText = esc(info.size_display || '—');
       if (info.count_display) sizeText += ' <span style="color:#607080">(' + esc(info.count_display) + ')</span>';
@@ -485,9 +552,21 @@ FOLDER_JS = r"""
     if (dateCell) dateCell.innerHTML = prefix + esc(info.date_display || '');
   }
 
+  function applyCurrent(info) {
+    if (!info || !info.file_statuses) return;
+    Object.keys(fileStatusCells).forEach(function (relPath) {
+      var name = relPath.split('/').pop();
+      var statusInfo = info.file_statuses[name];
+      if (statusInfo) applyStatusCell(fileStatusCells[relPath], labelForDiff(statusInfo.diff_status));
+    });
+  }
+
   function poll() {
-    if (pending.length === 0) return;
-    fetch('/folder-info?paths=' + pending.map(encodeURIComponent).join(','))
+    if (pending.length === 0 && !pollCurrent) return;
+    var parts = [];
+    if (pending.length > 0) parts.push('paths=' + pending.map(encodeURIComponent).join(','));
+    if (pollCurrent) parts.push('current=' + encodeURIComponent(CURRENT_FOLDER_PATH || ''));
+    fetch('/folder-info?' + parts.join('&'))
       .then(function (r) { return r.json(); })
       .then(function (data) {
         var stillPending = [];
@@ -502,10 +581,15 @@ FOLDER_JS = r"""
             if (!info.complete) stillPending.push(relPath);
           }
         });
+        if (pollCurrent) {
+          var currentInfo = data.results[CURRENT_FOLDER_PATH || ''];
+          applyCurrent(currentInfo);
+          pollCurrent = !!(currentInfo && (currentInfo.status === 'calculating' || currentInfo.diff_status === 'loading'));
+        }
         pending = stillPending;
-        if (pending.length > 0) setTimeout(poll, 2000);
+        if (pending.length > 0 || pollCurrent) setTimeout(poll, 2000);
       })
-      .catch(function () { if (pending.length > 0) setTimeout(poll, 5000); });
+      .catch(function () { if (pending.length > 0 || pollCurrent) setTimeout(poll, 5000); });
   }
 
   setTimeout(poll, 500);
