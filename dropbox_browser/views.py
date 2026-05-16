@@ -5,7 +5,7 @@ import json
 import posixpath
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from . import APP_TITLE
 from .formatting import display_date, file_type, human_size, status_class
@@ -27,10 +27,18 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
     current_local_folder = ""
     if app.local_root:
         current_local_folder = str(app.local_display_path(rel_path) or app.local_root)
+    sync_toggles = (
+        '<div class="sync-toggles">'
+        '<label class="sync-toggle"><input type="checkbox" id="enable-to-local"> Enable sync to local</label>'
+        '<label class="sync-toggle"><input type="checkbox" id="enable-write-dropbox"> Enable sync to Dropbox</label>'
+        '</div>'
+        if app.local_root
+        else ""
+    )
     topbar_actions = (
         '<div class="topbar-actions">'
         f'<button type="button" class="copy-path" data-copy-path="{html.escape(current_local_folder)}">Copy Folder Path</button>'
-        '<label class="sync-toggle"><input type="checkbox" id="sync-enabled"> Enable sync</label>'
+        f'<a class="dropbox-link" href="{html.escape(dropbox_home_url(rel_path))}" target="_blank" rel="noopener noreferrer">Go to Dropbox</a>'
         '</div>'
         if app.local_root
         else ""
@@ -52,8 +60,11 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
 </head>
 <body>
   <header>
-    <h1>{APP_TITLE}</h1>
-    <div class="meta">{html.escape(app.remote)} / {html.escape(rel_path)} - {local_note}</div>
+    <div>
+      <h1>{APP_TITLE}</h1>
+      <div class="meta">{html.escape(app.remote)} / {html.escape(rel_path)} - {local_note}</div>
+    </div>
+    {sync_toggles}
   </header>
   <main>
     <div class="topbar">
@@ -118,6 +129,11 @@ def breadcrumbs(rel_path: str) -> str:
     return " / ".join(links)
 
 
+def dropbox_home_url(rel_path: str) -> str:
+    encoded = quote(rel_path, safe="/")
+    return "https://www.dropbox.com/home" + (f"/{encoded}" if encoded else "")
+
+
 def _sync_buttons(rel_path: str, kind: str, status: str) -> str:
     directions: list[tuple[str, str]] = []
     if status == "Local Only":
@@ -130,11 +146,12 @@ def _sync_buttons(rel_path: str, kind: str, status: str) -> str:
     forms = []
     for direction, label in directions:
         forms.append(
-            '<form class="sync-form" action="/sync" method="post">'
+            f'<form class="sync-form" data-sync-direction="{html.escape(direction)}" action="/sync" method="post">'
             f'<input type="hidden" name="path" value="{html.escape(rel_path)}">'
             f'<input type="hidden" name="kind" value="{html.escape(kind)}">'
             f'<input type="hidden" name="direction" value="{html.escape(direction)}">'
-            '<input type="hidden" name="sync_enabled" value="0">'
+            '<input type="hidden" name="enable_to_local" value="0">'
+            '<input type="hidden" name="enable_write_dropbox" value="0">'
             f'<button type="submit">{html.escape(label)}</button>'
             '</form>'
         )
@@ -251,8 +268,12 @@ body {
   margin: 0;
 }
 header {
+  align-items: center;
   background: #ffffff;
   border-bottom: 1px solid #d8dde3;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
   padding: 18px 28px;
 }
 h1 {
@@ -285,6 +306,13 @@ main {
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
+}
+.sync-toggles {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: flex-end;
 }
 .topbar-actions {
   align-items: center;
@@ -391,6 +419,14 @@ th {
   font-size: 12px;
   padding: 5px 8px;
 }
+.dropbox-link {
+  background: #eef2f6;
+  border-radius: 5px;
+  color: #1f2933;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 8px;
+}
 .copy-path.copied {
   background: #e7f5ec;
   color: #17633a;
@@ -399,7 +435,8 @@ th {
   display: none;
   margin: 0 0 4px;
 }
-body.sync-enabled .sync-form {
+body.sync-to-local-enabled .sync-form[data-sync-direction="dropbox_to_local"],
+body.sync-to-dropbox-enabled .sync-form[data-sync-direction="local_to_dropbox"] {
   display: block;
 }
 .sync-form button {
@@ -666,7 +703,8 @@ LOG_JS = r"""
 
 SYNC_JS = r"""
 (function () {
-  var toggle = document.getElementById('sync-enabled');
+  var enableToLocal = document.getElementById('enable-to-local');
+  var enableWriteDropbox = document.getElementById('enable-write-dropbox');
   var popup = document.getElementById('sync-popup');
   var hide = document.getElementById('sync-popup-hide');
   var message = document.getElementById('sync-popup-message');
@@ -691,11 +729,12 @@ SYNC_JS = r"""
 
   function renderCell(relPath, kind, status) {
     return directionsForStatus(status).map(function (direction) {
-      return '<form class="sync-form" action="/sync" method="post">' +
+      return '<form class="sync-form" data-sync-direction="' + esc(direction) + '" action="/sync" method="post">' +
         '<input type="hidden" name="path" value="' + esc(relPath) + '">' +
         '<input type="hidden" name="kind" value="' + esc(kind) + '">' +
         '<input type="hidden" name="direction" value="' + esc(direction) + '">' +
-        '<input type="hidden" name="sync_enabled" value="0">' +
+        '<input type="hidden" name="enable_to_local" value="0">' +
+        '<input type="hidden" name="enable_write_dropbox" value="0">' +
         '<button type="submit">' + esc(labelForDirection(direction)) + '</button>' +
         '</form>';
     }).join('');
@@ -710,21 +749,33 @@ SYNC_JS = r"""
   }
 
   function applyToggle() {
-    var enabled = !!(toggle && toggle.checked);
-    document.body.classList.toggle('sync-enabled', enabled);
-    document.querySelectorAll('input[name="sync_enabled"]').forEach(function (input) {
-      input.value = enabled ? '1' : '0';
+    var toLocal = !!(enableToLocal && enableToLocal.checked);
+    var writeDropbox = !!(enableWriteDropbox && enableWriteDropbox.checked);
+    document.body.classList.toggle('sync-to-local-enabled', toLocal);
+    document.body.classList.toggle('sync-to-dropbox-enabled', writeDropbox);
+    document.querySelectorAll('input[name="enable_to_local"]').forEach(function (input) {
+      input.value = toLocal ? '1' : '0';
+    });
+    document.querySelectorAll('input[name="enable_write_dropbox"]').forEach(function (input) {
+      input.value = writeDropbox ? '1' : '0';
     });
   }
 
-  if (toggle) {
-    toggle.checked = Settings.get('sync-enabled', false);
-    toggle.addEventListener('change', function () {
-      Settings.set('sync-enabled', toggle.checked);
+  if (enableToLocal) {
+    enableToLocal.checked = Settings.get('sync-enable-to-local', false);
+    enableToLocal.addEventListener('change', function () {
+      Settings.set('sync-enable-to-local', enableToLocal.checked);
       applyToggle();
     });
-    applyToggle();
   }
+  if (enableWriteDropbox) {
+    enableWriteDropbox.checked = Settings.get('sync-enable-write-dropbox', false);
+    enableWriteDropbox.addEventListener('change', function () {
+      Settings.set('sync-enable-write-dropbox', enableWriteDropbox.checked);
+      applyToggle();
+    });
+  }
+  applyToggle();
 
   if (hide) {
     hide.addEventListener('click', function () {
@@ -779,7 +830,9 @@ SYNC_JS = r"""
     var form = event.target;
     if (!form || !form.classList || !form.classList.contains('sync-form')) return;
     event.preventDefault();
-    if (!toggle || !toggle.checked) return;
+    var direction = form.getAttribute('data-sync-direction') || '';
+    if (direction === 'local_to_dropbox' && (!enableWriteDropbox || !enableWriteDropbox.checked)) return;
+    if (direction === 'dropbox_to_local' && (!enableToLocal || !enableToLocal.checked)) return;
     if (form.getAttribute('data-sync-running') === '1') return;
     applyToggle();
     form.setAttribute('data-sync-running', '1');

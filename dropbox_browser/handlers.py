@@ -272,11 +272,17 @@ class RequestHandler(BaseHTTPRequestHandler):
     def handle_sync(self) -> None:
         length = int(self.headers.get("Content-Length") or "0")
         params = parse_qs(self.rfile.read(length).decode("utf-8") if length > 0 else "", keep_blank_values=True)
-        if params.get("sync_enabled", [""])[0] != "1":
-            raise BrowserError(HTTPStatus.FORBIDDEN, "Enable sync before starting a copy.")
         rel_path = clean_rel_path(params.get("path", [""])[0])
         direction = params.get("direction", [""])[0]
         kind = params.get("kind", [""])[0]
+        if direction == "local_to_dropbox":
+            if params.get("enable_write_dropbox", [""])[0] != "1":
+                raise BrowserError(HTTPStatus.FORBIDDEN, "Enable write to Dropbox before starting a copy.")
+        elif direction == "dropbox_to_local":
+            if params.get("enable_to_local", [""])[0] != "1":
+                raise BrowserError(HTTPStatus.FORBIDDEN, "Enable to local before starting a copy.")
+        else:
+            raise BrowserError(HTTPStatus.BAD_REQUEST, "Unsupported sync direction.")
         label = f"{direction.replace('_', ' ')}: {rel_path or '/'}"
         command = label
         if self.app.local_root is not None:
