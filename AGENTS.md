@@ -30,6 +30,8 @@ http://127.0.0.1:8000/
   types, and status CSS classes.
 - `dropbox_browser/handlers.py` - stdlib HTTP request routing and response
   streaming.
+- `dropbox_browser/ignored.py` - hardcoded metadata/system file names that are
+  hidden from Dropbox and local listings.
 - `dropbox_browser/paths.py` - local and remote path normalization/safety
   helpers.
 - `dropbox_browser/rclone.py` - rclone subprocess adapter.
@@ -68,11 +70,18 @@ http://127.0.0.1:8000/
 - Upload staging files are deleted in a `finally` block after the Dropbox copy
   attempt.
 - Uploads are sent to Dropbox with `rclone copyto --ignore-existing`.
+- Browser sync actions run through `/sync` and are guarded by an explicit
+  `sync_enabled=1` POST field. Sync may overwrite destination files in the
+  selected direction, but it is copy-only and must never delete destination-only
+  files.
 
 ## Safety Rules
 
 - Do not add delete behavior unless explicitly requested.
 - Do not add overwrite behavior unless explicitly requested.
+- The sync feature is the explicit exception to the overwrite rule: when the
+  user chooses a sync direction in the browser, overwrite the destination from
+  the selected source direction. Sync must still never delete extra files.
 - Uploads must remain create-only:
   - check whether the target name exists in the current Dropbox folder;
   - when `--local-root` is configured, also check whether that name exists in the

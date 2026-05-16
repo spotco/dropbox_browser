@@ -6,13 +6,14 @@ from pathlib import Path
 import posixpath
 import shutil
 import tempfile
+import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from . import MAX_UPLOAD_BYTES
-from . import logoutput, logstore
+from . import logoutput, logstore, syncstate
 from .config import upload_temp_dir
 from .errors import BrowserError
 from .formatting import display_date, human_size
@@ -40,6 +41,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.serve_file(parsed.query, inline=False)
             elif parsed.path == "/logs":
                 self.serve_logs(parsed.query)
+            elif parsed.path == "/sync-status":
+                self.serve_sync_status(parsed.query)
             elif parsed.path == "/folder-info":
                 self.serve_folder_info(parsed.query)
             else:
@@ -52,9 +55,12 @@ class RequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         try:
             parsed = urlparse(self.path)
-            if parsed.path != "/upload":
+            if parsed.path == "/upload":
+                self.handle_upload(parsed.query)
+            elif parsed.path == "/sync":
+                self.handle_sync()
+            else:
                 raise BrowserError(HTTPStatus.NOT_FOUND, "Not found.")
-            self.handle_upload(parsed.query)
         except BrowserError as exc:
             self.render_error(exc.status, exc.message)
         except Exception as exc:
@@ -73,15 +79,23 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         cache = self.app.folder_cache
         page_time = time.time()
+        current_remote = remote_target(self.app.remote, rel_path)
         if cache:
             cache.notify_page_load(page_time, page_key=rel_path, force=force_refresh)
+            if force_refresh:
+                cache.invalidate(current_remote)
 
         entries = self.app.list_entries(rel_path, force_refresh=force_refresh)
 
         current_folder_cache: dict | None = None
         if cache and self.app.local_root:
-            current_remote = remote_target(self.app.remote, rel_path)
             current_folder_cache = cache.get(current_remote)
+            live_file_statuses = self.app.file_statuses_for_entries(entries)
+            if current_folder_cache is None:
+                current_folder_cache = {"file_statuses": live_file_statuses}
+            else:
+                current_folder_cache = dict(current_folder_cache)
+                current_folder_cache["file_statuses"] = live_file_statuses
             if current_folder_cache is None or not current_folder_cache.get("complete"):
                 cache.request(current_remote, page_time)
 
@@ -93,6 +107,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if entry["is_dir"] and entry["remote"]:
                     child = posixpath.join(rel_path, entry["name"]) if rel_path else entry["name"]
                     full_remote = remote_target(self.app.remote, child)
+                    if force_refresh:
+                        cache.invalidate(full_remote)
                     cached_data = cache.get(full_remote)
                     folder_cache_map[entry["name"]] = cached_data
                     entry["cached_size"] = cached_data.get("size") if cached_data else None
@@ -159,13 +175,27 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def serve_sync_status(self, query: str) -> None:
+        params = parse_qs(query)
+        op_id = params.get("id", [""])[0]
+        op = syncstate.get(op_id)
+        if op is None:
+            raise BrowserError(HTTPStatus.NOT_FOUND, "Sync operation not found.")
+        body = _json.dumps(op).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def serve_folder_info(self, query: str) -> None:
         params = parse_qs(query, keep_blank_values=True)
         paths_str = params.get("paths", [""])[0]
         rel_paths = [p for p in paths_str.split(",") if p]
-        current_rel = params.get("current", [None])[0]
+        current_rel_raw = params.get("current", [None])[0]
+        current_rel = clean_rel_path(current_rel_raw) if current_rel_raw is not None else None
         if current_rel is not None:
-            rel_paths.append(clean_rel_path(current_rel))
+            rel_paths.append(current_rel)
         cache = self.app.folder_cache
         results: dict = {}
         for rel_path in rel_paths:
@@ -178,13 +208,16 @@ class RequestHandler(BaseHTTPRequestHandler):
                 data = cache.get(full_remote) or {}
                 sz = data.get("size")
                 fc = data.get("file_count")
+                file_statuses = data.get("file_statuses", {})
+                if rel_path == current_rel and self.app.local_root:
+                    file_statuses = self.app.file_statuses_for_entries(self.app.list_entries(rel_path))
                 results[rel_path] = {
                     "status": st,
                     "complete": data.get("complete", st == "complete"),
                     "diff_status": data.get("diff_status"),
                     "diff_complete": data.get("diff_complete", False),
                     "first_diff_path": data.get("first_diff_path"),
-                    "file_statuses": data.get("file_statuses", {}),
+                    "file_statuses": file_statuses,
                     "size_display": human_size(sz) if sz is not None else "—",
                     "count_display": f"{fc:,} files" if fc is not None else "",
                     "date_display": display_date(data.get("newest_mtime")),
@@ -233,6 +266,45 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Location", location)
         self.end_headers()
 
+    def handle_sync(self) -> None:
+        length = int(self.headers.get("Content-Length") or "0")
+        params = parse_qs(self.rfile.read(length).decode("utf-8") if length > 0 else "", keep_blank_values=True)
+        if params.get("sync_enabled", [""])[0] != "1":
+            raise BrowserError(HTTPStatus.FORBIDDEN, "Enable sync before starting a copy.")
+        rel_path = clean_rel_path(params.get("path", [""])[0])
+        direction = params.get("direction", [""])[0]
+        kind = params.get("kind", [""])[0]
+        label = f"{direction.replace('_', ' ')}: {rel_path or '/'}"
+        command = label
+        if self.app.local_root is not None:
+            local_path = safe_join_local(self.app.local_root, rel_path)
+            remote_path = remote_target(self.app.remote, rel_path)
+            verb = "copy" if kind == "folder" else "copyto"
+            if direction == "local_to_dropbox":
+                command = f"rclone {verb} -- {local_path} {remote_path}"
+            elif direction == "dropbox_to_local":
+                command = f"rclone {verb} -- {remote_path} {local_path}"
+        op_id = syncstate.start(label)
+        syncstate.update(op_id, command=command, percent=10)
+
+        def _run_sync() -> None:
+            try:
+                self.app.sync_item(rel_path, direction, kind)
+            except BrowserError as exc:
+                syncstate.fail(op_id, exc.message)
+            except Exception as exc:
+                syncstate.fail(op_id, str(exc))
+            else:
+                syncstate.complete(op_id, "Sync complete")
+
+        threading.Thread(target=_run_sync, daemon=True, name=f"sync-{op_id[:8]}").start()
+        body = _json.dumps({"id": op_id}).encode("utf-8")
+        self.send_response(HTTPStatus.ACCEPTED)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def send_html(self, status: HTTPStatus, body: str) -> None:
         encoded = body.encode("utf-8")
         self.send_response(status)
@@ -260,7 +332,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
         # Don't log polling endpoints to avoid noise.
-        if self.path.startswith("/logs") or self.path.startswith("/folder-info"):
+        if self.path.startswith("/logs") or self.path.startswith("/folder-info") or self.path.startswith("/sync-status"):
             return
         super().log_request(code, size)
 
