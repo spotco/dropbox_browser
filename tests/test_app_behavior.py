@@ -797,11 +797,21 @@ class AppBehaviorTests(IsolatedPathsTestCase):
 
         self.assertIn("<th>View</th>", html)
         self.assertIn("<th>Sync</th>", html)
-        self.assertIn('id="sync-enabled"', html)
+        self.assertIn("spotco's Dropbox Browser", html)
+        self.assertIn('id="enable-to-local"', html)
+        self.assertIn('id="enable-write-dropbox"', html)
+        self.assertIn("Enable sync to local", html)
+        self.assertIn("Enable sync to Dropbox", html)
         self.assertIn("Copy Local -&gt; Dropbox", html)
-        self.assertIn("body.sync-enabled .sync-form", html)
-        self.assertIn("Settings.get('sync-enabled', false)", html)
-        self.assertIn("Settings.set('sync-enabled', toggle.checked)", html)
+        self.assertIn('data-sync-direction="local_to_dropbox"', html)
+        self.assertIn('name="enable_to_local" value="0"', html)
+        self.assertIn('name="enable_write_dropbox" value="0"', html)
+        self.assertIn("body.sync-to-local-enabled .sync-form[data-sync-direction=\"dropbox_to_local\"]", html)
+        self.assertIn("body.sync-to-dropbox-enabled .sync-form[data-sync-direction=\"local_to_dropbox\"]", html)
+        self.assertIn("Settings.get('sync-enable-to-local', false)", html)
+        self.assertIn("Settings.get('sync-enable-write-dropbox', false)", html)
+        self.assertIn("Settings.set('sync-enable-to-local', enableToLocal.checked)", html)
+        self.assertIn("Settings.set('sync-enable-write-dropbox', enableWriteDropbox.checked)", html)
         self.assertIn("setSyncBusy(true)", html)
         self.assertIn("button.disabled = busy", html)
 
@@ -830,6 +840,8 @@ class AppBehaviorTests(IsolatedPathsTestCase):
 
         self.assertIn('<div class="topbar-actions">', html)
         self.assertIn(">Copy Folder Path</button>", html)
+        self.assertIn('href="https://www.dropbox.com/home"', html)
+        self.assertIn('target="_blank"', html)
         self.assertIn(">Copy Filepath</button>", html)
         self.assertIn('class="copy-path"', html)
         self.assertIn(f'data-copy-path="{local_root}"', html)
@@ -840,6 +852,27 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         remote_row = html.split('remote.txt</a></td>', 1)[1].split("</tr>", 1)[0]
         self.assertNotIn("copy-path", remote_row)
 
+    def test_go_to_dropbox_link_encodes_current_folder_path(self) -> None:
+        local_root = self.create_local_root({
+            "THE DUMP/Garcello & Slynk/Garcello/local.txt": b"local",
+            "Plus+Folder/local.txt": b"plus",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:THE DUMP/Garcello & Slynk/Garcello": [SimulatedLsjsonResponse(items=[])],
+            "dropbox:Plus+Folder": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            html = server.get_text("/?path=THE%20DUMP%2FGarcello%20%26%20Slynk%2FGarcello")
+            plus_html = server.get_text("/?path=Plus%2BFolder")
+
+        self.assertIn(
+            'href="https://www.dropbox.com/home/THE%20DUMP/Garcello%20%26%20Slynk/Garcello"',
+            html,
+        )
+        self.assertIn('href="https://www.dropbox.com/home/Plus%2BFolder"', plus_html)
+
     def test_sync_post_requires_enabled_guard(self) -> None:
         local_root = self.create_local_root({
             "local.txt": b"local",
@@ -848,7 +881,28 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         app = self._build_app(rclone, local_root=local_root, workers=1)
 
         with TestServer(app) as server:
-            body = b"path=local.txt&kind=file&direction=local_to_dropbox&sync_enabled=0"
+            body = b"path=local.txt&kind=file&direction=local_to_dropbox&enable_write_dropbox=0"
+            request = Request(
+                server.base_url + "/sync",
+                data=body,
+                method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            with self.assertRaises(HTTPError) as ctx:
+                urlopen(request, timeout=5)
+
+        self.assertEqual(ctx.exception.code, 403)
+        ctx.exception.close()
+
+    def test_sync_post_requires_direction_specific_enabled_guard(self) -> None:
+        local_root = self.create_local_root({})
+        rclone = SimulatedRclone(cat_data={
+            "dropbox:remote.txt": b"remote",
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            body = b"path=remote.txt&kind=file&direction=dropbox_to_local&enable_to_local=0&enable_write_dropbox=1"
             request = Request(
                 server.base_url + "/sync",
                 data=body,
@@ -873,7 +927,7 @@ class AppBehaviorTests(IsolatedPathsTestCase):
                 "path": "local.txt",
                 "kind": "file",
                 "direction": "local_to_dropbox",
-                "sync_enabled": "1",
+                "enable_write_dropbox": "1",
             })
             result = wait_until(
                 lambda: server.get_json("/sync-status?id=" + payload["id"])
@@ -898,7 +952,7 @@ class AppBehaviorTests(IsolatedPathsTestCase):
                 "path": "remote.txt",
                 "kind": "file",
                 "direction": "dropbox_to_local",
-                "sync_enabled": "1",
+                "enable_to_local": "1",
             })
             result = wait_until(
                 lambda: server.get_json("/sync-status?id=" + payload["id"])
@@ -924,7 +978,7 @@ class AppBehaviorTests(IsolatedPathsTestCase):
                 "path": "folder",
                 "kind": "folder",
                 "direction": "local_to_dropbox",
-                "sync_enabled": "1",
+                "enable_write_dropbox": "1",
             })
             result = wait_until(
                 lambda: server.get_json("/sync-status?id=" + payload["id"])
@@ -953,7 +1007,7 @@ class AppBehaviorTests(IsolatedPathsTestCase):
                 "path": "folder",
                 "kind": "folder",
                 "direction": "dropbox_to_local",
-                "sync_enabled": "1",
+                "enable_to_local": "1",
             })
             result = wait_until(
                 lambda: server.get_json("/sync-status?id=" + payload["id"])
