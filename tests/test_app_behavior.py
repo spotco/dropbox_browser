@@ -139,6 +139,39 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertEqual(results["slow"]["diff_status"], "synced")
         self.assertTrue(results["slow"]["complete"])
 
+    def test_same_page_reload_does_not_rerun_identical_child_listing(self) -> None:
+        local_root = self.create_local_root({
+            "slow/child.txt": b"slow child",
+        })
+        slow_started = threading.Event()
+        slow_release = threading.Event()
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[remote_dir_item("slow")])],
+            "dropbox:slow": [
+                SimulatedLsjsonResponse(
+                    items=[remote_file_item("child.txt", local_root / "slow" / "child.txt")],
+                    wait_event=slow_release,
+                    started_event=slow_started,
+                ),
+                SimulatedLsjsonResponse(items=[remote_file_item("child.txt", local_root / "slow" / "child.txt")]),
+            ],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=2)
+
+        with TestServer(app) as server:
+            server.get_text("/")
+            wait_until(slow_started.is_set, description="slow child listing to start")
+            server.get_text("/")
+            slow_release.set()
+            results = self._wait_folder_info(
+                server,
+                paths=["slow"],
+                predicate=lambda data: data.get("slow", {}).get("complete"),
+            )
+
+        self.assertEqual(results["slow"]["diff_status"], "synced")
+        self.assertEqual(sum(1 for call in rclone.calls if call["target"] == "dropbox:slow"), 1)
+
     def test_newer_page_load_cancels_stale_folder_job_and_allows_new_page_to_finish(self) -> None:
         a_started = threading.Event()
         a_release = threading.Event()
@@ -262,6 +295,52 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertGreaterEqual(
             sum(1 for call in rclone.calls if call["target"] == "dropbox:root/season/extras"),
             2,
+        )
+
+    def test_refreshed_queued_root_is_reenqueued_after_old_job_canceled(self) -> None:
+        block_started = threading.Event()
+        block_release = threading.Event()
+        local_root = self.create_local_root({
+            "root/file.txt": b"ok",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:block": [SimulatedLsjsonResponse(items=[], wait_event=block_release, started_event=block_started)],
+            "dropbox:root": [SimulatedLsjsonResponse(items=[
+                remote_file_item("file.txt", local_root / "root" / "file.txt"),
+            ])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+        cache = app.folder_cache
+        assert cache is not None
+
+        page0 = time.time()
+        cache.request("dropbox:block", page0)
+        wait_until(block_started.is_set, description="block folder to start")
+
+        page1 = page0 + 1
+        cache.request("dropbox:root", page1)
+
+        page2 = page1 + 1
+        cache.request("dropbox:root", page2)
+
+        page3 = page2 + 1
+        cache.notify_page_load(page3)
+        block_release.set()
+        wait_until(lambda: cache.status("dropbox:block") != "calculating", description="block folder cancellation")
+
+        page4 = page3 + 1
+        cache.request("dropbox:root", page4)
+
+        data = wait_until(
+            lambda: cache.get("dropbox:root") if (cache.get("dropbox:root") or {}).get("complete") else None,
+            description="root completion after queued job cancellation",
+        )
+
+        self.assertEqual(data["diff_status"], "synced")
+        self.assertTrue(data["complete"])
+        self.assertGreaterEqual(
+            sum(1 for call in rclone.calls if call["target"] == "dropbox:root"),
+            1,
         )
 
     def test_size_only_sync_queues_no_hash_jobs(self) -> None:
