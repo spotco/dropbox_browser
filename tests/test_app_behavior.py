@@ -403,6 +403,37 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertEqual(data["first_diff_path"], "Local only: af_audio_download (1).py")
         self.assertEqual(data["file_statuses"]["af_audio_download.py"]["diff_status"], "synced")
 
+    def test_direct_diff_does_not_complete_before_recursive_size_finishes(self) -> None:
+        local_root = self.create_local_root({
+            "af_vid_dl/af_audio_download.py": b"print('ok')\n",
+            "af_vid_dl/af_audio_download (1).py": b"print('extra')\n",
+            "af_vid_dl/nested/video.mp4": b"x" * 4096,
+        })
+        rclone = SimulatedRclone({
+            "dropbox:af_vid_dl": [SimulatedLsjsonResponse(items=[
+                remote_file_item("af_audio_download.py", local_root / "af_vid_dl" / "af_audio_download.py"),
+                remote_dir_item("nested"),
+            ])],
+            "dropbox:af_vid_dl/nested": [SimulatedLsjsonResponse(items=[
+                remote_file_item("video.mp4", local_root / "af_vid_dl" / "nested" / "video.mp4"),
+            ])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+        cache = app.folder_cache
+        assert cache is not None
+
+        cache.request("dropbox:af_vid_dl", time.time())
+        data = wait_until(
+            lambda: cache.get("dropbox:af_vid_dl") if (cache.get("dropbox:af_vid_dl") or {}).get("complete") else None,
+            description="af_vid_dl recursive metadata completion",
+        )
+
+        self.assertEqual(data["diff_status"], "has_diffs")
+        self.assertEqual(data["first_diff_path"], "Local only: af_audio_download (1).py")
+        self.assertEqual(data["size"], len(b"print('ok')\n") + 4096)
+        self.assertEqual(data["file_count"], 2)
+        self.assertTrue(any(call["target"] == "dropbox:af_vid_dl/nested" for call in rclone.calls))
+
     def test_folder_worker_exception_completes_with_failure_state(self) -> None:
         local_root = self.create_local_root({})
         rclone = SimulatedRclone({
@@ -446,3 +477,33 @@ class AppBehaviorTests(IsolatedPathsTestCase):
 
         self.assertEqual(data["diff_status"], "dropbox_only")
         self.assertEqual(cache.status("dropbox:only"), "complete")
+
+    def test_dropbox_only_folder_with_subfolder_keeps_status_and_completes_size(self) -> None:
+        local_root = self.create_local_root({})
+        rclone = SimulatedRclone({
+            "dropbox:only": [SimulatedLsjsonResponse(items=[
+                remote_dir_item("nested"),
+            ])],
+            "dropbox:only/nested": [SimulatedLsjsonResponse(items=[
+                {
+                    "Name": "child.txt",
+                    "Path": "child.txt",
+                    "IsDir": False,
+                    "Size": 7,
+                    "ModTime": "2024-01-01T12:00:00Z",
+                },
+            ])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+        cache = app.folder_cache
+        assert cache is not None
+
+        cache.request("dropbox:only", time.time())
+        data = wait_until(
+            lambda: cache.get("dropbox:only") if (cache.get("dropbox:only") or {}).get("complete") else None,
+            description="dropbox-only nested completion",
+        )
+
+        self.assertEqual(data["diff_status"], "dropbox_only")
+        self.assertEqual(data["size"], 7)
+        self.assertEqual(data["file_count"], 1)
