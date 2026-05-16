@@ -69,13 +69,14 @@ class RequestHandler(BaseHTTPRequestHandler):
             sort_key = "name"
         if direction not in {"asc", "desc"}:
             direction = "asc"
+        force_refresh = params.get("refresh", [""])[0] == "1"
 
         cache = self.app.folder_cache
         page_time = time.time()
         if cache:
-            cache.notify_page_load(page_time)
+            cache.notify_page_load(page_time, page_key=rel_path, force=force_refresh)
 
-        entries = self.app.list_entries(rel_path, force_refresh=params.get("refresh", [""])[0] == "1")
+        entries = self.app.list_entries(rel_path, force_refresh=force_refresh)
 
         current_folder_cache: dict | None = None
         if cache and self.app.local_root:

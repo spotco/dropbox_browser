@@ -116,6 +116,7 @@ class FolderCacheManager:
         self._active_jobs: dict[str, ActiveFolderJob] = {}
         # Tracks the newest page_time seen; workers skip items older than this.
         self._min_page_time: float = 0.0
+        self._current_page_key: str | None = None
         # Progress counters for the current page (reset when _min_page_time advances).
         self._page_dispatched: int = 0
         self._page_completed: int = 0
@@ -301,17 +302,27 @@ class FolderCacheManager:
                 return "calculating"
         return "pending"
 
-    def notify_page_load(self, page_time: float) -> None:
+    def notify_page_load(self, page_time: float, *, page_key: str | None = None, force: bool = False) -> None:
         """Start a new page epoch and cancel queued work from older pages."""
-        removed = self._queue.remove_matching(
-            lambda item: isinstance(item, FolderJob) and item.page_epoch < page_time
-        )
         with self._lock:
+            if not force and page_key is not None and page_key == self._current_page_key:
+                self._trace_locked("page_load_reused", page_epoch=page_time, page_key=page_key)
+                return
+            removed = self._queue.remove_matching(
+                lambda item: isinstance(item, FolderJob) and item.page_epoch < page_time
+            )
             self._advance_page_time(page_time)
+            self._current_page_key = page_key
             for job in removed:
                 self._cancel_queued_job(job)
             self._cancel_active_jobs_before(page_time)
-            self._trace_locked("page_load", page_epoch=page_time, removed_jobs=len(removed))
+            self._trace_locked(
+                "page_load",
+                page_epoch=page_time,
+                removed_jobs=len(removed),
+                page_key=page_key,
+                force=force,
+            )
 
     def _advance_page_time(self, page_time: float) -> None:
         """Update _min_page_time and reset progress counters.  Lock must be held."""
@@ -372,6 +383,7 @@ class FolderCacheManager:
         if data is not None and (data.get("complete") or data.get("diff_status") in {DIFF_HAS_DIFFS, DIFF_DROPBOX_ONLY}):
             self._trace("request_skipped_cached", remote_path, page_epoch=page_time)
             return
+        enqueue_refresh = False
         with self._lock:
             if remote_path in self._direct_done:
                 # Its direct listing has already been fetched in this process.
@@ -388,19 +400,30 @@ class FolderCacheManager:
             current_page_time = self._in_progress.get(remote_path)
             if current_page_time is not None:
                 active = self._active_jobs.get(remote_path)
+                queued_jobs = self._queue.count_matching(
+                    lambda item: isinstance(item, FolderJob) and item.remote_path == remote_path
+                )
                 if active is not None and active.cancel_token.cancelled:
                     previous = self._reschedule_after_cancel.get(remote_path, 0.0)
                     self._reschedule_after_cancel[remote_path] = max(previous, page_time)
                     self._trace_locked("request_rescheduled", remote_path, page_epoch=page_time)
                 elif page_time > current_page_time:
                     self._in_progress[remote_path] = page_time
-                    self._trace_locked("request_refreshed", remote_path, page_epoch=page_time)
-                return
-            self._in_progress[remote_path] = page_time
-            self._advance_page_time(page_time)
-            self._record_dispatched(page_time)
-            self._trace_locked("request_enqueued", remote_path, page_epoch=page_time)
-        self._queue_job(FolderJob.create(remote_path, page_time, 0), "request")
+                    if active is None and queued_jobs == 0:
+                        self._advance_page_time(page_time)
+                        self._record_dispatched(page_time)
+                        self._trace_locked("request_reenqueued", remote_path, page_epoch=page_time)
+                        enqueue_refresh = True
+                    else:
+                        self._trace_locked("request_refreshed", remote_path, page_epoch=page_time)
+                if not enqueue_refresh:
+                    return
+            else:
+                self._in_progress[remote_path] = page_time
+                self._advance_page_time(page_time)
+                self._record_dispatched(page_time)
+                self._trace_locked("request_enqueued", remote_path, page_epoch=page_time)
+        self._queue_job(FolderJob.create(remote_path, page_time, 0), "request_reenqueue" if enqueue_refresh else "request")
 
     # ------------------------------------------------------------------
     # Worker
