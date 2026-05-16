@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 
 from . import APP_TITLE
 from .formatting import display_date, file_type, human_size, status_class
+from .services import diff_label
 
 
 def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: str, direction: str, msg: str, folder_cache_map: dict | None = None, current_folder_cache: dict | None = None) -> str:
@@ -23,8 +24,14 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
     )
     msg_html = f'<p class="notice">{html.escape(msg)}</p>' if msg else ""
     current_folder_js = json.dumps(rel_path)
-    sync_toggle = (
+    current_local_folder = ""
+    if app.local_root:
+        current_local_folder = str(app.local_display_path(rel_path) or app.local_root)
+    topbar_actions = (
+        '<div class="topbar-actions">'
+        f'<button type="button" class="copy-path" data-copy-path="{html.escape(current_local_folder)}">Copy Folder Path</button>'
         '<label class="sync-toggle"><input type="checkbox" id="sync-enabled"> Enable sync</label>'
+        '</div>'
         if app.local_root
         else ""
     )
@@ -51,7 +58,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
   <main>
     <div class="topbar">
       <nav class="breadcrumbs">{crumbs} <a class="refresh-link" href="{refresh_href}" title="Bypass listing cache and reload from Dropbox">&#8635; refresh</a></nav>
-      {sync_toggle}
+      {topbar_actions}
     </div>
     {msg_html}
     <form class="upload" action="{upload_action}" method="post" enctype="multipart/form-data">
@@ -64,7 +71,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         <tr>
           <th>{sort_link("Name", "name")}</th>
           <th>{sort_link("Type", "type")}</th>
-          <th>Status</th>
+          <th>{sort_link("Status", "status")}</th>
           <th>{sort_link("Size", "size")}</th>
           <th>{sort_link("Date", "date")}</th>
           <th>View</th>
@@ -111,16 +118,6 @@ def breadcrumbs(rel_path: str) -> str:
     return " / ".join(links)
 
 
-def _diff_label(status: str | None) -> str:
-    return {
-        "synced": "Synced",
-        "has_diffs": "Has Diffs",
-        "dropbox_only": "Dropbox Only",
-        "local_only": "Local Only",
-        "loading": "Loading",
-    }.get(status or "", "Loading")
-
-
 def _sync_buttons(rel_path: str, kind: str, status: str) -> str:
     directions: list[tuple[str, str]] = []
     if status == "Local Only":
@@ -150,14 +147,15 @@ def _sync_cell(rel_path: str, kind: str, status: str, enabled: bool) -> str:
     return f'<td class="sync"{attrs}>{buttons}</td>'
 
 
-def _copy_parent_button(app: Any, child_path: str, is_dir: bool) -> str:
+def _copy_path_button(app: Any, row: dict[str, Any], child_path: str, is_dir: bool) -> str:
     if not app.local_root:
         return ""
-    local_path = app.local_root / Path(*child_path.split("/"))
-    parent = local_path if is_dir else local_path.parent
+    local_path = Path(row.get("local_path") or app.local_display_path(child_path) or (app.local_root / Path(*child_path.split("/"))))
+    copy_path = local_path
+    label = "Copy Folder Path" if is_dir else "Copy Filepath"
     return (
-        f'<button type="button" class="copy-parent" data-copy-path="{html.escape(str(parent))}">'
-        'Copy Folder Path'
+        f'<button type="button" class="copy-path" data-copy-path="{html.escape(str(copy_path))}">'
+        f'{label}'
         '</button>'
     )
 
@@ -165,7 +163,7 @@ def _copy_parent_button(app: Any, child_path: str, is_dir: bool) -> str:
 def entry_row(app: Any, rel_path: str, row: dict[str, Any], folder_cache_map: dict | None = None, current_folder_cache: dict | None = None) -> str:
     name = row["name"]
     child_path = posixpath.join(rel_path, name) if rel_path else name
-    status = "Both" if row["remote"] and row["local"] else "Dropbox Only" if row["remote"] else "Local Only"
+    status = row.get("status_label") or ("Both" if row["remote"] and row["local"] else "Dropbox Only" if row["remote"] else "Local Only")
     is_dir = row["is_dir"]
     type_text = file_type(name, is_dir)
     status_attrs = ""
@@ -178,7 +176,7 @@ def entry_row(app: Any, rel_path: str, row: dict[str, Any], folder_cache_map: di
                 if not row["local"]:
                     status = "Dropbox Only"
                 elif cached is not None and cached.get("diff_complete"):
-                    status = _diff_label(cached.get("diff_status"))
+                    status = diff_label(cached.get("diff_status"))
                 else:
                     status = "Loading"
             if cached is not None:
@@ -200,7 +198,7 @@ def entry_row(app: Any, rel_path: str, row: dict[str, Any], folder_cache_map: di
             date_td = f'<td class="col-date">{display_date(row.get("local_mtime"))}</td>'
             row_attrs = ""
         name_html = f'<a class="name" href="/?{urlencode({"path": child_path})}">[dir] {html.escape(name)}</a>'
-        copy_button = _copy_parent_button(app, child_path, True) if row["local"] else ""
+        copy_button = _copy_path_button(app, row, child_path, True) if row["local"] else ""
         view_td = f'<td class="view-actions">{copy_button}</td>'
         sync_td = _sync_cell(child_path, "folder", status, sync_enabled)
     else:
@@ -212,7 +210,7 @@ def entry_row(app: Any, rel_path: str, row: dict[str, Any], folder_cache_map: di
                 status = "Dropbox Only"
             else:
                 file_status = ((current_folder_cache or {}).get("file_statuses") or {}).get(name, {})
-                status = _diff_label(file_status.get("diff_status"))
+                status = diff_label(file_status.get("diff_status"))
                 status_attrs = f' data-file-status-path="{html.escape(child_path)}"'
         size = row.get("remote_size") if row.get("remote_size") is not None else row.get("local_size")
         date_value = max(row.get("remote_mtime") or 0, row.get("local_mtime") or 0) or None
@@ -221,7 +219,7 @@ def entry_row(app: Any, rel_path: str, row: dict[str, Any], folder_cache_map: di
         row_attrs = status_attrs
         query = urlencode({"path": child_path, "source": source})
         name_html = f'<a class="name" href="/file?{query}">{html.escape(name)}</a>'
-        copy_button = _copy_parent_button(app, child_path, False) if row["local"] else ""
+        copy_button = _copy_path_button(app, row, child_path, False) if row["local"] else ""
         view_td = f'<td class="view-actions"><a href="/file?{query}">Preview</a> <a href="/download?{query}">Download</a>{copy_button}</td>'
         sync_td = _sync_cell(child_path, "file", status, sync_enabled)
 
@@ -287,6 +285,11 @@ main {
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
+}
+.topbar-actions {
+  align-items: center;
+  display: flex;
+  gap: 10px;
 }
 .refresh-link {
   margin-left: 12px;
@@ -382,13 +385,13 @@ th {
 .view-actions a + button {
   margin-left: 10px;
 }
-.copy-parent {
+.copy-path {
   background: #eef2f6;
   color: #1f2933;
   font-size: 12px;
   padding: 5px 8px;
 }
-.copy-parent.copied {
+.copy-path.copied {
   background: #e7f5ec;
   color: #17633a;
 }
@@ -802,7 +805,7 @@ SYNC_JS = r"""
 
   document.addEventListener('click', function (event) {
     var button = event.target;
-    if (!button || !button.classList || !button.classList.contains('copy-parent')) return;
+    if (!button || !button.classList || !button.classList.contains('copy-path')) return;
     var path = button.getAttribute('data-copy-path') || '';
     if (!path) return;
 

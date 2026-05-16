@@ -190,6 +190,122 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertEqual(data["diff_status"], "synced")
         self.assertEqual(data["file_statuses"], {"song.mp3": {"diff_status": "synced"}})
 
+    def test_windows_safe_unicode_replacement_names_merge_for_page_and_live_status(self) -> None:
+        remote_name = "Sak Noel - Loca People (What the f*ck).mp3"
+        local_name = "Sak Noel - Loca People (What the f\uff0ack).mp3"
+        local_root = self.create_local_root({
+            f"music/{local_name}": b"audio",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:music": [SimulatedLsjsonResponse(items=[
+                remote_file_item(remote_name, local_root / "music" / local_name),
+            ])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            html = server.get_text("/?path=music")
+            results = self._wait_folder_info(
+                server,
+                current="music",
+                predicate=lambda data: data.get("music", {}).get("file_statuses", {}).get(remote_name),
+            )
+            info = results["music"]
+
+        table_body = html.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+        self.assertIn(remote_name, html)
+        self.assertEqual(table_body.count("<tr"), 1)
+        self.assertIn("Synced", table_body)
+        self.assertNotIn("Dropbox Only", table_body)
+        self.assertNotIn("Local Only", table_body)
+        self.assertIn(f'data-copy-path="{local_root / "music" / local_name}"', html)
+        self.assertNotIn(f'data-copy-path="{local_root / "music" / remote_name}"', html)
+        self.assertEqual(info["file_statuses"], {remote_name: {"diff_status": "synced"}})
+
+    def test_copy_filepath_uses_actual_local_unicode_replacement_name(self) -> None:
+        remote_name = "*NSYNC - Bye Bye Bye.mp3"
+        local_name = "\uff0aNSYNC - Bye Bye Bye.mp3"
+        local_root = self.create_local_root({
+            f"music/{local_name}": b"audio",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:music": [SimulatedLsjsonResponse(items=[
+                remote_file_item(remote_name, local_root / "music" / local_name),
+            ])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            html = server.get_text("/?path=music")
+
+        self.assertIn(remote_name, html)
+        self.assertIn(">Copy Filepath</button>", html)
+        self.assertIn(f'data-copy-path="{local_root / "music" / local_name}"', html)
+        self.assertNotIn(f'data-copy-path="{local_root / "music" / remote_name}"', html)
+
+    def test_windows_safe_unicode_replacement_names_do_not_create_folder_cache_diffs(self) -> None:
+        remote_name = "Sak Noel - Loca People (What the f*ck).mp3"
+        local_name = "Sak Noel - Loca People (What the f\uff0ack).mp3"
+        local_root = self.create_local_root({
+            f"music/{local_name}": b"audio",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:music": [SimulatedLsjsonResponse(items=[
+                remote_file_item(remote_name, local_root / "music" / local_name),
+            ])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+        cache = app.folder_cache
+        assert cache is not None
+
+        cache.request("dropbox:music", time.time())
+        data = wait_until(
+            lambda: cache.get("dropbox:music") if (cache.get("dropbox:music") or {}).get("complete") else None,
+            description="unicode replacement folder completion",
+        )
+
+        self.assertEqual(data["diff_status"], "synced")
+        self.assertEqual(data["file_statuses"], {remote_name: {"diff_status": "synced"}})
+
+    def test_status_column_sorts_direct_file_statuses(self) -> None:
+        local_root = self.create_local_root({
+            "local.txt": b"local",
+            "changed.txt": b"local",
+            "synced.txt": b"synced",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[
+                {
+                    "Name": "changed.txt",
+                    "Path": "changed.txt",
+                    "IsDir": False,
+                    "Size": 99,
+                    "ModTime": "2024-01-01T12:00:00Z",
+                },
+                {
+                    "Name": "remote.txt",
+                    "Path": "remote.txt",
+                    "IsDir": False,
+                    "Size": 6,
+                    "ModTime": "2024-01-01T12:00:00Z",
+                },
+                remote_file_item("synced.txt", local_root / "synced.txt"),
+            ])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            html = server.get_text("/?sort=status&dir=asc")
+
+        self.assertIn('<a href="/?path=&sort=status&dir=desc">Status ^</a>', html)
+        table_body = html.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+        status_labels = [
+            row.split('<span class="status ', 1)[1].split(">", 1)[1].split("</span>", 1)[0]
+            for row in table_body.split("<tr")
+            if '<span class="status ' in row
+        ]
+        self.assertEqual(status_labels, ["Dropbox Only", "Has Diffs", "Local Only", "Synced"])
+
     def test_slow_background_folder_reports_calculating_then_completes(self) -> None:
         local_root = self.create_local_root({
             "shared.txt": b"root data",
@@ -689,7 +805,7 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertIn("setSyncBusy(true)", html)
         self.assertIn("button.disabled = busy", html)
 
-    def test_view_column_can_copy_local_parent_folder_path(self) -> None:
+    def test_copy_buttons_cover_current_folder_and_local_file_paths(self) -> None:
         local_root = self.create_local_root({
             "both.txt": b"both",
             "local.txt": b"local",
@@ -712,12 +828,17 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         with TestServer(app) as server:
             html = server.get_text("/")
 
-        self.assertIn('class="copy-parent"', html)
+        self.assertIn('<div class="topbar-actions">', html)
+        self.assertIn(">Copy Folder Path</button>", html)
+        self.assertIn(">Copy Filepath</button>", html)
+        self.assertIn('class="copy-path"', html)
         self.assertIn(f'data-copy-path="{local_root}"', html)
+        self.assertIn(f'data-copy-path="{local_root / "both.txt"}"', html)
+        self.assertIn(f'data-copy-path="{local_root / "local.txt"}"', html)
         self.assertIn("navigator.clipboard.writeText(path)", html)
         self.assertIn("document.execCommand('copy')", html)
         remote_row = html.split('remote.txt</a></td>', 1)[1].split("</tr>", 1)[0]
-        self.assertNotIn("copy-parent", remote_row)
+        self.assertNotIn("copy-path", remote_row)
 
     def test_sync_post_requires_enabled_guard(self) -> None:
         local_root = self.create_local_root({
