@@ -42,7 +42,7 @@ from .rclone import RcloneCancelled, RcloneCancelToken
 from . import workertrace
 
 CACHE_DIR = PROJECT_ROOT / "Cache" / "FolderInfo"
-DIFF_CACHE_SCHEMA_VERSION = 3
+DIFF_CACHE_SCHEMA_VERSION = 4
 DIFF_LOADING = "loading"
 DIFF_SYNCED = "synced"
 DIFF_HAS_DIFFS = "has_diffs"
@@ -380,7 +380,7 @@ class FolderCacheManager:
         if page_time is None:
             page_time = time.time()
         data = self.get(remote_path)
-        if data is not None and (data.get("complete") or data.get("diff_status") in {DIFF_HAS_DIFFS, DIFF_DROPBOX_ONLY}):
+        if data is not None and data.get("complete"):
             self._trace("request_skipped_cached", remote_path, page_epoch=page_time)
             return
         enqueue_refresh = False
@@ -702,8 +702,7 @@ class FolderCacheManager:
 
             if direct_diff_reason is not None:
                 self._trace_locked("direct_diff_found", remote_path, reason=direct_diff_reason, diff_status=direct_diff_status)
-                self._mark_diff(remote_path, direct_diff_reason, direct_diff_status)
-                return True
+                self._note_diff(remote_path, direct_diff_reason, direct_diff_status)
 
             complete = len(subfolders) == 0
             self._write_cache(remote_path, complete=complete)
@@ -730,8 +729,7 @@ class FolderCacheManager:
                     self._pending_children.setdefault(sf, set())
                     self._propagate(sf)
                     if cached.get("diff_status") in {DIFF_HAS_DIFFS, DIFF_DROPBOX_ONLY}:
-                        self._mark_diff(remote_path, cached.get("first_diff_path") or sf)
-                        return True
+                        self._note_diff(remote_path, cached.get("first_diff_path") or sf)
                     # sf is already fully done — do not add to pending_children.
                     self._on_subtree_complete(sf)
                 else:
@@ -769,8 +767,8 @@ class FolderCacheManager:
             current = self._parent.get(current)
         return False
 
-    def _mark_diff(self, path: str, reason: str, diff_status: str = DIFF_HAS_DIFFS) -> None:
-        """Mark this subtree and ancestors as different. Lock must be held."""
+    def _note_diff(self, path: str, reason: str, diff_status: str = DIFF_HAS_DIFFS) -> None:
+        """Record completed diff status without forcing metadata completion."""
         acc = self._acc.setdefault(path, {
             "size": 0,
             "count": 0,
@@ -781,13 +779,19 @@ class FolderCacheManager:
             if status.get("diff_status") == DIFF_LOADING:
                 status["diff_status"] = diff_status
                 status.setdefault("reason", "Skipped after first diff")
-        acc["diff_status"] = diff_status
+        if acc.get("diff_status") not in {DIFF_HAS_DIFFS, DIFF_DROPBOX_ONLY}:
+            acc["diff_status"] = diff_status
         acc["diff_complete"] = True
-        acc["first_diff_path"] = reason
+        if not acc.get("first_diff_path"):
+            acc["first_diff_path"] = reason
+        self._trace_locked("subtree_diff_marked", path, reason=reason, diff_status=diff_status)
+
+    def _mark_diff(self, path: str, reason: str, diff_status: str = DIFF_HAS_DIFFS) -> None:
+        """Mark this subtree and ancestors as different. Lock must be held."""
+        self._note_diff(path, reason, diff_status)
         self._pending_children[path] = set()
         self._abandoned.add(path)
         self._write_cache(path, complete=True)
-        self._trace_locked("subtree_diff_marked", path, reason=reason, diff_status=diff_status)
 
         parent = self._parent.get(path)
         if parent is not None:
@@ -802,9 +806,12 @@ class FolderCacheManager:
         if acc is None:
             return
         if acc.get("diff_status") in {DIFF_HAS_DIFFS, DIFF_DROPBOX_ONLY}:
-            self._write_cache(path, complete=True)
-            self._trace_locked("subtree_complete", path, diff_status=acc.get("diff_status"))
-            self._on_subtree_complete(path)
+            if path in self._direct_done and not self._pending_children.get(path):
+                self._write_cache(path, complete=True)
+                self._trace_locked("subtree_complete", path, diff_status=acc.get("diff_status"))
+                self._on_subtree_complete(path)
+            else:
+                self._write_cache(path, complete=False)
             return
         if self.local_root is None:
             acc["diff_status"] = DIFF_UNAVAILABLE
@@ -861,8 +868,7 @@ class FolderCacheManager:
             return
         pc.discard(path)
         if self._acc.get(path, {}).get("diff_status") in {DIFF_HAS_DIFFS, DIFF_DROPBOX_ONLY}:
-            self._mark_diff(parent, self._acc[path].get("first_diff_path") or path)
-            return
+            self._note_diff(parent, self._acc[path].get("first_diff_path") or path)
         if parent in self._direct_done and not pc:
             if parent in self._abandoned:
                 self._write_cache(parent, complete=False)

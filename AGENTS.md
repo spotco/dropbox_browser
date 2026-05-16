@@ -107,7 +107,21 @@ The background-worker regression suite lives under `tests/` and uses a fake
 `rclone` implementation rather than the real binary. The main coverage file is
 `tests/test_app_behavior.py`; it exercises normal page loads, `/folder-info`
 polling, slow background listings, page changes during in-flight work,
-background worker failures, and common diff cases.
+background worker failures, common diff cases, and regressions where diff
+status completes before recursive folder metadata is actually complete.
+
+When a new regression is found, add a focused unit test for it before applying
+the fix:
+
+1. Create a regression unit test that reproduces the bad behavior with the fake
+   `rclone` and isolated temp/cache paths.
+2. Run that specific test and verify it fails for the expected reason.
+3. Apply the smallest fix that addresses the regression.
+4. Run the specific regression test again and verify it passes.
+5. Run the full suite with `python -m unittest discover -s tests -v`.
+
+Do not rely only on browser/manual verification for regressions that can be
+represented in the stdlib test harness.
 
 Run with local comparison:
 
@@ -118,6 +132,36 @@ python dropbox_browser.py --remote dropbox: --local-root "C:\path\to\folder"
 If starting the server from an agent shell, use a hidden background process and
 then verify the root URL returns HTTP 200. The current environment has required
 approval for persistent background server starts.
+
+## Background Job Debugging
+
+Folder-cache workers write persistent JSONL trace events to:
+
+```text
+Temp/foldercache_threads.jsonl
+```
+
+Each line is one JSON object with fields such as `ts`, `thread`, `event`,
+`remote_path`, `queue_size`, `active_jobs`, `in_progress`, `page_completed`,
+and `page_dispatched`. Use this file to trace background folder progress across
+threads without depending on browser timing.
+
+Useful event names include:
+
+- `manager_started` and `worker_started` - worker pool startup.
+- `page_load` and `page_load_reused` - page epoch changes.
+- `request_enqueued`, `request_reenqueued`, and `request_skipped_cached` -
+  public folder-cache requests.
+- `job_queued`, `job_started`, `job_finished`, `job_aborted`,
+  `job_canceled_running`, and `job_failed` - worker job lifecycle.
+- `folder_listing_loaded` - a direct `lsjson` result was loaded from rclone or
+  listing cache.
+- `direct_diff_found` and `subtree_diff_marked` - diff status was determined.
+- `subtree_complete` - recursive folder metadata for that path is complete.
+
+For live debugging, inspect the tail of the file while loading pages or polling
+`/folder-info`. In tests, `IsolatedPathsTestCase.read_trace_events()` reads the
+same JSONL format from the isolated temp directory.
 
 ## Git/GitHub Notes
 
@@ -182,9 +226,10 @@ Resolved design decisions:
 - Store folder/subtree diff status in the existing folder cache JSON.
 - Treat old folder cache files that do not include the current diff fields as
   stale and recompute them.
-- Exit as soon as any diff is found. Once a folder is known to have diffs, write
-  that state, report it through the UI, and stop any further recursive
-  traversals for that subtree.
+- Diff status may be determined before recursive metadata is complete, but the
+  folder cache must not mark `complete: true` until size/count/date metadata has
+  finished for all required Dropbox subfolders. A folder can show `Has Diffs`
+  while size/date cells continue loading.
 - Local-only folders should show `Local Only` immediately. Do not create
   recursive cache jobs for local-only folder contents.
 - Dropbox-only folders should show `Dropbox Only`, not `Has Diffs`, when the
@@ -217,11 +262,10 @@ Implementation plan:
      ancestors as `has_diffs`;
    - if no direct differences exist, recursively queued child folders continue
      determining whether the whole subtree is still size-synced.
-5. Stop traversal early for a subtree after the first difference
-   is found. Once a folder is known to have diffs, write that status to cache and
-   propagate it upward. Size/date/count cache values may remain partial in this
-   case; fast diff status is more important for this feature than completing
-   metadata totals after a diff has already been proven.
+5. Record and surface diff status as soon as the first difference is found, but
+   keep recursive folder metadata work running until size/date/count values are
+   complete. Do not write `complete: true` for a folder whose subfolder metadata
+   is still pending.
 6. Keep file-row status synchronous for existence/type/size where available:
    - both sides present: `Synced`;
    - only local present: `Local Only`;
