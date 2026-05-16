@@ -61,7 +61,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.render_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
     def render_index(self, query: str) -> None:
-        params = parse_qs(query)
+        params = parse_qs(query, keep_blank_values=True)
         rel_path = clean_rel_path(params.get("path", [""])[0])
         sort_key = params.get("sort", ["name"])[0]
         direction = params.get("dir", ["asc"])[0]
@@ -76,6 +76,13 @@ class RequestHandler(BaseHTTPRequestHandler):
             cache.notify_page_load(page_time)
 
         entries = self.app.list_entries(rel_path, force_refresh=params.get("refresh", [""])[0] == "1")
+
+        current_folder_cache: dict | None = None
+        if cache and self.app.local_root:
+            current_remote = remote_target(self.app.remote, rel_path)
+            current_folder_cache = cache.get(current_remote)
+            if current_folder_cache is None or not current_folder_cache.get("complete"):
+                cache.request(current_remote, page_time)
 
         # Build folder cache map; stamp cached_size onto folder entries so
         # sort_entries can sort by size.  Trigger background fetch as needed.
@@ -96,7 +103,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_html(
             HTTPStatus.OK,
             page_html(self.app, rel_path, entries, sort_key, direction,
-                      params.get("msg", [""])[0], folder_cache_map or None),
+                      params.get("msg", [""])[0], folder_cache_map or None, current_folder_cache),
         )
 
     def serve_file(self, query: str, inline: bool) -> None:
@@ -122,11 +129,23 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         proc = self.app.rclone.open_cat(remote_target(self.app.remote, rel_path))
         assert proc.stdout is not None
+        stream_error: Exception | None = None
+        wait_error: Exception | None = None
         try:
             shutil.copyfileobj(proc.stdout, self.wfile)
+        except Exception as exc:
+            stream_error = exc
+            raise
         finally:
             proc.stdout.close()
-            proc.wait(timeout=30)
+            try:
+                proc.wait(timeout=30)
+            except Exception as exc:
+                wait_error = exc
+            finally:
+                self.app.rclone.finish_cat(proc, stream_error or wait_error)
+            if wait_error is not None:
+                raise wait_error
 
     def serve_logs(self, query: str) -> None:
         params = parse_qs(query)
@@ -140,9 +159,12 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def serve_folder_info(self, query: str) -> None:
-        params = parse_qs(query)
+        params = parse_qs(query, keep_blank_values=True)
         paths_str = params.get("paths", [""])[0]
         rel_paths = [p for p in paths_str.split(",") if p]
+        current_rel = params.get("current", [None])[0]
+        if current_rel is not None:
+            rel_paths.append(clean_rel_path(current_rel))
         cache = self.app.folder_cache
         results: dict = {}
         for rel_path in rel_paths:
@@ -158,6 +180,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                 results[rel_path] = {
                     "status": st,
                     "complete": data.get("complete", st == "complete"),
+                    "diff_status": data.get("diff_status"),
+                    "diff_complete": data.get("diff_complete", False),
+                    "first_diff_path": data.get("first_diff_path"),
+                    "file_statuses": data.get("file_statuses", {}),
                     "size_display": human_size(sz) if sz is not None else "—",
                     "count_display": f"{fc:,} files" if fc is not None else "",
                     "date_display": display_date(data.get("newest_mtime")),

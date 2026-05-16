@@ -39,6 +39,8 @@ def main() -> int:
         workers=int(app_config["FolderCacheWorkers"]),
         ttl_hours=float(app_config["FolderCacheTTLHours"]),
         listing_cache=listing_cache,
+        local_root=args.local_root,
+        remote=args.remote,
     )
     rclone.progress_fn = folder_cache.current_progress
     app = DropboxBrowser(rclone, args.remote, args.local_root, folder_cache=folder_cache, listing_cache=listing_cache)
