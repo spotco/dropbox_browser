@@ -284,7 +284,7 @@ class DropboxBrowser:
     def plan_batch_sync(self, rel_path: str, action: str, recursive: bool) -> dict[str, Any]:
         if self.local_root is None:
             raise BrowserError(HTTPStatus.BAD_REQUEST, "Local comparison is not configured.")
-        if action not in {"local_to_dropbox_all", "delete_local_only_and_pull_diffs"}:
+        if action not in {"local_to_dropbox_all", "delete_local_only_all", "dropbox_only_to_local_all"}:
             raise BrowserError(HTTPStatus.BAD_REQUEST, "Unsupported batch sync action.")
 
         rows = self._batch_rows(rel_path, recursive)
@@ -302,9 +302,10 @@ class DropboxBrowser:
             if action == "local_to_dropbox_all":
                 if row["status"] in {"local_only", "has_diffs"}:
                     groups["local_to_dropbox"].append(item)
-            elif row["status"] in {"local_only", "local_only_dir"}:
-                groups["delete_local"].append(item)
-            elif row["status"] == "has_diffs":
+            elif action == "delete_local_only_all":
+                if row["status"] in {"local_only", "local_only_dir"}:
+                    groups["delete_local"].append(item)
+            elif row["status"] == "dropbox_only":
                 groups["dropbox_to_local"].append(item)
         return {
             "action": action,

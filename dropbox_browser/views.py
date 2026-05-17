@@ -40,7 +40,8 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         f'<a class="dropbox-link" href="{html.escape(dropbox_home_url(rel_path))}" target="_blank" rel="noopener noreferrer">Go to Dropbox</a>'
         '<label class="recursive-toggle"><input type="checkbox" id="batch-recursive"> Recursive</label>'
         '<button type="button" class="batch-sync batch-to-dropbox" data-batch-action="local_to_dropbox_all">Sync All Local to Dropbox</button>'
-        '<button type="button" class="batch-sync batch-to-local" data-batch-action="delete_local_only_and_pull_diffs">Delete all Local-Only Files</button>'
+        '<button type="button" class="batch-sync batch-to-local batch-delete-local" data-batch-action="delete_local_only_all">Delete all Local-Only Files</button>'
+        '<button type="button" class="batch-sync batch-to-local" data-batch-action="dropbox_only_to_local_all">Copy all Dropbox-Only Files to Local</button>'
         '</div>'
         if app.local_root
         else ""
@@ -104,8 +105,8 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
       <div id="batch-confirm-summary"></div>
       <div id="batch-confirm-list"></div>
       <div class="batch-confirm-actions">
-        <button type="button" id="batch-confirm-run">Run</button>
         <button type="button" id="batch-confirm-cancel">Cancel</button>
+        <button type="button" id="batch-confirm-run">Run</button>
       </div>
     </div>
   </div>
@@ -293,9 +294,11 @@ h1 {
   font-size: 14px;
 }
 main {
-  max-width: 1180px;
-  margin: 0 auto;
-  padding: 24px;
+  box-sizing: border-box;
+  margin: 0 16px;
+  max-width: none;
+  padding: 24px 0;
+  width: calc(100% - 32px);
 }
 .topbar {
   display: flex;
@@ -330,7 +333,7 @@ main {
 }
 .recursive-toggle {
   align-items: center;
-  display: flex;
+  display: none;
   gap: 5px;
   font-size: 12px;
   font-weight: 600;
@@ -433,9 +436,16 @@ th {
   font-size: 12px;
   padding: 5px 8px;
 }
+.batch-delete-local {
+  background: #8a1f1f;
+}
 body.sync-to-dropbox-enabled .batch-to-dropbox,
 body.sync-to-local-enabled .batch-to-local {
   display: inline-block;
+}
+body.sync-to-local-enabled .recursive-toggle,
+body.sync-to-dropbox-enabled .recursive-toggle {
+  display: flex;
 }
 .copy-path.copied {
   background: #e7f5ec;
@@ -453,7 +463,7 @@ body.sync-to-dropbox-enabled .sync-form[data-sync-direction="local_to_dropbox"] 
   font-size: 12px;
   padding: 5px 8px;
 }
-.sync-form button:disabled {
+button:disabled {
   cursor: default;
   opacity: 0.55;
 }
@@ -524,7 +534,7 @@ body.sync-to-dropbox-enabled .sync-form[data-sync-direction="local_to_dropbox"] 
 .batch-confirm-actions {
   display: flex;
   gap: 10px;
-  justify-content: flex-end;
+  justify-content: space-between;
   margin-top: 12px;
 }
 .sync-popup-head {
@@ -781,6 +791,8 @@ SYNC_JS = r"""
   var batchCancel = document.getElementById('batch-confirm-cancel');
   var batchRecursive = document.getElementById('batch-recursive');
   var pendingBatch = null;
+  var syncBusyCount = 0;
+  var activeSyncForm = null;
 
   function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -814,10 +826,29 @@ SYNC_JS = r"""
 
   window.SyncControls = { renderCell: renderCell };
 
-  function setSyncBusy(busy) {
-    document.querySelectorAll('.sync-form button').forEach(function (button) {
-      button.disabled = busy;
+  function applySyncBusyState() {
+    var busy = syncBusyCount > 0;
+    document.querySelectorAll('.sync-form button, .batch-sync, #batch-confirm-run, #batch-confirm-cancel').forEach(function (button) {
+      var baseDisabled = button.getAttribute('data-base-disabled') === '1';
+      button.disabled = busy || baseDisabled;
     });
+  }
+
+  function setSyncBusy(busy) {
+    syncBusyCount = busy ? (syncBusyCount + 1) : Math.max(0, syncBusyCount - 1);
+    applySyncBusyState();
+  }
+
+  function setBaseDisabled(button, disabled) {
+    if (!button) return;
+    button.setAttribute('data-base-disabled', disabled ? '1' : '0');
+    applySyncBusyState();
+  }
+
+  function clearActiveSyncForm() {
+    if (!activeSyncForm) return;
+    activeSyncForm.removeAttribute('data-sync-running');
+    activeSyncForm = null;
   }
 
   function applyToggle() {
@@ -909,10 +940,10 @@ SYNC_JS = r"""
       html += '</ul>';
     });
     batchList.innerHTML = html || '<p>No files will be changed.</p>';
-    batchRun.disabled = !plan.total;
+    setBaseDisabled(batchRun, !plan.total);
   }
 
-  function openBatchConfirm(action, button) {
+  function openBatchConfirm(action) {
     var gates = gateParams();
     var fields = {
       path: window.CURRENT_FOLDER_PATH || '',
@@ -921,7 +952,7 @@ SYNC_JS = r"""
       enable_to_local: gates.enable_to_local,
       enable_write_dropbox: gates.enable_write_dropbox
     };
-    if (button) button.disabled = true;
+    setSyncBusy(true);
     fetch('/sync-batch-plan', { method: 'POST', body: formBody(fields) })
       .then(function (r) {
         if (!r.ok) throw new Error('Could not build batch plan');
@@ -936,7 +967,7 @@ SYNC_JS = r"""
         finishPopup(err.message || 'Batch plan failed', '', false);
       })
       .then(function () {
-        if (button) button.disabled = false;
+        setSyncBusy(false);
       });
   }
 
@@ -946,6 +977,8 @@ SYNC_JS = r"""
       .then(function (data) {
         command.textContent = data.command || data.label || '';
         if (data.status === 'complete') {
+          clearActiveSyncForm();
+          setSyncBusy(false);
           var msg = data.message || 'Sync complete';
           if (data.errors && data.errors.length) msg += ': ' + data.errors.join('; ');
           finishPopup(msg, data.command || data.label || '', data.errors && data.errors.length ? false : true);
@@ -953,6 +986,7 @@ SYNC_JS = r"""
           return;
         }
         if (data.status === 'error') {
+          clearActiveSyncForm();
           setSyncBusy(false);
           finishPopup(data.message || 'Sync failed', data.command || data.label || '', false);
           return;
@@ -971,9 +1005,11 @@ SYNC_JS = r"""
     var direction = form.getAttribute('data-sync-direction') || '';
     if (direction === 'local_to_dropbox' && (!enableWriteDropbox || !enableWriteDropbox.checked)) return;
     if (direction === 'dropbox_to_local' && (!enableToLocal || !enableToLocal.checked)) return;
+    if (syncBusyCount > 0) return;
     if (form.getAttribute('data-sync-running') === '1') return;
     applyToggle();
-    form.setAttribute('data-sync-running', '1');
+    activeSyncForm = form;
+    activeSyncForm.setAttribute('data-sync-running', '1');
     setSyncBusy(true);
     var data = new FormData(form);
     var cmd = labelForDirection(data.get('direction')) + ': ' + data.get('path');
@@ -988,7 +1024,7 @@ SYNC_JS = r"""
       })
       .then(function (payload) { pollStatus(payload.id); })
       .catch(function (err) {
-        form.removeAttribute('data-sync-running');
+        clearActiveSyncForm();
         setSyncBusy(false);
         finishPopup(err.message || 'Sync failed', cmd, false);
       });
@@ -997,10 +1033,11 @@ SYNC_JS = r"""
   document.addEventListener('click', function (event) {
     var button = event.target;
     if (!button || !button.classList || !button.classList.contains('batch-sync')) return;
+    if (syncBusyCount > 0) return;
     var action = button.getAttribute('data-batch-action') || '';
     if (action === 'local_to_dropbox_all' && (!enableWriteDropbox || !enableWriteDropbox.checked)) return;
-    if (action === 'delete_local_only_and_pull_diffs' && (!enableToLocal || !enableToLocal.checked)) return;
-    openBatchConfirm(action, button);
+    if ((action === 'delete_local_only_all' || action === 'dropbox_only_to_local_all') && (!enableToLocal || !enableToLocal.checked)) return;
+    openBatchConfirm(action);
   });
 
   if (batchCancel) {
@@ -1012,7 +1049,9 @@ SYNC_JS = r"""
 
   if (batchRun) {
     batchRun.addEventListener('click', function () {
+      if (syncBusyCount > 0) return;
       if (!pendingBatch) return;
+      setSyncBusy(true);
       batchConfirm.classList.add('hidden');
       showPopup('Batch sync starting', '');
       fetch('/sync-batch', { method: 'POST', body: formBody(pendingBatch) })
@@ -1022,6 +1061,7 @@ SYNC_JS = r"""
         })
         .then(function (payload) { pollStatus(payload.id); })
         .catch(function (err) {
+          setSyncBusy(false);
           finishPopup(err.message || 'Batch sync failed', '', false);
         });
     });

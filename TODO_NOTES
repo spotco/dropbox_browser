@@ -1,7 +1,7 @@
-- implement upload to folder
 - add filetype default icons
 - add download folder as zip
 - add search
 - add image preview with cache
 - add openmap/googlemap image location visualization
 - improve audio/video streaming behaviour
+- music player functionality

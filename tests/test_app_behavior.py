@@ -820,16 +820,26 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertIn("Settings.get('sync-enable-write-dropbox', false)", html)
         self.assertIn("Settings.set('sync-enable-to-local', enableToLocal.checked)", html)
         self.assertIn("Settings.set('sync-enable-write-dropbox', enableWriteDropbox.checked)", html)
+        self.assertIn("var syncBusyCount = 0", html)
         self.assertIn("setSyncBusy(true)", html)
-        self.assertIn("button.disabled = busy", html)
+        self.assertIn(".sync-form button, .batch-sync, #batch-confirm-run, #batch-confirm-cancel", html)
+        self.assertIn("button.disabled = busy || baseDisabled", html)
+        self.assertIn("if (syncBusyCount > 0) return;", html)
         self.assertIn('id="batch-recursive"', html)
+        self.assertIn("width: calc(100% - 32px)", html)
+        self.assertIn("max-width: none", html)
         self.assertIn("Sync All Local to Dropbox", html)
         self.assertIn("Delete all Local-Only Files", html)
+        self.assertIn("Copy all Dropbox-Only Files to Local", html)
+        self.assertIn('data-batch-action="delete_local_only_all"', html)
+        self.assertIn('data-batch-action="dropbox_only_to_local_all"', html)
+        self.assertIn(".batch-delete-local", html)
+        self.assertIn("body.sync-to-local-enabled .recursive-toggle", html)
+        self.assertIn("body.sync-to-dropbox-enabled .recursive-toggle", html)
         self.assertIn("data.current + '/' + data.total", html)
         self.assertIn("sync-batch-plan", html)
         self.assertIn("batch-confirm-list", html)
-        self.assertIn("button.disabled = true", html)
-        self.assertIn("button.disabled = false", html)
+        self.assertIn("setBaseDisabled(batchRun, !plan.total)", html)
         folder_row = html.split('[dir] folder</a></td>', 1)[1].split("</tr>", 1)[0]
         self.assertIn('data-sync-kind="folder"', folder_row)
         self.assertNotIn("sync-form", folder_row)
@@ -1034,10 +1044,13 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         rclone = SimulatedRclone({
             "dropbox:": [SimulatedLsjsonResponse(items=[
                 {"Name": "changed.txt", "Path": "changed.txt", "IsDir": False, "Size": 99, "ModTime": "2024-01-01T12:00:00Z"},
+                {"Name": "remote.txt", "Path": "remote.txt", "IsDir": False, "Size": 6, "ModTime": "2024-01-01T12:00:00Z"},
                 remote_file_item("synced.txt", local_root / "synced.txt"),
                 remote_dir_item("child"),
             ])],
-            "dropbox:child": [SimulatedLsjsonResponse(items=[])],
+            "dropbox:child": [SimulatedLsjsonResponse(items=[
+                {"Name": "remote-child.txt", "Path": "child/remote-child.txt", "IsDir": False, "Size": 7, "ModTime": "2024-01-01T12:00:00Z"},
+            ])],
         })
         app = self._build_app(rclone, local_root=local_root, workers=1)
 
@@ -1052,19 +1065,30 @@ class AppBehaviorTests(IsolatedPathsTestCase):
                 "recursive": "1",
                 "enable_write_dropbox": "1",
             })
-            delete_pull = server.post_json("/sync-batch-plan", {
-                "action": "delete_local_only_and_pull_diffs",
+            delete_local = server.post_json("/sync-batch-plan", {
+                "action": "delete_local_only_all",
                 "recursive": "0",
+                "enable_to_local": "1",
+            })
+            copy_to_local = server.post_json("/sync-batch-plan", {
+                "action": "dropbox_only_to_local_all",
+                "recursive": "0",
+                "enable_to_local": "1",
+            })
+            copy_to_local_recursive = server.post_json("/sync-batch-plan", {
+                "action": "dropbox_only_to_local_all",
+                "recursive": "1",
                 "enable_to_local": "1",
             })
 
         self.assertEqual([item["path"] for item in nonrecursive["groups"]["local_to_dropbox"]], ["changed.txt", "local.txt"])
         self.assertEqual([item["path"] for item in recursive["groups"]["local_to_dropbox"]], ["child/local-child.txt", "changed.txt", "local.txt"])
-        self.assertEqual([item["path"] for item in delete_pull["groups"]["dropbox_to_local"]], ["changed.txt"])
-        self.assertEqual([item["path"] for item in delete_pull["groups"]["delete_local"]], ["local.txt"])
+        self.assertEqual([item["path"] for item in delete_local["groups"]["delete_local"]], ["local.txt"])
+        self.assertEqual([item["path"] for item in copy_to_local["groups"]["dropbox_to_local"]], ["remote.txt"])
+        self.assertEqual([item["path"] for item in copy_to_local_recursive["groups"]["dropbox_to_local"]], ["child/remote-child.txt", "remote.txt"])
         self.assertNotIn(".DS_Store", str(nonrecursive))
 
-    def test_batch_delete_local_only_and_pull_diffs_runs_per_file(self) -> None:
+    def test_batch_delete_local_only_runs_per_file(self) -> None:
         local_root = self.create_local_root({
             "local.txt": b"local",
             "local-folder/inside.txt": b"inside",
@@ -1076,12 +1100,12 @@ class AppBehaviorTests(IsolatedPathsTestCase):
                 {"Name": "changed.txt", "Path": "changed.txt", "IsDir": False, "Size": 6, "ModTime": "2024-01-01T12:00:00Z"},
                 remote_file_item("synced.txt", local_root / "synced.txt"),
             ])],
-        }, cat_data={"dropbox:changed.txt": b"remote"})
+        })
         app = self._build_app(rclone, local_root=local_root, workers=1)
 
         with TestServer(app) as server:
             payload = server.post_json("/sync-batch", {
-                "action": "delete_local_only_and_pull_diffs",
+                "action": "delete_local_only_all",
                 "recursive": "0",
                 "enable_to_local": "1",
             })
@@ -1089,15 +1113,51 @@ class AppBehaviorTests(IsolatedPathsTestCase):
                 lambda: server.get_json("/sync-status?id=" + payload["id"])
                 if server.get_json("/sync-status?id=" + payload["id"]).get("status") != "running"
                 else None,
-                description="batch delete/pull completion",
+                description="batch delete completion",
             )
 
         self.assertEqual(result["status"], "complete")
         self.assertEqual(result["message"], "Batch sync complete")
         self.assertFalse((local_root / "local.txt").exists())
         self.assertFalse((local_root / "local-folder").exists())
-        self.assertEqual((local_root / "changed.txt").read_bytes(), b"remote")
-        self.assertTrue(any(call["args"][0] == "copyto" and call["target"] == str(local_root / "changed.txt") for call in rclone.calls))
+        self.assertEqual((local_root / "changed.txt").read_bytes(), b"local")
+        self.assertFalse(any(call["args"][0] == "copyto" and call["target"] == str(local_root / "changed.txt") for call in rclone.calls))
+
+    def test_batch_copy_dropbox_only_to_local_runs_per_file(self) -> None:
+        local_root = self.create_local_root({
+            "changed.txt": b"local",
+            "synced.txt": b"synced",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[
+                {"Name": "changed.txt", "Path": "changed.txt", "IsDir": False, "Size": 6, "ModTime": "2024-01-01T12:00:00Z"},
+                {"Name": "remote.txt", "Path": "remote.txt", "IsDir": False, "Size": 6, "ModTime": "2024-01-01T12:00:00Z"},
+                remote_file_item("synced.txt", local_root / "synced.txt"),
+            ])],
+        }, cat_data={
+            "dropbox:remote.txt": b"remote",
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            payload = server.post_json("/sync-batch", {
+                "action": "dropbox_only_to_local_all",
+                "recursive": "0",
+                "enable_to_local": "1",
+            })
+            result = wait_until(
+                lambda: server.get_json("/sync-status?id=" + payload["id"])
+                if server.get_json("/sync-status?id=" + payload["id"]).get("status") != "running"
+                else None,
+                description="batch copy to local completion",
+            )
+
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["message"], "Batch sync complete")
+        self.assertEqual((local_root / "remote.txt").read_bytes(), b"remote")
+        self.assertEqual((local_root / "changed.txt").read_bytes(), b"local")
+        self.assertTrue(any(call["args"][0] == "copyto" and call["target"] == str(local_root / "remote.txt") for call in rclone.calls))
+        self.assertFalse(any(call["args"][0] == "copyto" and call["target"] == str(local_root / "changed.txt") for call in rclone.calls))
 
     def test_recursive_batch_delete_removes_nested_local_only_folders_after_children(self) -> None:
         local_root = self.create_local_root({
@@ -1118,12 +1178,12 @@ class AppBehaviorTests(IsolatedPathsTestCase):
 
         with TestServer(app) as server:
             plan = server.post_json("/sync-batch-plan", {
-                "action": "delete_local_only_and_pull_diffs",
+                "action": "delete_local_only_all",
                 "recursive": "1",
                 "enable_to_local": "1",
             })
             payload = server.post_json("/sync-batch", {
-                "action": "delete_local_only_and_pull_diffs",
+                "action": "delete_local_only_all",
                 "recursive": "1",
                 "enable_to_local": "1",
             })
@@ -1177,4 +1237,3 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertIn("1 error", result["message"])
         self.assertEqual(rclone.cat_data["dropbox:good.txt"], b"good")
         self.assertTrue(any("bad.txt" in error for error in result["errors"]))
-
