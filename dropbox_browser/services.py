@@ -9,9 +9,9 @@ from .errors import BrowserError
 from .formatting import file_type, parse_rclone_time
 from .ignored import is_ignored_name
 from .listingcache import ListingCacheManager
-from .namekeys import filename_compare_key
 from .paths import remote_target, safe_join_local
 from .rclone import RcloneClient
+from .windows_names import match_dropbox_names_to_local_names, resolve_matching_local_path
 
 
 def diff_label(status: str | None) -> str:
@@ -33,10 +33,8 @@ class DropboxBrowser:
         self.listing_cache = listing_cache
 
     def list_entries(self, rel_path: str, force_refresh: bool = False) -> list[dict[str, Any]]:
-        merged: dict[str, dict[str, Any]] = {}
-        merged_keys: dict[str, str] = {}
         remote = remote_target(self.remote, rel_path)
-        local_folder = safe_join_local(self.local_root, rel_path) if self.local_root else None
+        local_folder = resolve_matching_local_path(self.local_root, rel_path) if self.local_root else None
 
         remote_items = None
         if self.listing_cache and not force_refresh:
@@ -52,60 +50,61 @@ class DropboxBrowser:
                 if self.listing_cache:
                     self.listing_cache.set(remote, remote_items)
 
+        remote_entries: dict[str, dict[str, Any]] = {}
         for item in remote_items:
             name = item.get("Name") or item.get("Path") or ""
             if not name or "/" in name or is_ignored_name(name):
                 continue
+            remote_entries[name] = item
+
+        local_entries: dict[str, Path] = {}
+        if local_folder and local_folder.exists() and local_folder.is_dir():
+            for child in local_folder.iterdir():
+                if not is_ignored_name(child.name):
+                    local_entries[child.name] = child
+
+        matches = match_dropbox_names_to_local_names(remote_entries, local_entries)
+        matched_local_names = set(matches.values())
+        rows: list[dict[str, Any]] = []
+
+        for remote_name, item in remote_entries.items():
+            local_name = matches.get(remote_name)
+            child = local_entries.get(local_name) if local_name is not None else None
+            stat = child.stat() if child is not None else None
             is_dir = bool(item.get("IsDir"))
-            key = filename_compare_key(name)
-            merged_keys[key] = name
-            merged[name] = {
-                "name": name,
-                "remote_name": name,
-                "local_name": None,
-                "local_path": None,
-                "is_dir": is_dir,
+            rows.append({
+                "name": remote_name,
+                "remote_name": remote_name,
+                "local_name": child.name if child is not None else None,
+                "local_path": str(child) if child is not None else None,
+                "is_dir": bool(is_dir or (child.is_dir() if child is not None else False)),
                 "remote": True,
-                "local": False,
+                "local": child is not None,
                 "remote_size": None if is_dir else item.get("Size"),
-                "local_size": None,
+                "local_size": None if child is None or child.is_dir() else stat.st_size,
                 "remote_mtime": parse_rclone_time(item.get("ModTime")),
-                "local_mtime": None,
-            }
+                "local_mtime": None if child is None else stat.st_mtime,
+            })
 
-        if local_folder:
-            if local_folder.exists() and local_folder.is_dir():
-                for child in local_folder.iterdir():
-                    if is_ignored_name(child.name):
-                        continue
-                    stat = child.stat()
-                    compare_key = filename_compare_key(child.name)
-                    key = merged_keys.get(compare_key, child.name)
-                    merged_keys.setdefault(compare_key, key)
-                    row = merged.setdefault(
-                        key,
-                        {
-                            "name": child.name,
-                            "remote_name": None,
-                            "local_name": child.name,
-                            "local_path": str(child),
-                            "is_dir": child.is_dir(),
-                            "remote": False,
-                            "local": False,
-                            "remote_size": None,
-                            "local_size": None,
-                            "remote_mtime": None,
-                            "local_mtime": None,
-                        },
-                    )
-                    row["local"] = True
-                    row["local_name"] = child.name
-                    row["local_path"] = str(child)
-                    row["is_dir"] = bool(row["is_dir"] or child.is_dir())
-                    row["local_size"] = None if child.is_dir() else stat.st_size
-                    row["local_mtime"] = stat.st_mtime
+        for local_name, child in local_entries.items():
+            if local_name in matched_local_names:
+                continue
+            stat = child.stat()
+            rows.append({
+                "name": local_name,
+                "remote_name": None,
+                "local_name": local_name,
+                "local_path": str(child),
+                "is_dir": child.is_dir(),
+                "remote": False,
+                "local": True,
+                "remote_size": None,
+                "local_size": None if child.is_dir() else stat.st_size,
+                "remote_mtime": None,
+                "local_mtime": stat.st_mtime,
+            })
 
-        return list(merged.values())
+        return rows
 
     def local_display_path(self, rel_path: str) -> Path | None:
         """Return the actual local path for a displayed Dropbox-relative path.
@@ -117,17 +116,7 @@ class DropboxBrowser:
         """
         if self.local_root is None:
             return None
-        current = self.local_root
-        for part in [part for part in rel_path.split("/") if part]:
-            if not current.exists() or not current.is_dir():
-                return current / part
-            wanted = filename_compare_key(part)
-            try:
-                match = next((child for child in current.iterdir() if filename_compare_key(child.name) == wanted), None)
-            except OSError:
-                match = None
-            current = match if match is not None else current / part
-        return current
+        return resolve_matching_local_path(self.local_root, rel_path)
 
     def invalidate_folder_metadata(self, rel_path: str) -> None:
         """Invalidate cached folder totals for this folder and its ancestors."""
@@ -254,22 +243,25 @@ class DropboxBrowser:
         return rows
 
     def _child_folder_paths(self, rel_path: str) -> list[str]:
-        children: dict[str, str] = {}
+        remote_children: dict[str, str] = {}
         remote = remote_target(self.remote, rel_path)
         try:
             for item in self.rclone.lsjson(remote):
                 name = item.get("Name") or item.get("Path") or ""
                 if name and "/" not in name and not is_ignored_name(name) and item.get("IsDir"):
-                    children[filename_compare_key(name)] = f"{rel_path}/{name}" if rel_path else name
+                    remote_children[name] = f"{rel_path}/{name}" if rel_path else name
         except BrowserError:
             pass
-        local_folder = safe_join_local(self.local_root, rel_path) if self.local_root else None
+        local_children: dict[str, str] = {}
+        local_folder = resolve_matching_local_path(self.local_root, rel_path) if self.local_root else None
         if local_folder is not None and local_folder.exists() and local_folder.is_dir():
             for child in local_folder.iterdir():
                 if child.is_dir() and not is_ignored_name(child.name):
-                    key = filename_compare_key(child.name)
-                    children.setdefault(key, f"{rel_path}/{child.name}" if rel_path else child.name)
-        return sorted(children.values(), key=str.casefold)
+                    local_children[child.name] = f"{rel_path}/{child.name}" if rel_path else child.name
+        matches = match_dropbox_names_to_local_names(remote_children, local_children)
+        paths = [remote_children[name] for name in remote_children]
+        paths.extend(local_children[name] for name in local_children if name not in set(matches.values()))
+        return sorted(dict.fromkeys(paths), key=str.casefold)
 
     def _batch_rows(self, rel_path: str, recursive: bool) -> list[dict[str, Any]]:
         if recursive:

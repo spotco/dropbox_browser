@@ -991,8 +991,8 @@ SYNC_JS = r"""
           finishPopup(data.message || 'Sync failed', data.command || data.label || '', false);
           return;
         }
-        var progressText = data.current && data.total ? ' [' + data.current + '/' + data.total + ']' : '';
-        message.textContent = (data.message || 'Sync running') + progressText;
+        var progressText = data.current && data.total ? '[' + data.current + '/' + data.total + '] ' : '';
+        message.textContent = progressText + (data.message || 'Sync running');
         setTimeout(function () { pollStatus(id); }, 800);
       })
       .catch(function () { setTimeout(function () { pollStatus(id); }, 1500); });
