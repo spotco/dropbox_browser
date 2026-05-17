@@ -592,6 +592,62 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         events = self.read_trace_events()
         self.assertTrue(any(event["event"] == "job_canceled_running" and event.get("remote_path") == "dropbox:a" for event in events))
 
+    def test_stale_parent_with_subfolders_does_not_persist_complete_zero_metadata(self) -> None:
+        root_started = threading.Event()
+        root_release = threading.Event()
+        local_root = self.create_local_root({
+            "root/child/file.txt": b"child data",
+            "other/ok.txt": b"ok",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:root": [
+                SimulatedLsjsonResponse(
+                    items=[remote_dir_item("child")],
+                    wait_event=root_release,
+                    started_event=root_started,
+                ),
+                SimulatedLsjsonResponse(items=[remote_dir_item("child")]),
+            ],
+            "dropbox:root/child": [
+                SimulatedLsjsonResponse(items=[
+                    remote_file_item("file.txt", local_root / "root" / "child" / "file.txt"),
+                ]),
+            ],
+            "dropbox:other": [
+                SimulatedLsjsonResponse(items=[
+                    remote_file_item("ok.txt", local_root / "other" / "ok.txt"),
+                ]),
+            ],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=2)
+        cache = app.folder_cache
+        assert cache is not None
+
+        page1 = time.time()
+        cache.request("dropbox:root", page1)
+        wait_until(root_started.is_set, description="root folder to start")
+
+        page2 = page1 + 1
+        cache.request("dropbox:other", page2)
+        root_release.set()
+        wait_until(lambda: cache.status("dropbox:root") != "calculating", description="stale root job to finish")
+
+        stale_data = cache.get("dropbox:root") or {}
+        self.assertFalse(stale_data.get("complete"))
+        self.assertEqual(stale_data.get("size"), 0)
+
+        page3 = page2 + 1
+        cache.request("dropbox:root", page3)
+        root_data = wait_until(
+            lambda: cache.get("dropbox:root") if (cache.get("dropbox:root") or {}).get("complete") else None,
+            description="root recompletion after stale partial",
+        )
+
+        self.assertEqual(root_data["diff_status"], "synced")
+        self.assertTrue(root_data["complete"])
+        self.assertEqual(root_data["size"], len(b"child data"))
+        self.assertEqual(root_data["file_count"], 1)
+
     def test_size_only_folder_can_be_requeued_after_newer_page(self) -> None:
         local_root = self.create_local_root({
             "a/one.txt": b"one",

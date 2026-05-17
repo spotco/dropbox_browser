@@ -809,6 +809,9 @@ class FolderCacheManager:
         acc = self._acc.get(path)
         if acc is None:
             return
+        if path in self._abandoned:
+            self._write_cache(path, complete=False)
+            return
         if acc.get("diff_status") in {DIFF_HAS_DIFFS, DIFF_DROPBOX_ONLY}:
             if path in self._direct_done and not self._pending_children.get(path):
                 self._write_cache(path, complete=True)
