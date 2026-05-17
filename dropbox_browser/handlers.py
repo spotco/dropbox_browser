@@ -8,7 +8,7 @@ import shutil
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from . import logoutput, logstore, syncstate
 from .errors import BrowserError
@@ -17,6 +17,10 @@ from .paths import clean_rel_path, remote_target, safe_join_local
 from .services import DropboxBrowser
 from .syncjobs import SyncJobManager
 from .views import error_html, page_html
+
+
+ICON_ASSET_DIR = Path(__file__).resolve().parent / "assets" / "icons" / "material-icon-theme"
+ICON_ROUTE_PREFIX = "/assets/icons/material-icon-theme/"
 
 
 class RequestHandler(BaseHTTPRequestHandler):
@@ -47,6 +51,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.serve_sync_status(parsed.query)
             elif parsed.path == "/folder-info":
                 self.serve_folder_info(parsed.query)
+            elif parsed.path.startswith(ICON_ROUTE_PREFIX):
+                self.serve_icon_asset(parsed.path)
             else:
                 raise BrowserError(HTTPStatus.NOT_FOUND, "Not found.")
         except BrowserError as exc:
@@ -254,6 +260,21 @@ class RequestHandler(BaseHTTPRequestHandler):
         body = _json.dumps({"results": results}).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def serve_icon_asset(self, request_path: str) -> None:
+        filename = unquote(request_path.removeprefix(ICON_ROUTE_PREFIX))
+        if "/" in filename or "\\" in filename or not filename.endswith(".svg"):
+            raise BrowserError(HTTPStatus.NOT_FOUND, "Not found.")
+        path = ICON_ASSET_DIR / filename
+        if not path.is_file():
+            raise BrowserError(HTTPStatus.NOT_FOUND, "Not found.")
+        body = path.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "image/svg+xml; charset=utf-8")
+        self.send_header("Cache-Control", "public, max-age=86400")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

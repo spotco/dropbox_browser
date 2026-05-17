@@ -49,6 +49,8 @@ http://127.0.0.1:8000/
 - `dropbox_browser/namekeys.py` - compatibility wrapper for the exact normalized
   filename comparison key used by the broader Windows-safe matcher.
 - `dropbox_browser/views.py` - server-rendered HTML/CSS.
+- `dropbox_browser/assets/icons/material-icon-theme/` - vendored SVG icons from
+  Material Icon Theme for VS Code, including local license/README notes.
 - `tests/` - stdlib `unittest` coverage for app behavior and folder-cache
   workers, using simulated rclone responses and isolated temp/cache paths.
 - `README.md` - user-facing setup and usage notes.
@@ -78,6 +80,22 @@ http://127.0.0.1:8000/
   destination-only files.
 - Browser uploads are not supported. Do not reintroduce upload UI or `/upload`
   backend behavior unless the user explicitly asks.
+
+## Icon Asset Notes
+
+- File and folder row icons are local SVG assets vendored from Material Icon
+  Theme for VS Code under `dropbox_browser/assets/icons/material-icon-theme/`.
+  Keep the upstream `LICENSE` and update the local asset `README.md` when adding
+  more icons.
+- Do not hotlink GitHub or CDN icon URLs from the app. Serve icon files through
+  the constrained `/assets/icons/material-icon-theme/<name>.svg` handler.
+- To add an icon, download the needed upstream `icons/<name>.svg` file into the
+  vendored icon directory, then add or adjust extension mappings in
+  `dropbox_browser/views.py` (`FILE_ICON_BY_EXTENSION`). Use one icon for related
+  extensions where practical, such as mapping `.zip`, `.rar`, `.7z`, `.tar`, and
+  `.gz` to `zip.svg`.
+- Keep a reasonable default icon for unknown file types. Folder rows should use
+  `folder-base.svg`; unknown files should fall back to `document.svg`.
 
 ## Safety Rules
 
