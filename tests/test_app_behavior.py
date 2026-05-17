@@ -1583,6 +1583,68 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertEqual((local_root / "remote.txt").read_bytes(), b"remote")
         self.assertTrue(any(call["args"][0] == "copyto" and call["target"] == str(local_root / "remote.txt") for call in rclone.calls))
 
+    def test_sync_dropbox_only_nested_file_does_not_copy_to_partial_ancestor_path(self) -> None:
+        local_root = self.create_local_root({
+            "conan/Season Pack": b"misplaced episode bytes",
+        })
+        rclone = SimulatedRclone(cat_data={
+            "dropbox:conan/Season Pack/Episodes/episode 001.mkv": b"episode",
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            payload = server.post_json("/sync", {
+                "path": "conan/Season Pack/Episodes/episode 001.mkv",
+                "kind": "file",
+                "direction": "dropbox_to_local",
+                "enable_to_local": "1",
+            })
+            result = wait_until(
+                lambda: server.get_json("/sync-status?id=" + payload["id"])
+                if server.get_json("/sync-status?id=" + payload["id"]).get("status") != "running"
+                else None,
+                description="nested dropbox-to-local sync completion",
+            )
+
+        expected = local_root / "conan" / "Season Pack" / "Episodes" / "episode 001.mkv"
+        bad_partial = local_root / "conan" / "Season Pack"
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(bad_partial.read_bytes(), b"misplaced episode bytes")
+        self.assertFalse(expected.exists())
+        self.assertFalse(any(
+            call["args"][0] == "copyto" and call["target"] == str(bad_partial)
+            for call in rclone.calls
+        ))
+
+    def test_sync_dropbox_only_nested_file_uses_full_safe_destination_path(self) -> None:
+        local_root = self.create_local_root({})
+        rclone = SimulatedRclone(cat_data={
+            "dropbox:conan/Season Pack/Episodes/episode 001.mkv": b"episode",
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            payload = server.post_json("/sync", {
+                "path": "conan/Season Pack/Episodes/episode 001.mkv",
+                "kind": "file",
+                "direction": "dropbox_to_local",
+                "enable_to_local": "1",
+            })
+            result = wait_until(
+                lambda: server.get_json("/sync-status?id=" + payload["id"])
+                if server.get_json("/sync-status?id=" + payload["id"]).get("status") != "running"
+                else None,
+                description="nested dropbox-to-local sync completion",
+            )
+
+        expected = local_root / "conan" / "Season Pack" / "Episodes" / "episode 001.mkv"
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(expected.read_bytes(), b"episode")
+        self.assertTrue(any(
+            call["args"][0] == "copyto" and call["target"] == str(expected)
+            for call in rclone.calls
+        ))
+
     def test_batch_plan_lists_current_folder_files_by_action(self) -> None:
         local_root = self.create_local_root({
             "local.txt": b"local",
