@@ -228,8 +228,14 @@ class RcloneClient:
             message = proc.stderr.decode("utf-8", "replace").strip() or "Folder sync failed."
             raise BrowserError(HTTPStatus.BAD_GATEWAY, message)
 
-    def open_cat(self, target: str) -> subprocess.Popen[bytes]:
-        cmd = self.command("cat", "--", target)
+    def open_cat(self, target: str, offset: int | None = None, count: int | None = None) -> subprocess.Popen[bytes]:
+        args = ["cat"]
+        if offset is not None:
+            args += ["--offset", str(offset)]
+        if count is not None:
+            args += ["--count", str(count)]
+        args += ["--", target]
+        cmd = self.command(*args)
         logstore_id, logoutput_id = self._log_start(cmd)
         started_at = time.monotonic()
         try:

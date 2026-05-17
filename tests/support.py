@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import io
 import json
 import tempfile
 import threading
@@ -42,9 +43,17 @@ class SimulatedCatProcess:
         self.stdout = io.BytesIO(data)
         self.stderr = io.BytesIO()
         self.returncode = 0
+        self.killed = False
 
     def wait(self, timeout: float | None = None) -> int:
         return 0
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
 
 
 class SimulatedRclone:
@@ -150,10 +159,22 @@ class SimulatedRclone:
     def mkdir(self, target: str) -> None:
         self.run("mkdir", "--", target)
 
-    def open_cat(self, target: str) -> SimulatedCatProcess:
+    def open_cat(self, target: str, offset: int | None = None, count: int | None = None) -> SimulatedCatProcess:
         if target not in self.cat_data:
             raise BrowserError(HTTPStatus.NOT_FOUND, "Remote file not found.")
-        return SimulatedCatProcess(self.cat_data[target])
+        args = ["cat"]
+        if offset is not None:
+            args += ["--offset", str(offset)]
+        if count is not None:
+            args += ["--count", str(count)]
+        args += ["--", target]
+        self._record_call(target, tuple(args), cancelable=False)
+        data = self.cat_data[target]
+        if offset is not None:
+            data = data[offset:]
+        if count is not None:
+            data = data[:count]
+        return SimulatedCatProcess(data)
 
     def finish_cat(self, process: SimulatedCatProcess, stream_error: Exception | None = None) -> None:
         return None
