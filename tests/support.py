@@ -128,6 +128,10 @@ class SimulatedRclone:
                 destination_path.parent.mkdir(parents=True, exist_ok=True)
                 destination_path.write_bytes(self.cat_data[source])
             return CompletedProcess(list(args), 0, b"", b"")
+        if args[0] == "mkdir":
+            target = args[-1]
+            self._record_call(target, args, cancelable=cancel_token is not None)
+            return CompletedProcess(list(args), 0, b"", b"")
         raise AssertionError(f"Unsupported simulated rclone command: {args!r}")
 
     def lsjson(self, target: str) -> list[dict[str, Any]]:
@@ -142,6 +146,9 @@ class SimulatedRclone:
 
     def copy_file_overwrite(self, source: str | Path, destination: str | Path) -> None:
         self.run("copyto", "--", str(source), str(destination))
+
+    def mkdir(self, target: str) -> None:
+        self.run("mkdir", "--", target)
 
     def open_cat(self, target: str) -> SimulatedCatProcess:
         if target not in self.cat_data:

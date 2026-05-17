@@ -942,15 +942,17 @@ SYNC_JS = r"""
   }
 
   function groupTitle(key) {
+    if (key === 'local_dir_to_dropbox') return 'Create Dropbox Folders';
     if (key === 'local_to_dropbox') return 'Copy Local -> Dropbox';
+    if (key === 'dropbox_dir_to_local') return 'Create Local Folders';
     if (key === 'dropbox_to_local') return 'Copy Dropbox -> Local';
     return 'Delete Local';
   }
 
   function renderPlan(plan) {
-    batchSummary.textContent = plan.total + ' file(s) will be affected.';
+    batchSummary.textContent = plan.total + ' item(s) will be affected.';
     var html = '';
-    ['local_to_dropbox', 'dropbox_to_local', 'delete_local'].forEach(function (key) {
+    ['local_dir_to_dropbox', 'local_to_dropbox', 'dropbox_dir_to_local', 'dropbox_to_local', 'delete_local'].forEach(function (key) {
       var items = (plan.groups && plan.groups[key]) || [];
       if (!items.length) return;
       html += '<h3>' + esc(groupTitle(key)) + ' (' + items.length + ')</h3><ul>';
@@ -959,7 +961,7 @@ SYNC_JS = r"""
       });
       html += '</ul>';
     });
-    batchList.innerHTML = html || '<p>No files will be changed.</p>';
+    batchList.innerHTML = html || '<p>No items will be changed.</p>';
     setBaseDisabled(batchRun, !plan.total);
   }
 

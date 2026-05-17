@@ -59,10 +59,20 @@ def _job_message(kind: str, item: dict[str, str]) -> tuple[str, str]:
     rel_path = item["path"]
     local_path = item["local_path"]
     remote_path = item["remote_path"]
+    if kind == "local_dir_to_dropbox":
+        return (
+            f"Creating Dropbox folder: {rel_path}",
+            f"rclone mkdir -- {remote_path}",
+        )
     if kind == "local_to_dropbox":
         return (
             f"Copying local to Dropbox: {rel_path}",
             f"rclone copyto -- {local_path} {remote_path}",
+        )
+    if kind == "dropbox_dir_to_local":
+        return (
+            f"Creating local folder: {rel_path}",
+            f"mkdir -- {local_path}",
         )
     if kind == "dropbox_to_local":
         return (
@@ -111,6 +121,9 @@ class SyncJobManager:
         phase_rank = 0
         depth_rank = 0
         local_path = Path(item["local_path"])
+        if kind in {"local_dir_to_dropbox", "dropbox_dir_to_local"}:
+            phase_rank = -1
+            depth_rank = len(Path(item["path"]).parts)
         if kind == "delete_local" and local_path.is_dir():
             phase_rank = 1
             depth_rank = -len(Path(item["path"]).parts)
@@ -171,6 +184,8 @@ class SyncJobManager:
             group.running = max(0, group.running - 1)
             group.completed += 1
             group.touched_parents.add(job.parent_rel)
+            if job.kind in {"local_dir_to_dropbox", "dropbox_dir_to_local"} or (job.kind == "delete_local" and job.phase_rank == 1):
+                group.touched_parents.add(job.item["path"])
             if error_message is not None:
                 group.errors.append(error_message)
             if group.completed >= group.total:
