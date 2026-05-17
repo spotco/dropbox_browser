@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from http import HTTPStatus
 import shutil
+import time
 from pathlib import Path
 from typing import Any
 
@@ -222,6 +223,13 @@ class DropboxBrowser:
                         "local_path": row.get("local_path") or str(safe_join_local(self.local_root, child_path)),
                         "remote_path": remote_target(self.remote, child_path),
                     })
+                elif not row["local"]:
+                    rows.append({
+                        "status": "dropbox_only_dir",
+                        "path": child_path,
+                        "local_path": str(safe_join_local(self.local_root, child_path)),
+                        "remote_path": remote_target(self.remote, child_path),
+                    })
                 continue
             if not row["remote"]:
                 rows.append({
@@ -285,7 +293,9 @@ class DropboxBrowser:
 
         rows = self._batch_rows(rel_path, recursive)
         groups: dict[str, list[dict[str, str]]] = {
+            "local_dir_to_dropbox": [],
             "local_to_dropbox": [],
+            "dropbox_dir_to_local": [],
             "dropbox_to_local": [],
             "delete_local": [],
         }
@@ -296,13 +306,18 @@ class DropboxBrowser:
                 "remote_path": row["remote_path"],
             }
             if action == "local_to_dropbox_all":
-                if row["status"] in {"local_only", "has_diffs"}:
+                if row["status"] == "local_only_dir":
+                    groups["local_dir_to_dropbox"].append(item)
+                elif row["status"] in {"local_only", "has_diffs"}:
                     groups["local_to_dropbox"].append(item)
             elif action == "delete_local_only_all":
                 if row["status"] in {"local_only", "local_only_dir"}:
                     groups["delete_local"].append(item)
-            elif row["status"] == "dropbox_only":
-                groups["dropbox_to_local"].append(item)
+            elif action == "dropbox_only_to_local_all":
+                if row["status"] == "dropbox_only_dir":
+                    groups["dropbox_dir_to_local"].append(item)
+                elif row["status"] == "dropbox_only":
+                    groups["dropbox_to_local"].append(item)
         return {
             "action": action,
             "recursive": recursive,
@@ -312,7 +327,7 @@ class DropboxBrowser:
 
     def batch_sync_operations(self, plan: dict[str, Any]) -> list[tuple[str, dict[str, str]]]:
         operations: list[tuple[str, dict[str, str]]] = []
-        for kind in ("local_to_dropbox", "dropbox_to_local", "delete_local"):
+        for kind in ("local_dir_to_dropbox", "dropbox_dir_to_local", "local_to_dropbox", "dropbox_to_local", "delete_local"):
             operations.extend((kind, item) for item in plan.get("groups", {}).get(kind, []))
         return operations
 
@@ -338,14 +353,37 @@ class DropboxBrowser:
             if not local_path.is_file():
                 raise BrowserError(HTTPStatus.NOT_FOUND, "Local file not found.")
             self.rclone.copy_file_overwrite(local_path, remote_path)
+        elif kind == "local_dir_to_dropbox":
+            if not local_path.is_dir():
+                raise BrowserError(HTTPStatus.NOT_FOUND, "Local folder not found.")
+            parts = [part for part in item["path"].split("/") if part]
+            for index in range(1, len(parts) + 1):
+                self.rclone.mkdir(remote_target(self.remote, "/".join(parts[:index])))
         elif kind == "dropbox_to_local":
             local_path.parent.mkdir(parents=True, exist_ok=True)
             self.rclone.copy_file_overwrite(remote_path, local_path)
+        elif kind == "dropbox_dir_to_local":
+            local_path.mkdir(parents=True, exist_ok=True)
         elif kind == "delete_local":
-            if local_path.is_dir():
-                shutil.rmtree(local_path)
-            else:
-                local_path.unlink()
+            for attempt in range(50):
+                try:
+                    if not local_path.exists():
+                        return
+                    if local_path.is_dir():
+                        shutil.rmtree(local_path, ignore_errors=True)
+                        if not local_path.exists():
+                            return
+                    else:
+                        local_path.unlink()
+                        return
+                except FileNotFoundError:
+                    return
+                except OSError:
+                    if attempt == 49:
+                        raise
+                time.sleep(0.05)
+            if local_path.exists():
+                shutil.rmtree(local_path) if local_path.is_dir() else local_path.unlink()
         else:
             raise BrowserError(HTTPStatus.BAD_REQUEST, "Unsupported sync direction.")
 

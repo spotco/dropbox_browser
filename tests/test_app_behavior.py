@@ -1332,6 +1332,70 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertTrue(any(call["args"][0] == "copyto" and call["target"] == str(local_root / "remote.txt") for call in rclone.calls))
         self.assertFalse(any(call["args"][0] == "copyto" and call["target"] == str(local_root / "changed.txt") for call in rclone.calls))
 
+    def test_recursive_batch_copy_dropbox_only_to_local_creates_empty_folders(self) -> None:
+        local_root = self.create_local_root({})
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[
+                remote_dir_item("empty-remote"),
+            ])],
+            "dropbox:empty-remote": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            plan = server.post_json("/sync-batch-plan", {
+                "action": "dropbox_only_to_local_all",
+                "recursive": "1",
+                "enable_to_local": "1",
+            })
+            payload = server.post_json("/sync-batch", {
+                "action": "dropbox_only_to_local_all",
+                "recursive": "1",
+                "enable_to_local": "1",
+            })
+            result = wait_until(
+                lambda: server.get_json("/sync-status?id=" + payload["id"])
+                if server.get_json("/sync-status?id=" + payload["id"]).get("status") != "running"
+                else None,
+                description="empty remote folder copy completion",
+            )
+
+        self.assertEqual([item["path"] for item in plan["groups"]["dropbox_dir_to_local"]], ["empty-remote"])
+        self.assertEqual(result["status"], "complete")
+        self.assertTrue((local_root / "empty-remote").is_dir())
+
+    def test_recursive_batch_copy_local_to_dropbox_creates_empty_folders(self) -> None:
+        local_root = self.create_local_root({
+            "empty-local": None,
+        })
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[])],
+            "dropbox:empty-local": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            plan = server.post_json("/sync-batch-plan", {
+                "action": "local_to_dropbox_all",
+                "recursive": "1",
+                "enable_write_dropbox": "1",
+            })
+            payload = server.post_json("/sync-batch", {
+                "action": "local_to_dropbox_all",
+                "recursive": "1",
+                "enable_write_dropbox": "1",
+            })
+            result = wait_until(
+                lambda: server.get_json("/sync-status?id=" + payload["id"])
+                if server.get_json("/sync-status?id=" + payload["id"]).get("status") != "running"
+                else None,
+                description="empty local folder copy completion",
+            )
+
+        self.assertEqual([item["path"] for item in plan["groups"]["local_dir_to_dropbox"]], ["empty-local"])
+        self.assertEqual(result["status"], "complete")
+        self.assertTrue(any(call["args"][0] == "mkdir" and call["target"] == "dropbox:empty-local" for call in rclone.calls))
+
     def test_recursive_local_to_dropbox_sync_invalidates_parent_listing_cache_for_new_folders(self) -> None:
         local_root = self.create_local_root({
             "local-folder/file.txt": b"local",

@@ -67,6 +67,22 @@ class SyncJobManagerTests(unittest.TestCase):
 
         self.assertEqual(app.executed, ["batch-one.txt", "priority.txt", "batch-two.txt"])
 
+    def test_directory_jobs_invalidate_directory_and_parent(self) -> None:
+        app = _FakeApp("never-block")
+        manager = SyncJobManager(app, workers=1)
+        op_id = manager.submit(
+            "empty folder",
+            [("dropbox_dir_to_local", {"path": "parent/empty", "local_path": r"C:\tmp\parent\empty", "remote_path": "dropbox:parent/empty"})],
+            batch=True,
+            success_message="Batch sync complete",
+        )
+
+        wait_until(lambda: syncstate.get(op_id) if (syncstate.get(op_id) or {}).get("status") == "complete" else None)
+
+        self.assertEqual(app.executed, ["parent/empty"])
+        self.assertEqual(len(app.invalidated), 1)
+        self.assertEqual(set(app.invalidated[0]), {"parent", "parent/empty"})
+
 
 class SyncJobIntegrationTests(IsolatedPathsTestCase):
     def _build_app(self, rclone: SimulatedRclone, local_root: Path | None = None, workers: int = 1, sync_workers: int = 2) -> DropboxBrowser:
