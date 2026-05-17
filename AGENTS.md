@@ -41,8 +41,11 @@ http://127.0.0.1:8000/
   size/date/count caching; writes JSON files to `Cache/`.
 - `dropbox_browser/logstore.py` - thread-safe in-memory log ring buffer for
   the browser log panel.
-- `dropbox_browser/namekeys.py` - filename comparison keys for matching Dropbox
-  names with local Windows-safe Unicode replacement names.
+- `dropbox_browser/windows_names.py` - Windows-safe Dropbox/local name matching,
+  fallback comparison, and local path resolution helpers for Windows-safe local
+  rename variants.
+- `dropbox_browser/namekeys.py` - compatibility wrapper for the exact normalized
+  filename comparison key used by the broader Windows-safe matcher.
 - `dropbox_browser/views.py` - server-rendered HTML/CSS.
 - `tests/` - stdlib `unittest` coverage for app behavior and folder-cache
   workers, using simulated rclone responses and isolated temp/cache paths.
@@ -97,6 +100,19 @@ http://127.0.0.1:8000/
   `dropbox_browser.namekeys.filename_compare_key`, which applies Unicode NFKC
   normalization before `casefold()`. This makes Dropbox `*` compare equal to
   local `＊`, and similarly handles other fullwidth compatibility characters.
+- Planned robust matcher work: move Windows-safe Dropbox/local name matching
+  into a dedicated helper module so all call sites share the same behavior.
+  Keep the existing exact NFKC/casefold match first, then add a constrained
+  fallback for Windows-safe local substitutions that are not recovered by NFKC
+  alone, including private-use replacement characters and the observed
+  `:` -> `_` local rename form. Integrate the same matcher into page listing
+  merge, local path resolution, folder-cache direct child comparison, and child
+  folder enumeration so a Dropbox folder/file keeps the same local link across
+  the whole app.
+- Add regression coverage for combined Windows-prohibited character cases in
+  both file and folder names, including repeated/combined invalid characters
+  and surrounding Unicode text. Verify the page row merge, `local_display_path`
+  resolution, and folder-cache diff status stay aligned.
 - Do not reconstruct an existing local path from the Dropbox display name when a
   row matched by `filename_compare_key`. Use the actual local path captured from
   the filesystem (`row["local_path"]`) or resolve each path segment through the

@@ -38,9 +38,9 @@ from .config import PROJECT_ROOT
 from .formatting import parse_rclone_time
 from .ignored import is_ignored_name
 from .listingcache import ListingCacheManager
-from .namekeys import filename_compare_key
 from .priorityqueue import PriorityQueue
 from .rclone import RcloneCancelled, RcloneCancelToken
+from .windows_names import match_dropbox_names_to_local_names, resolve_matching_local_path
 from . import workertrace
 
 CACHE_DIR = PROJECT_ROOT / "Cache" / "FolderInfo"
@@ -175,9 +175,7 @@ class FolderCacheManager:
         rel_path = self._remote_rel_path(remote_path)
         if rel_path is None:
             return None
-        from .paths import safe_join_local
-
-        return safe_join_local(self.local_root, rel_path)
+        return resolve_matching_local_path(self.local_root, rel_path)
 
 
     def get(self, remote_path: str) -> dict | None:
@@ -601,7 +599,7 @@ class FolderCacheManager:
             name = item.get("Name") or item.get("Path") or ""
             if not name or "/" in name or is_ignored_name(name):
                 continue
-            remote_children[filename_compare_key(name)] = item
+            remote_children[name] = item
             t = parse_rclone_time(item.get("ModTime"))
             if t and (direct_mtime is None or t > direct_mtime):
                 direct_mtime = t
@@ -623,7 +621,7 @@ class FolderCacheManager:
         if local_folder is not None and local_folder.exists() and local_folder.is_dir():
             try:
                 local_children = {
-                    filename_compare_key(child.name): child
+                    child.name: child
                     for child in local_folder.iterdir()
                     if not is_ignored_name(child.name)
                 }
@@ -634,8 +632,10 @@ class FolderCacheManager:
         direct_diff_status = DIFF_HAS_DIFFS
         file_statuses: dict[str, dict] = {}
         if self.local_root is not None:
-            remote_keys = set(remote_children)
-            local_keys = set(local_children)
+            matches = match_dropbox_names_to_local_names(remote_children, local_children)
+            matched_local_names = set(matches.values())
+            missing_local = sorted((name for name in remote_children if name not in matches), key=str.casefold)
+            missing_remote = sorted((name for name in local_children if name not in matched_local_names), key=str.casefold)
 
             def set_direct_diff(reason: str, status: str = DIFF_HAS_DIFFS) -> None:
                 nonlocal direct_diff_reason, direct_diff_status
@@ -645,10 +645,8 @@ class FolderCacheManager:
 
             if local_folder is None or not local_folder.exists() or not local_folder.is_dir():
                 set_direct_diff("Dropbox only", DIFF_DROPBOX_ONLY)
-            if remote_keys != local_keys:
-                missing_local = sorted(remote_keys - local_keys)
-                missing_remote = sorted(local_keys - remote_keys)
-                if missing_local and not missing_remote and not local_keys:
+            if missing_local or missing_remote:
+                if missing_local and not missing_remote and not local_children:
                     set_direct_diff("Dropbox only", DIFF_DROPBOX_ONLY)
                 elif missing_local:
                     set_direct_diff(
@@ -657,9 +655,9 @@ class FolderCacheManager:
                 elif missing_remote:
                     set_direct_diff(f"Local only: {local_children[missing_remote[0]].name}")
 
-            for key in sorted(remote_keys & local_keys):
-                item = remote_children[key]
-                child = local_children[key]
+            for remote_name in sorted(matches, key=str.casefold):
+                item = remote_children[remote_name]
+                child = local_children[matches[remote_name]]
                 name = item.get("Name") or item.get("Path") or child.name
                 remote_is_dir = bool(item.get("IsDir"))
                 local_is_dir = child.is_dir()

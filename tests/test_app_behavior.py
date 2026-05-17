@@ -836,7 +836,7 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertIn(".batch-delete-local", html)
         self.assertIn("body.sync-to-local-enabled .recursive-toggle", html)
         self.assertIn("body.sync-to-dropbox-enabled .recursive-toggle", html)
-        self.assertIn("data.current + '/' + data.total", html)
+        self.assertIn("'[' + data.current + '/' + data.total + '] '", html)
         self.assertIn("sync-batch-plan", html)
         self.assertIn("batch-confirm-list", html)
         self.assertIn("setBaseDisabled(batchRun, !plan.total)", html)
