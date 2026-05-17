@@ -4,17 +4,26 @@ import json as _json
 import mimetypes
 from pathlib import Path
 import posixpath
-import shutil
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import parse_qs, quote, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from . import logoutput, logstore, syncstate
 from .errors import BrowserError
 from .formatting import display_date, human_size
 from .paths import clean_rel_path, remote_target, safe_join_local
 from .services import DropboxBrowser
+from .streaming import (
+    RangeNotSatisfiable,
+    StreamPlan,
+    copy_exact,
+    copy_file_range,
+    is_client_disconnect,
+    plan_stream,
+    stream_headers,
+    unsatisfiable_range_headers,
+)
 from .syncjobs import SyncJobManager
 from .views import error_html, page_html
 
@@ -60,6 +69,24 @@ class RequestHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self.render_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
+    def do_HEAD(self) -> None:
+        try:
+            parsed = urlparse(self.path)
+            if parsed.path == "/":
+                self.render_index(parsed.query, head_only=True)
+            elif parsed.path == "/file":
+                self.serve_file(parsed.query, inline=True, head_only=True)
+            elif parsed.path == "/download":
+                self.serve_file(parsed.query, inline=False, head_only=True)
+            elif parsed.path.startswith(ICON_ROUTE_PREFIX):
+                self.serve_icon_asset(parsed.path, head_only=True)
+            else:
+                raise BrowserError(HTTPStatus.NOT_FOUND, "Not found.")
+        except BrowserError as exc:
+            self.render_error(exc.status, exc.message, head_only=True)
+        except Exception as exc:
+            self.render_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc), head_only=True)
+
     def do_POST(self) -> None:
         try:
             parsed = urlparse(self.path)
@@ -76,7 +103,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self.render_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
-    def render_index(self, query: str) -> None:
+    def render_index(self, query: str, head_only: bool = False) -> None:
         params = parse_qs(query, keep_blank_values=True)
         rel_path = clean_rel_path(params.get("path", [""])[0])
         sort_key = params.get("sort", ["name"])[0]
@@ -135,9 +162,40 @@ class RequestHandler(BaseHTTPRequestHandler):
             HTTPStatus.OK,
             page_html(self.app, rel_path, entries, sort_key, direction,
                       params.get("msg", [""])[0], folder_cache_map or None, current_folder_cache),
+            head_only=head_only,
         )
 
-    def serve_file(self, query: str, inline: bool) -> None:
+    def _remote_file_size(self, rel_path: str) -> int:
+        parent = posixpath.dirname(rel_path)
+        name = posixpath.basename(rel_path)
+        for entry in self.app.list_entries(parent):
+            if entry.get("name") == name and entry.get("remote") and not entry.get("is_dir"):
+                size = entry.get("remote_size")
+                if size is None:
+                    break
+                return int(size)
+        raise BrowserError(HTTPStatus.NOT_FOUND, "Remote file not found.")
+
+    def _send_file_headers(
+        self,
+        *,
+        plan: StreamPlan,
+        content_type: str,
+        disposition: str,
+        name: str,
+    ) -> None:
+        self.send_response(plan.status)
+        for key, value in stream_headers(plan, content_type=content_type, disposition=disposition, filename=name):
+            self.send_header(key, value)
+        self.end_headers()
+
+    def _send_unsatisfiable_range(self, file_size: int) -> None:
+        self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+        for key, value in unsatisfiable_range_headers(file_size):
+            self.send_header(key, value)
+        self.end_headers()
+
+    def serve_file(self, query: str, inline: bool, head_only: bool = False) -> None:
         params = parse_qs(query)
         rel_path = clean_rel_path(params.get("path", [""])[0])
         source = params.get("source", ["remote"])[0]
@@ -145,27 +203,57 @@ class RequestHandler(BaseHTTPRequestHandler):
         content_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
         disposition = "inline" if inline else "attachment"
 
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Disposition", f'{disposition}; filename="{quote(name)}"')
-        self.end_headers()
-
         if source == "local" and self.app.local_root:
-            local_file = safe_join_local(self.app.local_root, rel_path)
+            local_file = self.app.local_display_path(rel_path) or safe_join_local(self.app.local_root, rel_path)
             if not local_file.is_file():
                 raise BrowserError(HTTPStatus.NOT_FOUND, "Local file not found.")
+            file_size = local_file.stat().st_size
+            try:
+                plan = plan_stream(self.headers.get("Range"), file_size)
+            except RangeNotSatisfiable:
+                self._send_unsatisfiable_range(file_size)
+                return
+            self._send_file_headers(plan=plan, content_type=content_type, disposition=disposition, name=name)
+            if head_only:
+                return
             with local_file.open("rb") as handle:
-                shutil.copyfileobj(handle, self.wfile)
+                try:
+                    copy_file_range(handle, self.wfile, plan)
+                except Exception as exc:
+                    if is_client_disconnect(exc):
+                        return
+                    raise
             return
 
-        proc = self.app.rclone.open_cat(remote_target(self.app.remote, rel_path))
+        file_size = self._remote_file_size(rel_path)
+        try:
+            plan = plan_stream(self.headers.get("Range"), file_size)
+        except RangeNotSatisfiable:
+            self._send_unsatisfiable_range(file_size)
+            return
+        self._send_file_headers(plan=plan, content_type=content_type, disposition=disposition, name=name)
+        if head_only:
+            return
+
+        proc = self.app.rclone.open_cat(
+            remote_target(self.app.remote, rel_path),
+            offset=plan.start if plan.is_partial else None,
+            count=plan.length if plan.is_partial else None,
+        )
         assert proc.stdout is not None
         stream_error: Exception | None = None
         wait_error: Exception | None = None
         try:
-            shutil.copyfileobj(proc.stdout, self.wfile)
+            copy_exact(proc.stdout, self.wfile, plan.length)
         except Exception as exc:
             stream_error = exc
+            if is_client_disconnect(exc):
+                if getattr(proc, "poll", lambda: None)() is None:
+                    try:
+                        proc.kill()
+                    except OSError:
+                        pass
+                return
             raise
         finally:
             proc.stdout.close()
@@ -264,7 +352,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def serve_icon_asset(self, request_path: str) -> None:
+    def serve_icon_asset(self, request_path: str, head_only: bool = False) -> None:
         filename = unquote(request_path.removeprefix(ICON_ROUTE_PREFIX))
         if "/" in filename or "\\" in filename or not filename.endswith(".svg"):
             raise BrowserError(HTTPStatus.NOT_FOUND, "Not found.")
@@ -277,6 +365,8 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "public, max-age=86400")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
+        if head_only:
+            return
         self.wfile.write(body)
 
     def handle_sync(self) -> None:
@@ -358,20 +448,22 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def send_html(self, status: HTTPStatus, body: str) -> None:
+    def send_html(self, status: HTTPStatus, body: str, head_only: bool = False) -> None:
         encoded = body.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
+        if head_only:
+            return
         try:
             self.wfile.write(encoded)
         except (ConnectionAbortedError, BrokenPipeError):
             pass  # client navigated away; response not needed
 
-    def render_error(self, status: HTTPStatus, message: str) -> None:
+    def render_error(self, status: HTTPStatus, message: str, head_only: bool = False) -> None:
         try:
-            self.send_html(status, error_html(status, message))
+            self.send_html(status, error_html(status, message), head_only=head_only)
         except (ConnectionAbortedError, BrokenPipeError):
             pass
 

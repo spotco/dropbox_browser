@@ -248,11 +248,60 @@ https://github.com/spotco/dropbox_browser
     sync progress: `dropbox_browser/syncjobs.py`;
   - rclone command execution and future progress/log capture:
     `dropbox_browser/rclone.py`;
-  - request routes, streaming behavior, and response status:
+  - HTTP byte-range parsing and streaming helpers:
+    `dropbox_browser/streaming.py`;
+  - request routes and response status:
     `dropbox_browser/handlers.py`;
   - generated HTML, icons, search controls, preview controls, and map links:
     `dropbox_browser/views.py`;
   - config-file evolution and path locations: `dropbox_browser/config.py`.
+
+## Seekable Audio/Video Streaming
+
+Audio and video previews support browser seeking/jumping through HTTP byte-range
+requests. Keep this behavior in place for both `/file` and `/download`.
+
+Current behavior and ownership:
+
+- `/file` and `/download` both use `RequestHandler.serve_file()`.
+- `dropbox_browser/streaming.py` owns byte-range parsing, response planning,
+  and exact-byte copy helpers.
+- Local files are streamed from disk by seeking to the requested offset and
+  copying the planned byte count.
+- Dropbox files are streamed from `rclone cat`. Full responses use plain
+  `rclone cat -- remote:path`; range responses use `rclone cat --offset N
+  --count M -- remote:path`.
+- `HEAD` is supported for `/file` and `/download` so media players and download
+  managers can probe metadata without opening a rclone stream.
+- Abandoned remote streams from browser seek behavior should terminate the
+  active rclone process promptly.
+
+Relevant rclone capability:
+
+- `rclone cat` supports `--offset N` and `--count M`, which can serve a byte
+  slice without downloading/saving the whole file locally.
+- Remote range streaming should translate HTTP ranges into:
+  `rclone cat --offset <start> --count <length> -- remote:path`.
+
+Supported range forms:
+
+- `bytes=START-END`;
+- `bytes=START-`;
+- `bytes=-SUFFIX_LENGTH`.
+
+Expected response behavior:
+
+- Full response: `200 OK`, `Content-Length`, `Accept-Ranges: bytes`.
+- Partial response: `206 Partial Content`, `Content-Range`,
+  `Content-Length`, `Accept-Ranges: bytes`.
+- Invalid range: `416 Range Not Satisfiable`, `Content-Range: bytes */size`.
+
+Test coverage:
+
+- `tests/test_streaming.py` covers pure range parsing and stream planning.
+- `tests/test_rclone.py` covers range-aware rclone command construction.
+- `tests/test_app_behavior.py` covers local and remote full/range responses,
+  suffix/open-ended ranges, `HEAD`, invalid ranges, and `/download`.
 
 ## Planned: Recursive Diff Status Cache
 
