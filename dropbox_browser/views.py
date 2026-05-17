@@ -12,6 +12,129 @@ from .formatting import display_date, file_type, human_size, status_class
 from .services import diff_label
 
 
+ICON_BASE_URL = "/assets/icons/material-icon-theme/"
+FOLDER_ICON = "folder-base.svg"
+DEFAULT_FILE_ICON = "document.svg"
+FILE_ICON_BY_EXTENSION = {
+    ".7z": "zip.svg",
+    ".aac": "audio.svg",
+    ".avi": "video.svg",
+    ".avif": "image.svg",
+    ".bash": "console.svg",
+    ".bat": "console.svg",
+    ".bmp": "image.svg",
+    ".bz2": "zip.svg",
+    ".cjs": "javascript.svg",
+    ".cmd": "console.svg",
+    ".com": "exe.svg",
+    ".conf": "editorconfig.svg",
+    ".cfg": "editorconfig.svg",
+    ".csv": "table.svg",
+    ".css": "css.svg",
+    ".db": "database.svg",
+    ".dll": "dll.svg",
+    ".doc": "word.svg",
+    ".docx": "word.svg",
+    ".eot": "font.svg",
+    ".env": "editorconfig.svg",
+    ".exe": "exe.svg",
+    ".fish": "console.svg",
+    ".flac": "audio.svg",
+    ".gif": "image.svg",
+    ".gz": "zip.svg",
+    ".heic": "image.svg",
+    ".htm": "html.svg",
+    ".html": "html.svg",
+    ".ico": "image.svg",
+    ".ini": "editorconfig.svg",
+    ".jpeg": "image.svg",
+    ".jpg": "image.svg",
+    ".js": "javascript.svg",
+    ".json": "json.svg",
+    ".jsonl": "json.svg",
+    ".lock": "lock.svg",
+    ".log": "log.svg",
+    ".m4a": "audio.svg",
+    ".m4v": "video.svg",
+    ".markdown": "markdown.svg",
+    ".md": "markdown.svg",
+    ".mid": "audio.svg",
+    ".midi": "audio.svg",
+    ".mjs": "javascript.svg",
+    ".mkv": "video.svg",
+    ".mov": "video.svg",
+    ".mp3": "audio.svg",
+    ".mp4": "video.svg",
+    ".mpeg": "video.svg",
+    ".mpg": "video.svg",
+    ".msi": "installation.svg",
+    ".nfo": "document.svg",
+    ".odp": "powerpoint.svg",
+    ".ods": "table.svg",
+    ".odt": "word.svg",
+    ".ogg": "audio.svg",
+    ".otf": "font.svg",
+    ".pdf": "pdf.svg",
+    ".png": "image.svg",
+    ".ppt": "powerpoint.svg",
+    ".pptx": "powerpoint.svg",
+    ".ps1": "powershell.svg",
+    ".psd1": "powershell.svg",
+    ".psm1": "powershell.svg",
+    ".py": "python.svg",
+    ".pyw": "python.svg",
+    ".rar": "zip.svg",
+    ".rtf": "document.svg",
+    ".sh": "console.svg",
+    ".sql": "database.svg",
+    ".sqlite": "database.svg",
+    ".sqlite3": "database.svg",
+    ".svg": "image.svg",
+    ".tar": "zip.svg",
+    ".text": "document.svg",
+    ".tgz": "zip.svg",
+    ".tif": "image.svg",
+    ".tiff": "image.svg",
+    ".toml": "editorconfig.svg",
+    ".tsv": "table.svg",
+    ".ttf": "font.svg",
+    ".txt": "document.svg",
+    ".wav": "audio.svg",
+    ".webm": "video.svg",
+    ".webp": "image.svg",
+    ".wma": "audio.svg",
+    ".wmv": "video.svg",
+    ".woff": "font.svg",
+    ".woff2": "font.svg",
+    ".xls": "table.svg",
+    ".xlsx": "table.svg",
+    ".xml": "xml.svg",
+    ".xz": "zip.svg",
+    ".yaml": "editorconfig.svg",
+    ".yml": "editorconfig.svg",
+    ".zip": "zip.svg",
+    ".zsh": "console.svg",
+}
+
+
+def icon_for_entry(name: str, is_dir: bool) -> str:
+    if is_dir:
+        return FOLDER_ICON
+    return FILE_ICON_BY_EXTENSION.get(Path(name).suffix.casefold(), DEFAULT_FILE_ICON)
+
+
+def entry_name_link(href: str, name: str, is_dir: bool) -> str:
+    icon_name = icon_for_entry(name, is_dir)
+    icon_src = ICON_BASE_URL + quote(icon_name, safe="")
+    escaped_name = html.escape(name)
+    return (
+        f'<a class="name" href="{href}">'
+        f'<img class="file-icon" src="{icon_src}" alt="" aria-hidden="true" loading="lazy">'
+        f'<span class="entry-name">{escaped_name}</span>'
+        '</a>'
+    )
+
+
 def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: str, direction: str, msg: str, folder_cache_map: dict | None = None, current_folder_cache: dict | None = None) -> str:
     rows = "\n".join(entry_row(app, rel_path, entry, folder_cache_map or {}, current_folder_cache or {}) for entry in entries)
     crumbs = breadcrumbs(rel_path)
@@ -60,6 +183,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/svg+xml" href="{ICON_BASE_URL}box-favicon.svg">
   <title>{APP_TITLE}</title>
   <style>{CSS}</style>
 </head>
@@ -236,7 +360,7 @@ def entry_row(app: Any, rel_path: str, row: dict[str, Any], folder_cache_map: di
             size_td = '<td class="col-size">—</td>'
             date_td = f'<td class="col-date">{display_date(row.get("local_mtime"))}</td>'
             row_attrs = common_row_attrs
-        name_html = f'<a class="name" href="/?{urlencode({"path": child_path})}">[dir] {html.escape(name)}</a>'
+        name_html = entry_name_link("/?" + urlencode({"path": child_path}), name, True)
         copy_button = _copy_path_button(app, row, child_path, True) if row["local"] else ""
         view_td = f'<td class="view-actions">{copy_button}</td>'
         sync_td = _sync_cell(child_path, "folder", status, sync_enabled)
@@ -257,7 +381,7 @@ def entry_row(app: Any, rel_path: str, row: dict[str, Any], folder_cache_map: di
         date_td = f'<td class="col-date">{display_date(date_value)}</td>'
         row_attrs = common_row_attrs + status_attrs
         query = urlencode({"path": child_path, "source": source})
-        name_html = f'<a class="name" href="/file?{query}">{html.escape(name)}</a>'
+        name_html = entry_name_link("/file?" + query, name, False)
         copy_button = _copy_path_button(app, row, child_path, False) if row["local"] else ""
         view_td = f'<td class="view-actions"><a href="/file?{query}">Preview</a> <a href="/download?{query}">Download</a>{copy_button}</td>'
         sync_td = _sync_cell(child_path, "file", status, sync_enabled)
@@ -394,7 +518,19 @@ th {
   text-transform: uppercase;
 }
 .name {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
   font-weight: 600;
+  min-width: 0;
+}
+.file-icon {
+  flex: 0 0 18px;
+  height: 18px;
+  width: 18px;
+}
+.entry-name {
+  overflow-wrap: anywhere;
 }
 .status {
   border-radius: 999px;

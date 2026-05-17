@@ -90,7 +90,7 @@ class WindowsSafeNameIntegrationTests(IsolatedPathsTestCase):
             page_html = server.get_text("/?path=music")
             results = self._wait_folder_info(server, current="music", path=remote_path)
         table_body = page_html.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
-        self.assertEqual(table_body.count(f"[dir] {html_module.escape(remote_name)}</a>"), 1)
-        self.assertNotIn(f"[dir] {html_module.escape(local_name)}</a>", table_body)
+        self.assertEqual(table_body.count(f'<span class="entry-name">{html_module.escape(remote_name)}</span>'), 1)
+        self.assertNotIn(f'<span class="entry-name">{html_module.escape(local_name)}</span>', table_body)
         self.assertEqual(app.local_display_path(remote_path), local_root / "music" / local_name)
         self.assertEqual(results[remote_path]["diff_status"], "synced")

@@ -128,7 +128,8 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         with TestServer(app) as server:
             html = server.get_text("/")
             self.assertIn("shared.txt", html)
-            self.assertIn("[dir] sub", html)
+            self.assertIn('<span class="entry-name">sub</span>', html)
+            self.assertIn('/assets/icons/material-icon-theme/folder-base.svg', html)
             self.assertIn("Loading", html)
 
             results = self._wait_folder_info(
@@ -372,9 +373,9 @@ class AppBehaviorTests(IsolatedPathsTestCase):
 
         table_body = html.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
         names = [
-            row.split('[dir] ', 1)[1].split("</a>", 1)[0]
+            row.split('<span class="entry-name">', 1)[1].split("</span>", 1)[0]
             for row in table_body.split("<tr")
-            if '[dir] ' in row
+            if 'data-row-kind="folder"' in row
         ]
         self.assertEqual(names, ["newer", "older"])
         self.assertIn('data-sort-date="1735689600.0"', table_body)
@@ -1014,9 +1015,42 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertIn("sync-batch-plan", html)
         self.assertIn("batch-confirm-list", html)
         self.assertIn("setBaseDisabled(batchRun, !plan.total)", html)
-        folder_row = html.split('[dir] folder</a></td>', 1)[1].split("</tr>", 1)[0]
+        folder_row = html.split('<span class="entry-name">folder</span></a></td>', 1)[1].split("</tr>", 1)[0]
         self.assertIn('data-sync-kind="folder"', folder_row)
         self.assertNotIn("sync-form", folder_row)
+
+    def test_entry_rows_render_material_file_type_icons(self) -> None:
+        local_root = self.create_local_root({
+            "archive.rar": b"archive",
+            "movie.mkv": b"video",
+            "program.exe": b"exe",
+            "unknown.bin": b"bin",
+            "folder/inside.txt": b"inside",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[
+                remote_file_item("archive.rar", local_root / "archive.rar"),
+                remote_file_item("movie.mkv", local_root / "movie.mkv"),
+                remote_file_item("program.exe", local_root / "program.exe"),
+                remote_file_item("unknown.bin", local_root / "unknown.bin"),
+                remote_dir_item("folder"),
+            ])],
+        })
+        app = self._build_app(rclone, local_root=local_root)
+
+        with TestServer(app) as server:
+            html = server.get_text("/")
+            icon_svg = server.get_text("/assets/icons/material-icon-theme/folder-base.svg")
+            favicon_svg = server.get_text("/assets/icons/material-icon-theme/box-favicon.svg")
+
+        self.assertIn('<link rel="icon" type="image/svg+xml" href="/assets/icons/material-icon-theme/box-favicon.svg">', html)
+        self.assertIn('src="/assets/icons/material-icon-theme/folder-base.svg"', html)
+        self.assertIn('src="/assets/icons/material-icon-theme/zip.svg"', html)
+        self.assertIn('src="/assets/icons/material-icon-theme/video.svg"', html)
+        self.assertIn('src="/assets/icons/material-icon-theme/exe.svg"', html)
+        self.assertIn('src="/assets/icons/material-icon-theme/document.svg"', html)
+        self.assertIn("<svg", icon_svg)
+        self.assertIn("<svg", favicon_svg)
 
     def test_copy_buttons_cover_current_folder_and_local_file_paths(self) -> None:
         local_root = self.create_local_root({
@@ -1052,7 +1086,7 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertIn(f'data-copy-path="{local_root / "local.txt"}"', html)
         self.assertIn("navigator.clipboard.writeText(path)", html)
         self.assertIn("document.execCommand('copy')", html)
-        remote_row = html.split('remote.txt</a></td>', 1)[1].split("</tr>", 1)[0]
+        remote_row = html.split('<span class="entry-name">remote.txt</span></a></td>', 1)[1].split("</tr>", 1)[0]
         self.assertNotIn("copy-path", remote_row)
 
     def test_go_to_dropbox_link_encodes_current_folder_path(self) -> None:
@@ -1474,7 +1508,7 @@ class AppBehaviorTests(IsolatedPathsTestCase):
             html = server.get_text("/")
 
         self.assertEqual(result["status"], "complete")
-        folder_row = html.split("[dir] local-folder</a></td>", 1)[1].split("</tr>", 1)[0]
+        folder_row = html.split('<span class="entry-name">local-folder</span></a></td>', 1)[1].split("</tr>", 1)[0]
         self.assertNotIn("Local Only", folder_row)
         self.assertGreaterEqual(sum(1 for call in rclone.calls if call["target"] == "dropbox:"), 3)
 
