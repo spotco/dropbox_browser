@@ -12,6 +12,7 @@ from . import logoutput
 from .listingcache import ListingCacheManager
 from .rclone import RcloneClient
 from .services import DropboxBrowser
+from .syncjobs import SyncJobManager
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,17 +34,18 @@ def main() -> int:
 
     app_config = load_app_config()
     rclone = RcloneClient(args.rclone, args.rclone_config, log_commands=bool(app_config["LogRcloneCommands"]))
-    listing_cache = ListingCacheManager(ttl_minutes=float(app_config["ListingCacheTTLMinutes"]))
+    listing_cache = ListingCacheManager(ttl_seconds=float(app_config["ListingCacheTTLSeconds"]))
     folder_cache = FolderCacheManager(
         rclone,
         workers=int(app_config["FolderCacheWorkers"]),
-        ttl_hours=float(app_config["FolderCacheTTLHours"]),
+        ttl_seconds=float(app_config["FolderCacheTTLSeconds"]),
         listing_cache=listing_cache,
         local_root=args.local_root,
         remote=args.remote,
     )
     rclone.progress_fn = folder_cache.current_progress
     app = DropboxBrowser(rclone, args.remote, args.local_root, folder_cache=folder_cache, listing_cache=listing_cache)
+    app.sync_jobs = SyncJobManager(app, workers=int(app_config["SyncJobWorkers"]))
     server = ThreadingHTTPServer((args.host, args.port), RequestHandler)
     server.app = app  # type: ignore[attr-defined]
     server.log_requests = bool(app_config["LogHttpRequests"])  # type: ignore[attr-defined]
@@ -57,4 +59,3 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\nStopped.")
     return 0
-

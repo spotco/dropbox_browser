@@ -14,8 +14,9 @@ _APP_CONFIG_DEFAULTS: dict = {
     "LogRcloneCommands": True,
     "LogHttpRequests": True,
     "FolderCacheWorkers": 4,
-    "FolderCacheTTLHours": 24,
-    "ListingCacheTTLMinutes": 30,
+    "SyncJobWorkers": 4,
+    "FolderCacheTTLSeconds": 86400,
+    "ListingCacheTTLSeconds": 1800,
 }
 
 

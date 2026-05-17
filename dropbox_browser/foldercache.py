@@ -93,13 +93,13 @@ class FolderCacheManager:
         self,
         rclone: "RcloneClient",
         workers: int,
-        ttl_hours: float,
+        ttl_seconds: float,
         listing_cache: ListingCacheManager | None = None,
         local_root: Path | None = None,
         remote: str | None = None,
     ):
         self.rclone = rclone
-        self.ttl_seconds = ttl_hours * 3600
+        self.ttl_seconds = ttl_seconds
         self.listing_cache = listing_cache
         self.local_root = local_root.resolve() if local_root else None
         self.remote = (remote or "").rstrip("/")

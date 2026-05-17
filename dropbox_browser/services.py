@@ -31,6 +31,7 @@ class DropboxBrowser:
         self.local_root = local_root.resolve() if local_root else None
         self.folder_cache = folder_cache
         self.listing_cache = listing_cache
+        self.sync_jobs: Any | None = None
 
     def list_entries(self, rel_path: str, force_refresh: bool = False) -> list[dict[str, Any]]:
         remote = remote_target(self.remote, rel_path)
@@ -135,7 +136,10 @@ class DropboxBrowser:
             if sort_key == "type":
                 primary = file_type(row["name"], row["is_dir"])
             elif sort_key == "date":
-                primary = max(row.get("remote_mtime") or 0, row.get("local_mtime") or 0)
+                if row["is_dir"] and row.get("cached_mtime") is not None:
+                    primary = row.get("cached_mtime") or 0
+                else:
+                    primary = max(row.get("remote_mtime") or 0, row.get("local_mtime") or 0)
             elif sort_key == "size":
                 if row["is_dir"]:
                     primary = row.get("cached_size") or 0
@@ -306,68 +310,56 @@ class DropboxBrowser:
             "total": sum(len(items) for items in groups.values()),
         }
 
-    def run_batch_sync(self, plan: dict[str, Any], progress: Any | None = None) -> list[str]:
-        errors: list[str] = []
+    def batch_sync_operations(self, plan: dict[str, Any]) -> list[tuple[str, dict[str, str]]]:
         operations: list[tuple[str, dict[str, str]]] = []
         for kind in ("local_to_dropbox", "dropbox_to_local", "delete_local"):
             operations.extend((kind, item) for item in plan.get("groups", {}).get(kind, []))
-        total = len(operations)
-        for index, (kind, item) in enumerate(operations, start=1):
-            rel_path = item["path"]
-            local_path = Path(item["local_path"])
-            remote_path = item["remote_path"]
-            try:
-                if kind == "local_to_dropbox":
-                    command = f"rclone copyto -- {local_path} {remote_path}"
-                    if progress:
-                        progress(index, total, f"Copying local to Dropbox: {rel_path}", command)
-                    self.rclone.copy_file_overwrite(local_path, remote_path)
-                elif kind == "dropbox_to_local":
-                    command = f"rclone copyto -- {remote_path} {local_path}"
-                    if progress:
-                        progress(index, total, f"Copying Dropbox to local: {rel_path}", command)
-                    local_path.parent.mkdir(parents=True, exist_ok=True)
-                    self.rclone.copy_file_overwrite(remote_path, local_path)
-                else:
-                    command = f"delete local -- {local_path}"
-                    if progress:
-                        progress(index, total, f"Deleting local-only item: {rel_path}", command)
-                    if local_path.is_dir():
-                        shutil.rmtree(local_path)
-                    else:
-                        local_path.unlink()
-            except Exception as exc:
-                errors.append(f"{rel_path}: {exc}")
-        rels = {str(Path(item["path"]).parent).replace("\\", "/") for _, item in operations}
-        for parent in rels:
-            if parent == ".":
-                parent = ""
-            if self.listing_cache:
-                self.listing_cache.invalidate(remote_target(self.remote, parent))
-            self.invalidate_folder_metadata(parent)
-        return errors
+        return operations
 
-    def sync_item(self, rel_path: str, direction: str) -> None:
+    def single_sync_operation(self, rel_path: str, direction: str) -> tuple[str, dict[str, str]]:
         if self.local_root is None:
             raise BrowserError(HTTPStatus.BAD_REQUEST, "Local comparison is not configured.")
         if direction not in {"local_to_dropbox", "dropbox_to_local"}:
             raise BrowserError(HTTPStatus.BAD_REQUEST, "Unsupported sync direction.")
+        local_path = self.local_display_path(rel_path) or safe_join_local(self.local_root, rel_path)
+        return (
+            direction,
+            {
+                "path": rel_path,
+                "local_path": str(local_path),
+                "remote_path": remote_target(self.remote, rel_path),
+            },
+        )
 
-        local_path = safe_join_local(self.local_root, rel_path)
-        remote_path = remote_target(self.remote, rel_path)
-        if direction == "local_to_dropbox":
+    def execute_sync_operation(self, kind: str, item: dict[str, str]) -> None:
+        local_path = Path(item["local_path"])
+        remote_path = item["remote_path"]
+        if kind == "local_to_dropbox":
             if not local_path.is_file():
                 raise BrowserError(HTTPStatus.NOT_FOUND, "Local file not found.")
             self.rclone.copy_file_overwrite(local_path, remote_path)
-        else:
+        elif kind == "dropbox_to_local":
             local_path.parent.mkdir(parents=True, exist_ok=True)
             self.rclone.copy_file_overwrite(remote_path, local_path)
+        elif kind == "delete_local":
+            if local_path.is_dir():
+                shutil.rmtree(local_path)
+            else:
+                local_path.unlink()
+        else:
+            raise BrowserError(HTTPStatus.BAD_REQUEST, "Unsupported sync direction.")
 
-        # Sync is copy-only: it overwrites destination files selected by the
-        # user, but intentionally never deletes destination-only files.
-        parent_rel = str(Path(rel_path).parent).replace("\\", "/")
-        if parent_rel == ".":
-            parent_rel = ""
-        if self.listing_cache:
-            self.listing_cache.invalidate(remote_target(self.remote, parent_rel))
-        self.invalidate_folder_metadata(parent_rel)
+    def invalidate_sync_parents(self, parents: list[str] | set[str]) -> None:
+        for parent in parents:
+            normalized = parent or ""
+            if self.listing_cache:
+                parts = [part for part in normalized.split("/") if part]
+                for index in range(len(parts), -1, -1):
+                    ancestor = "/".join(parts[:index])
+                    self.listing_cache.invalidate(remote_target(self.remote, ancestor))
+            self.invalidate_folder_metadata(normalized)
+
+    def sync_item(self, rel_path: str, direction: str) -> None:
+        kind, item = self.single_sync_operation(rel_path, direction)
+        self.execute_sync_operation(kind, item)
+        self.invalidate_sync_parents({str(Path(rel_path).parent).replace("\\", "/") if str(Path(rel_path).parent) != "." else ""})
