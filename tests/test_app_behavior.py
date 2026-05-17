@@ -4,6 +4,7 @@ import threading
 import time
 from http import HTTPStatus
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -1260,6 +1261,49 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertEqual([item["path"] for item in copy_to_local["groups"]["dropbox_to_local"]], ["remote.txt"])
         self.assertEqual([item["path"] for item in copy_to_local_recursive["groups"]["dropbox_to_local"]], ["child/remote-child.txt", "remote.txt"])
         self.assertNotIn(".DS_Store", str(nonrecursive))
+
+    def test_recursive_batch_plan_uses_sync_worker_concurrency(self) -> None:
+        local_root = self.create_local_root({})
+        release = threading.Event()
+        started_a = threading.Event()
+        started_b = threading.Event()
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[
+                remote_dir_item("a"),
+                remote_dir_item("b"),
+            ]), SimulatedLsjsonResponse(items=[
+                remote_dir_item("a"),
+                remote_dir_item("b"),
+            ])],
+            "dropbox:a": [
+                SimulatedLsjsonResponse(items=[], wait_event=release, started_event=started_a),
+                SimulatedLsjsonResponse(items=[]),
+            ],
+            "dropbox:b": [
+                SimulatedLsjsonResponse(items=[], wait_event=release, started_event=started_b),
+                SimulatedLsjsonResponse(items=[]),
+            ],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1, sync_workers=2)
+        plan_holder: dict[str, Any] = {}
+
+        def run_plan() -> None:
+            plan_holder["plan"] = app.plan_batch_sync("", "dropbox_only_to_local_all", recursive=True)
+
+        thread = threading.Thread(target=run_plan)
+        thread.start()
+        try:
+            wait_until(started_a.is_set, description="first child planning listing")
+            wait_until(started_b.is_set, description="second child planning listing")
+        finally:
+            release.set()
+            thread.join(timeout=5)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(
+            [item["path"] for item in plan_holder["plan"]["groups"]["dropbox_dir_to_local"]],
+            ["a", "b"],
+        )
 
     def test_batch_delete_local_only_runs_per_file(self) -> None:
         local_root = self.create_local_root({

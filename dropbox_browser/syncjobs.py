@@ -93,6 +93,7 @@ class SyncJobManager:
         self._submit_order = 0
         self._groups: dict[str, SyncGroup] = {}
         worker_count = max(1, workers)
+        self.worker_count = worker_count
         for index in range(worker_count):
             threading.Thread(
                 target=self._worker,
