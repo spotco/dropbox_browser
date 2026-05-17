@@ -200,6 +200,9 @@ class TestServer:
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=5)
+        shutdown = getattr(self.app, "shutdown", None)
+        if shutdown is not None:
+            shutdown()
 
     @property
     def base_url(self) -> str:
@@ -280,7 +283,7 @@ def wait_until(predicate: Any, timeout: float = 5.0, interval: float = 0.02, des
         if last_value:
             return last_value
         time.sleep(interval)
-    raise AssertionError(f"Timed out waiting for {description}")
+    raise AssertionError(f"Timed out waiting for {description}; last value: {last_value!r}")
 def remote_file_item(name: str, local_path: Path, mod_time: str = "2024-01-01T12:00:00Z") -> dict[str, Any]:
     data = local_path.read_bytes()
     return {

@@ -44,6 +44,14 @@ class SyncJob:
     parent_rel: str = field(compare=False)
 
 
+@dataclass(order=True, frozen=True)
+class SyncShutdownJob:
+    priority_rank: int = 999
+    phase_rank: int = 0
+    depth_rank: int = 0
+    submit_order: int = 0
+
+
 @dataclass
 class SyncGroup:
     total: int
@@ -92,14 +100,29 @@ class SyncJobManager:
         self._lock = threading.Lock()
         self._submit_order = 0
         self._groups: dict[str, SyncGroup] = {}
+        self._shutdown = False
+        self._workers: list[threading.Thread] = []
         worker_count = max(1, workers)
         self.worker_count = worker_count
         for index in range(worker_count):
-            threading.Thread(
+            worker = threading.Thread(
                 target=self._worker,
                 daemon=True,
                 name=f"sync-job-worker-{index + 1}",
-            ).start()
+            )
+            worker.start()
+            self._workers.append(worker)
+
+    def shutdown(self, timeout: float = 5.0) -> None:
+        with self._lock:
+            if self._shutdown:
+                return
+            self._shutdown = True
+        for _ in self._workers:
+            self._queue.put(SyncShutdownJob())
+        per_thread_timeout = timeout / max(1, len(self._workers))
+        for worker in self._workers:
+            worker.join(timeout=per_thread_timeout)
 
     def submit(self, label: str, operations: list[tuple[str, dict[str, str]]], *, batch: bool, success_message: str) -> str:
         op_id = syncstate.start(label)
@@ -110,6 +133,9 @@ class SyncJobManager:
             return op_id
         jobs: list[SyncJob] = []
         with self._lock:
+            if self._shutdown:
+                syncstate.fail(op_id, "Sync job manager is shutting down.")
+                return op_id
             self._groups[op_id] = SyncGroup(total=total, batch=batch, success_message=success_message)
             for kind, item in operations:
                 self._submit_order += 1
@@ -149,6 +175,10 @@ class SyncJobManager:
         while True:
             job = self._queue.get()
             try:
+                if isinstance(job, SyncShutdownJob):
+                    return
+                if not isinstance(job, SyncJob):
+                    return
                 self._run_job(job)
             finally:
                 self._queue.task_done()

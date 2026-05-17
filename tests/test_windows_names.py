@@ -55,7 +55,9 @@ class WindowsSafeNameIntegrationTests(IsolatedPathsTestCase):
             local_root=local_root,
             remote="dropbox:",
         )
-        return DropboxBrowser(rclone, "dropbox:", local_root, folder_cache=folder_cache, listing_cache=listing_cache)
+        app = DropboxBrowser(rclone, "dropbox:", local_root, folder_cache=folder_cache, listing_cache=listing_cache)
+        self.addCleanup(app.shutdown)
+        return app
 
     def _wait_folder_info(self, server: TestServer, *, current: str, path: str) -> dict:
         payload_holder: dict[str, dict] = {}
