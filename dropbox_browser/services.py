@@ -35,6 +35,12 @@ class DropboxBrowser:
         self.listing_cache = listing_cache
         self.sync_jobs: Any | None = None
 
+    def shutdown(self) -> None:
+        for manager in (self.folder_cache, self.sync_jobs):
+            shutdown = getattr(manager, "shutdown", None)
+            if shutdown is not None:
+                shutdown()
+
     def list_entries(self, rel_path: str, force_refresh: bool = False) -> list[dict[str, Any]]:
         remote = remote_target(self.remote, rel_path)
         local_folder = resolve_matching_local_path(self.local_root, rel_path) if self.local_root else None

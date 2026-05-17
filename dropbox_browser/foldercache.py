@@ -80,6 +80,14 @@ class FolderJob:
         return cls(-page_epoch, breadth_depth, 0, remote_path, page_epoch, remote_path)
 
 
+@dataclass(order=True, frozen=True)
+class FolderShutdownJob:
+    priority_page: float = 0.0
+    breadth_depth: int = 0
+    job_priority: int = 1
+    sort_path: str = ""
+
+
 @dataclass
 class ActiveFolderJob:
     remote_path: str
@@ -133,6 +141,8 @@ class FolderCacheManager:
         self._generation: dict[str, int] = {}
         self._abandoned: set[str] = set()
         self._reschedule_after_cancel: dict[str, float] = {}
+        self._shutdown = False
+        self._workers: list[threading.Thread] = []
 
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         worker_count = max(1, workers)
@@ -145,7 +155,21 @@ class FolderCacheManager:
         for index in range(worker_count):
             t = threading.Thread(target=self._worker, daemon=True, name=f"folder-cache-worker-{index + 1}")
             t.start()
+            self._workers.append(t)
             workertrace.append("worker_started", worker=t.name)
+
+    def shutdown(self, timeout: float = 5.0) -> None:
+        with self._lock:
+            if self._shutdown:
+                return
+            self._shutdown = True
+            for active in list(self._active_jobs.values()):
+                active.cancel_token.cancel()
+        for _ in self._workers:
+            self._queue.put(FolderShutdownJob())
+        per_thread_timeout = timeout / max(1, len(self._workers))
+        for worker in self._workers:
+            worker.join(timeout=per_thread_timeout)
 
     # ------------------------------------------------------------------
     # Cache file helpers
@@ -385,6 +409,8 @@ class FolderCacheManager:
             return
         enqueue_refresh = False
         with self._lock:
+            if self._shutdown:
+                return
             if remote_path in self._direct_done:
                 # Its direct listing has already been fetched in this process.
                 # If child work is still finishing, do not start a second
@@ -432,6 +458,9 @@ class FolderCacheManager:
     def _worker(self) -> None:
         while True:
             job = self._queue.get()
+            if isinstance(job, FolderShutdownJob):
+                self._queue.task_done()
+                return
             if not isinstance(job, FolderJob):
                 self._queue.task_done()
                 continue
@@ -738,7 +767,27 @@ class FolderCacheManager:
                     self._on_subtree_complete(sf)
                 else:
                     self._pending_children[remote_path].add(sf)
+                    if (
+                        sf in self._acc
+                        and sf in self._direct_done
+                        and not self._pending_children.get(sf)
+                        and sf not in self._abandoned
+                    ):
+                        # The child may have completed as an independent page
+                        # request before this parent registered it. Attach its
+                        # already-complete contribution now so the parent does
+                        # not wait forever for a completion callback that has
+                        # already happened.
+                        self._propagate(sf)
+                        if self._acc.get(sf, {}).get("diff_status") in {DIFF_HAS_DIFFS, DIFF_DROPBOX_ONLY}:
+                            self._note_diff(remote_path, self._acc[sf].get("first_diff_path") or sf)
+                        self._on_subtree_complete(sf)
+                        continue
                     if sf in self._direct_done and not self._pending_children.get(sf):
+                        # A previously canceled child can be left with direct
+                        # metadata but no pending descendants. Clear that
+                        # stale marker and let the current page enqueue a clean
+                        # recompute below.
                         self._direct_done.pop(sf, None)
                     if page_time < self._min_page_time:
                         self._mark_abandoned(sf)

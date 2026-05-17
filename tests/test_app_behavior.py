@@ -91,6 +91,7 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         )
         app = DropboxBrowser(rclone, "dropbox:", local_root, folder_cache=folder_cache, listing_cache=listing_cache)
         app.sync_jobs = SyncJobManager(app, workers=sync_workers)
+        self.addCleanup(app.shutdown)
         return app
 
     def _wait_folder_info(self, server: TestServer, *, paths: list[str] | None = None, current: str | None = None, predicate=None):
@@ -108,7 +109,10 @@ class AppBehaviorTests(IsolatedPathsTestCase):
             payload_holder["value"] = server.get_json(path)["results"]
             return predicate(payload_holder["value"]) if predicate is not None else payload_holder["value"]
 
-        wait_until(_ready, description=f"folder-info response for {path}")
+        try:
+            wait_until(_ready, description=f"folder-info response for {path}")
+        except AssertionError as exc:
+            raise AssertionError(f"{exc}; last payload: {payload_holder.get('value')!r}") from exc
         return payload_holder["value"]
 
     def _remote_media_rclone(self) -> SimulatedRclone:
@@ -161,6 +165,34 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         events = self.read_trace_events()
         self.assertTrue(any(event["event"] == "job_queued" for event in events))
         self.assertTrue(any(event["event"] == "subtree_complete" and event.get("remote_path") == "dropbox:sub" for event in events))
+
+    def test_server_cleanup_stops_app_background_workers(self) -> None:
+        before_folder_workers = {
+            thread.ident for thread in threading.enumerate()
+            if thread.name.startswith("folder-cache-worker")
+        }
+        before_sync_workers = {
+            thread.ident for thread in threading.enumerate()
+            if thread.name.startswith("sync-job-worker")
+        }
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, local_root=None, workers=2, sync_workers=2)
+
+        with TestServer(app) as server:
+            server.get_text("/")
+
+        after_folder_workers = {
+            thread.ident for thread in threading.enumerate()
+            if thread.name.startswith("folder-cache-worker")
+        }
+        after_sync_workers = {
+            thread.ident for thread in threading.enumerate()
+            if thread.name.startswith("sync-job-worker")
+        }
+        self.assertEqual(after_folder_workers, before_folder_workers)
+        self.assertEqual(after_sync_workers, before_sync_workers)
 
     def test_ignored_metadata_files_are_not_listed_or_compared(self) -> None:
         local_root = self.create_local_root({

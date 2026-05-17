@@ -40,6 +40,7 @@ class SyncJobManagerTests(unittest.TestCase):
     def test_single_file_job_runs_before_queued_batch_job(self) -> None:
         app = _FakeApp("batch-one.txt")
         manager = SyncJobManager(app, workers=1)
+        self.addCleanup(manager.shutdown)
         batch_id = manager.submit(
             "batch",
             [
@@ -70,6 +71,7 @@ class SyncJobManagerTests(unittest.TestCase):
     def test_directory_jobs_invalidate_directory_and_parent(self) -> None:
         app = _FakeApp("never-block")
         manager = SyncJobManager(app, workers=1)
+        self.addCleanup(manager.shutdown)
         op_id = manager.submit(
             "empty folder",
             [("dropbox_dir_to_local", {"path": "parent/empty", "local_path": r"C:\tmp\parent\empty", "remote_path": "dropbox:parent/empty"})],
@@ -97,6 +99,7 @@ class SyncJobIntegrationTests(IsolatedPathsTestCase):
         )
         app = DropboxBrowser(rclone, "dropbox:", local_root, folder_cache=folder_cache, listing_cache=listing_cache)
         app.sync_jobs = SyncJobManager(app, workers=sync_workers)
+        self.addCleanup(app.shutdown)
         return app
 
     def test_batch_sync_runs_multiple_copy_jobs_in_parallel(self) -> None:
