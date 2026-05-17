@@ -371,7 +371,10 @@ class DropboxBrowser:
             raise BrowserError(HTTPStatus.BAD_REQUEST, "Local comparison is not configured.")
         if direction not in {"local_to_dropbox", "dropbox_to_local"}:
             raise BrowserError(HTTPStatus.BAD_REQUEST, "Unsupported sync direction.")
-        local_path = self.local_display_path(rel_path) or safe_join_local(self.local_root, rel_path)
+        if direction == "dropbox_to_local":
+            local_path = safe_join_local(self.local_root, rel_path)
+        else:
+            local_path = self.local_display_path(rel_path) or safe_join_local(self.local_root, rel_path)
         return (
             direction,
             {
