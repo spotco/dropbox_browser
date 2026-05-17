@@ -288,7 +288,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         if action == "local_to_dropbox_all":
             if params.get("enable_write_dropbox", [""])[0] != "1":
                 raise BrowserError(HTTPStatus.FORBIDDEN, "Enable sync to Dropbox before starting a batch copy.")
-        elif action == "delete_local_only_and_pull_diffs":
+        elif action in {"delete_local_only_all", "dropbox_only_to_local_all"}:
             if params.get("enable_to_local", [""])[0] != "1":
                 raise BrowserError(HTTPStatus.FORBIDDEN, "Enable sync to local before starting a batch copy.")
         else:
