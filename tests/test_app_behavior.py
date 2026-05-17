@@ -12,6 +12,7 @@ from dropbox_browser.errors import BrowserError
 from dropbox_browser.foldercache import FolderCacheManager
 from dropbox_browser.listingcache import ListingCacheManager
 from dropbox_browser.services import DropboxBrowser
+from dropbox_browser.syncjobs import SyncJobManager
 
 try:
     from tests.support import (
@@ -35,31 +36,66 @@ except ImportError:
     )
 
 
+class _PreloadedFolderCache:
+    def __init__(self, _rclone, workers=None, ttl_seconds=None, listing_cache=None, local_root=None, remote=None, **_kwargs):
+        self._data = {
+            "dropbox:older": {
+                "complete": False,
+                "size": 0,
+                "file_count": 0,
+                "newest_mtime": 1704067200.0,  # 2024-01-01
+            },
+            "dropbox:newer": {
+                "complete": False,
+                "size": 0,
+                "file_count": 0,
+                "newest_mtime": 1735689600.0,  # 2025-01-01
+            },
+        }
+        self.requests: list[str] = []
+
+    def notify_page_load(self, *_args, **_kwargs) -> None:
+        return None
+
+    def invalidate(self, remote_path: str) -> None:
+        self._data.pop(remote_path, None)
+
+    def get(self, remote_path: str) -> dict | None:
+        data = self._data.get(remote_path)
+        return dict(data) if data is not None else None
+
+    def request(self, remote_path: str, *_args, **_kwargs) -> None:
+        self.requests.append(remote_path)
+
+
 class AppBehaviorTests(IsolatedPathsTestCase):
     def _build_app(
         self,
         rclone: SimulatedRclone,
         local_root: Path | None = None,
         workers: int = 2,
+        sync_workers: int = 2,
         manager_cls=FolderCacheManager,
         **manager_kwargs,
     ) -> DropboxBrowser:
-        listing_cache = ListingCacheManager(ttl_minutes=30)
+        listing_cache = ListingCacheManager(ttl_seconds=1800)
         folder_cache = manager_cls(
             rclone,
             workers=workers,
-            ttl_hours=24,
+            ttl_seconds=86400,
             listing_cache=listing_cache,
             local_root=local_root,
             remote="dropbox:",
             **manager_kwargs,
         )
-        return DropboxBrowser(rclone, "dropbox:", local_root, folder_cache=folder_cache, listing_cache=listing_cache)
+        app = DropboxBrowser(rclone, "dropbox:", local_root, folder_cache=folder_cache, listing_cache=listing_cache)
+        app.sync_jobs = SyncJobManager(app, workers=sync_workers)
+        return app
 
     def _wait_folder_info(self, server: TestServer, *, paths: list[str] | None = None, current: str | None = None, predicate=None):
         query_parts: list[str] = []
         if paths:
-            query_parts.append("paths=" + ",".join(quote(path) for path in paths))
+            query_parts.extend("paths=" + quote(path) for path in paths)
         if current is not None:
             query_parts.append("current=" + quote(current))
         path = "/folder-info"
@@ -309,6 +345,41 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         ]
         self.assertEqual(status_labels, ["Dropbox Only", "Has Diffs", "Local Only", "Synced"])
 
+    def test_date_desc_sort_uses_loading_folder_cached_dates(self) -> None:
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[
+                {
+                    "Name": "older",
+                    "Path": "older",
+                    "IsDir": True,
+                    "Size": 0,
+                    "ModTime": "2025-01-01T00:00:00Z",
+                },
+                {
+                    "Name": "newer",
+                    "Path": "newer",
+                    "IsDir": True,
+                    "Size": 0,
+                    "ModTime": "2024-01-01T00:00:00Z",
+                },
+            ])],
+        })
+        app = self._build_app(rclone, manager_cls=_PreloadedFolderCache)
+
+        with TestServer(app) as server:
+            html = server.get_text("/?sort=date&dir=desc")
+
+        table_body = html.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+        names = [
+            row.split('[dir] ', 1)[1].split("</a>", 1)[0]
+            for row in table_body.split("<tr")
+            if '[dir] ' in row
+        ]
+        self.assertEqual(names, ["newer", "older"])
+        self.assertIn('data-sort-date="1735689600.0"', table_body)
+        self.assertIn('data-sort-date="1704067200.0"', table_body)
+        self.assertIn("spinner", table_body)
+
     def test_slow_background_folder_reports_calculating_then_completes(self) -> None:
         local_root = self.create_local_root({
             "shared.txt": b"root data",
@@ -339,6 +410,49 @@ class AppBehaviorTests(IsolatedPathsTestCase):
 
         self.assertEqual(results["slow"]["diff_status"], "synced")
         self.assertTrue(results["slow"]["complete"])
+
+    def test_folder_info_paths_support_names_with_commas(self) -> None:
+        folder_name = "Paco de Lucia - Entre Dos Aguas 1981 - 320Kbps - Flamenco, Latino # DrBn"
+        local_root = self.create_local_root({
+            f"music/{folder_name}/Cover/front.jpg": b"cover front",
+            f"music/{folder_name}/Cover/back.jpg": b"cover back",
+            "music/Other Album/song.mp3": b"other song",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:music": [SimulatedLsjsonResponse(items=[
+                remote_dir_item(folder_name),
+                remote_dir_item("Other Album"),
+            ])],
+            f"dropbox:music/{folder_name}": [SimulatedLsjsonResponse(items=[
+                remote_dir_item("Cover"),
+            ])],
+            f"dropbox:music/{folder_name}/Cover": [SimulatedLsjsonResponse(items=[
+                remote_file_item("front.jpg", local_root / "music" / folder_name / "Cover" / "front.jpg"),
+                remote_file_item("back.jpg", local_root / "music" / folder_name / "Cover" / "back.jpg"),
+            ])],
+            "dropbox:music/Other Album": [SimulatedLsjsonResponse(items=[
+                remote_file_item("song.mp3", local_root / "music" / "Other Album" / "song.mp3"),
+            ])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            html = server.get_text("/?path=music")
+            results = self._wait_folder_info(
+                server,
+                paths=[folder_name, "Other Album"],
+                predicate=lambda data: (
+                    data.get(folder_name, {}).get("complete")
+                    and data.get("Other Album", {}).get("complete")
+                ),
+            )
+
+        self.assertIn(folder_name, html)
+        self.assertTrue(results[folder_name]["complete"])
+        self.assertIn(results[folder_name]["diff_status"], {"synced", "has_diffs"})
+        self.assertTrue(results["Other Album"]["complete"])
+        self.assertNotIn("Paco de Lucia - Entre Dos Aguas 1981 - 320Kbps - Flamenco", results)
+        self.assertNotIn(" Latino # DrBn", results)
 
     def test_local_file_size_change_overrides_stale_synced_folder_cache(self) -> None:
         local_root = self.create_local_root({
@@ -837,6 +951,9 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertIn("body.sync-to-local-enabled .recursive-toggle", html)
         self.assertIn("body.sync-to-dropbox-enabled .recursive-toggle", html)
         self.assertIn("'[' + data.current + '/' + data.total + '] '", html)
+        self.assertIn("function scrollLogToBottom()", html)
+        self.assertIn("if (!collapsed) {", html)
+        self.assertIn("scrollLogToBottom();", html)
         self.assertIn("sync-batch-plan", html)
         self.assertIn("batch-confirm-list", html)
         self.assertIn("setBaseDisabled(batchRun, !plan.total)", html)
@@ -1158,6 +1275,44 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertEqual((local_root / "changed.txt").read_bytes(), b"local")
         self.assertTrue(any(call["args"][0] == "copyto" and call["target"] == str(local_root / "remote.txt") for call in rclone.calls))
         self.assertFalse(any(call["args"][0] == "copyto" and call["target"] == str(local_root / "changed.txt") for call in rclone.calls))
+
+    def test_recursive_local_to_dropbox_sync_invalidates_parent_listing_cache_for_new_folders(self) -> None:
+        local_root = self.create_local_root({
+            "local-folder/file.txt": b"local",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:": [
+                SimulatedLsjsonResponse(items=[]),
+                SimulatedLsjsonResponse(items=[]),
+                SimulatedLsjsonResponse(items=[remote_dir_item("local-folder")]),
+            ],
+            "dropbox:local-folder": [
+                SimulatedLsjsonResponse(items=[]),
+                SimulatedLsjsonResponse(items=[]),
+            ],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+        assert app.listing_cache is not None
+        app.listing_cache.set("dropbox:", [])
+
+        with TestServer(app) as server:
+            payload = server.post_json("/sync-batch", {
+                "action": "local_to_dropbox_all",
+                "recursive": "1",
+                "enable_write_dropbox": "1",
+            })
+            result = wait_until(
+                lambda: server.get_json("/sync-status?id=" + payload["id"])
+                if server.get_json("/sync-status?id=" + payload["id"]).get("status") != "running"
+                else None,
+                description="recursive local-to-dropbox sync completion",
+            )
+            html = server.get_text("/")
+
+        self.assertEqual(result["status"], "complete")
+        folder_row = html.split("[dir] local-folder</a></td>", 1)[1].split("</tr>", 1)[0]
+        self.assertNotIn("Local Only", folder_row)
+        self.assertGreaterEqual(sum(1 for call in rclone.calls if call["target"] == "dropbox:"), 3)
 
     def test_recursive_batch_delete_removes_nested_local_only_folders_after_children(self) -> None:
         local_root = self.create_local_root({

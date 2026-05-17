@@ -19,8 +19,8 @@ CACHE_DIR = PROJECT_ROOT / "Cache" / "ListingCache"
 
 
 class ListingCacheManager:
-    def __init__(self, ttl_minutes: float = 30):
-        self.ttl_seconds = ttl_minutes * 60
+    def __init__(self, ttl_seconds: float = 1800):
+        self.ttl_seconds = ttl_seconds
         self._lock = threading.Lock()
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
 

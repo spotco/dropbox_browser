@@ -14,6 +14,24 @@ No Python web framework is required.
 This repository includes `rclone.exe`. The server defaults to reading the rclone
 config path from `config.json` (`RCloneConfig` property) when that file exists.
 
+Useful `config.json` settings in the repository root:
+
+```json
+{
+  "RCloneConfig": "%APPDATA%\\rclone\\rclone.conf",
+  "LogRcloneCommands": true,
+  "LogHttpRequests": true,
+  "FolderCacheWorkers": 4,
+  "SyncJobWorkers": 4,
+  "FolderCacheTTLSeconds": 86400,
+  "ListingCacheTTLSeconds": 1800
+}
+```
+
+- `FolderCacheWorkers` controls the background folder metadata/diff worker pool.
+- `SyncJobWorkers` controls the browser-triggered sync/delete worker pool.
+- `FolderCacheTTLSeconds` and `ListingCacheTTLSeconds` tune cache freshness.
+
 ## Run
 
 ```powershell
@@ -48,6 +66,15 @@ Useful options:
 - Browser uploads are not supported.
 - File sync, when enabled in the browser, is copy-only and may overwrite the
   selected destination file. It does not delete destination-only files.
+
+## Known Bugs
+
+- Empty local-only folders do not sync to Dropbox because current sync operations
+  are file-based. Recursive local-to-Dropbox sync creates remote folders as a
+  side effect of copying contained files, but an empty folder can still remain
+  `Local Only`.
+- Folder rows do not expose single-item sync forms. Sync controls currently
+  apply to file rows and batch actions.
 
 ## Notes
 

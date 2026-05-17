@@ -5,7 +5,6 @@ import mimetypes
 from pathlib import Path
 import posixpath
 import shutil
-import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
@@ -16,6 +15,7 @@ from .errors import BrowserError
 from .formatting import display_date, human_size
 from .paths import clean_rel_path, remote_target, safe_join_local
 from .services import DropboxBrowser
+from .syncjobs import SyncJobManager
 from .views import error_html, page_html
 
 
@@ -25,6 +25,12 @@ class RequestHandler(BaseHTTPRequestHandler):
     @property
     def app(self) -> DropboxBrowser:
         return self.server.app  # type: ignore[attr-defined]
+
+    @property
+    def sync_jobs(self) -> SyncJobManager:
+        if self.app.sync_jobs is None:
+            self.app.sync_jobs = SyncJobManager(self.app, workers=1)
+        return self.app.sync_jobs
 
     def do_GET(self) -> None:
         try:
@@ -110,6 +116,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     cached_data = cache.get(full_remote)
                     folder_cache_map[entry["name"]] = cached_data
                     entry["cached_size"] = cached_data.get("size") if cached_data else None
+                    entry["cached_mtime"] = cached_data.get("newest_mtime") if cached_data else None
                     if cached_data is None or not cached_data.get("complete"):
                         cache.request(full_remote, page_time)
 
@@ -191,11 +198,27 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def serve_folder_info(self, query: str) -> None:
         params = parse_qs(query, keep_blank_values=True)
-        paths_str = params.get("paths", [""])[0]
-        rel_paths = [p for p in paths_str.split(",") if p]
+
+        def _folder_info_rel_path(raw: str) -> str:
+            parts: list[str] = []
+            for part in raw.split("/"):
+                if not part or part == ".":
+                    continue
+                if part == "..":
+                    raise BrowserError(HTTPStatus.BAD_REQUEST, "Parent path segments are not allowed.")
+                parts.append(part)
+            return "/".join(parts)
+
+        rel_paths: list[str] = []
+        seen_paths: set[str] = set()
+        for rel_path_raw in params.get("paths", []):
+            rel_path = _folder_info_rel_path(rel_path_raw)
+            if rel_path not in seen_paths:
+                rel_paths.append(rel_path)
+                seen_paths.add(rel_path)
         current_rel_raw = params.get("current", [None])[0]
         current_rel = clean_rel_path(current_rel_raw) if current_rel_raw is not None else None
-        if current_rel is not None:
+        if current_rel is not None and current_rel not in seen_paths:
             rel_paths.append(current_rel)
         cache = self.app.folder_cache
         results: dict = {}
@@ -222,6 +245,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "size_display": human_size(sz) if sz is not None else "—",
                     "count_display": f"{fc:,} files" if fc is not None else "",
                     "date_display": display_date(data.get("newest_mtime")),
+                    "date_sort_value": data.get("newest_mtime") or 0,
                 }
             else:
                 # calculating or pending — ensure it's queued
@@ -251,28 +275,12 @@ class RequestHandler(BaseHTTPRequestHandler):
         else:
             raise BrowserError(HTTPStatus.BAD_REQUEST, "Unsupported sync direction.")
         label = f"{direction.replace('_', ' ')}: {rel_path or '/'}"
-        command = label
-        if self.app.local_root is not None:
-            local_path = safe_join_local(self.app.local_root, rel_path)
-            remote_path = remote_target(self.app.remote, rel_path)
-            if direction == "local_to_dropbox":
-                command = f"rclone copyto -- {local_path} {remote_path}"
-            elif direction == "dropbox_to_local":
-                command = f"rclone copyto -- {remote_path} {local_path}"
-        op_id = syncstate.start(label)
-        syncstate.update(op_id, command=command, percent=10)
-
-        def _run_sync() -> None:
-            try:
-                self.app.sync_item(rel_path, direction)
-            except BrowserError as exc:
-                syncstate.fail(op_id, exc.message)
-            except Exception as exc:
-                syncstate.fail(op_id, str(exc))
-            else:
-                syncstate.complete(op_id, "Sync complete")
-
-        threading.Thread(target=_run_sync, daemon=True, name=f"sync-{op_id[:8]}").start()
+        op_id = self.sync_jobs.submit(
+            label,
+            [self.app.single_sync_operation(rel_path, direction)],
+            batch=False,
+            success_message="Sync complete",
+        )
         body = _json.dumps({"id": op_id}).encode("utf-8")
         self.send_response(HTTPStatus.ACCEPTED)
         self.send_header("Content-Type", "application/json")
@@ -316,28 +324,12 @@ class RequestHandler(BaseHTTPRequestHandler):
         self._validate_batch_gate(action, params)
         plan = self.app.plan_batch_sync(rel_path, action, recursive)
         label = f"{action.replace('_', ' ')}: {rel_path or '/'}"
-        op_id = syncstate.start(label)
-        syncstate.update(op_id, percent=0, total=plan["total"], errors=[])
-
-        def _progress(index: int, total: int, message: str, command: str) -> None:
-            percent = int((index - 1) / total * 100) if total else 100
-            syncstate.update(op_id, message=message, command=command, percent=percent, current=index, total=total)
-
-        def _run_batch() -> None:
-            try:
-                errors = self.app.run_batch_sync(plan, progress=_progress)
-            except BrowserError as exc:
-                syncstate.fail(op_id, exc.message)
-            except Exception as exc:
-                syncstate.fail(op_id, str(exc))
-            else:
-                if errors:
-                    syncstate.update(op_id, errors=errors)
-                    syncstate.complete(op_id, f"Batch complete with {len(errors)} error(s)")
-                else:
-                    syncstate.complete(op_id, "Batch sync complete")
-
-        threading.Thread(target=_run_batch, daemon=True, name=f"sync-batch-{op_id[:8]}").start()
+        op_id = self.sync_jobs.submit(
+            label,
+            self.app.batch_sync_operations(plan),
+            batch=True,
+            success_message="Batch sync complete",
+        )
         body = _json.dumps({"id": op_id, "total": plan["total"]}).encode("utf-8")
         self.send_response(HTTPStatus.ACCEPTED)
         self.send_header("Content-Type", "application/json")

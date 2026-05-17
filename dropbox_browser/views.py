@@ -23,6 +23,8 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
     )
     msg_html = f'<p class="notice">{html.escape(msg)}</p>' if msg else ""
     current_folder_js = json.dumps(rel_path)
+    current_sort_key_js = json.dumps(sort_key)
+    current_sort_direction_js = json.dumps(direction)
     current_local_folder = ""
     if app.local_root:
         current_local_folder = str(app.local_display_path(rel_path) or app.local_root)
@@ -120,6 +122,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
   <script>{SETTINGS_JS}</script>
   <script>{LOG_JS}</script>
   <script>var CURRENT_FOLDER_PATH = {current_folder_js};</script>
+  <script>var CURRENT_SORT_KEY = {current_sort_key_js}; var CURRENT_SORT_DIRECTION = {current_sort_direction_js};</script>
   <script>{SYNC_JS}</script>
   <script>{FOLDER_JS}</script>
 </body>
@@ -191,6 +194,16 @@ def entry_row(app: Any, rel_path: str, row: dict[str, Any], folder_cache_map: di
     child_path = posixpath.join(rel_path, name) if rel_path else name
     status = row.get("status_label") or ("Both" if row["remote"] and row["local"] else "Dropbox Only" if row["remote"] else "Local Only")
     is_dir = row["is_dir"]
+    sort_date_value = (
+        row.get("cached_mtime")
+        if is_dir and row.get("cached_mtime") is not None
+        else max(row.get("remote_mtime") or 0, row.get("local_mtime") or 0)
+    ) or 0
+    common_row_attrs = (
+        f' data-row-kind="{"folder" if is_dir else "file"}"'
+        f' data-sort-name="{html.escape(name.casefold())}"'
+        f' data-sort-date="{sort_date_value}"'
+    )
     type_text = file_type(name, is_dir)
     status_attrs = ""
     sync_enabled = bool(app.local_root)
@@ -216,13 +229,13 @@ def entry_row(app: Any, rel_path: str, row: dict[str, Any], folder_cache_map: di
                 pending_cell = '<span class="folder-pending"><span class="spinner"></span> calculating\u2026</span>'
                 size_td = f'<td class="col-size">{pending_cell}</td>'
                 date_td = f'<td class="col-date">{pending_cell}</td>'
-            row_attrs = f' data-folder-path="{html.escape(child_path)}"'
+            row_attrs = common_row_attrs + f' data-folder-path="{html.escape(child_path)}"'
         else:
             if app.local_root:
                 status = "Local Only"
             size_td = '<td class="col-size">—</td>'
             date_td = f'<td class="col-date">{display_date(row.get("local_mtime"))}</td>'
-            row_attrs = ""
+            row_attrs = common_row_attrs
         name_html = f'<a class="name" href="/?{urlencode({"path": child_path})}">[dir] {html.escape(name)}</a>'
         copy_button = _copy_path_button(app, row, child_path, True) if row["local"] else ""
         view_td = f'<td class="view-actions">{copy_button}</td>'
@@ -242,7 +255,7 @@ def entry_row(app: Any, rel_path: str, row: dict[str, Any], folder_cache_map: di
         date_value = max(row.get("remote_mtime") or 0, row.get("local_mtime") or 0) or None
         size_td = f'<td class="col-size">{human_size(size or 0)}</td>'
         date_td = f'<td class="col-date">{display_date(date_value)}</td>'
-        row_attrs = status_attrs
+        row_attrs = common_row_attrs + status_attrs
         query = urlencode({"path": child_path, "source": source})
         name_html = f'<a class="name" href="/file?{query}">{html.escape(name)}</a>'
         copy_button = _copy_path_button(app, row, child_path, False) if row["local"] else ""
@@ -714,9 +727,16 @@ LOG_JS = r"""
   var entries = document.getElementById('log-entries');
   var arrow = document.getElementById('log-arrow');
 
+  function scrollLogToBottom() {
+    entries.scrollTop = entries.scrollHeight;
+  }
+
   function applyCollapsed() {
     panel.classList.toggle('collapsed', collapsed);
     arrow.innerHTML = collapsed ? '&#9654;' : '&#9660;';
+    if (!collapsed) {
+      scrollLogToBottom();
+    }
   }
   applyCollapsed();
 
@@ -763,7 +783,7 @@ LOG_JS = r"""
           if (div) applyEntry(div, e);
         });
         if (data.entries.length > 0 && !collapsed) {
-          entries.scrollTop = entries.scrollHeight;
+          scrollLogToBottom();
         }
       })
       .catch(function () {})
@@ -1110,6 +1130,8 @@ FOLDER_JS = r"""
   document.querySelectorAll('tr[data-folder-path]').forEach(function (row) {
     folderRows[row.getAttribute('data-folder-path')] = row;
   });
+  var currentSortKey = window.CURRENT_SORT_KEY || 'name';
+  var currentSortDirection = window.CURRENT_SORT_DIRECTION || 'asc';
   var fileStatusCells = {};
   document.querySelectorAll('tr[data-file-status-path]').forEach(function (row) {
     var cell = row.querySelector('.status');
@@ -1154,6 +1176,28 @@ FOLDER_JS = r"""
     return null;
   }
 
+  function reorderFolderRows() {
+    if (currentSortKey !== 'date') return;
+    var tbody = document.querySelector('tbody');
+    if (!tbody) return;
+    var rows = Array.prototype.slice.call(tbody.querySelectorAll('tr[data-row-kind="folder"]'));
+    if (rows.length < 2) return;
+    rows.sort(function (a, b) {
+      var aDate = parseFloat(a.getAttribute('data-sort-date') || '0');
+      var bDate = parseFloat(b.getAttribute('data-sort-date') || '0');
+      if (aDate !== bDate) {
+        return currentSortDirection === 'desc' ? bDate - aDate : aDate - bDate;
+      }
+      var aName = a.getAttribute('data-sort-name') || '';
+      var bName = b.getAttribute('data-sort-name') || '';
+      return currentSortDirection === 'desc' ? bName.localeCompare(aName) : aName.localeCompare(bName);
+    });
+    var firstFileRow = tbody.querySelector('tr[data-row-kind="file"]');
+    rows.forEach(function (row) {
+      tbody.insertBefore(row, firstFileRow);
+    });
+  }
+
   function applyResult(relPath, info) {
     var row = folderRows[relPath];
     if (!row) return;
@@ -1173,6 +1217,8 @@ FOLDER_JS = r"""
       sizeCell.innerHTML = prefix + sizeText;
     }
     if (dateCell) dateCell.innerHTML = prefix + esc(info.date_display || '');
+    row.setAttribute('data-sort-date', String(info.date_sort_value || 0));
+    reorderFolderRows();
   }
 
   function applyCurrent(info) {
@@ -1192,7 +1238,9 @@ FOLDER_JS = r"""
   function poll() {
     if (pending.length === 0 && !pollCurrent) return;
     var parts = [];
-    if (pending.length > 0) parts.push('paths=' + pending.map(encodeURIComponent).join(','));
+    pending.forEach(function (relPath) {
+      parts.push('paths=' + encodeURIComponent(relPath));
+    });
     if (pollCurrent) parts.push('current=' + encodeURIComponent(CURRENT_FOLDER_PATH || ''));
     fetch('/folder-info?' + parts.join('&'))
       .then(function (r) { return r.json(); })

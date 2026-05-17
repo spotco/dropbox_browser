@@ -41,6 +41,8 @@ http://127.0.0.1:8000/
   size/date/count caching; writes JSON files to `Cache/`.
 - `dropbox_browser/logstore.py` - thread-safe in-memory log ring buffer for
   the browser log panel.
+- `dropbox_browser/syncjobs.py` - background worker pool for browser-triggered
+  sync/delete jobs, with queue priorities and grouped progress reporting.
 - `dropbox_browser/windows_names.py` - Windows-safe Dropbox/local name matching,
   fallback comparison, and local path resolution helpers for Windows-safe local
   rename variants.
@@ -52,8 +54,9 @@ http://127.0.0.1:8000/
 - `README.md` - user-facing setup and usage notes.
 - `config.json` - rclone config path and logging/cache options (`RCloneConfig`,
   `LogRcloneCommands`, `LogHttpRequests`, `FolderCacheWorkers`,
-  `FolderCacheTTLHours`). May contain Windows environment variables such as
-  `%APPDATA%\rclone\rclone.conf`; the app expands them.
+  `SyncJobWorkers`, `FolderCacheTTLSeconds`, `ListingCacheTTLSeconds`). May
+  contain Windows environment variables such as `%APPDATA%\rclone\rclone.conf`;
+  the app expands them.
 - `Cache/` - folder metadata cache (JSON files keyed by SHA-256 of remote
   path). Ignored by git.
 - `rclone.exe` - bundled Windows rclone binary, currently tracked.
@@ -223,6 +226,8 @@ https://github.com/spotco/dropbox_browser
 - Place new features in the module that owns the behavior:
   - listing, status comparison, direct file sync, caching decisions:
     `dropbox_browser/services.py`;
+  - browser-triggered sync/delete queueing, worker concurrency, and grouped
+    sync progress: `dropbox_browser/syncjobs.py`;
   - rclone command execution and future progress/log capture:
     `dropbox_browser/rclone.py`;
   - request routes, streaming behavior, and response status:

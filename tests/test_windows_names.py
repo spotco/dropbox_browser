@@ -46,11 +46,11 @@ class WindowsSafeNameMatcherTests(unittest.TestCase):
 
 class WindowsSafeNameIntegrationTests(IsolatedPathsTestCase):
     def _build_app(self, rclone: SimulatedRclone, local_root: Path | None = None, workers: int = 2) -> DropboxBrowser:
-        listing_cache = ListingCacheManager(ttl_minutes=30)
+        listing_cache = ListingCacheManager(ttl_seconds=1800)
         folder_cache = FolderCacheManager(
             rclone,
             workers=workers,
-            ttl_hours=24,
+            ttl_seconds=86400,
             listing_cache=listing_cache,
             local_root=local_root,
             remote="dropbox:",

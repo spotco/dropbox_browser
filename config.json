@@ -2,7 +2,8 @@
   "RCloneConfig": "%APPDATA%\\rclone\\rclone.conf",
   "LogRcloneCommands": true,
   "LogHttpRequests": true,
-  "FolderCacheWorkers": 4,
-  "FolderCacheTTLHours": 24,
-  "ListingCacheTTLMinutes": 30
+  "FolderCacheWorkers": 16,
+  "SyncJobWorkers": 8,
+  "FolderCacheTTLSeconds": 86400,
+  "ListingCacheTTLSeconds": 1800
 }
