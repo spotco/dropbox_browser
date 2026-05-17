@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from http import HTTPStatus
 import shutil
 import time
@@ -275,15 +276,49 @@ class DropboxBrowser:
         paths.extend(local_children[name] for name in local_children if name not in set(matches.values()))
         return sorted(dict.fromkeys(paths), key=str.casefold)
 
-    def _batch_rows(self, rel_path: str, recursive: bool) -> list[dict[str, Any]]:
+    def _batch_rows(self, rel_path: str, recursive: bool, workers: int = 1) -> list[dict[str, Any]]:
         if recursive:
+            if workers > 1:
+                return self._batch_rows_parallel(rel_path, workers)
             rows: list[dict[str, Any]] = []
             for child in self._child_folder_paths(rel_path):
-                rows.extend(self._batch_rows(child, recursive=True))
+                rows.extend(self._batch_rows(child, recursive=True, workers=workers))
             rows.extend(self._direct_batch_rows(rel_path))
-        else:
-            rows = self._direct_batch_rows(rel_path)
+            return rows
+        return self._direct_batch_rows(rel_path)
+
+    def _batch_rows_parallel(self, rel_path: str, workers: int) -> list[dict[str, Any]]:
+        def scan(path: str) -> tuple[str, list[str], list[dict[str, Any]]]:
+            return path, self._child_folder_paths(path), self._direct_batch_rows(path)
+
+        results: dict[str, tuple[list[str], list[dict[str, Any]]]] = {}
+        scheduled = {rel_path}
+        with ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="sync-plan") as executor:
+            pending = {executor.submit(scan, rel_path)}
+            while pending:
+                done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    path, children, rows = future.result()
+                    results[path] = (children, rows)
+                    for child in children:
+                        if child in scheduled:
+                            continue
+                        scheduled.add(child)
+                        pending.add(executor.submit(scan, child))
+
+        rows: list[dict[str, Any]] = []
+
+        def append_postorder(path: str) -> None:
+            children, direct_rows = results[path]
+            for child in children:
+                append_postorder(child)
+            rows.extend(direct_rows)
+
+        append_postorder(rel_path)
         return rows
+
+    def _sync_plan_workers(self) -> int:
+        return max(1, int(getattr(self.sync_jobs, "worker_count", 1) or 1))
 
     def plan_batch_sync(self, rel_path: str, action: str, recursive: bool) -> dict[str, Any]:
         if self.local_root is None:
@@ -291,7 +326,7 @@ class DropboxBrowser:
         if action not in {"local_to_dropbox_all", "delete_local_only_all", "dropbox_only_to_local_all"}:
             raise BrowserError(HTTPStatus.BAD_REQUEST, "Unsupported batch sync action.")
 
-        rows = self._batch_rows(rel_path, recursive)
+        rows = self._batch_rows(rel_path, recursive, workers=self._sync_plan_workers())
         groups: dict[str, list[dict[str, str]]] = {
             "local_dir_to_dropbox": [],
             "local_to_dropbox": [],
