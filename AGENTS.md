@@ -24,7 +24,7 @@ http://127.0.0.1:8000/
   `dropbox_browser.cli.main`.
 - `dropbox_browser/cli.py` - argument parsing and HTTP server startup.
 - `dropbox_browser/config.py` - project paths, default rclone discovery, config
-  path expansion, and upload temp directory selection.
+  path expansion, and scratch/temp directory selection.
 - `dropbox_browser/errors.py` - HTTP-aware application exception.
 - `dropbox_browser/formatting.py` - display formatting for dates, sizes, file
   types, and status CSS classes.
@@ -35,9 +35,8 @@ http://127.0.0.1:8000/
 - `dropbox_browser/paths.py` - local and remote path normalization/safety
   helpers.
 - `dropbox_browser/rclone.py` - rclone subprocess adapter.
-- `dropbox_browser/services.py` - Dropbox/local listing merge, sorting, and
-  create-only upload rules.
-- `dropbox_browser/uploads.py` - multipart upload parsing.
+- `dropbox_browser/services.py` - Dropbox/local listing merge, sorting, direct
+  file sync, and caching decisions.
 - `dropbox_browser/foldercache.py` - background thread pool for recursive folder
   size/date/count caching; writes JSON files to `Cache/`.
 - `dropbox_browser/logstore.py` - thread-safe in-memory log ring buffer for
@@ -56,7 +55,7 @@ http://127.0.0.1:8000/
   path). Ignored by git.
 - `rclone.exe` - bundled Windows rclone binary, currently tracked.
 - `rclone.1` - bundled rclone manpage, currently tracked.
-- `Temp/` - local upload staging directory. It is ignored by git.
+- `Temp/` - local process/log scratch directory. It is ignored by git.
 - `.dropbox-browser-temp/` - local process/log scratch directory. It is ignored
   by git.
 - `TODO_NOTES` - human-owned future feature notes. Do not edit it unless the
@@ -67,15 +66,12 @@ http://127.0.0.1:8000/
 - Dropbox folder listings use `rclone lsjson`.
 - File preview and download stream directly from `rclone cat` to the HTTP
   response. Downloads/previews are not saved to disk by this app.
-- Browser uploads are staged in `./Temp` using `tempfile.NamedTemporaryFile`
-  with `dir=upload_temp_dir()`.
-- Upload staging files are deleted in a `finally` block after the Dropbox copy
-  attempt.
-- Uploads are sent to Dropbox with `rclone copyto --ignore-existing`.
 - Browser sync actions run through `/sync` and are guarded by an explicit
-  `sync_enabled=1` POST field. Sync may overwrite destination files in the
-  selected direction, but it is copy-only and must never delete destination-only
-  files.
+  direction-specific POST field. File sync may overwrite destination files in
+  the selected direction, but it is copy-only and must never delete
+  destination-only files.
+- Browser uploads are not supported. Do not reintroduce upload UI or `/upload`
+  backend behavior unless the user explicitly asks.
 
 ## Safety Rules
 
@@ -84,11 +80,6 @@ http://127.0.0.1:8000/
 - The sync feature is the explicit exception to the overwrite rule: when the
   user chooses a sync direction in the browser, overwrite the destination from
   the selected source direction. Sync must still never delete extra files.
-- Uploads must remain create-only:
-  - check whether the target name exists in the current Dropbox folder;
-  - when `--local-root` is configured, also check whether that name exists in the
-    matching local folder;
-  - reject conflicts before copying.
 - Local paths must stay under `--local-root`; use `safe_join_local`.
 - Remote paths are normalized through `clean_rel_path`; parent segments are
   rejected.
@@ -214,7 +205,7 @@ https://github.com/spotco/dropbox_browser
 - Treat `.gitignore`, `run_local.bat`, and any untracked local tooling as
   user-owned unless the user asks to modify them.
 - Place new features in the module that owns the behavior:
-  - listing, status comparison, upload rules, caching decisions:
+  - listing, status comparison, direct file sync, caching decisions:
     `dropbox_browser/services.py`;
   - rclone command execution and future progress/log capture:
     `dropbox_browser/rclone.py`;
@@ -302,8 +293,7 @@ Implementation plan:
      background job exists for them.
 8. Extend `/folder-info` and `FOLDER_JS` so polling updates the Status cell at
    the same time it updates size/date cells.
-9. Invalidate diff cache data anywhere existing folder metadata is invalidated,
-   especially after successful uploads.
+9. Invalidate diff cache data anywhere existing folder metadata is invalidated.
 10. Add focused tests for direct name/type/size comparison, early exit, recursive propagation,
     local-only/dropbox-only rows, and cache serialization. If no test harness
     exists yet, add small stdlib `unittest` coverage around the pure comparison

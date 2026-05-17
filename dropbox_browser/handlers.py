@@ -5,21 +5,17 @@ import mimetypes
 from pathlib import Path
 import posixpath
 import shutil
-import tempfile
 import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import parse_qs, quote, urlencode, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
-from . import MAX_UPLOAD_BYTES
 from . import logoutput, logstore, syncstate
-from .config import upload_temp_dir
 from .errors import BrowserError
 from .formatting import display_date, human_size
 from .paths import clean_rel_path, remote_target, safe_join_local
 from .services import DropboxBrowser
-from .uploads import parse_multipart_file
 from .views import error_html, page_html
 
 
@@ -55,10 +51,12 @@ class RequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         try:
             parsed = urlparse(self.path)
-            if parsed.path == "/upload":
-                self.handle_upload(parsed.query)
-            elif parsed.path == "/sync":
+            if parsed.path == "/sync":
                 self.handle_sync()
+            elif parsed.path == "/sync-batch-plan":
+                self.handle_sync_batch_plan()
+            elif parsed.path == "/sync-batch":
+                self.handle_sync_batch()
             else:
                 raise BrowserError(HTTPStatus.NOT_FOUND, "Not found.")
         except BrowserError as exc:
@@ -236,45 +234,14 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def handle_upload(self, query: str) -> None:
-        params = parse_qs(query)
-        rel_path = clean_rel_path(params.get("path", [""])[0])
-        length = int(self.headers.get("Content-Length") or "0")
-        if length <= 0:
-            raise BrowserError(HTTPStatus.BAD_REQUEST, "No upload body was received.")
-        if length > MAX_UPLOAD_BYTES:
-            raise BrowserError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Upload is too large.")
-
-        content_type = self.headers.get("Content-Type", "")
-        boundary_key = "boundary="
-        if "multipart/form-data" not in content_type or boundary_key not in content_type:
-            raise BrowserError(HTTPStatus.BAD_REQUEST, "Expected multipart form upload.")
-        boundary = content_type.split(boundary_key, 1)[1].strip().strip('"')
-        body = self.rfile.read(length)
-        filename, data = parse_multipart_file(body, boundary, "file")
-
-        with tempfile.NamedTemporaryFile(delete=False, dir=upload_temp_dir()) as tmp:
-            tmp.write(data)
-            tmp_path = Path(tmp.name)
-        try:
-            self.app.upload_new_file(rel_path, filename, tmp_path)
-        finally:
-            try:
-                tmp_path.unlink()
-            except OSError:
-                pass
-
-        location = "/?" + urlencode({"path": rel_path, "msg": f"Uploaded {filename}"})
-        self.send_response(HTTPStatus.SEE_OTHER)
-        self.send_header("Location", location)
-        self.end_headers()
-
     def handle_sync(self) -> None:
         length = int(self.headers.get("Content-Length") or "0")
         params = parse_qs(self.rfile.read(length).decode("utf-8") if length > 0 else "", keep_blank_values=True)
         rel_path = clean_rel_path(params.get("path", [""])[0])
         direction = params.get("direction", [""])[0]
         kind = params.get("kind", [""])[0]
+        if kind != "file":
+            raise BrowserError(HTTPStatus.BAD_REQUEST, "Sync is only supported for files.")
         if direction == "local_to_dropbox":
             if params.get("enable_write_dropbox", [""])[0] != "1":
                 raise BrowserError(HTTPStatus.FORBIDDEN, "Enable write to Dropbox before starting a copy.")
@@ -288,17 +255,16 @@ class RequestHandler(BaseHTTPRequestHandler):
         if self.app.local_root is not None:
             local_path = safe_join_local(self.app.local_root, rel_path)
             remote_path = remote_target(self.app.remote, rel_path)
-            verb = "copy" if kind == "folder" else "copyto"
             if direction == "local_to_dropbox":
-                command = f"rclone {verb} -- {local_path} {remote_path}"
+                command = f"rclone copyto -- {local_path} {remote_path}"
             elif direction == "dropbox_to_local":
-                command = f"rclone {verb} -- {remote_path} {local_path}"
+                command = f"rclone copyto -- {remote_path} {local_path}"
         op_id = syncstate.start(label)
         syncstate.update(op_id, command=command, percent=10)
 
         def _run_sync() -> None:
             try:
-                self.app.sync_item(rel_path, direction, kind)
+                self.app.sync_item(rel_path, direction)
             except BrowserError as exc:
                 syncstate.fail(op_id, exc.message)
             except Exception as exc:
@@ -308,6 +274,71 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         threading.Thread(target=_run_sync, daemon=True, name=f"sync-{op_id[:8]}").start()
         body = _json.dumps({"id": op_id}).encode("utf-8")
+        self.send_response(HTTPStatus.ACCEPTED)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _read_form(self) -> dict[str, list[str]]:
+        length = int(self.headers.get("Content-Length") or "0")
+        return parse_qs(self.rfile.read(length).decode("utf-8") if length > 0 else "", keep_blank_values=True)
+
+    def _validate_batch_gate(self, action: str, params: dict[str, list[str]]) -> None:
+        if action == "local_to_dropbox_all":
+            if params.get("enable_write_dropbox", [""])[0] != "1":
+                raise BrowserError(HTTPStatus.FORBIDDEN, "Enable sync to Dropbox before starting a batch copy.")
+        elif action == "delete_local_only_and_pull_diffs":
+            if params.get("enable_to_local", [""])[0] != "1":
+                raise BrowserError(HTTPStatus.FORBIDDEN, "Enable sync to local before starting a batch copy.")
+        else:
+            raise BrowserError(HTTPStatus.BAD_REQUEST, "Unsupported batch sync action.")
+
+    def handle_sync_batch_plan(self) -> None:
+        params = self._read_form()
+        rel_path = clean_rel_path(params.get("path", [""])[0])
+        action = params.get("action", [""])[0]
+        recursive = params.get("recursive", [""])[0] == "1"
+        self._validate_batch_gate(action, params)
+        plan = self.app.plan_batch_sync(rel_path, action, recursive)
+        body = _json.dumps(plan).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def handle_sync_batch(self) -> None:
+        params = self._read_form()
+        rel_path = clean_rel_path(params.get("path", [""])[0])
+        action = params.get("action", [""])[0]
+        recursive = params.get("recursive", [""])[0] == "1"
+        self._validate_batch_gate(action, params)
+        plan = self.app.plan_batch_sync(rel_path, action, recursive)
+        label = f"{action.replace('_', ' ')}: {rel_path or '/'}"
+        op_id = syncstate.start(label)
+        syncstate.update(op_id, percent=0, total=plan["total"], errors=[])
+
+        def _progress(index: int, total: int, message: str, command: str) -> None:
+            percent = int((index - 1) / total * 100) if total else 100
+            syncstate.update(op_id, message=message, command=command, percent=percent, current=index, total=total)
+
+        def _run_batch() -> None:
+            try:
+                errors = self.app.run_batch_sync(plan, progress=_progress)
+            except BrowserError as exc:
+                syncstate.fail(op_id, exc.message)
+            except Exception as exc:
+                syncstate.fail(op_id, str(exc))
+            else:
+                if errors:
+                    syncstate.update(op_id, errors=errors)
+                    syncstate.complete(op_id, f"Batch complete with {len(errors)} error(s)")
+                else:
+                    syncstate.complete(op_id, "Batch sync complete")
+
+        threading.Thread(target=_run_batch, daemon=True, name=f"sync-batch-{op_id[:8]}").start()
+        body = _json.dumps({"id": op_id, "total": plan["total"]}).encode("utf-8")
         self.send_response(HTTPStatus.ACCEPTED)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))

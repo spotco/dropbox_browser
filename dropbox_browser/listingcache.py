@@ -2,7 +2,7 @@
 
 Cache files live in Cache/ListingCache/<sha256(remote_path)>.json.
 TTL is enforced strictly — an expired entry is treated as a miss.
-The cache is invalidated immediately after a successful upload to a folder.
+The cache is invalidated immediately after operations that can change a folder.
 """
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ class ListingCacheManager:
             write_json_atomic(self._cache_path(remote_path), data)
 
     def invalidate(self, remote_path: str) -> None:
-        """Delete the cached listing (e.g. after a successful upload)."""
+        """Delete the cached listing after an operation changes a folder."""
         with self._lock:
             try:
                 self._cache_path(remote_path).unlink(missing_ok=True)

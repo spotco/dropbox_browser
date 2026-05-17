@@ -44,12 +44,10 @@ Useful options:
 
 ## Safety Rules
 
-- Uploads are create-only.
-- Uploads are blocked if a file or folder with the same name already exists in
-  the current Dropbox folder.
-- When `--local-root` is provided, uploads are also blocked if the same name
-  already exists locally in the current folder.
-- The server has no delete or overwrite endpoint.
+- The server has no delete endpoint.
+- Browser uploads are not supported.
+- File sync, when enabled in the browser, is copy-only and may overwrite the
+  selected destination file. It does not delete destination-only files.
 
 ## Notes
 

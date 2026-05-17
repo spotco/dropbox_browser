@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from http import HTTPStatus
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +10,7 @@ from .formatting import file_type, parse_rclone_time
 from .ignored import is_ignored_name
 from .listingcache import ListingCacheManager
 from .namekeys import filename_compare_key
-from .paths import child_remote_path, remote_target, safe_join_local
+from .paths import remote_target, safe_join_local
 from .rclone import RcloneClient
 
 
@@ -214,55 +215,160 @@ class DropboxBrowser:
                 statuses[name] = {"diff_status": "synced"}
         return statuses
 
-    def name_exists_in_folder(self, rel_path: str, filename: str) -> tuple[bool, str | None]:
-        remote_file = child_remote_path(rel_path, filename)
-        if self.rclone.exists(remote_target(self.remote, remote_file)):
-            return True, "Dropbox already has an item with that name."
-        if self.local_root:
-            local_file = safe_join_local(self.local_root, remote_file)
-            if local_file.exists():
-                return True, "The local folder already has an item with that name."
-        return False, None
+    def _direct_batch_rows(self, rel_path: str) -> list[dict[str, Any]]:
+        entries = self.list_entries(rel_path, force_refresh=True)
+        rows: list[dict[str, Any]] = []
+        for row in entries:
+            name = row["name"]
+            child_path = f"{rel_path}/{name}" if rel_path else name
+            if row["is_dir"]:
+                if not row["remote"]:
+                    rows.append({
+                        "status": "local_only_dir",
+                        "path": child_path,
+                        "local_path": row.get("local_path") or str(safe_join_local(self.local_root, child_path)),
+                        "remote_path": remote_target(self.remote, child_path),
+                    })
+                continue
+            if not row["remote"]:
+                rows.append({
+                    "status": "local_only",
+                    "path": child_path,
+                    "local_path": row.get("local_path") or str(safe_join_local(self.local_root, child_path)),
+                    "remote_path": remote_target(self.remote, child_path),
+                })
+            elif not row["local"]:
+                rows.append({
+                    "status": "dropbox_only",
+                    "path": child_path,
+                    "local_path": str(safe_join_local(self.local_root, child_path)),
+                    "remote_path": remote_target(self.remote, child_path),
+                })
+            elif (row.get("remote_size") or 0) != (row.get("local_size") or 0):
+                rows.append({
+                    "status": "has_diffs",
+                    "path": child_path,
+                    "local_path": row.get("local_path") or str(safe_join_local(self.local_root, child_path)),
+                    "remote_path": remote_target(self.remote, child_path),
+                })
+        return rows
 
-    def upload_new_file(self, rel_path: str, filename: str, temp_file: Path) -> None:
-        filename = Path(filename).name
-        if not filename:
-            raise BrowserError(HTTPStatus.BAD_REQUEST, "The upload needs a filename.")
-        exists, reason = self.name_exists_in_folder(rel_path, filename)
-        if exists:
-            raise BrowserError(HTTPStatus.CONFLICT, reason or "That name already exists.")
-        remote_file = child_remote_path(rel_path, filename)
-        self.rclone.copy_file_to_remote(temp_file, remote_target(self.remote, remote_file))
-        if self.listing_cache:
-            self.listing_cache.invalidate(remote_target(self.remote, rel_path))
-        self.invalidate_folder_metadata(rel_path)
+    def _child_folder_paths(self, rel_path: str) -> list[str]:
+        children: dict[str, str] = {}
+        remote = remote_target(self.remote, rel_path)
+        try:
+            for item in self.rclone.lsjson(remote):
+                name = item.get("Name") or item.get("Path") or ""
+                if name and "/" not in name and not is_ignored_name(name) and item.get("IsDir"):
+                    children[filename_compare_key(name)] = f"{rel_path}/{name}" if rel_path else name
+        except BrowserError:
+            pass
+        local_folder = safe_join_local(self.local_root, rel_path) if self.local_root else None
+        if local_folder is not None and local_folder.exists() and local_folder.is_dir():
+            for child in local_folder.iterdir():
+                if child.is_dir() and not is_ignored_name(child.name):
+                    key = filename_compare_key(child.name)
+                    children.setdefault(key, f"{rel_path}/{child.name}" if rel_path else child.name)
+        return sorted(children.values(), key=str.casefold)
 
-    def sync_item(self, rel_path: str, direction: str, kind: str) -> None:
+    def _batch_rows(self, rel_path: str, recursive: bool) -> list[dict[str, Any]]:
+        if recursive:
+            rows: list[dict[str, Any]] = []
+            for child in self._child_folder_paths(rel_path):
+                rows.extend(self._batch_rows(child, recursive=True))
+            rows.extend(self._direct_batch_rows(rel_path))
+        else:
+            rows = self._direct_batch_rows(rel_path)
+        return rows
+
+    def plan_batch_sync(self, rel_path: str, action: str, recursive: bool) -> dict[str, Any]:
+        if self.local_root is None:
+            raise BrowserError(HTTPStatus.BAD_REQUEST, "Local comparison is not configured.")
+        if action not in {"local_to_dropbox_all", "delete_local_only_and_pull_diffs"}:
+            raise BrowserError(HTTPStatus.BAD_REQUEST, "Unsupported batch sync action.")
+
+        rows = self._batch_rows(rel_path, recursive)
+        groups: dict[str, list[dict[str, str]]] = {
+            "local_to_dropbox": [],
+            "dropbox_to_local": [],
+            "delete_local": [],
+        }
+        for row in rows:
+            item = {
+                "path": row["path"],
+                "local_path": row["local_path"],
+                "remote_path": row["remote_path"],
+            }
+            if action == "local_to_dropbox_all":
+                if row["status"] in {"local_only", "has_diffs"}:
+                    groups["local_to_dropbox"].append(item)
+            elif row["status"] in {"local_only", "local_only_dir"}:
+                groups["delete_local"].append(item)
+            elif row["status"] == "has_diffs":
+                groups["dropbox_to_local"].append(item)
+        return {
+            "action": action,
+            "recursive": recursive,
+            "groups": groups,
+            "total": sum(len(items) for items in groups.values()),
+        }
+
+    def run_batch_sync(self, plan: dict[str, Any], progress: Any | None = None) -> list[str]:
+        errors: list[str] = []
+        operations: list[tuple[str, dict[str, str]]] = []
+        for kind in ("local_to_dropbox", "dropbox_to_local", "delete_local"):
+            operations.extend((kind, item) for item in plan.get("groups", {}).get(kind, []))
+        total = len(operations)
+        for index, (kind, item) in enumerate(operations, start=1):
+            rel_path = item["path"]
+            local_path = Path(item["local_path"])
+            remote_path = item["remote_path"]
+            try:
+                if kind == "local_to_dropbox":
+                    command = f"rclone copyto -- {local_path} {remote_path}"
+                    if progress:
+                        progress(index, total, f"Copying local to Dropbox: {rel_path}", command)
+                    self.rclone.copy_file_overwrite(local_path, remote_path)
+                elif kind == "dropbox_to_local":
+                    command = f"rclone copyto -- {remote_path} {local_path}"
+                    if progress:
+                        progress(index, total, f"Copying Dropbox to local: {rel_path}", command)
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
+                    self.rclone.copy_file_overwrite(remote_path, local_path)
+                else:
+                    command = f"delete local -- {local_path}"
+                    if progress:
+                        progress(index, total, f"Deleting local-only item: {rel_path}", command)
+                    if local_path.is_dir():
+                        shutil.rmtree(local_path)
+                    else:
+                        local_path.unlink()
+            except Exception as exc:
+                errors.append(f"{rel_path}: {exc}")
+        rels = {str(Path(item["path"]).parent).replace("\\", "/") for _, item in operations}
+        for parent in rels:
+            if parent == ".":
+                parent = ""
+            if self.listing_cache:
+                self.listing_cache.invalidate(remote_target(self.remote, parent))
+            self.invalidate_folder_metadata(parent)
+        return errors
+
+    def sync_item(self, rel_path: str, direction: str) -> None:
         if self.local_root is None:
             raise BrowserError(HTTPStatus.BAD_REQUEST, "Local comparison is not configured.")
         if direction not in {"local_to_dropbox", "dropbox_to_local"}:
             raise BrowserError(HTTPStatus.BAD_REQUEST, "Unsupported sync direction.")
-        if kind not in {"file", "folder"}:
-            raise BrowserError(HTTPStatus.BAD_REQUEST, "Unsupported sync item type.")
 
         local_path = safe_join_local(self.local_root, rel_path)
         remote_path = remote_target(self.remote, rel_path)
         if direction == "local_to_dropbox":
-            if kind == "folder":
-                if not local_path.is_dir():
-                    raise BrowserError(HTTPStatus.NOT_FOUND, "Local folder not found.")
-                self.rclone.copy_folder_overwrite(local_path, remote_path)
-            else:
-                if not local_path.is_file():
-                    raise BrowserError(HTTPStatus.NOT_FOUND, "Local file not found.")
-                self.rclone.copy_file_overwrite(local_path, remote_path)
+            if not local_path.is_file():
+                raise BrowserError(HTTPStatus.NOT_FOUND, "Local file not found.")
+            self.rclone.copy_file_overwrite(local_path, remote_path)
         else:
-            if kind == "folder":
-                local_path.mkdir(parents=True, exist_ok=True)
-                self.rclone.copy_folder_overwrite(remote_path, local_path)
-            else:
-                local_path.parent.mkdir(parents=True, exist_ok=True)
-                self.rclone.copy_file_overwrite(remote_path, local_path)
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            self.rclone.copy_file_overwrite(remote_path, local_path)
 
         # Sync is copy-only: it overwrites destination files selected by the
         # user, but intentionally never deletes destination-only files.
@@ -271,8 +377,4 @@ class DropboxBrowser:
             parent_rel = ""
         if self.listing_cache:
             self.listing_cache.invalidate(remote_target(self.remote, parent_rel))
-            if kind == "folder":
-                self.listing_cache.invalidate(remote_path)
         self.invalidate_folder_metadata(parent_rel)
-        if kind == "folder":
-            self.invalidate_folder_metadata(rel_path)

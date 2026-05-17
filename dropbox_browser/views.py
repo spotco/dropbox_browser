@@ -15,7 +15,6 @@ from .services import diff_label
 def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: str, direction: str, msg: str, folder_cache_map: dict | None = None, current_folder_cache: dict | None = None) -> str:
     rows = "\n".join(entry_row(app, rel_path, entry, folder_cache_map or {}, current_folder_cache or {}) for entry in entries)
     crumbs = breadcrumbs(rel_path)
-    upload_action = "/upload?" + urlencode({"path": rel_path})
     refresh_href = "/?" + urlencode({"path": rel_path, "sort": sort_key, "dir": direction, "refresh": "1"})
     local_note = (
         f"Comparing with {html.escape(str(app.local_root))}"
@@ -39,6 +38,9 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         '<div class="topbar-actions">'
         f'<button type="button" class="copy-path" data-copy-path="{html.escape(current_local_folder)}">Copy Folder Path</button>'
         f'<a class="dropbox-link" href="{html.escape(dropbox_home_url(rel_path))}" target="_blank" rel="noopener noreferrer">Go to Dropbox</a>'
+        '<label class="recursive-toggle"><input type="checkbox" id="batch-recursive"> Recursive</label>'
+        '<button type="button" class="batch-sync batch-to-dropbox" data-batch-action="local_to_dropbox_all">Sync All Local to Dropbox</button>'
+        '<button type="button" class="batch-sync batch-to-local" data-batch-action="delete_local_only_and_pull_diffs">Delete all Local-Only Files</button>'
         '</div>'
         if app.local_root
         else ""
@@ -72,11 +74,6 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
       {topbar_actions}
     </div>
     {msg_html}
-    <form class="upload" action="{upload_action}" method="post" enctype="multipart/form-data">
-      <input type="file" name="file" required>
-      <button type="submit">Upload New File</button>
-      <span>Create-only: existing names are blocked.</span>
-    </form>
     <table>
       <thead>
         <tr>
@@ -100,6 +97,17 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
     <div id="sync-popup-message">Waiting</div>
     <div id="sync-popup-command"></div>
     <div class="sync-progress"><div id="sync-progress-bar"></div></div>
+  </div>
+  <div id="batch-confirm" class="batch-confirm hidden">
+    <div class="batch-confirm-box">
+      <h2>Confirm Batch Sync</h2>
+      <div id="batch-confirm-summary"></div>
+      <div id="batch-confirm-list"></div>
+      <div class="batch-confirm-actions">
+        <button type="button" id="batch-confirm-run">Run</button>
+        <button type="button" id="batch-confirm-cancel">Cancel</button>
+      </div>
+    </div>
   </div>
   <div id="log-panel">
     <div id="log-toolbar" onclick="toggleLog()">
@@ -160,7 +168,7 @@ def _sync_buttons(rel_path: str, kind: str, status: str) -> str:
 
 def _sync_cell(rel_path: str, kind: str, status: str, enabled: bool) -> str:
     attrs = f' data-sync-path="{html.escape(rel_path)}" data-sync-kind="{html.escape(kind)}"'
-    buttons = _sync_buttons(rel_path, kind, status) if enabled else ""
+    buttons = _sync_buttons(rel_path, kind, status) if enabled and kind == "file" else ""
     return f'<td class="sync"{attrs}>{buttons}</td>'
 
 
@@ -317,7 +325,15 @@ main {
 .topbar-actions {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
+}
+.recursive-toggle {
+  align-items: center;
+  display: flex;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
 }
 .refresh-link {
   margin-left: 12px;
@@ -334,21 +350,6 @@ a {
 }
 a:hover {
   text-decoration: underline;
-}
-.upload {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-  background: #fff;
-  border: 1px solid #d8dde3;
-  border-radius: 6px;
-  padding: 12px;
-  margin-bottom: 16px;
-}
-.upload span {
-  color: #607080;
-  font-size: 13px;
 }
 button {
   background: #174a7c;
@@ -427,6 +428,15 @@ th {
   font-weight: 600;
   padding: 5px 8px;
 }
+.batch-sync {
+  display: none;
+  font-size: 12px;
+  padding: 5px 8px;
+}
+body.sync-to-dropbox-enabled .batch-to-dropbox,
+body.sync-to-local-enabled .batch-to-local {
+  display: inline-block;
+}
 .copy-path.copied {
   background: #e7f5ec;
   color: #17633a;
@@ -462,6 +472,60 @@ body.sync-to-dropbox-enabled .sync-form[data-sync-direction="local_to_dropbox"] 
 }
 .sync-popup.hidden {
   display: none;
+}
+.batch-confirm {
+  align-items: center;
+  background: rgba(0, 0, 0, 0.32);
+  bottom: 0;
+  display: flex;
+  justify-content: center;
+  left: 0;
+  position: fixed;
+  right: 0;
+  top: 0;
+  z-index: 200;
+}
+.batch-confirm.hidden {
+  display: none;
+}
+.batch-confirm-box {
+  background: #fff;
+  border: 1px solid #b9c4d0;
+  border-radius: 6px;
+  max-height: 82vh;
+  max-width: 760px;
+  padding: 16px;
+  width: calc(100% - 40px);
+}
+.batch-confirm-box h2 {
+  font-size: 18px;
+  margin: 0 0 10px;
+}
+#batch-confirm-list {
+  border: 1px solid #d8dde3;
+  max-height: 48vh;
+  overflow: auto;
+  padding: 10px;
+}
+#batch-confirm-list h3 {
+  font-size: 13px;
+  margin: 10px 0 6px;
+}
+#batch-confirm-list ul {
+  margin: 0 0 8px 18px;
+  padding: 0;
+}
+#batch-confirm-list li {
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.batch-confirm-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 12px;
 }
 .sync-popup-head {
   align-items: center;
@@ -710,6 +774,13 @@ SYNC_JS = r"""
   var message = document.getElementById('sync-popup-message');
   var command = document.getElementById('sync-popup-command');
   var bar = document.getElementById('sync-progress-bar');
+  var batchConfirm = document.getElementById('batch-confirm');
+  var batchSummary = document.getElementById('batch-confirm-summary');
+  var batchList = document.getElementById('batch-confirm-list');
+  var batchRun = document.getElementById('batch-confirm-run');
+  var batchCancel = document.getElementById('batch-confirm-cancel');
+  var batchRecursive = document.getElementById('batch-recursive');
+  var pendingBatch = null;
 
   function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -728,6 +799,7 @@ SYNC_JS = r"""
   }
 
   function renderCell(relPath, kind, status) {
+    if (kind !== 'file') return '';
     return directionsForStatus(status).map(function (direction) {
       return '<form class="sync-form" data-sync-direction="' + esc(direction) + '" action="/sync" method="post">' +
         '<input type="hidden" name="path" value="' + esc(relPath) + '">' +
@@ -805,13 +877,78 @@ SYNC_JS = r"""
     bar.style.background = ok ? '#17633a' : '#8a1f1f';
   }
 
+  function gateParams() {
+    return {
+      enable_to_local: enableToLocal && enableToLocal.checked ? '1' : '0',
+      enable_write_dropbox: enableWriteDropbox && enableWriteDropbox.checked ? '1' : '0'
+    };
+  }
+
+  function formBody(fields) {
+    var params = new URLSearchParams();
+    Object.keys(fields).forEach(function (key) { params.set(key, fields[key]); });
+    return params;
+  }
+
+  function groupTitle(key) {
+    if (key === 'local_to_dropbox') return 'Copy Local -> Dropbox';
+    if (key === 'dropbox_to_local') return 'Copy Dropbox -> Local';
+    return 'Delete Local';
+  }
+
+  function renderPlan(plan) {
+    batchSummary.textContent = plan.total + ' file(s) will be affected.';
+    var html = '';
+    ['local_to_dropbox', 'dropbox_to_local', 'delete_local'].forEach(function (key) {
+      var items = (plan.groups && plan.groups[key]) || [];
+      if (!items.length) return;
+      html += '<h3>' + esc(groupTitle(key)) + ' (' + items.length + ')</h3><ul>';
+      items.forEach(function (item) {
+        html += '<li>' + esc(item.path) + '</li>';
+      });
+      html += '</ul>';
+    });
+    batchList.innerHTML = html || '<p>No files will be changed.</p>';
+    batchRun.disabled = !plan.total;
+  }
+
+  function openBatchConfirm(action, button) {
+    var gates = gateParams();
+    var fields = {
+      path: window.CURRENT_FOLDER_PATH || '',
+      action: action,
+      recursive: batchRecursive && batchRecursive.checked ? '1' : '0',
+      enable_to_local: gates.enable_to_local,
+      enable_write_dropbox: gates.enable_write_dropbox
+    };
+    if (button) button.disabled = true;
+    fetch('/sync-batch-plan', { method: 'POST', body: formBody(fields) })
+      .then(function (r) {
+        if (!r.ok) throw new Error('Could not build batch plan');
+        return r.json();
+      })
+      .then(function (plan) {
+        pendingBatch = fields;
+        renderPlan(plan);
+        batchConfirm.classList.remove('hidden');
+      })
+      .catch(function (err) {
+        finishPopup(err.message || 'Batch plan failed', '', false);
+      })
+      .then(function () {
+        if (button) button.disabled = false;
+      });
+  }
+
   function pollStatus(id) {
     fetch('/sync-status?id=' + encodeURIComponent(id))
       .then(function (r) { return r.json(); })
       .then(function (data) {
         command.textContent = data.command || data.label || '';
         if (data.status === 'complete') {
-          finishPopup(data.message || 'Sync complete', data.command || data.label || '', true);
+          var msg = data.message || 'Sync complete';
+          if (data.errors && data.errors.length) msg += ': ' + data.errors.join('; ');
+          finishPopup(msg, data.command || data.label || '', data.errors && data.errors.length ? false : true);
           setTimeout(function () { window.location.reload(); }, 700);
           return;
         }
@@ -820,7 +957,8 @@ SYNC_JS = r"""
           finishPopup(data.message || 'Sync failed', data.command || data.label || '', false);
           return;
         }
-        message.textContent = data.message || 'Sync running';
+        var progressText = data.current && data.total ? ' [' + data.current + '/' + data.total + ']' : '';
+        message.textContent = (data.message || 'Sync running') + progressText;
         setTimeout(function () { pollStatus(id); }, 800);
       })
       .catch(function () { setTimeout(function () { pollStatus(id); }, 1500); });
@@ -855,6 +993,39 @@ SYNC_JS = r"""
         finishPopup(err.message || 'Sync failed', cmd, false);
       });
   });
+
+  document.addEventListener('click', function (event) {
+    var button = event.target;
+    if (!button || !button.classList || !button.classList.contains('batch-sync')) return;
+    var action = button.getAttribute('data-batch-action') || '';
+    if (action === 'local_to_dropbox_all' && (!enableWriteDropbox || !enableWriteDropbox.checked)) return;
+    if (action === 'delete_local_only_and_pull_diffs' && (!enableToLocal || !enableToLocal.checked)) return;
+    openBatchConfirm(action, button);
+  });
+
+  if (batchCancel) {
+    batchCancel.addEventListener('click', function () {
+      pendingBatch = null;
+      batchConfirm.classList.add('hidden');
+    });
+  }
+
+  if (batchRun) {
+    batchRun.addEventListener('click', function () {
+      if (!pendingBatch) return;
+      batchConfirm.classList.add('hidden');
+      showPopup('Batch sync starting', '');
+      fetch('/sync-batch', { method: 'POST', body: formBody(pendingBatch) })
+        .then(function (r) {
+          if (!r.ok) throw new Error('Batch sync request failed');
+          return r.json();
+        })
+        .then(function (payload) { pollStatus(payload.id); })
+        .catch(function (err) {
+          finishPopup(err.message || 'Batch sync failed', '', false);
+        });
+    });
+  }
 
   document.addEventListener('click', function (event) {
     var button = event.target;
