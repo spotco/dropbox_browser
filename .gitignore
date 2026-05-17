@@ -1,5 +1,6 @@
 __pycache__/
 *.py[cod]
+!python/*.pyd
 .env
 .dropbox-browser-temp/
 Temp/
