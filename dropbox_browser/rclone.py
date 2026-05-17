@@ -216,25 +216,10 @@ class RcloneClient:
         proc = self.run("lsjson", "--", target)
         return proc.returncode == 0
 
-    def copy_file_to_remote(self, source: Path, destination: str) -> None:
-        proc = self.run("copyto", "--ignore-existing", "--", str(source), destination)
-        if proc.returncode != 0:
-            message = proc.stderr.decode("utf-8", "replace").strip() or "Upload failed."
-            raise BrowserError(HTTPStatus.BAD_GATEWAY, message)
-
     def copy_file_overwrite(self, source: str | Path, destination: str | Path) -> None:
         proc = self.run("copyto", "--", str(source), str(destination))
         if proc.returncode != 0:
             message = proc.stderr.decode("utf-8", "replace").strip() or "File sync failed."
-            raise BrowserError(HTTPStatus.BAD_GATEWAY, message)
-
-    def copy_folder_overwrite(self, source: str | Path, destination: str | Path) -> None:
-        # rclone copy overwrites changed files but does not delete destination-only
-        # files. Do not replace this with sync/delete behavior without explicit
-        # user approval.
-        proc = self.run("copy", "--", str(source), str(destination))
-        if proc.returncode != 0:
-            message = proc.stderr.decode("utf-8", "replace").strip() or "Folder sync failed."
             raise BrowserError(HTTPStatus.BAD_GATEWAY, message)
 
     def open_cat(self, target: str) -> subprocess.Popen[bytes]:

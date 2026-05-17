@@ -128,26 +128,6 @@ class SimulatedRclone:
                 destination_path.parent.mkdir(parents=True, exist_ok=True)
                 destination_path.write_bytes(self.cat_data[source])
             return CompletedProcess(list(args), 0, b"", b"")
-        if args[0] == "copy":
-            source = args[-2]
-            destination = args[-1]
-            self._record_call(destination, args, cancelable=cancel_token is not None)
-            source_path = Path(source)
-            destination_path = Path(destination)
-            if source_path.exists() and source_path.is_dir():
-                for child in source_path.rglob("*"):
-                    if child.is_file():
-                        rel = child.relative_to(source_path).as_posix()
-                        self.cat_data[destination.rstrip("/") + "/" + rel] = child.read_bytes()
-            else:
-                prefix = source.rstrip("/") + "/"
-                for remote_path, data in list(self.cat_data.items()):
-                    if remote_path.startswith(prefix):
-                        rel = remote_path[len(prefix):]
-                        target = destination_path.joinpath(*rel.split("/"))
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        target.write_bytes(data)
-            return CompletedProcess(list(args), 0, b"", b"")
         raise AssertionError(f"Unsupported simulated rclone command: {args!r}")
 
     def lsjson(self, target: str) -> list[dict[str, Any]]:
@@ -160,14 +140,8 @@ class SimulatedRclone:
     def exists(self, target: str) -> bool:
         return target in self.cat_data
 
-    def copy_file_to_remote(self, source: Path, destination: str) -> None:
-        self.cat_data[destination] = source.read_bytes()
-
     def copy_file_overwrite(self, source: str | Path, destination: str | Path) -> None:
         self.run("copyto", "--", str(source), str(destination))
-
-    def copy_folder_overwrite(self, source: str | Path, destination: str | Path) -> None:
-        self.run("copy", "--", str(source), str(destination))
 
     def open_cat(self, target: str) -> SimulatedCatProcess:
         if target not in self.cat_data:

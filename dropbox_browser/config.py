@@ -54,8 +54,3 @@ def find_default_config() -> str | None:
     if default is not None and resolved == default.resolve():
         return None  # matches rclone's own default; omit --config
     return str(resolved)
-
-
-def upload_temp_dir() -> Path:
-    TEMP_DIR.mkdir(exist_ok=True)
-    return TEMP_DIR
