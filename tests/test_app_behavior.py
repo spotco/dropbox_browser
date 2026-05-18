@@ -1120,9 +1120,25 @@ class AppBehaviorTests(IsolatedPathsTestCase):
 
         with TestServer(app) as server:
             html = server.get_text("/")
+            css = server.get_text("/assets/app.css")
+            js = "\n".join([
+                server.get_text("/assets/js/settings.js"),
+                server.get_text("/assets/js/log.js"),
+                server.get_text("/assets/js/refresh.js"),
+                server.get_text("/assets/js/sync.js"),
+                server.get_text("/assets/js/folder.js"),
+            ])
 
         self.assertIn("<th>View</th>", html)
         self.assertIn("<th>Sync</th>", html)
+        self.assertIn('<link rel="stylesheet" href="/assets/app.css">', html)
+        self.assertIn('<script src="/assets/js/settings.js"></script>', html)
+        self.assertIn('<script src="/assets/js/log.js"></script>', html)
+        self.assertIn('<script src="/assets/js/refresh.js"></script>', html)
+        self.assertIn('<script src="/assets/js/sync.js"></script>', html)
+        self.assertIn('<script src="/assets/js/folder.js"></script>', html)
+        self.assertNotIn("<style>", html)
+        self.assertNotIn("<script>var CURRENT_FOLDER_PATH", html)
         self.assertNotIn('action="/upload', html)
         self.assertNotIn("Upload New File", html)
         self.assertIn("SDB: Dropbox (dropbox:)", html)
@@ -1134,49 +1150,49 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertIn('data-sync-direction="local_to_dropbox"', html)
         self.assertIn('name="enable_to_local" value="0"', html)
         self.assertIn('name="enable_write_dropbox" value="0"', html)
-        self.assertIn("body.sync-to-local-enabled .sync-form[data-sync-direction=\"dropbox_to_local\"]", html)
-        self.assertIn("body.sync-to-dropbox-enabled .sync-form[data-sync-direction=\"local_to_dropbox\"]", html)
-        self.assertIn("Settings.get('sync-enable-to-local', false)", html)
-        self.assertIn("Settings.get('sync-enable-write-dropbox', false)", html)
-        self.assertIn("Settings.set('sync-enable-to-local', enableToLocal.checked)", html)
-        self.assertIn("Settings.set('sync-enable-write-dropbox', enableWriteDropbox.checked)", html)
-        self.assertIn("var syncBusyCount = 0", html)
-        self.assertIn("setSyncBusy(true)", html)
-        self.assertIn(".sync-form button, .batch-sync, #batch-confirm-run, #batch-confirm-cancel", html)
-        self.assertIn("button.disabled = busy || baseDisabled", html)
-        self.assertIn("if (syncBusyCount > 0) return;", html)
+        self.assertIn("body.sync-to-local-enabled .sync-form[data-sync-direction=\"dropbox_to_local\"]", css)
+        self.assertIn("body.sync-to-dropbox-enabled .sync-form[data-sync-direction=\"local_to_dropbox\"]", css)
+        self.assertIn("Settings.get('sync-enable-to-local', false)", js)
+        self.assertIn("Settings.get('sync-enable-write-dropbox', false)", js)
+        self.assertIn("Settings.set('sync-enable-to-local', enableToLocal.checked)", js)
+        self.assertIn("Settings.set('sync-enable-write-dropbox', enableWriteDropbox.checked)", js)
+        self.assertIn("var syncBusyCount = 0", js)
+        self.assertIn("setSyncBusy(true)", js)
+        self.assertIn(".sync-form button, .batch-sync, #batch-confirm-run, #batch-confirm-cancel", js)
+        self.assertIn("button.disabled = busy || baseDisabled", js)
+        self.assertIn("if (syncBusyCount > 0) return;", js)
         self.assertIn('id="batch-recursive"', html)
-        self.assertIn("width: calc(100% - 32px)", html)
-        self.assertIn("max-width: none", html)
+        self.assertIn("width: calc(100% - 32px)", css)
+        self.assertIn("max-width: none", css)
         self.assertIn("Sync All Local to Dropbox", html)
         self.assertIn("Delete all Local-Only Files", html)
         self.assertIn("Copy all Dropbox-Only Files to Local", html)
         self.assertIn('data-batch-action="delete_local_only_all"', html)
         self.assertIn('data-batch-action="dropbox_only_to_local_all"', html)
-        self.assertIn(".batch-delete-local", html)
-        self.assertIn("body.sync-to-local-enabled .recursive-toggle", html)
-        self.assertIn("body.sync-to-dropbox-enabled .recursive-toggle", html)
-        self.assertIn("'[' + data.current + '/' + data.total + '] '", html)
-        self.assertIn("function scrollLogToBottom()", html)
-        self.assertIn("body.has-log-panel", html)
-        self.assertIn("padding-bottom: var(--log-panel-height)", html)
+        self.assertIn(".batch-delete-local", css)
+        self.assertIn("body.sync-to-local-enabled .recursive-toggle", css)
+        self.assertIn("body.sync-to-dropbox-enabled .recursive-toggle", css)
+        self.assertIn("'[' + data.current + '/' + data.total + '] '", js)
+        self.assertIn("function scrollLogToBottom()", js)
+        self.assertIn("body.has-log-panel", css)
+        self.assertIn("padding-bottom: var(--log-panel-height)", css)
         self.assertIn('id="log-resizer"', html)
-        self.assertIn("Settings.get('log-height', defaultHeight)", html)
+        self.assertIn("Settings.get('log-height', defaultHeight)", js)
         self.assertNotIn('onclick="toggleLog()"', html)
-        self.assertNotIn("log-collapsed", html)
-        self.assertIn("scrollLogToBottom();", html)
-        self.assertIn("sync-batch-plan", html)
+        self.assertNotIn("log-collapsed", js)
+        self.assertIn("scrollLogToBottom();", js)
+        self.assertIn("sync-batch-plan", js)
         self.assertIn("batch-confirm-list", html)
-        self.assertIn("setBaseDisabled(batchRun, !plan.total)", html)
+        self.assertIn("setBaseDisabled(batchRun, !plan.total)", js)
         self.assertIn('id="refresh-cache"', html)
         self.assertIn('id="refresh-blocker"', html)
-        self.assertIn("refresh all children", html)
-        self.assertIn("fetch('/refresh-cache'", html)
-        self.assertIn("recursive: recursive ? '1' : '0'", html)
-        self.assertIn("Cache invalidated. Reloading page", html)
-        self.assertIn("window.location.reload();", html)
-        self.assertNotIn("pollUntilReady", html)
-        self.assertIn("event.key === 'Shift'", html)
+        self.assertIn("refresh all children", js)
+        self.assertIn("fetch('/refresh-cache'", js)
+        self.assertIn("recursive: recursive ? '1' : '0'", js)
+        self.assertIn("Cache invalidated. Reloading page", js)
+        self.assertIn("window.location.reload();", js)
+        self.assertNotIn("pollUntilReady", js)
+        self.assertIn("event.key === 'Shift'", js)
         folder_row = html.split('<span class="entry-name">folder</span></a></td>', 1)[1].split("</tr>", 1)[0]
         self.assertIn('data-sync-kind="folder"', folder_row)
         self.assertNotIn("sync-form", folder_row)
@@ -1235,6 +1251,16 @@ class AppBehaviorTests(IsolatedPathsTestCase):
                 icon_body = response.read()
                 icon_headers = response.headers
                 icon_status = response.status
+            css_request = Request(server.base_url + "/assets/app.css", method="HEAD")
+            with urlopen(css_request, timeout=5) as response:
+                css_body = response.read()
+                css_headers = response.headers
+                css_status = response.status
+            js_request = Request(server.base_url + "/assets/js/sync.js", method="HEAD")
+            with urlopen(js_request, timeout=5) as response:
+                js_body = response.read()
+                js_headers = response.headers
+                js_status = response.status
 
         self.assertEqual(page_status, HTTPStatus.OK)
         self.assertEqual(page_body, b"")
@@ -1244,6 +1270,14 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertEqual(icon_body, b"")
         self.assertEqual(icon_headers["Content-Type"], "image/svg+xml; charset=utf-8")
         self.assertGreater(int(icon_headers["Content-Length"]), 0)
+        self.assertEqual(css_status, HTTPStatus.OK)
+        self.assertEqual(css_body, b"")
+        self.assertEqual(css_headers["Content-Type"], "text/css; charset=utf-8")
+        self.assertGreater(int(css_headers["Content-Length"]), 0)
+        self.assertEqual(js_status, HTTPStatus.OK)
+        self.assertEqual(js_body, b"")
+        self.assertEqual(js_headers["Content-Type"], "application/javascript; charset=utf-8")
+        self.assertGreater(int(js_headers["Content-Length"]), 0)
 
     def test_copy_buttons_cover_current_folder_and_local_file_paths(self) -> None:
         local_root = self.create_local_root({
@@ -1267,6 +1301,7 @@ class AppBehaviorTests(IsolatedPathsTestCase):
 
         with TestServer(app) as server:
             html = server.get_text("/")
+            sync_js = server.get_text("/assets/js/sync.js")
 
         self.assertIn('<div class="topbar-actions">', html)
         self.assertIn(">Copy Folder Path</button>", html)
@@ -1277,8 +1312,8 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertIn(f'data-copy-path="{local_root}"', html)
         self.assertIn(f'data-copy-path="{local_root / "both.txt"}"', html)
         self.assertIn(f'data-copy-path="{local_root / "local.txt"}"', html)
-        self.assertIn("navigator.clipboard.writeText(path)", html)
-        self.assertIn("document.execCommand('copy')", html)
+        self.assertIn("navigator.clipboard.writeText(path)", sync_js)
+        self.assertIn("document.execCommand('copy')", sync_js)
         remote_row = html.split('<span class="entry-name">remote.txt</span></a></td>', 1)[1].split("</tr>", 1)[0]
         self.assertNotIn("copy-path", remote_row)
 

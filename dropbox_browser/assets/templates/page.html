@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/svg+xml" href="${icon_base_url}box-favicon.svg">
+  <link rel="stylesheet" href="/assets/app.css">
+  <title>$page_title</title>
+</head>
+<body class="has-log-panel" data-current-folder-path="$current_folder_attr" data-current-sort-key="$current_sort_key_attr" data-current-sort-direction="$current_sort_direction_attr">
+  <header>
+    <div>
+      <h1>$page_title</h1>
+      <div class="meta">$remote / $rel_path - $local_note</div>
+    </div>
+    $sync_toggles
+  </header>
+  <main>
+    <div class="topbar">
+      <nav class="breadcrumbs">$crumbs <a id="refresh-cache" class="refresh-link" href="$refresh_href" title="Refresh cached metadata for this folder">&#8635; refresh</a></nav>
+      $topbar_actions
+    </div>
+    $msg_html
+    <table>
+      <thead>
+        <tr>
+          <th>$sort_name</th>
+          <th>$sort_type</th>
+          <th>$sort_status</th>
+          <th>$sort_size</th>
+          <th>$sort_date</th>
+          <th>View</th>
+          <th>Sync</th>
+        </tr>
+      </thead>
+      <tbody>$rows</tbody>
+    </table>
+  </main>
+  <div id="sync-popup" class="sync-popup hidden">
+    <div class="sync-popup-head">
+      <strong>Sync</strong>
+      <button type="button" id="sync-popup-hide">Hide</button>
+    </div>
+    <div id="sync-popup-message">Waiting</div>
+    <div id="sync-popup-command"></div>
+    <div class="sync-progress"><div id="sync-progress-bar"></div></div>
+  </div>
+  <div id="batch-confirm" class="batch-confirm hidden">
+    <div class="batch-confirm-box">
+      <h2>Confirm Batch Sync</h2>
+      <div id="batch-confirm-summary"></div>
+      <div id="batch-confirm-list"></div>
+      <div class="batch-confirm-actions">
+        <button type="button" id="batch-confirm-cancel">Cancel</button>
+        <button type="button" id="batch-confirm-run">Run</button>
+      </div>
+    </div>
+  </div>
+  <div id="refresh-blocker" class="refresh-blocker hidden">
+    <div class="refresh-box">
+      <h2>Refreshing Cache</h2>
+      <div id="refresh-message">Refreshing current folder</div>
+      <div class="sync-progress"><div id="refresh-progress-bar" class="running"></div></div>
+    </div>
+  </div>
+  <div id="log-panel">
+    <div id="log-resizer" title="Drag to resize server log"></div>
+    <div id="log-toolbar">
+      <span id="log-grip" aria-hidden="true">&#8942;</span>
+      <span id="log-title">Server Log</span>
+    </div>
+    <div id="log-entries"></div>
+  </div>
+  <script src="/assets/js/settings.js"></script>
+  <script src="/assets/js/log.js"></script>
+  <script src="/assets/js/refresh.js"></script>
+  <script src="/assets/js/sync.js"></script>
+  <script src="/assets/js/folder.js"></script>
+</body>
+</html>
