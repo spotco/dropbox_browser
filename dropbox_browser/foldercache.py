@@ -251,6 +251,34 @@ class FolderCacheManager:
         except Exception:
             pass
 
+    def invalidate_tree(self, remote_path: str) -> list[str]:
+        """Forget cached and in-memory metadata for a folder and known descendants."""
+        prefix = remote_path.rstrip("/") + "/"
+        paths = {remote_path}
+        with self._lock:
+            known_paths: set[str] = set(self._acc)
+            known_paths.update(self._direct_done)
+            known_paths.update(self._pending_children)
+            known_paths.update(self._parent)
+            known_paths.update(self._in_progress)
+            known_paths.update(self._active_jobs)
+            for child_paths in self._pending_children.values():
+                known_paths.update(child_paths)
+            for path in known_paths:
+                if path == remote_path or path.startswith(prefix):
+                    paths.add(path)
+        for cache_file in list(CACHE_DIR.glob("*.json")):
+            try:
+                data = json.loads(cache_file.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            cached_path = data.get("remote_path")
+            if isinstance(cached_path, str) and (cached_path == remote_path or cached_path.startswith(prefix)):
+                paths.add(cached_path)
+        for path in sorted(paths, key=lambda value: value.count("/"), reverse=True):
+            self.invalidate(path)
+        return sorted(paths, key=str.casefold)
+
     def _write_cache(self, remote_path: str, complete: bool) -> None:
         """Flush current accumulated state to disk.  Lock must be held."""
         acc = self._acc.get(remote_path, {})

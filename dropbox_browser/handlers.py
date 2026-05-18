@@ -96,6 +96,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.handle_sync_batch_plan()
             elif parsed.path == "/sync-batch":
                 self.handle_sync_batch()
+            elif parsed.path == "/refresh-cache":
+                self.handle_refresh_cache()
             else:
                 raise BrowserError(HTTPStatus.NOT_FOUND, "Not found.")
         except BrowserError as exc:
@@ -442,6 +444,40 @@ class RequestHandler(BaseHTTPRequestHandler):
             success_message="Batch sync complete",
         )
         body = _json.dumps({"id": op_id, "total": plan["total"]}).encode("utf-8")
+        self.send_response(HTTPStatus.ACCEPTED)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def handle_refresh_cache(self) -> None:
+        params = self._read_form()
+        rel_path = clean_rel_path(params.get("path", [""])[0])
+        recursive = params.get("recursive", [""])[0] == "1"
+        full_remote = remote_target(self.app.remote, rel_path)
+        invalidated: list[str] = []
+        if self.app.listing_cache:
+            if recursive and hasattr(self.app.listing_cache, "invalidate_tree"):
+                invalidated.extend(self.app.listing_cache.invalidate_tree(full_remote))
+            else:
+                self.app.listing_cache.invalidate(full_remote)
+                invalidated.append(full_remote)
+        cache = self.app.folder_cache
+        page_time = time.time()
+        if cache:
+            cache.notify_page_load(page_time, page_key=rel_path, force=True)
+            if recursive and hasattr(cache, "invalidate_tree"):
+                invalidated.extend(cache.invalidate_tree(full_remote))
+            else:
+                cache.invalidate(full_remote)
+                invalidated.append(full_remote)
+            cache.request(full_remote, page_time)
+        body = _json.dumps({
+            "status": "refreshing",
+            "path": rel_path,
+            "recursive": recursive,
+            "invalidated": sorted(set(invalidated), key=str.casefold),
+        }).encode("utf-8")
         self.send_response(HTTPStatus.ACCEPTED)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))

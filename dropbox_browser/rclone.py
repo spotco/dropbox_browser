@@ -74,16 +74,16 @@ class RcloneClient:
     def _log_start(self, cmd: list[str]) -> tuple[int, int]:
         """Log command start to logstore and terminal. Returns (logstore_id, logoutput_id)."""
         msg = shlex.join(cmd)
-        logstore_id = logstore.append("rclone", msg + "  [...]")
-        logoutput_id = logoutput.log_start(msg) if self.log_commands else 0
+        logstore_id = logstore.append("rclone", "[...] " + msg)
+        logoutput_id = logoutput.log_start("[...] " + msg) if self.log_commands else 0
         return (logstore_id, logoutput_id)
 
     def _log_complete(
-        self, cmd: list[str], suffix: str, elapsed: float,
+        self, cmd: list[str], prefix: str, elapsed: float,
         logstore_id: int, logoutput_id: int,
     ) -> None:
         """Update the start log entry with timing and progress."""
-        msg = shlex.join(cmd) + suffix
+        msg = prefix + " " + shlex.join(cmd)
         logstore.update(logstore_id, msg, elapsed=elapsed)
         if self.log_commands:
             logoutput.log_complete(logoutput_id, msg, elapsed)
@@ -196,8 +196,8 @@ class RcloneClient:
             if inflight is not None:
                 inflight["error"] = exc
             elapsed = time.monotonic() - t0
-            suffix = f"  [{elapsed:.2f}s, canceled]"
-            self._log_complete(cmd, suffix, elapsed, logstore_id, logoutput_id)
+            prefix = f"[{elapsed:.2f}s canceled]"
+            self._log_complete(cmd, prefix, elapsed, logstore_id, logoutput_id)
             raise
         except Exception as exc:
             if inflight is not None:
@@ -214,15 +214,15 @@ class RcloneClient:
         context_progress_fn = getattr(self._progress_context, "fn", None)
         if context_progress_fn is not None:
             progress_str = context_progress_fn()
-            suffix = f"  [{elapsed:.2f}s, {progress_str}"
+            prefix = f"[{elapsed:.2f}s {progress_str}"
         elif self.progress_fn:
             done, total = self.progress_fn()
             progress_str = f"{done}/{total}"
-            suffix = f"  [{elapsed:.2f}s, {progress_str}]"
+            prefix = f"[{elapsed:.2f}s {progress_str}]"
         else:
             progress_str = ""
-            suffix = f"  [{elapsed:.2f}s]"
-        self._log_complete(cmd, suffix, elapsed, logstore_id, logoutput_id)
+            prefix = f"[{elapsed:.2f}s]"
+        self._log_complete(cmd, prefix, elapsed, logstore_id, logoutput_id)
         return result
 
     def lsjson(self, target: str) -> list[dict[str, Any]]:
@@ -271,7 +271,7 @@ class RcloneClient:
             return process
         except FileNotFoundError as exc:
             elapsed = time.monotonic() - started_at
-            self._log_complete(cmd, f"  [{elapsed:.2f}s, error]", elapsed, logstore_id, logoutput_id)
+            self._log_complete(cmd, f"[{elapsed:.2f}s error]", elapsed, logstore_id, logoutput_id)
             raise BrowserError(HTTPStatus.INTERNAL_SERVER_ERROR, f"rclone was not found: {exc}") from exc
 
     def finish_cat(self, process: subprocess.Popen[bytes], stream_error: Exception | None = None) -> None:
@@ -289,12 +289,12 @@ class RcloneClient:
                 stderr_text = ""
         if stream_error is not None:
             if isinstance(stream_error, (BrokenPipeError, ConnectionAbortedError)):
-                suffix = f"  [{elapsed:.2f}s, client disconnected]"
+                prefix = f"[{elapsed:.2f}s client disconnected]"
             else:
-                suffix = f"  [{elapsed:.2f}s, error]"
+                prefix = f"[{elapsed:.2f}s error]"
         elif process.returncode and process.returncode != 0:
             detail = f": {stderr_text}" if stderr_text else ""
-            suffix = f"  [{elapsed:.2f}s, error rc={process.returncode}{detail}]"
+            prefix = f"[{elapsed:.2f}s error rc={process.returncode}{detail}]"
         else:
-            suffix = f"  [{elapsed:.2f}s, streamed]"
-        self._log_complete(cmd, suffix, elapsed, logstore_id, logoutput_id)
+            prefix = f"[{elapsed:.2f}s streamed]"
+        self._log_complete(cmd, prefix, elapsed, logstore_id, logoutput_id)

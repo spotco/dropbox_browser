@@ -33,8 +33,9 @@ class RcloneLoggingTests(unittest.TestCase):
                 self.assertEqual(client.lsjson("dropbox:music"), [])
 
         update_text = update_mock.call_args[0][1]
+        self.assertTrue(update_text.startswith("["))
         self.assertIn("lsjson -- dropbox:music", update_text)
-        self.assertIn("123/271 planned, 148 remaining] (Plan: 2026-05-18 15:41:21)", update_text)
+        self.assertIn("s 123/271 planned, 148 remaining] (Plan: 2026-05-18 15:41:21) rclone.exe lsjson", update_text)
         self.assertTrue(complete_mock.called)
 
     def test_cat_stream_logs_start_and_completion(self) -> None:
@@ -53,10 +54,13 @@ class RcloneLoggingTests(unittest.TestCase):
 
         self.assertIs(proc, process)
         self.assertTrue(append_mock.called)
+        self.assertTrue(append_mock.call_args[0][1].startswith("[...] "))
         self.assertTrue(start_mock.called)
         start_text = start_mock.call_args[0][0]
+        self.assertTrue(start_text.startswith("[...] "))
         self.assertIn("cat -- dropbox:test/file.txt", start_text)
         update_text = update_mock.call_args[0][1]
+        self.assertTrue(update_text.startswith("["))
         self.assertIn("cat -- dropbox:test/file.txt", update_text)
         self.assertIn("streamed", update_text)
         self.assertTrue(complete_mock.called)

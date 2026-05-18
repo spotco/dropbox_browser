@@ -93,7 +93,7 @@ def _writer() -> None:
         if kind == "start":
             _, entry_id, ts, text = msg
             screen_lines.append({"id": entry_id, "done": False})
-            sys.stderr.write("[%s] %s  [...]\n" % (ts, text))
+            sys.stderr.write("[%s] %s\n" % (ts, text))
 
         elif kind == "plain":
             _, ts, text = msg
