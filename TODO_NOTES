@@ -1,5 +1,3 @@
-- run_select_folder.bat (select dropbox folder)
-  run.bat (use last selected dropbox folder, ./DropboxLocal by default)
 
 - Make the refresh invalidate cache of current folder and all folder. When hold shift, change the text and invalidate cache of all subfolders.
 
