@@ -239,7 +239,7 @@ https://github.com/spotco/dropbox_browser
 - Prefer conservative, direct stdlib code over introducing a framework.
 - Keep UI interactions server-rendered unless a feature needs client-side state.
 - Avoid expensive Dropbox recursion during normal page loads.
-- Treat `.gitignore`, `run_local.bat`, and any untracked local tooling as
+- Treat `.gitignore`, and any untracked local tooling as
   user-owned unless the user asks to modify them.
 - Place new features in the module that owns the behavior:
   - listing, status comparison, direct file sync, caching decisions:

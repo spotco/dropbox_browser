@@ -1,4 +1,5 @@
 {
+  "DropboxFolder": "./DropboxLocal",
   "RCloneConfig": "%APPDATA%\\rclone\\rclone.conf",
   "LogRcloneCommands": true,
   "LogHttpRequests": true,

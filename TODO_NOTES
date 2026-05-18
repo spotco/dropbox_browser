@@ -1,4 +1,14 @@
-- music player functionality
+- run_select_folder.bat (select dropbox folder)
+  run.bat (use last selected dropbox folder, ./DropboxLocal by default)
+
+- Make the refresh invalidate cache of current folder and all folder. When hold shift, change the text and invalidate cache of all subfolders.
+
+- bottom popup (which is currently only server log) resizable
+
 - add search (from cache only?)
+
+
+- music player functionality
+
 - add image preview with cache
 - add openmap/googlemap image location visualization

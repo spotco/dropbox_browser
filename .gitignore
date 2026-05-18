@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 !python/*.pyd
 .env
+config_local.json
 .dropbox-browser-temp/
 Temp/
 Cache/
