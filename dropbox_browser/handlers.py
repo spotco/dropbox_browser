@@ -28,8 +28,8 @@ from .syncjobs import SyncJobManager
 from .views import error_html, page_html
 
 
-ICON_ASSET_DIR = Path(__file__).resolve().parent / "assets" / "icons" / "material-icon-theme"
-ICON_ROUTE_PREFIX = "/assets/icons/material-icon-theme/"
+ASSET_DIR = Path(__file__).resolve().parent / "assets"
+ASSET_ROUTE_PREFIX = "/assets/"
 
 
 class RequestHandler(BaseHTTPRequestHandler):
@@ -60,8 +60,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.serve_sync_status(parsed.query)
             elif parsed.path == "/folder-info":
                 self.serve_folder_info(parsed.query)
-            elif parsed.path.startswith(ICON_ROUTE_PREFIX):
-                self.serve_icon_asset(parsed.path)
+            elif parsed.path.startswith(ASSET_ROUTE_PREFIX):
+                self.serve_asset(parsed.path)
             else:
                 raise BrowserError(HTTPStatus.NOT_FOUND, "Not found.")
         except BrowserError as exc:
@@ -78,8 +78,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.serve_file(parsed.query, inline=True, head_only=True)
             elif parsed.path == "/download":
                 self.serve_file(parsed.query, inline=False, head_only=True)
-            elif parsed.path.startswith(ICON_ROUTE_PREFIX):
-                self.serve_icon_asset(parsed.path, head_only=True)
+            elif parsed.path.startswith(ASSET_ROUTE_PREFIX):
+                self.serve_asset(parsed.path, head_only=True)
             else:
                 raise BrowserError(HTTPStatus.NOT_FOUND, "Not found.")
         except BrowserError as exc:
@@ -354,16 +354,37 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def serve_icon_asset(self, request_path: str, head_only: bool = False) -> None:
-        filename = unquote(request_path.removeprefix(ICON_ROUTE_PREFIX))
-        if "/" in filename or "\\" in filename or not filename.endswith(".svg"):
+    def serve_asset(self, request_path: str, head_only: bool = False) -> None:
+        rel = unquote(request_path.removeprefix(ASSET_ROUTE_PREFIX))
+        if "\\" in rel:
             raise BrowserError(HTTPStatus.NOT_FOUND, "Not found.")
-        path = ICON_ASSET_DIR / filename
+        parts = Path(rel).parts
+        if not parts or any(part in {"", ".", ".."} for part in parts):
+            raise BrowserError(HTTPStatus.NOT_FOUND, "Not found.")
+        if parts == ("app.css",):
+            content_type = "text/css; charset=utf-8"
+        elif len(parts) == 2 and parts[0] == "js" and parts[1].endswith(".js"):
+            content_type = "application/javascript; charset=utf-8"
+        elif (
+            len(parts) == 3
+            and parts[0] == "icons"
+            and parts[1] == "material-icon-theme"
+            and parts[2].endswith(".svg")
+        ):
+            content_type = "image/svg+xml; charset=utf-8"
+        else:
+            raise BrowserError(HTTPStatus.NOT_FOUND, "Not found.")
+
+        path = ASSET_DIR.joinpath(*parts)
+        try:
+            path.resolve().relative_to(ASSET_DIR.resolve())
+        except ValueError:
+            raise BrowserError(HTTPStatus.NOT_FOUND, "Not found.")
         if not path.is_file():
             raise BrowserError(HTTPStatus.NOT_FOUND, "Not found.")
         body = path.read_bytes()
         self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "image/svg+xml; charset=utf-8")
+        self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", "public, max-age=86400")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
