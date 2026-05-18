@@ -193,7 +193,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
   <title>{html.escape(page_title)}</title>
   <style>{CSS}</style>
 </head>
-<body>
+<body class="has-log-panel">
   <header>
     <div>
       <h1>{html.escape(page_title)}</h1>
@@ -250,8 +250,9 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
     </div>
   </div>
   <div id="log-panel">
-    <div id="log-toolbar" onclick="toggleLog()">
-      <span id="log-arrow">&#9660;</span>
+    <div id="log-resizer" title="Drag to resize server log"></div>
+    <div id="log-toolbar">
+      <span id="log-grip" aria-hidden="true">&#8942;</span>
       <span id="log-title">Server Log</span>
     </div>
     <div id="log-entries"></div>
@@ -423,9 +424,14 @@ CSS = """
   font-family: Arial, Helvetica, sans-serif;
   background: #f7f7f4;
   color: #1f2933;
+  --log-panel-height: 240px;
 }
 body {
+  box-sizing: border-box;
   margin: 0;
+}
+body.has-log-panel {
+  padding-bottom: var(--log-panel-height);
 }
 header {
   align-items: center;
@@ -635,7 +641,7 @@ button:disabled {
   background: #ffffff;
   border: 1px solid #b9c4d0;
   border-radius: 6px;
-  bottom: 260px;
+  bottom: calc(var(--log-panel-height) + 20px);
   box-shadow: 0 8px 24px rgba(20, 30, 40, 0.16);
   max-width: 460px;
   padding: 10px 12px;
@@ -796,22 +802,32 @@ button:disabled {
   padding: 10px 12px;
 }
 #log-panel {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
   background: #1a1f2e;
-  color: #c8d0db;
-  font-family: monospace;
-  font-size: 12px;
-  z-index: 100;
   border-top: 2px solid #3a4a5e;
+  bottom: 0;
+  color: #c8d0db;
   display: flex;
   flex-direction: column;
-  max-height: 240px;
+  font-family: monospace;
+  font-size: 12px;
+  height: var(--log-panel-height);
+  left: 0;
+  max-height: calc(100vh - 80px);
+  min-height: 42px;
+  position: fixed;
+  right: 0;
+  z-index: 100;
 }
-#log-panel.collapsed {
-  max-height: none;
+#log-resizer {
+  background: #3a4a5e;
+  cursor: ns-resize;
+  display: flex;
+  flex: 0 0 6px;
+  touch-action: none;
+}
+#log-resizer:hover,
+#log-resizer.dragging {
+  background: #5a6f86;
 }
 #log-toolbar {
   display: flex;
@@ -820,13 +836,14 @@ button:disabled {
   padding: 4px 12px;
   background: #252b3a;
   border-bottom: 1px solid #3a4a5e;
-  cursor: pointer;
   user-select: none;
   flex-shrink: 0;
 }
-#log-arrow {
+#log-grip {
   color: #607080;
+  cursor: ns-resize;
   font-size: 10px;
+  text-transform: uppercase;
 }
 #log-title {
   font-weight: bold;
@@ -839,9 +856,6 @@ button:disabled {
   overflow-y: auto;
   flex: 1;
   padding: 4px 12px 6px;
-}
-#log-panel.collapsed #log-entries {
-  display: none;
 }
 .log-entry {
   padding: 1px 0;
@@ -914,33 +928,65 @@ var Settings = (function () {
 
 LOG_JS = r"""
 (function () {
-  var collapsed = Settings.get('log-collapsed', false);
   var panel = document.getElementById('log-panel');
   var entries = document.getElementById('log-entries');
-  var arrow = document.getElementById('log-arrow');
+  var resizer = document.getElementById('log-resizer');
+  var grip = document.getElementById('log-grip');
+  var defaultHeight = 240;
+  var minHeight = 42;
 
   function scrollLogToBottom() {
     entries.scrollTop = entries.scrollHeight;
   }
 
-  function applyCollapsed() {
-    panel.classList.toggle('collapsed', collapsed);
-    arrow.innerHTML = collapsed ? '&#9654;' : '&#9660;';
-    if (!collapsed) {
+  function maxHeight() {
+    return Math.max(minHeight, window.innerHeight - 80);
+  }
+
+  function clampHeight(height) {
+    var parsed = parseInt(height, 10);
+    if (!isFinite(parsed)) parsed = defaultHeight;
+    return Math.min(Math.max(parsed, minHeight), maxHeight());
+  }
+
+  function applyHeight(height) {
+    var clamped = clampHeight(height);
+    document.documentElement.style.setProperty('--log-panel-height', clamped + 'px');
+    Settings.set('log-height', clamped);
+    return clamped;
+  }
+
+  applyHeight(Settings.get('log-height', defaultHeight));
+
+  function startResize(ev) {
+    ev.preventDefault();
+    var startY = ev.clientY;
+    var startHeight = panel.getBoundingClientRect().height;
+    resizer.classList.add('dragging');
+
+    function move(moveEv) {
+      applyHeight(startHeight + startY - moveEv.clientY);
       scrollLogToBottom();
     }
+
+    function end() {
+      resizer.classList.remove('dragging');
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', end);
+    }
+
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
   }
-  applyCollapsed();
+
+  resizer.addEventListener('pointerdown', startResize);
+  grip.addEventListener('pointerdown', startResize);
+  window.addEventListener('resize', function () { applyHeight(panel.getBoundingClientRect().height); });
 
   var nextIndex = 0;
   var nextUpdateSeq = 0;
-
-  function toggleLog() {
-    collapsed = !collapsed;
-    Settings.set('log-collapsed', collapsed);
-    applyCollapsed();
-  }
-  window.toggleLog = toggleLog;
 
   function esc(s) {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -974,7 +1020,7 @@ LOG_JS = r"""
           var div = entries.querySelector('[data-id="' + e.index + '"]');
           if (div) applyEntry(div, e);
         });
-        if (data.entries.length > 0 && !collapsed) {
+        if (data.entries.length > 0) {
           scrollLogToBottom();
         }
       })
