@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlencode
 
-from . import APP_TITLE
 from .formatting import display_date, file_type, human_size, status_class
+from .paths import remote_target
 from .services import diff_label
 
 
@@ -135,9 +135,15 @@ def entry_name_link(href: str, name: str, is_dir: bool) -> str:
     )
 
 
+def folder_page_title(remote: str, rel_path: str) -> str:
+    folder_name = posixpath.basename(rel_path) if rel_path else "Dropbox"
+    return f"SDB: {folder_name} ({remote_target(remote, rel_path)})"
+
+
 def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: str, direction: str, msg: str, folder_cache_map: dict | None = None, current_folder_cache: dict | None = None) -> str:
     rows = "\n".join(entry_row(app, rel_path, entry, folder_cache_map or {}, current_folder_cache or {}) for entry in entries)
     crumbs = breadcrumbs(rel_path)
+    page_title = folder_page_title(app.remote, rel_path)
     refresh_href = "/?" + urlencode({"path": rel_path, "sort": sort_key, "dir": direction, "refresh": "1"})
     local_note = (
         f"Comparing with {html.escape(str(app.local_root))}"
@@ -184,13 +190,13 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" type="image/svg+xml" href="{ICON_BASE_URL}box-favicon.svg">
-  <title>{APP_TITLE}</title>
+  <title>{html.escape(page_title)}</title>
   <style>{CSS}</style>
 </head>
 <body>
   <header>
     <div>
-      <h1>{APP_TITLE}</h1>
+      <h1>{html.escape(page_title)}</h1>
       <div class="meta">{html.escape(app.remote)} / {html.escape(rel_path)} - {local_note}</div>
     </div>
     {sync_toggles}

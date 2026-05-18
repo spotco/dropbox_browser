@@ -166,6 +166,20 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertTrue(any(event["event"] == "job_queued" for event in events))
         self.assertTrue(any(event["event"] == "subtree_complete" and event.get("remote_path") == "dropbox:sub" for event in events))
 
+    def test_page_title_uses_current_folder_name_and_dropbox_path(self) -> None:
+        rel_path = "Music & Videos/Album <One>"
+        rclone = SimulatedRclone({
+            "dropbox:Music & Videos/Album <One>": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, local_root=None, workers=1)
+
+        with TestServer(app) as server:
+            html = server.get_text("/?path=" + quote(rel_path))
+
+        escaped_title = "SDB: Album &lt;One&gt; (dropbox:Music &amp; Videos/Album &lt;One&gt;)"
+        self.assertIn(f"<title>{escaped_title}</title>", html)
+        self.assertIn(f"<h1>{escaped_title}</h1>", html)
+
     def test_server_cleanup_stops_app_background_workers(self) -> None:
         before_folder_workers = {
             thread.ident for thread in threading.enumerate()
@@ -1020,7 +1034,7 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertIn("<th>Sync</th>", html)
         self.assertNotIn('action="/upload', html)
         self.assertNotIn("Upload New File", html)
-        self.assertIn("spotco's Dropbox Browser", html)
+        self.assertIn("SDB: Dropbox (dropbox:)", html)
         self.assertIn('id="enable-to-local"', html)
         self.assertIn('id="enable-write-dropbox"', html)
         self.assertIn("Enable sync to local", html)
