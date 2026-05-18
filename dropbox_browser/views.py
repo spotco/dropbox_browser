@@ -203,7 +203,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
   </header>
   <main>
     <div class="topbar">
-      <nav class="breadcrumbs">{crumbs} <a class="refresh-link" href="{refresh_href}" title="Bypass listing cache and reload from Dropbox">&#8635; refresh</a></nav>
+      <nav class="breadcrumbs">{crumbs} <a id="refresh-cache" class="refresh-link" href="{refresh_href}" title="Refresh cached metadata for this folder">&#8635; refresh</a></nav>
       {topbar_actions}
     </div>
     {msg_html}
@@ -242,6 +242,13 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
       </div>
     </div>
   </div>
+  <div id="refresh-blocker" class="refresh-blocker hidden">
+    <div class="refresh-box">
+      <h2>Refreshing Cache</h2>
+      <div id="refresh-message">Refreshing current folder</div>
+      <div class="sync-progress"><div id="refresh-progress-bar" class="running"></div></div>
+    </div>
+  </div>
   <div id="log-panel">
     <div id="log-toolbar" onclick="toggleLog()">
       <span id="log-arrow">&#9660;</span>
@@ -253,6 +260,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
   <script>{LOG_JS}</script>
   <script>var CURRENT_FOLDER_PATH = {current_folder_js};</script>
   <script>var CURRENT_SORT_KEY = {current_sort_key_js}; var CURRENT_SORT_DIRECTION = {current_sort_direction_js};</script>
+  <script>{REFRESH_JS}</script>
   <script>{SYNC_JS}</script>
   <script>{FOLDER_JS}</script>
 </body>
@@ -486,6 +494,7 @@ main {
   font-size: 13px;
   color: #666;
   opacity: 0.75;
+  white-space: nowrap;
 }
 .refresh-link:hover {
   opacity: 1;
@@ -653,6 +662,39 @@ button:disabled {
 .batch-confirm.hidden {
   display: none;
 }
+.refresh-blocker {
+  align-items: center;
+  background: rgba(0, 0, 0, 0.36);
+  bottom: 0;
+  display: flex;
+  justify-content: center;
+  left: 0;
+  position: fixed;
+  right: 0;
+  top: 0;
+  z-index: 260;
+}
+.refresh-blocker.hidden {
+  display: none;
+}
+.refresh-box {
+  background: #fff;
+  border: 1px solid #b9c4d0;
+  border-radius: 6px;
+  box-shadow: 0 12px 32px rgba(20, 30, 40, 0.18);
+  max-width: 420px;
+  padding: 18px;
+  width: calc(100% - 40px);
+}
+.refresh-box h2 {
+  font-size: 18px;
+  margin: 0 0 10px;
+}
+#refresh-message {
+  color: #1f2933;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
 .batch-confirm-box {
   background: #fff;
   border: 1px solid #b9c4d0;
@@ -728,6 +770,14 @@ button:disabled {
 #sync-progress-bar.running {
   animation: sync-indeterminate 1.1s linear infinite;
   width: 35%;
+}
+#refresh-progress-bar {
+  background: #174a7c;
+  height: 100%;
+  width: 35%;
+}
+#refresh-progress-bar.running {
+  animation: sync-indeterminate 1.1s linear infinite;
 }
 .empty {
   color: #607080;
@@ -933,6 +983,86 @@ LOG_JS = r"""
   }
 
   setTimeout(poll, 500);
+}());
+"""
+
+
+REFRESH_JS = r"""
+(function () {
+  var link = document.getElementById('refresh-cache');
+  var blocker = document.getElementById('refresh-blocker');
+  var message = document.getElementById('refresh-message');
+  var progress = document.getElementById('refresh-progress-bar');
+  if (!link || !blocker || !message) return;
+
+  var shiftDown = false;
+  var refreshing = false;
+
+  function formBody(fields) {
+    var params = new URLSearchParams();
+    Object.keys(fields).forEach(function (key) { params.set(key, fields[key]); });
+    return params;
+  }
+
+  function setShiftState(active) {
+    shiftDown = !!active;
+    link.textContent = shiftDown ? '\u21bb refresh all children' : '\u21bb refresh';
+    link.title = shiftDown ? 'Refresh cached metadata for this folder and all known child folders' : 'Refresh cached metadata for this folder';
+  }
+
+  function showBlocker(text) {
+    message.textContent = text;
+    if (progress) progress.className = 'running';
+    blocker.classList.remove('hidden');
+  }
+
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Shift') setShiftState(true);
+  });
+  document.addEventListener('keyup', function (event) {
+    if (event.key === 'Shift') setShiftState(false);
+  });
+  window.addEventListener('blur', function () {
+    setShiftState(false);
+  });
+  link.addEventListener('mousemove', function (event) {
+    setShiftState(event.shiftKey);
+  });
+  link.addEventListener('mouseleave', function () {
+    if (!shiftDown) setShiftState(false);
+  });
+  link.addEventListener('click', function (event) {
+    event.preventDefault();
+    if (refreshing) return;
+    refreshing = true;
+    var recursive = !!event.shiftKey;
+    showBlocker(recursive ? 'Refreshing current folder and known child folders' : 'Refreshing current folder');
+    fetch('/refresh-cache', {
+      method: 'POST',
+      body: formBody({
+        path: window.CURRENT_FOLDER_PATH || '',
+        recursive: recursive ? '1' : '0'
+      })
+    })
+      .then(function (r) {
+        if (!r.ok) throw new Error('Refresh request failed');
+        return r.json();
+      })
+      .then(function () {
+        message.textContent = 'Cache invalidated. Reloading page';
+        window.location.reload();
+      })
+      .catch(function (err) {
+        refreshing = false;
+        message.textContent = err.message || 'Refresh failed';
+        if (progress) {
+          progress.className = '';
+          progress.style.width = '100%';
+          progress.style.background = '#8a1f1f';
+        }
+      });
+  });
+  setShiftState(false);
 }());
 """
 

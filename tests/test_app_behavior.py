@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 from http import HTTPStatus
@@ -10,7 +11,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from dropbox_browser.errors import BrowserError
-from dropbox_browser.foldercache import FolderCacheManager
+from dropbox_browser.foldercache import DIFF_CACHE_SCHEMA_VERSION, FolderCacheManager
 from dropbox_browser.listingcache import ListingCacheManager
 from dropbox_browser.services import DropboxBrowser
 from dropbox_browser.syncjobs import SyncJobManager
@@ -64,6 +65,27 @@ class _PreloadedFolderCache:
     def get(self, remote_path: str) -> dict | None:
         data = self._data.get(remote_path)
         return dict(data) if data is not None else None
+
+    def request(self, remote_path: str, *_args, **_kwargs) -> None:
+        self.requests.append(remote_path)
+
+
+class _RecordingFolderCache:
+    def __init__(self) -> None:
+        self.notified: list[tuple[float, str | None, bool]] = []
+        self.invalidated: list[str] = []
+        self.invalidated_trees: list[str] = []
+        self.requests: list[str] = []
+
+    def notify_page_load(self, page_time: float, *, page_key: str | None = None, force: bool = False) -> None:
+        self.notified.append((page_time, page_key, force))
+
+    def invalidate(self, remote_path: str) -> None:
+        self.invalidated.append(remote_path)
+
+    def invalidate_tree(self, remote_path: str) -> list[str]:
+        self.invalidated_trees.append(remote_path)
+        return [remote_path, remote_path.rstrip("/") + "/child"]
 
     def request(self, remote_path: str, *_args, **_kwargs) -> None:
         self.requests.append(remote_path)
@@ -179,6 +201,75 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         escaped_title = "SDB: Album &lt;One&gt; (dropbox:Music &amp; Videos/Album &lt;One&gt;)"
         self.assertIn(f"<title>{escaped_title}</title>", html)
         self.assertIn(f"<h1>{escaped_title}</h1>", html)
+
+    def test_refresh_cache_post_invalidates_current_folder_only(self) -> None:
+        rclone = SimulatedRclone()
+        listing_cache = ListingCacheManager(ttl_seconds=1800)
+        folder_cache = _RecordingFolderCache()
+        app = DropboxBrowser(rclone, "dropbox:", None, folder_cache=folder_cache, listing_cache=listing_cache)
+        listing_cache.set("dropbox:music", [{"Name": "old.txt"}])
+        listing_cache.set("dropbox:music/child", [{"Name": "child.txt"}])
+
+        with TestServer(app) as server:
+            payload = server.post_json("/refresh-cache", {"path": "music", "recursive": "0"})
+
+        self.assertEqual(payload["status"], "refreshing")
+        self.assertFalse(payload["recursive"])
+        self.assertIn("dropbox:music", payload["invalidated"])
+        self.assertIsNone(listing_cache.get("dropbox:music"))
+        self.assertIsNotNone(listing_cache.get("dropbox:music/child"))
+        self.assertEqual(folder_cache.invalidated, ["dropbox:music"])
+        self.assertEqual(folder_cache.invalidated_trees, [])
+        self.assertEqual(folder_cache.requests, ["dropbox:music"])
+        self.assertEqual(folder_cache.notified[0][1:], ("music", True))
+
+    def test_refresh_cache_post_with_shift_invalidates_known_children(self) -> None:
+        rclone = SimulatedRclone()
+        listing_cache = ListingCacheManager(ttl_seconds=1800)
+        folder_cache = _RecordingFolderCache()
+        app = DropboxBrowser(rclone, "dropbox:", None, folder_cache=folder_cache, listing_cache=listing_cache)
+        listing_cache.set("dropbox:music", [{"Name": "old.txt"}])
+        listing_cache.set("dropbox:music/child", [{"Name": "child.txt"}])
+        listing_cache.set("dropbox:other", [{"Name": "other.txt"}])
+
+        with TestServer(app) as server:
+            payload = server.post_json("/refresh-cache", {"path": "music", "recursive": "1"})
+
+        self.assertTrue(payload["recursive"])
+        self.assertEqual(folder_cache.invalidated, [])
+        self.assertEqual(folder_cache.invalidated_trees, ["dropbox:music"])
+        self.assertIsNone(listing_cache.get("dropbox:music"))
+        self.assertIsNone(listing_cache.get("dropbox:music/child"))
+        self.assertIsNotNone(listing_cache.get("dropbox:other"))
+        self.assertEqual(folder_cache.requests, ["dropbox:music"])
+
+    def test_folder_cache_invalidate_tree_removes_current_and_known_child_files(self) -> None:
+        rclone = SimulatedRclone()
+        app = self._build_app(rclone, local_root=None, workers=1)
+        cache = app.folder_cache
+        assert cache is not None
+        for remote_path in ("dropbox:music", "dropbox:music/child", "dropbox:other"):
+            cache_file = cache._cache_path(remote_path)
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            cache_file.write_text(json.dumps({
+                "remote_path": remote_path,
+                "schema_version": DIFF_CACHE_SCHEMA_VERSION,
+                "local_root": None,
+                "cached_at": time.time(),
+                "complete": True,
+                "diff_complete": True,
+            }), encoding="utf-8")
+        with cache._lock:
+            cache._acc["dropbox:music/live"] = {}
+            cache._direct_done["dropbox:music/live"] = time.time()
+
+        invalidated = cache.invalidate_tree("dropbox:music")
+
+        self.assertEqual(invalidated, ["dropbox:music", "dropbox:music/child", "dropbox:music/live"])
+        self.assertFalse(cache._cache_path("dropbox:music").exists())
+        self.assertFalse(cache._cache_path("dropbox:music/child").exists())
+        self.assertTrue(cache._cache_path("dropbox:other").exists())
+        self.assertNotIn("dropbox:music/live", cache._acc)
 
     def test_server_cleanup_stops_app_background_workers(self) -> None:
         before_folder_workers = {
@@ -1072,6 +1163,15 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertIn("sync-batch-plan", html)
         self.assertIn("batch-confirm-list", html)
         self.assertIn("setBaseDisabled(batchRun, !plan.total)", html)
+        self.assertIn('id="refresh-cache"', html)
+        self.assertIn('id="refresh-blocker"', html)
+        self.assertIn("refresh all children", html)
+        self.assertIn("fetch('/refresh-cache'", html)
+        self.assertIn("recursive: recursive ? '1' : '0'", html)
+        self.assertIn("Cache invalidated. Reloading page", html)
+        self.assertIn("window.location.reload();", html)
+        self.assertNotIn("pollUntilReady", html)
+        self.assertIn("event.key === 'Shift'", html)
         folder_row = html.split('<span class="entry-name">folder</span></a></td>', 1)[1].split("</tr>", 1)[0]
         self.assertIn('data-sync-kind="folder"', folder_row)
         self.assertNotIn("sync-form", folder_row)

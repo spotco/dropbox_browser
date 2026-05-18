@@ -54,3 +54,23 @@ class ListingCacheManager:
                 self._cache_path(remote_path).unlink(missing_ok=True)
             except Exception:
                 pass
+
+    def invalidate_tree(self, remote_path: str) -> list[str]:
+        """Delete cached listings for a folder and known descendants."""
+        prefix = remote_path.rstrip("/") + "/"
+        paths = {remote_path}
+        with self._lock:
+            for cache_file in list(CACHE_DIR.glob("*.json")):
+                try:
+                    data = json.loads(cache_file.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                cached_path = data.get("remote_path")
+                if isinstance(cached_path, str) and (cached_path == remote_path or cached_path.startswith(prefix)):
+                    paths.add(cached_path)
+            for path in paths:
+                try:
+                    self._cache_path(path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+        return sorted(paths, key=str.casefold)
