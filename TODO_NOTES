@@ -1,5 +1,9 @@
 
+- kill retry thread with exponential backoff
+
 - Make the refresh invalidate cache of current folder and all folder. When hold shift, change the text and invalidate cache of all subfolders.
+
+
 
 - bottom popup (which is currently only server log) resizable
 

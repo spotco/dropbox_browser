@@ -112,6 +112,11 @@ http://127.0.0.1:8000/
 
 - Dropbox folder `ModTime` values returned by `rclone lsjson` may be placeholders
   such as `2000-01-01T00:00:00Z`.
+- Known batch-planning issue: the browser first calls `/sync-batch-plan` for
+  confirmation, then `/sync-batch` recomputes the same plan before queuing jobs.
+  On large recursive folders this can look like the confirmed batch command is
+  hanging before any `rclone copyto` work starts. Fix by passing a confirmed
+  plan id or equivalent immutable plan payload from confirmation to execution.
 - Dropbox names may contain characters that Windows cannot store in local file
   names, especially `*`. Local Windows copies may use visually similar
   fullwidth Unicode replacements such as `＊` (`U+FF0A FULLWIDTH ASTERISK`) for

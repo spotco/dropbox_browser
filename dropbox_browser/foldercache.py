@@ -130,6 +130,7 @@ class FolderCacheManager:
         # Progress counters for the current page (reset when _min_page_time advances).
         self._page_dispatched: int = 0
         self._page_completed: int = 0
+        self._progress_by_epoch: dict[float, dict[str, int]] = {}
         self._acc: dict[str, dict] = {}
         # Maps path → page_time at which _compute last ran for it.
         # Used to avoid re-fetching a folder while its subtree is still being
@@ -354,6 +355,7 @@ class FolderCacheManager:
             self._min_page_time = page_time
             self._page_dispatched = 0
             self._page_completed = 0
+        self._progress_by_epoch.setdefault(page_time, {"completed": 0, "dispatched": 0})
 
     def _cancel_queued_job(self, job: FolderJob) -> None:
         """Cancel a queued old-page job.  Lock must be held."""
@@ -389,13 +391,24 @@ class FolderCacheManager:
         with self._lock:
             return (self._page_completed, self._page_dispatched)
 
+    def _progress_text_for_epoch(self, page_epoch: float) -> str:
+        with self._lock:
+            progress = self._progress_by_epoch.get(page_epoch)
+            if progress is None:
+                return f"{self._page_completed}/{self._page_dispatched}]"
+            return f"{progress.get('completed', 0)}/{progress.get('dispatched', 0)}]"
+
     def _record_dispatched(self, page_epoch: float) -> None:
         """Count dispatched work only for the active page epoch.  Lock must be held."""
+        progress = self._progress_by_epoch.setdefault(page_epoch, {"completed": 0, "dispatched": 0})
+        progress["dispatched"] += 1
         if page_epoch >= self._min_page_time:
             self._page_dispatched += 1
 
     def _record_completed(self, page_epoch: float) -> None:
         """Count completed work only for the active page epoch.  Lock must be held."""
+        progress = self._progress_by_epoch.setdefault(page_epoch, {"completed": 0, "dispatched": 0})
+        progress["completed"] += 1
         if page_epoch >= self._min_page_time:
             self._page_completed += 1
 
@@ -606,7 +619,12 @@ class FolderCacheManager:
             items = self.listing_cache.get(remote_path)
         if items is None:
             listing_source = "rclone"
-            proc = self.rclone.run("lsjson", "--", remote_path, cancel_token=cancel_token)
+            context_factory = getattr(self.rclone, "progress_context", None)
+            if context_factory is None:
+                proc = self.rclone.run("lsjson", "--", remote_path, cancel_token=cancel_token)
+            else:
+                with context_factory(lambda: self._progress_text_for_epoch(page_time)):
+                    proc = self.rclone.run("lsjson", "--", remote_path, cancel_token=cancel_token)
             if proc.returncode == 0 and proc.stdout.strip():
                 try:
                     items = json.loads(proc.stdout.decode("utf-8"))

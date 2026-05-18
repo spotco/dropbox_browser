@@ -8,6 +8,7 @@ import threading
 import time
 import unittest
 from dataclasses import dataclass
+from contextlib import contextmanager
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -69,6 +70,8 @@ class SimulatedRclone:
         self.calls: list[dict[str, Any]] = []
         self.cat_data = dict(cat_data or {})
         self.progress_fn = None
+        self.progress_snapshots: list[str] = []
+        self._progress_context = threading.local()
 
     def _next_response(self, target: str) -> SimulatedLsjsonResponse:
         with self._lock:
@@ -106,9 +109,27 @@ class SimulatedRclone:
         self._record_call(target, args, cancelable=cancel_token is not None)
         response = self._next_response(target)
         self._wait(response, cancel_token)
+        progress_fn = getattr(self._progress_context, "fn", None)
+        if progress_fn is not None:
+            self.progress_snapshots.append(progress_fn())
         if response.exception is not None:
             raise response.exception
         return response
+
+    @contextmanager
+    def progress_context(self, progress_fn: Any):
+        previous = getattr(self._progress_context, "fn", None)
+        self._progress_context.fn = progress_fn
+        try:
+            yield
+        finally:
+            if previous is None:
+                try:
+                    del self._progress_context.fn
+                except AttributeError:
+                    pass
+            else:
+                self._progress_context.fn = previous
 
     def run(
         self,

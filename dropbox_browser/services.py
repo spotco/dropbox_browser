@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from dataclasses import dataclass, field
+from datetime import datetime
 from http import HTTPStatus
 import shutil
 import time
 from pathlib import Path
+import threading
 from typing import Any
+from contextlib import nullcontext
 
 from .errors import BrowserError
 from .formatting import file_type, parse_rclone_time
@@ -26,6 +30,34 @@ def diff_label(status: str | None) -> str:
     }.get(status or "", "Loading")
 
 
+@dataclass
+class BatchPlanProgress:
+    started_label: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    completed: int = 0
+    dispatched: int = 0
+    running: int = 0
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def dispatch(self, count: int = 1) -> None:
+        with self.lock:
+            self.dispatched += count
+
+    def start(self) -> None:
+        with self.lock:
+            self.running += 1
+
+    def finish(self) -> None:
+        with self.lock:
+            self.running = max(0, self.running - 1)
+            self.completed += 1
+
+    def text(self) -> str:
+        with self.lock:
+            current = min(self.dispatched, self.completed + self.running)
+            remaining = max(0, self.dispatched - current)
+            return f"{current}/{self.dispatched} planned, {remaining} remaining] (Plan: {self.started_label})"
+
+
 class DropboxBrowser:
     def __init__(self, rclone: RcloneClient, remote: str, local_root: Path | None, folder_cache: Any = None, listing_cache: ListingCacheManager | None = None):
         self.rclone = rclone
@@ -41,23 +73,8 @@ class DropboxBrowser:
             if shutdown is not None:
                 shutdown()
 
-    def list_entries(self, rel_path: str, force_refresh: bool = False) -> list[dict[str, Any]]:
-        remote = remote_target(self.remote, rel_path)
+    def _entries_from_remote_items(self, rel_path: str, remote_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         local_folder = resolve_matching_local_path(self.local_root, rel_path) if self.local_root else None
-
-        remote_items = None
-        if self.listing_cache and not force_refresh:
-            remote_items = self.listing_cache.get(remote)
-        if remote_items is None:
-            try:
-                remote_items = self.rclone.lsjson(remote)
-            except BrowserError:
-                if not (local_folder and local_folder.exists() and local_folder.is_dir()):
-                    raise
-                remote_items = []
-            else:
-                if self.listing_cache:
-                    self.listing_cache.set(remote, remote_items)
 
         remote_entries: dict[str, dict[str, Any]] = {}
         for item in remote_items:
@@ -114,6 +131,26 @@ class DropboxBrowser:
             })
 
         return rows
+
+    def list_entries(self, rel_path: str, force_refresh: bool = False) -> list[dict[str, Any]]:
+        remote = remote_target(self.remote, rel_path)
+        local_folder = resolve_matching_local_path(self.local_root, rel_path) if self.local_root else None
+
+        remote_items = None
+        if self.listing_cache and not force_refresh:
+            remote_items = self.listing_cache.get(remote)
+        if remote_items is None:
+            try:
+                remote_items = self.rclone.lsjson(remote)
+            except BrowserError:
+                if not (local_folder and local_folder.exists() and local_folder.is_dir()):
+                    raise
+                remote_items = []
+            else:
+                if self.listing_cache:
+                    self.listing_cache.set(remote, remote_items)
+
+        return self._entries_from_remote_items(rel_path, remote_items)
 
     def local_display_path(self, rel_path: str) -> Path | None:
         """Return the actual local path for a displayed Dropbox-relative path.
@@ -216,8 +253,7 @@ class DropboxBrowser:
                 statuses[name] = {"diff_status": "synced"}
         return statuses
 
-    def _direct_batch_rows(self, rel_path: str) -> list[dict[str, Any]]:
-        entries = self.list_entries(rel_path, force_refresh=True)
+    def _direct_batch_rows_from_entries(self, rel_path: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for row in entries:
             name = row["name"]
@@ -261,6 +297,52 @@ class DropboxBrowser:
                 })
         return rows
 
+    def _direct_batch_rows(self, rel_path: str) -> list[dict[str, Any]]:
+        entries = self.list_entries(rel_path, force_refresh=True)
+        return self._direct_batch_rows_from_entries(rel_path, entries)
+
+    def _is_confirmed_synced_subtree(self, rel_path: str) -> bool:
+        if not self.folder_cache:
+            return False
+        cached = self.folder_cache.get(remote_target(self.remote, rel_path))
+        return bool(
+            cached
+            and cached.get("complete")
+            and cached.get("diff_complete")
+            and cached.get("diff_status") == "synced"
+        )
+
+    def _planning_lsjson(self, remote: str, progress: BatchPlanProgress | None) -> list[dict[str, Any]]:
+        if progress is None:
+            return self.rclone.lsjson(remote)
+        progress.start()
+        context_factory = getattr(self.rclone, "progress_context", None)
+        context = context_factory(progress.text) if context_factory is not None else nullcontext()
+        try:
+            with context:
+                return self.rclone.lsjson(remote)
+        finally:
+            progress.finish()
+
+    def _batch_scan(self, rel_path: str, progress: BatchPlanProgress | None = None) -> tuple[list[str], list[dict[str, Any]]]:
+        if self._is_confirmed_synced_subtree(rel_path):
+            return [], []
+        remote = remote_target(self.remote, rel_path)
+        local_folder = resolve_matching_local_path(self.local_root, rel_path) if self.local_root else None
+        try:
+            remote_items = self._planning_lsjson(remote, progress)
+        except BrowserError:
+            if not (local_folder and local_folder.exists() and local_folder.is_dir()):
+                raise
+            remote_items = []
+        entries = self._entries_from_remote_items(rel_path, remote_items)
+        children = [
+            f"{rel_path}/{row['name']}" if rel_path else row["name"]
+            for row in entries
+            if row["is_dir"] and not self._is_confirmed_synced_subtree(f"{rel_path}/{row['name']}" if rel_path else row["name"])
+        ]
+        return sorted(dict.fromkeys(children), key=str.casefold), self._direct_batch_rows_from_entries(rel_path, entries)
+
     def _child_folder_paths(self, rel_path: str) -> list[str]:
         remote_children: dict[str, str] = {}
         remote = remote_target(self.remote, rel_path)
@@ -284,21 +366,19 @@ class DropboxBrowser:
 
     def _batch_rows(self, rel_path: str, recursive: bool, workers: int = 1) -> list[dict[str, Any]]:
         if recursive:
-            if workers > 1:
-                return self._batch_rows_parallel(rel_path, workers)
-            rows: list[dict[str, Any]] = []
-            for child in self._child_folder_paths(rel_path):
-                rows.extend(self._batch_rows(child, recursive=True, workers=workers))
-            rows.extend(self._direct_batch_rows(rel_path))
-            return rows
+            return self._batch_rows_parallel(rel_path, workers)
         return self._direct_batch_rows(rel_path)
 
     def _batch_rows_parallel(self, rel_path: str, workers: int) -> list[dict[str, Any]]:
+        progress = BatchPlanProgress()
+
         def scan(path: str) -> tuple[str, list[str], list[dict[str, Any]]]:
-            return path, self._child_folder_paths(path), self._direct_batch_rows(path)
+            children, rows = self._batch_scan(path, progress)
+            return path, children, rows
 
         results: dict[str, tuple[list[str], list[dict[str, Any]]]] = {}
         scheduled = {rel_path}
+        progress.dispatch()
         with ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="sync-plan") as executor:
             pending = {executor.submit(scan, rel_path)}
             while pending:
@@ -310,6 +390,7 @@ class DropboxBrowser:
                         if child in scheduled:
                             continue
                         scheduled.add(child)
+                        progress.dispatch()
                         pending.add(executor.submit(scan, child))
 
         rows: list[dict[str, Any]] = []
