@@ -1789,6 +1789,78 @@ class AppBehaviorTests(IsolatedPathsTestCase):
             ["a", "b"],
         )
 
+    def test_recursive_batch_plans_skip_confirmed_synced_subtrees(self) -> None:
+        local_root = self.create_local_root({
+            "synced/track.txt": b"same",
+            "local-root.txt": b"local",
+        })
+
+        class SyncedFolderCache:
+            def get(self, remote_path: str) -> dict[str, Any] | None:
+                if remote_path == "dropbox:synced":
+                    return {
+                        "complete": True,
+                        "diff_complete": True,
+                        "diff_status": "synced",
+                    }
+                return None
+
+        root_items = [
+            remote_dir_item("synced"),
+            remote_dir_item("remote-only"),
+            {"Name": "remote-root.txt", "Path": "remote-root.txt", "IsDir": False, "Size": 6, "ModTime": "2024-01-01T12:00:00Z"},
+        ]
+        rclone = SimulatedRclone({
+            "dropbox:": [
+                SimulatedLsjsonResponse(items=root_items),
+                SimulatedLsjsonResponse(items=root_items),
+            ],
+            "dropbox:remote-only": [
+                SimulatedLsjsonResponse(items=[
+                    {"Name": "remote-child.txt", "Path": "remote-only/remote-child.txt", "IsDir": False, "Size": 6, "ModTime": "2024-01-01T12:00:00Z"},
+                ]),
+                SimulatedLsjsonResponse(items=[
+                    {"Name": "remote-child.txt", "Path": "remote-only/remote-child.txt", "IsDir": False, "Size": 6, "ModTime": "2024-01-01T12:00:00Z"},
+                ]),
+            ],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1, sync_workers=2)
+        app.folder_cache = SyncedFolderCache()
+
+        copy_to_local = app.plan_batch_sync("", "dropbox_only_to_local_all", recursive=True)
+        sync_to_dropbox = app.plan_batch_sync("", "local_to_dropbox_all", recursive=True)
+
+        self.assertEqual(
+            [item["path"] for item in copy_to_local["groups"]["dropbox_dir_to_local"]],
+            ["remote-only"],
+        )
+        self.assertEqual(
+            [item["path"] for item in copy_to_local["groups"]["dropbox_to_local"]],
+            ["remote-only/remote-child.txt", "remote-root.txt"],
+        )
+        self.assertEqual(
+            [item["path"] for item in sync_to_dropbox["groups"]["local_to_dropbox"]],
+            ["local-root.txt"],
+        )
+        self.assertFalse(any(call["target"] == "dropbox:synced" for call in rclone.calls))
+
+    def test_folder_cache_progress_text_uses_job_epoch_after_page_reset(self) -> None:
+        rclone = SimulatedRclone({})
+        app = self._build_app(rclone, workers=1)
+        cache = app.folder_cache
+
+        with cache._lock:
+            cache._advance_page_time(100.0)
+            for _ in range(10):
+                cache._record_dispatched(100.0)
+            for _ in range(3):
+                cache._record_completed(100.0)
+            cache._advance_page_time(200.0)
+            cache._record_dispatched(200.0)
+
+        self.assertEqual(cache.current_progress(), (0, 1))
+        self.assertEqual(cache._progress_text_for_epoch(100.0), "3/10]")
+
     def test_batch_delete_local_only_runs_per_file(self) -> None:
         local_root = self.create_local_root({
             "local.txt": b"local",
@@ -1931,11 +2003,9 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         rclone = SimulatedRclone({
             "dropbox:": [
                 SimulatedLsjsonResponse(items=[]),
-                SimulatedLsjsonResponse(items=[]),
                 SimulatedLsjsonResponse(items=[remote_dir_item("local-folder")]),
             ],
             "dropbox:local-folder": [
-                SimulatedLsjsonResponse(items=[]),
                 SimulatedLsjsonResponse(items=[]),
             ],
         })
@@ -1960,7 +2030,7 @@ class AppBehaviorTests(IsolatedPathsTestCase):
         self.assertEqual(result["status"], "complete")
         folder_row = html.split('<span class="entry-name">local-folder</span></a></td>', 1)[1].split("</tr>", 1)[0]
         self.assertNotIn("Local Only", folder_row)
-        self.assertGreaterEqual(sum(1 for call in rclone.calls if call["target"] == "dropbox:"), 3)
+        self.assertGreaterEqual(sum(1 for call in rclone.calls if call["target"] == "dropbox:"), 2)
 
     def test_recursive_batch_delete_removes_nested_local_only_folders_after_children(self) -> None:
         local_root = self.create_local_root({

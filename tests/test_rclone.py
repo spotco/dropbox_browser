@@ -19,6 +19,24 @@ class FakeCatProcess:
 
 
 class RcloneLoggingTests(unittest.TestCase):
+    def test_lsjson_progress_context_adds_plan_progress_to_log(self) -> None:
+        completed = subprocess.CompletedProcess(["rclone"], 0, b"[]", b"")
+        with (
+            patch("dropbox_browser.rclone.subprocess.run", return_value=completed),
+            patch("dropbox_browser.rclone.logstore.append", return_value=11),
+            patch("dropbox_browser.rclone.logstore.update") as update_mock,
+            patch("dropbox_browser.rclone.logoutput.log_start", return_value=22),
+            patch("dropbox_browser.rclone.logoutput.log_complete") as complete_mock,
+        ):
+            client = RcloneClient("rclone.exe", None)
+            with client.progress_context(lambda: "123/271 planned, 148 remaining] (Plan: 2026-05-18 15:41:21)"):
+                self.assertEqual(client.lsjson("dropbox:music"), [])
+
+        update_text = update_mock.call_args[0][1]
+        self.assertIn("lsjson -- dropbox:music", update_text)
+        self.assertIn("123/271 planned, 148 remaining] (Plan: 2026-05-18 15:41:21)", update_text)
+        self.assertTrue(complete_mock.called)
+
     def test_cat_stream_logs_start_and_completion(self) -> None:
         process = FakeCatProcess()
         with (

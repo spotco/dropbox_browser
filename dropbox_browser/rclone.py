@@ -4,10 +4,11 @@ import json
 import shlex
 import threading
 import time
+from contextlib import contextmanager
 from http import HTTPStatus
 from pathlib import Path
 import subprocess
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from . import logoutput, logstore
 from .errors import BrowserError
@@ -57,6 +58,7 @@ class RcloneClient:
         # Optional callback returning (completed, dispatched) for the current page.
         # Set externally after construction.
         self.progress_fn: Callable[[], tuple[int, int]] | None = None
+        self._progress_context = threading.local()
         self._lsjson_inflight_guard = threading.Lock()
         self._lsjson_inflight: dict[str, dict[str, Any]] = {}
         self._stream_log_guard = threading.Lock()
@@ -98,6 +100,21 @@ class RcloneClient:
         if len(args) >= 3 and args[0] == "lsjson" and args[-2] == "--":
             return args[-1]
         return None
+
+    @contextmanager
+    def progress_context(self, progress_fn: Callable[[], str]) -> Iterator[None]:
+        previous = getattr(self._progress_context, "fn", None)
+        self._progress_context.fn = progress_fn
+        try:
+            yield
+        finally:
+            if previous is None:
+                try:
+                    del self._progress_context.fn
+                except AttributeError:
+                    pass
+            else:
+                self._progress_context.fn = previous
 
     def _run_cancelable(
         self,
@@ -194,12 +211,17 @@ class RcloneClient:
                 with self._lsjson_inflight_guard:
                     self._lsjson_inflight.pop(lsjson_target, None)
         elapsed = time.monotonic() - t0
-        if self.progress_fn:
+        context_progress_fn = getattr(self._progress_context, "fn", None)
+        if context_progress_fn is not None:
+            progress_str = context_progress_fn()
+            suffix = f"  [{elapsed:.2f}s, {progress_str}"
+        elif self.progress_fn:
             done, total = self.progress_fn()
             progress_str = f"{done}/{total}"
+            suffix = f"  [{elapsed:.2f}s, {progress_str}]"
         else:
             progress_str = ""
-        suffix = f"  [{elapsed:.2f}s" + (f", {progress_str}]" if progress_str else "]")
+            suffix = f"  [{elapsed:.2f}s]"
         self._log_complete(cmd, suffix, elapsed, logstore_id, logoutput_id)
         return result
 
