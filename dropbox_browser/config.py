@@ -10,6 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEMP_DIR = PROJECT_ROOT / "Temp"
 
 _APP_CONFIG_DEFAULTS: dict = {
+    "DropboxFolder": "./DropboxLocal",
     "RCloneConfig": "",
     "LogRcloneCommands": True,
     "LogHttpRequests": True,
@@ -20,13 +21,17 @@ _APP_CONFIG_DEFAULTS: dict = {
 }
 
 
+def _read_config_file(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
 def load_app_config() -> dict:
-    """Load config.json and return a dict merged with defaults."""
+    """Load config.json plus local overrides and return a dict merged with defaults."""
     result = dict(_APP_CONFIG_DEFAULTS)
-    pointer = PROJECT_ROOT / "config.json"
-    if pointer.exists():
-        data = json.loads(pointer.read_text(encoding="utf-8"))
-        result.update(data)
+    result.update(_read_config_file(PROJECT_ROOT / "config.json"))
+    result.update(_read_config_file(PROJECT_ROOT / "config_local.json"))
     return result
 
 
@@ -55,3 +60,14 @@ def find_default_config() -> str | None:
     if default is not None and resolved == default.resolve():
         return None  # matches rclone's own default; omit --config
     return str(resolved)
+
+
+def find_dropbox_folder(app_config: dict | None = None) -> Path:
+    config = app_config if app_config is not None else load_app_config()
+    value = str(config.get("DropboxFolder") or _APP_CONFIG_DEFAULTS["DropboxFolder"]).strip()
+    if not value:
+        value = _APP_CONFIG_DEFAULTS["DropboxFolder"]
+    expanded = Path(os.path.expandvars(value)).expanduser()
+    if not expanded.is_absolute():
+        expanded = PROJECT_ROOT / expanded
+    return expanded.resolve()

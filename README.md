@@ -18,6 +18,7 @@ Useful `config.json` settings in the repository root:
 
 ```json
 {
+  "DropboxFolder": "./DropboxLocal",
   "RCloneConfig": "%APPDATA%\\rclone\\rclone.conf",
   "LogRcloneCommands": true,
   "LogHttpRequests": true,
@@ -28,6 +29,10 @@ Useful `config.json` settings in the repository root:
 }
 ```
 
+- `DropboxFolder` is the local folder compared with Dropbox. Relative paths are
+  resolved from the repository root, and the default is `./DropboxLocal`.
+- `config_local.json`, when present, overrides `config.json` properties and is
+  ignored by git for machine-local settings.
 - `FolderCacheWorkers` controls the background folder metadata/diff worker pool.
 - `SyncJobWorkers` controls the browser-triggered sync/delete worker pool.
 - `FolderCacheTTLSeconds` and `ListingCacheTTLSeconds` tune cache freshness.
@@ -38,11 +43,11 @@ Useful `config.json` settings in the repository root:
 python dropbox_browser.py --remote dropbox:
 ```
 
-With a local folder comparison:
+Or use the bundled Windows scripts:
 
-```powershell
-python dropbox_browser.py --remote dropbox: --local-root "C:\path\to\local\folder"
-```
+- `run.bat` starts the server using `DropboxFolder` from `config.json`.
+- `run_select_folder.bat` opens a folder picker, writes the selected folder to
+  `DropboxFolder` in `config_local.json`, then starts the server.
 
 Then open:
 
@@ -57,7 +62,6 @@ Useful options:
 --port 8000
 --rclone .\rclone.exe
 --rclone-config C:\Users\you\AppData\Roaming\rclone\rclone.conf
---local-root C:\path\to\folder
 ```
 
 ## Safety Rules
