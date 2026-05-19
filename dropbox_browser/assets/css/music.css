@@ -1,0 +1,32 @@
+.music-player-stub {
+  align-items: center;
+  box-sizing: border-box;
+  display: flex;
+  gap: 16px;
+  height: 100%;
+  justify-content: space-between;
+  padding: 14px 16px;
+}
+.music-player-stub strong {
+  color: #e5edf6;
+  display: block;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+.music-player-stub span {
+  color: #8fa3b8;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 12px;
+}
+.music-player-controls {
+  display: flex;
+  gap: 8px;
+}
+.music-player-controls button {
+  background: #3a4a5e;
+  color: #c8d0db;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 12px;
+  padding: 6px 10px;
+}

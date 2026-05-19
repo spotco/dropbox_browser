@@ -54,9 +54,12 @@ class WebUiTests(AppTestCase):
         with TestServer(app) as server:
             html = server.get_text("/")
             css = server.get_text("/assets/app.css")
+            music_css = server.get_text("/assets/css/music.css")
             js = "\n".join([
                 server.get_text("/assets/js/settings.js"),
+                server.get_text("/assets/js/bottom-pane.js"),
                 server.get_text("/assets/js/log.js"),
+                server.get_text("/assets/js/music.js"),
                 server.get_text("/assets/js/refresh.js"),
                 server.get_text("/assets/js/sync.js"),
                 server.get_text("/assets/js/folder.js"),
@@ -65,8 +68,11 @@ class WebUiTests(AppTestCase):
         self.assertIn("<th>View</th>", html)
         self.assertIn("<th>Sync</th>", html)
         self.assertIn('<link rel="stylesheet" href="/assets/app.css">', html)
+        self.assertIn('<link rel="stylesheet" href="/assets/css/music.css">', html)
         self.assertIn('<script src="/assets/js/settings.js"></script>', html)
+        self.assertIn('<script src="/assets/js/bottom-pane.js"></script>', html)
         self.assertIn('<script src="/assets/js/log.js"></script>', html)
+        self.assertIn('<script src="/assets/js/music.js"></script>', html)
         self.assertIn('<script src="/assets/js/refresh.js"></script>', html)
         self.assertIn('<script src="/assets/js/sync.js"></script>', html)
         self.assertIn('<script src="/assets/js/folder.js"></script>', html)
@@ -110,7 +116,23 @@ class WebUiTests(AppTestCase):
         self.assertIn("body.has-log-panel", css)
         self.assertIn("padding-bottom: var(--log-panel-height)", css)
         self.assertIn('id="log-resizer"', html)
+        self.assertIn('id="bottom-pane-mode"', html)
+        self.assertIn('<option value="server-log">Server Log</option>', html)
+        self.assertIn('<option value="music-player">Music Player</option>', html)
+        self.assertIn('id="server-log-pane"', html)
+        self.assertIn('id="music-player-pane"', html)
+        self.assertIn('id="music-player-pane" class="bottom-pane-view hidden" data-pane-mode="music-player" hidden', html)
+        self.assertIn("Playback controls will appear here.", html)
         self.assertIn("Settings.get('log-height', defaultHeight)", js)
+        self.assertIn("var defaultMode = 'server-log'", js)
+        self.assertIn("Settings.get('bottom-pane-mode', defaultMode)", js)
+        self.assertIn("Settings.set('bottom-pane-mode', mode)", js)
+        self.assertIn("view.hidden = !selected", js)
+        self.assertIn("bottom-pane-mode-changed", js)
+        self.assertIn("data-pane-mode=\"music-player\"", html)
+        self.assertNotIn(".music-player-stub", css)
+        self.assertIn(".music-player-stub", music_css)
+        self.assertIn("data-player-ready", js)
         self.assertNotIn('onclick="toggleLog()"', html)
         self.assertNotIn("log-collapsed", js)
         self.assertIn("scrollLogToBottom();", js)
@@ -189,6 +211,11 @@ class WebUiTests(AppTestCase):
                 css_body = response.read()
                 css_headers = response.headers
                 css_status = response.status
+            music_css_request = Request(server.base_url + "/assets/css/music.css", method="HEAD")
+            with urlopen(music_css_request, timeout=5) as response:
+                music_css_body = response.read()
+                music_css_headers = response.headers
+                music_css_status = response.status
             js_request = Request(server.base_url + "/assets/js/sync.js", method="HEAD")
             with urlopen(js_request, timeout=5) as response:
                 js_body = response.read()
@@ -207,6 +234,10 @@ class WebUiTests(AppTestCase):
         self.assertEqual(css_body, b"")
         self.assertEqual(css_headers["Content-Type"], "text/css; charset=utf-8")
         self.assertGreater(int(css_headers["Content-Length"]), 0)
+        self.assertEqual(music_css_status, HTTPStatus.OK)
+        self.assertEqual(music_css_body, b"")
+        self.assertEqual(music_css_headers["Content-Type"], "text/css; charset=utf-8")
+        self.assertGreater(int(music_css_headers["Content-Length"]), 0)
         self.assertEqual(js_status, HTTPStatus.OK)
         self.assertEqual(js_body, b"")
         self.assertEqual(js_headers["Content-Type"], "application/javascript; charset=utf-8")

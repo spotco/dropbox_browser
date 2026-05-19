@@ -128,6 +128,10 @@ def _render_template(name: str, **values: str) -> str:
     return _template(name).substitute(values)
 
 
+def _render_static_template(name: str) -> str:
+    return _template(name).template
+
+
 def icon_for_entry(name: str, is_dir: bool) -> str:
     if is_dir:
         return FOLDER_ICON
@@ -210,6 +214,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         sort_size=sort_link("Size", "size"),
         sort_date=sort_link("Date", "date"),
         rows=rows or '<tr><td colspan="7" class="empty">This folder is empty.</td></tr>',
+        music_player_html=_render_static_template("music_player.html"),
         current_folder_attr=html.escape(rel_path, quote=True),
         current_sort_key_attr=html.escape(sort_key, quote=True),
         current_sort_direction_attr=html.escape(direction, quote=True),

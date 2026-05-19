@@ -418,22 +418,39 @@ button:disabled {
   user-select: none;
   flex-shrink: 0;
 }
+#bottom-pane-label {
+  color: #8fa3b8;
+  font-size: 11px;
+  font-weight: bold;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+#bottom-pane-mode {
+  background: #1a1f2e;
+  border: 1px solid #3a4a5e;
+  border-radius: 4px;
+  color: #c8d0db;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 12px;
+  padding: 3px 24px 3px 8px;
+}
 #log-grip {
   color: #607080;
   cursor: ns-resize;
   font-size: 10px;
   text-transform: uppercase;
 }
-#log-title {
-  font-weight: bold;
-  font-size: 11px;
-  color: #8fa3b8;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+.bottom-pane-view {
+  flex: 1;
+  min-height: 0;
+}
+.bottom-pane-view.hidden {
+  display: none;
 }
 #log-entries {
   overflow-y: auto;
-  flex: 1;
+  height: 100%;
+  box-sizing: border-box;
   padding: 4px 12px 6px;
 }
 .log-entry {

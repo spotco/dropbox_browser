@@ -55,6 +55,9 @@
   resizer.addEventListener('pointerdown', startResize);
   grip.addEventListener('pointerdown', startResize);
   window.addEventListener('resize', function () { applyHeight(panel.getBoundingClientRect().height); });
+  window.addEventListener('bottom-pane-mode-changed', function (ev) {
+    if (ev.detail && ev.detail.mode === 'server-log') scrollLogToBottom();
+  });
 
   var nextIndex = 0;
   var nextUpdateSeq = 0;
