@@ -157,16 +157,31 @@ Useful checks:
 python -m py_compile dropbox_browser.py
 python -m compileall -q dropbox_browser.py dropbox_browser
 python dropbox_browser.py --help
+python -m tests.run --list
+python -m tests.run <relevant-group> -v
 python -m unittest discover -s tests -v
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/ -TimeoutSec 30
 ```
 
-The background-worker regression suite lives under `tests/` and uses a fake
-`rclone` implementation rather than the real binary. The main coverage file is
-`tests/test_app_behavior.py`; it exercises normal page loads, `/folder-info`
-polling, slow background listings, page changes during in-flight work,
-background worker failures, common diff cases, and regressions where diff
-status completes before recursive folder metadata is actually complete.
+The unit tests live under `tests/` and use fake `rclone` implementations rather
+than the real binary. The app-level tests are split into focused files and can
+be run by group with `python -m tests.run`. Use `python -m tests.run --list` to
+see available groups such as `web`, `streaming`, `file-sync`,
+`background-file-info`, `diff`, `cache`, `names`, and `rclone`.
+
+During normal feature work, run the smallest relevant test group or specific
+test case that covers the change. Prefer grouped runs such as:
+
+```powershell
+python -m tests.run web
+python -m tests.run file-sync
+python -m tests.run background-file-info
+python -m tests.run rclone
+```
+
+Run the full suite with `python -m unittest discover -s tests -v` before a
+checkin/commit, before handing off broad cross-cutting changes, or when the
+change touches shared helpers used by multiple groups.
 
 When a new regression is found, add a focused unit test for it before applying
 the fix:
@@ -176,7 +191,8 @@ the fix:
 2. Run that specific test and verify it fails for the expected reason.
 3. Apply the smallest fix that addresses the regression.
 4. Run the specific regression test again and verify it passes.
-5. Run the full suite with `python -m unittest discover -s tests -v`.
+5. Run the relevant test group. Run the full suite before checkin/commit or
+   for broad/shared changes.
 
 Do not rely only on browser/manual verification for regressions that can be
 represented in the stdlib test harness.

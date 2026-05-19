@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+import argparse
+import sys
+import unittest
+
+
+GROUPS: dict[str, list[str]] = {
+    "web": ["tests.test_web_ui"],
+    "ui": ["tests.test_web_ui"],
+    "javascript": ["tests.test_web_ui"],
+    "webpage": ["tests.test_web_ui"],
+    "streaming": ["tests.test_streaming", "tests.test_streaming_http"],
+    "streaming-http": ["tests.test_streaming_http"],
+    "file-sync": ["tests.test_sync_routes", "tests.test_syncjobs"],
+    "sync": ["tests.test_sync_routes", "tests.test_syncjobs"],
+    "sync-routes": ["tests.test_sync_routes"],
+    "sync-jobs": ["tests.test_syncjobs"],
+    "background": ["tests.test_folder_info_workers"],
+    "background-file-info": ["tests.test_folder_info_workers"],
+    "folder-info": ["tests.test_folder_info_workers"],
+    "foldercache": ["tests.test_folder_info_workers"],
+    "diff": ["tests.test_diff_status"],
+    "status": ["tests.test_diff_status"],
+    "cache": ["tests.test_cache_invalidation"],
+    "names": ["tests.test_listing_merge_names", "tests.test_windows_names"],
+    "windows-names": ["tests.test_listing_merge_names", "tests.test_windows_names"],
+    "rclone": ["tests.test_rclone"],
+}
+
+
+def _expand_groups(names: list[str]) -> list[str]:
+    modules: list[str] = []
+    seen: set[str] = set()
+    for name in names:
+        for part in name.split(","):
+            group = part.strip().lower()
+            if not group:
+                continue
+            if group == "all":
+                group_modules = sorted({module for values in GROUPS.values() for module in values})
+            else:
+                try:
+                    group_modules = GROUPS[group]
+                except KeyError as exc:
+                    choices = ", ".join(["all", *sorted(GROUPS)])
+                    raise SystemExit(f"Unknown test group {part!r}. Choices: {choices}") from exc
+            for module in group_modules:
+                if module not in seen:
+                    modules.append(module)
+                    seen.add(module)
+    return modules
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Run Dropbox browser unit test groups.")
+    parser.add_argument(
+        "groups",
+        nargs="*",
+        help="Test group names. Use commas or pass multiple groups. Defaults to all.",
+    )
+    parser.add_argument(
+        "-g",
+        "--group",
+        action="append",
+        default=[],
+        help="Test group name. May be passed more than once.",
+    )
+    parser.add_argument("--list", action="store_true", help="List available groups and exit.")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Use verbose unittest output.")
+    args = parser.parse_args(argv)
+
+    if args.list:
+        for group in sorted(GROUPS):
+            print(f"{group}: {', '.join(GROUPS[group])}")
+        return 0
+
+    requested = [*args.group, *args.groups] or ["all"]
+    modules = _expand_groups(requested)
+    loader = unittest.defaultTestLoader
+    suite = unittest.TestSuite(loader.loadTestsFromName(module) for module in modules)
+    result = unittest.TextTestRunner(verbosity=2 if args.verbose else 1).run(suite)
+    return 0 if result.wasSuccessful() else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
