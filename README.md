@@ -71,6 +71,25 @@ Useful options:
 - File sync, when enabled in the browser, is copy-only and may overwrite the
   selected destination file. It does not delete destination-only files.
 
+## Tests
+
+Run the full unit suite:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+Run grouped test categories:
+
+```powershell
+python -m tests.run --list
+python -m tests.run web rclone -v
+python -m tests.run --group file-sync --group background-file-info
+```
+
+Common groups include `web`, `streaming`, `file-sync`, `background-file-info`,
+`diff`, `cache`, `names`, and `rclone`.
+
 ## Known Bugs
 
 - Empty local-only folders do not sync to Dropbox because current sync operations
