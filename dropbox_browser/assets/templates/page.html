@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" type="image/svg+xml" href="${icon_base_url}box-favicon.svg">
   <link rel="stylesheet" href="/assets/app.css">
+  <link rel="stylesheet" href="/assets/css/music.css">
   <title>$page_title</title>
 </head>
 <body class="has-log-panel" data-current-folder-path="$current_folder_attr" data-current-sort-key="$current_sort_key_attr" data-current-sort-direction="$current_sort_direction_attr">
@@ -64,15 +65,24 @@
     </div>
   </div>
   <div id="log-panel">
-    <div id="log-resizer" title="Drag to resize server log"></div>
+    <div id="log-resizer" title="Drag to resize bottom pane"></div>
     <div id="log-toolbar">
       <span id="log-grip" aria-hidden="true">&#8942;</span>
-      <span id="log-title">Server Log</span>
+      <label for="bottom-pane-mode" id="bottom-pane-label">Pane</label>
+      <select id="bottom-pane-mode" aria-label="Bottom pane mode">
+        <option value="server-log">Server Log</option>
+        <option value="music-player">Music Player</option>
+      </select>
     </div>
-    <div id="log-entries"></div>
+    <div id="server-log-pane" class="bottom-pane-view" data-pane-mode="server-log">
+      <div id="log-entries"></div>
+    </div>
+    $music_player_html
   </div>
   <script src="/assets/js/settings.js"></script>
+  <script src="/assets/js/bottom-pane.js"></script>
   <script src="/assets/js/log.js"></script>
+  <script src="/assets/js/music.js"></script>
   <script src="/assets/js/refresh.js"></script>
   <script src="/assets/js/sync.js"></script>
   <script src="/assets/js/folder.js"></script>

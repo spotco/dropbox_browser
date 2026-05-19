@@ -361,7 +361,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         parts = Path(rel).parts
         if not parts or any(part in {"", ".", ".."} for part in parts):
             raise BrowserError(HTTPStatus.NOT_FOUND, "Not found.")
-        if parts == ("app.css",):
+        if parts == ("app.css",) or (len(parts) == 2 and parts[0] == "css" and parts[1].endswith(".css")):
             content_type = "text/css; charset=utf-8"
         elif len(parts) == 2 and parts[0] == "js" and parts[1].endswith(".js"):
             content_type = "application/javascript; charset=utf-8"
