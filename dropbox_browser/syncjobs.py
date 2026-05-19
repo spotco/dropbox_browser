@@ -19,10 +19,13 @@ Design decisions:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from http import HTTPStatus
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 import threading
 
+from .errors import BrowserError
+from .paths import remote_target
 from .priorityqueue import PriorityQueue
 from . import syncstate
 
@@ -53,6 +56,12 @@ class SyncShutdownJob:
 
 
 @dataclass
+class RemoteMkdirState:
+    event: threading.Event = field(default_factory=threading.Event)
+    error: Exception | None = None
+
+
+@dataclass
 class SyncGroup:
     total: int
     batch: bool
@@ -61,6 +70,7 @@ class SyncGroup:
     running: int = 0
     errors: list[str] = field(default_factory=list)
     touched_parents: set[str] = field(default_factory=set)
+    remote_mkdirs: dict[str, RemoteMkdirState] = field(default_factory=dict)
 
 
 def _job_message(kind: str, item: dict[str, str]) -> tuple[str, str]:
@@ -201,7 +211,7 @@ class SyncJobManager:
             )
         error_message: str | None = None
         try:
-            self.app.execute_sync_operation(job.kind, job.item)
+            self._execute_job_operation(job)
         except Exception as exc:
             if group.batch:
                 error_message = f"{job.item['path']}: {exc}"
@@ -241,3 +251,41 @@ class SyncJobManager:
                     syncstate.fail(job.op_id, group.errors[0])
             else:
                 syncstate.complete(job.op_id, group.success_message)
+
+    def _execute_job_operation(self, job: SyncJob) -> None:
+        if job.kind != "local_dir_to_dropbox":
+            self.app.execute_sync_operation(job.kind, job.item)
+            return
+
+        local_path = Path(job.item["local_path"])
+        if not local_path.is_dir():
+            raise BrowserError(HTTPStatus.NOT_FOUND, "Local folder not found.")
+        parts = [part for part in job.item["path"].split("/") if part]
+        for index in range(1, len(parts) + 1):
+            self._ensure_remote_mkdir_once(job.op_id, remote_target(self.app.remote, "/".join(parts[:index])))
+
+    def _ensure_remote_mkdir_once(self, op_id: str, target: str) -> None:
+        owner = False
+        with self._lock:
+            group = self._groups.get(op_id)
+            if group is None:
+                return
+            state = group.remote_mkdirs.get(target)
+            if state is None:
+                state = RemoteMkdirState()
+                group.remote_mkdirs[target] = state
+                owner = True
+
+        if owner:
+            try:
+                self.app.rclone.mkdir(target)
+            except Exception as exc:
+                state.error = exc
+                raise
+            finally:
+                state.event.set()
+            return
+
+        state.event.wait()
+        if state.error is not None:
+            raise state.error
