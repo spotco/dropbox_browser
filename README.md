@@ -90,6 +90,16 @@ python -m tests.run --group file-sync --group background-file-info
 Common groups include `web`, `streaming`, `file-sync`, `background-file-info`,
 `diff`, `cache`, `names`, and `rclone`.
 
+## Developer Notes
+
+Focused maintenance notes live under `docs/`:
+
+- `docs/architecture.md` - behavior and module ownership map.
+- `docs/background-workers.md` - folder-cache workers, diff status, sync jobs,
+  and trace logs.
+- `docs/windows-name-matching.md` - Windows-safe Dropbox/local filename rules.
+- `docs/testing.md` - grouped tests and regression workflow.
+
 ## Known Bugs
 
 - Empty local-only folders do not sync to Dropbox because current sync operations
