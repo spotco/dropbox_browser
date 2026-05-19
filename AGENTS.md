@@ -1,5 +1,43 @@
 # Agent Notes
 
+## TODO: Sync Progress Counters
+
+- Make console rclone progress match the browser sync job queue counter during
+  browser-triggered sync operations.
+- Current symptom: the browser popup can show sync progress such as
+  `[615/17780]`, while the console rclone log shows unrelated background folder
+  metadata progress such as `[194/194]`.
+- Analyze why these counters diverge before changing behavior. The likely cause
+  is that `RcloneClient.progress_fn` is wired to folder-cache progress globally,
+  while sync workers maintain their own operation counters in `syncstate` and
+  `SyncJobManager`.
+- During sync jobs, console rclone log prefixes should report the same current
+  and total values shown in the browser popup for that sync operation. Background
+  folder-cache operations should keep their own progress context.
+- Add regression coverage for the sync rclone log/progress context so future
+  changes cannot accidentally show folder-cache progress on sync commands.
+
+## TODO: Single-Pass Recursive Batch Planning
+
+- Remove the double recursive batch-plan calculation for browser batch sync.
+- Current flow: `/sync-batch-plan` calculates the plan for browser preview, then
+  `/sync-batch` recalculates the same plan before queueing jobs. On large trees
+  this makes the confirmed run appear to stall before any `mkdir` or `copyto`
+  commands start.
+- First analyze and propose a design, then get explicit human approval before
+  implementing. The design should preserve safety if the local or Dropbox tree
+  changes between preview and confirmation.
+- Preferred direction: let the preview request create a reusable plan token or
+  server-side plan record. The confirmation request should consume that exact
+  plan instead of recomputing it, with validation for action, path, recursive
+  flag, and sync direction gates.
+- Add browser feedback while the initial plan is being calculated. Use the same
+  side sync popup to show the latest planning command and planning progress
+  currently visible in the console, so the user can see that the preview plan is
+  actively scanning folders.
+- Add regression coverage for one-plan reuse, stale/invalid plan rejection, and
+  visible planning-progress updates.
+
 ## Overview
 
 This is a dependency-free Python Dropbox browser/downloader. It runs a local

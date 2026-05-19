@@ -488,6 +488,79 @@ class SyncRouteTests(AppTestCase):
         self.assertEqual(result["status"], "complete")
         self.assertTrue(any(call["args"][0] == "mkdir" and call["target"] == "dropbox:empty-local" for call in rclone.calls))
 
+    def test_recursive_batch_copy_local_to_dropbox_deduplicates_mkdir_ancestors(self) -> None:
+        local_root = self.create_local_root({
+            "a/b/c": None,
+            "a/b/d": None,
+            "a/e": None,
+        })
+        rclone = SimulatedRclone({
+            "dropbox:": [
+                SimulatedLsjsonResponse(items=[]),
+                SimulatedLsjsonResponse(items=[]),
+            ],
+            "dropbox:a": [
+                SimulatedLsjsonResponse(items=[]),
+                SimulatedLsjsonResponse(items=[]),
+            ],
+            "dropbox:a/b": [
+                SimulatedLsjsonResponse(items=[]),
+                SimulatedLsjsonResponse(items=[]),
+            ],
+            "dropbox:a/b/c": [
+                SimulatedLsjsonResponse(items=[]),
+                SimulatedLsjsonResponse(items=[]),
+            ],
+            "dropbox:a/b/d": [
+                SimulatedLsjsonResponse(items=[]),
+                SimulatedLsjsonResponse(items=[]),
+            ],
+            "dropbox:a/e": [
+                SimulatedLsjsonResponse(items=[]),
+                SimulatedLsjsonResponse(items=[]),
+            ],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1, sync_workers=4)
+
+        with TestServer(app) as server:
+            plan = server.post_json("/sync-batch-plan", {
+                "action": "local_to_dropbox_all",
+                "recursive": "1",
+                "enable_write_dropbox": "1",
+            })
+            payload = server.post_json("/sync-batch", {
+                "action": "local_to_dropbox_all",
+                "recursive": "1",
+                "enable_write_dropbox": "1",
+            })
+            result = wait_until(
+                lambda: server.get_json("/sync-status?id=" + payload["id"])
+                if server.get_json("/sync-status?id=" + payload["id"]).get("status") != "running"
+                else None,
+                description="deduplicated mkdir batch completion",
+            )
+
+        mkdir_targets = [
+            call["target"]
+            for call in rclone.calls
+            if call["args"][0] == "mkdir"
+        ]
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(
+            [item["path"] for item in plan["groups"]["local_dir_to_dropbox"]],
+            ["a/b/c", "a/b/d", "a/b", "a/e", "a"],
+        )
+        self.assertEqual(
+            sorted(mkdir_targets, key=str.casefold),
+            sorted({
+                "dropbox:a",
+                "dropbox:a/b",
+                "dropbox:a/b/c",
+                "dropbox:a/b/d",
+                "dropbox:a/e",
+            }, key=str.casefold),
+        )
+
     def test_recursive_local_to_dropbox_sync_invalidates_parent_listing_cache_for_new_folders(self) -> None:
         local_root = self.create_local_root({
             "local-folder/file.txt": b"local",
