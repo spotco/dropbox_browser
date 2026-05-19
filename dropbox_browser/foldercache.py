@@ -35,21 +35,25 @@ if TYPE_CHECKING:
 
 from .cacheio import write_json_atomic
 from .config import PROJECT_ROOT
-from .formatting import parse_rclone_time
-from .ignored import is_ignored_name
+from .foldercache_records import DIFF_CACHE_SCHEMA_VERSION, build_cache_record, validate_cache_record
+from .foldercache_state import FolderAccumulationState
+from .folderdiff import (
+    DIFF_DROPBOX_ONLY,
+    DIFF_HAS_DIFFS,
+    DIFF_LOADING,
+    DIFF_SYNCED,
+    DIFF_UNAVAILABLE,
+    compare_direct_children,
+    enumerate_local_children,
+)
+from .foldercache_compute import parse_direct_listing
 from .listingcache import ListingCacheManager
 from .priorityqueue import PriorityQueue
 from .rclone import RcloneCancelled, RcloneCancelToken
-from .windows_names import match_dropbox_names_to_local_names, resolve_matching_local_path
+from .windows_names import resolve_matching_local_path
 from . import workertrace
 
 CACHE_DIR = PROJECT_ROOT / "Cache" / "FolderInfo"
-DIFF_CACHE_SCHEMA_VERSION = 6
-DIFF_LOADING = "loading"
-DIFF_SYNCED = "synced"
-DIFF_HAS_DIFFS = "has_diffs"
-DIFF_DROPBOX_ONLY = "dropbox_only"
-DIFF_UNAVAILABLE = "unavailable"
 
 # Folders are intentionally processed breadth-first within each page load.
 # That discovers more direct child folders early, making the dispatched queue
@@ -130,17 +134,24 @@ class FolderCacheManager:
         # Progress counters for the current page (reset when _min_page_time advances).
         self._page_dispatched: int = 0
         self._page_completed: int = 0
-        self._progress_by_epoch: dict[float, dict[str, int]] = {}
-        self._acc: dict[str, dict] = {}
         # Maps path → page_time at which _compute last ran for it.
         # Used to avoid re-fetching a folder while its subtree is still being
         # accumulated in memory.
         self._direct_done: dict[str, float] = {}
-        self._pending_children: dict[str, set[str]] = {}
-        self._parent: dict[str, str] = {}
-        self._child_contrib: dict[str, dict] = {}
         self._generation: dict[str, int] = {}
         self._abandoned: set[str] = set()
+        self._progress_by_epoch: dict[float, dict[str, int]] = {}
+        self._state = FolderAccumulationState(
+            direct_done=self._direct_done,
+            abandoned=self._abandoned,
+            write_cache=self._write_cache,
+            note_diff=self._note_diff,
+            maybe_complete=self._maybe_complete,
+        )
+        self._acc = self._state.acc
+        self._pending_children = self._state.pending_children
+        self._parent = self._state.parent
+        self._child_contrib = self._state.child_contrib
         self._reschedule_after_cancel: dict[str, float] = {}
         self._shutdown = False
         self._workers: list[threading.Thread] = []
@@ -215,18 +226,12 @@ class FolderCacheManager:
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
             expected_local_root = str(self.local_root) if self.local_root is not None else None
-            if data.get("local_root") != expected_local_root:
-                return None
-            if self.local_root is not None and data.get("schema_version") != DIFF_CACHE_SCHEMA_VERSION:
-                return None
-            if data.get("complete") and data.get("diff_complete") and any(
-                (status or {}).get("diff_status") == DIFF_LOADING
-                for status in (data.get("file_statuses") or {}).values()
-            ):
-                return None
-            if data.get("complete") and time.time() - data.get("cached_at", 0) > self.ttl_seconds:
-                return None
-            return data
+            return validate_cache_record(
+                data,
+                expected_local_root=expected_local_root,
+                ttl_seconds=self.ttl_seconds,
+                now=time.time(),
+            )
         except Exception:
             return None
 
@@ -282,20 +287,13 @@ class FolderCacheManager:
     def _write_cache(self, remote_path: str, complete: bool) -> None:
         """Flush current accumulated state to disk.  Lock must be held."""
         acc = self._acc.get(remote_path, {})
-        data = {
-            "remote_path": remote_path,
-            "schema_version": DIFF_CACHE_SCHEMA_VERSION,
-            "local_root": str(self.local_root) if self.local_root is not None else None,
-            "size": acc.get("size", 0),
-            "file_count": acc.get("count", 0),
-            "newest_mtime": acc.get("mtime"),
-            "diff_status": acc.get("diff_status", DIFF_UNAVAILABLE if self.local_root is None else DIFF_LOADING),
-            "diff_complete": acc.get("diff_complete", self.local_root is None),
-            "first_diff_path": acc.get("first_diff_path"),
-            "file_statuses": acc.get("file_statuses", {}),
-            "complete": complete,
-            "cached_at": time.time(),
-        }
+        data = build_cache_record(
+            remote_path,
+            acc,
+            complete=complete,
+            local_root=str(self.local_root) if self.local_root is not None else None,
+            now=time.time(),
+        )
         write_json_atomic(self._cache_path(remote_path), data)
 
     def _trace(self, event: str, remote_path: str | None = None, **details: object) -> None:
@@ -599,8 +597,8 @@ class FolderCacheManager:
                     self._direct_done[remote_path] = latest_page_time
                     self._pending_children.setdefault(remote_path, set())
                     self._write_cache(remote_path, complete=True)
-                    self._propagate(remote_path)
-                    self._on_subtree_complete(remote_path)
+                    self._state.propagate(remote_path)
+                    self._state.on_subtree_complete(remote_path)
                     self._record_completed(latest_page_time)
                     self._trace_locked("job_failed", remote_path, page_epoch=latest_page_time)
                 self._trace(
@@ -664,99 +662,27 @@ class FolderCacheManager:
                 items = []
         self._trace("folder_listing_loaded", remote_path, page_epoch=page_time, source=listing_source, item_count=len(items))
 
-        direct_size = 0
-        direct_count = 0
-        direct_mtime: float | None = None
-        subfolders: list[str] = []
-        remote_children: dict[str, dict] = {}
+        direct_listing = parse_direct_listing(items, remote_path)
+        direct_size = direct_listing.direct_size
+        direct_count = direct_listing.direct_count
+        direct_mtime = direct_listing.direct_mtime
+        subfolders = direct_listing.subfolders
+        remote_children = direct_listing.remote_children
 
-        for item in items:
-            name = item.get("Name") or item.get("Path") or ""
-            if not name or "/" in name or is_ignored_name(name):
-                continue
-            remote_children[name] = item
-            t = parse_rclone_time(item.get("ModTime"))
-            if t and (direct_mtime is None or t > direct_mtime):
-                direct_mtime = t
-            if item.get("IsDir"):
-                sf_name = item.get("Path") or item.get("Name", "")
-                if sf_name:
-                    if remote_path.endswith(":"):
-                        subfolders.append(remote_path + sf_name)
-                    else:
-                        subfolders.append(remote_path.rstrip("/") + "/" + sf_name)
-            else:
-                sz = item.get("Size") or 0
-                if sz > 0:
-                    direct_size += sz
-                direct_count += 1
-
-        local_children: dict[str, Path] = {}
         local_folder = self._local_folder_for_remote(remote_path)
-        if local_folder is not None and local_folder.exists() and local_folder.is_dir():
-            try:
-                local_children = {
-                    child.name: child
-                    for child in local_folder.iterdir()
-                    if not is_ignored_name(child.name)
-                }
-            except OSError:
-                local_children = {}
-
         direct_diff_reason: str | None = None
         direct_diff_status = DIFF_HAS_DIFFS
         file_statuses: dict[str, dict] = {}
         if self.local_root is not None:
-            matches = match_dropbox_names_to_local_names(remote_children, local_children)
-            matched_local_names = set(matches.values())
-            missing_local = sorted((name for name in remote_children if name not in matches), key=str.casefold)
-            missing_remote = sorted((name for name in local_children if name not in matched_local_names), key=str.casefold)
-
-            def set_direct_diff(reason: str, status: str = DIFF_HAS_DIFFS) -> None:
-                nonlocal direct_diff_reason, direct_diff_status
-                if direct_diff_reason is None:
-                    direct_diff_reason = reason
-                    direct_diff_status = status
-
-            if local_folder is None or not local_folder.exists() or not local_folder.is_dir():
-                set_direct_diff("Dropbox only", DIFF_DROPBOX_ONLY)
-            if missing_local or missing_remote:
-                if missing_local and not missing_remote and not local_children:
-                    set_direct_diff("Dropbox only", DIFF_DROPBOX_ONLY)
-                elif missing_local:
-                    set_direct_diff(
-                        f"Dropbox only: {remote_children[missing_local[0]].get('Name') or remote_children[missing_local[0]].get('Path')}"
-                    )
-                elif missing_remote:
-                    set_direct_diff(f"Local only: {local_children[missing_remote[0]].name}")
-
-            for remote_name in sorted(matches, key=str.casefold):
-                item = remote_children[remote_name]
-                child = local_children[matches[remote_name]]
-                name = item.get("Name") or item.get("Path") or child.name
-                remote_is_dir = bool(item.get("IsDir"))
-                local_is_dir = child.is_dir()
-                if remote_is_dir != local_is_dir:
-                    set_direct_diff(f"Type differs: {name}")
-                    if not remote_is_dir:
-                        file_statuses[name] = {"diff_status": DIFF_HAS_DIFFS, "reason": f"Type differs: {name}"}
-                    continue
-                if remote_is_dir:
-                    continue
-                try:
-                    local_size = child.stat().st_size
-                except OSError:
-                    reason = f"Local unreadable: {name}"
-                    set_direct_diff(reason)
-                    file_statuses[name] = {"diff_status": DIFF_HAS_DIFFS, "reason": reason}
-                    continue
-                remote_size = item.get("Size") or 0
-                if remote_size != local_size:
-                    reason = f"Size differs: {name}"
-                    set_direct_diff(reason)
-                    file_statuses[name] = {"diff_status": DIFF_HAS_DIFFS, "reason": reason}
-                    continue
-                file_statuses[name] = {"diff_status": DIFF_SYNCED}
+            local_snapshot = enumerate_local_children(local_folder)
+            direct_diff = compare_direct_children(
+                remote_children,
+                local_snapshot.children,
+                local_folder_exists=local_snapshot.folder_exists,
+            )
+            direct_diff_reason = direct_diff.diff_reason
+            direct_diff_status = direct_diff.diff_status
+            file_statuses = direct_diff.file_statuses
 
         # Read cached data for subfolders *before* acquiring the lock.
         sf_cached: dict[str, dict | None] = {sf: self.get(sf) for sf in subfolders}
@@ -785,7 +711,7 @@ class FolderCacheManager:
 
             complete = len(subfolders) == 0
             self._write_cache(remote_path, complete=complete)
-            self._propagate(remote_path)
+            self._state.propagate(remote_path)
 
             # Register and (if needed) queue each subfolder.
             for sf in subfolders:
@@ -806,11 +732,11 @@ class FolderCacheManager:
                     }
                     self._direct_done[sf] = page_time
                     self._pending_children.setdefault(sf, set())
-                    self._propagate(sf)
+                    self._state.propagate(sf)
                     if cached.get("diff_status") in {DIFF_HAS_DIFFS, DIFF_DROPBOX_ONLY}:
                         self._note_diff(remote_path, cached.get("first_diff_path") or sf)
                     # sf is already fully done — do not add to pending_children.
-                    self._on_subtree_complete(sf)
+                    self._state.on_subtree_complete(sf)
                 else:
                     self._pending_children[remote_path].add(sf)
                     if (
@@ -824,10 +750,10 @@ class FolderCacheManager:
                         # already-complete contribution now so the parent does
                         # not wait forever for a completion callback that has
                         # already happened.
-                        self._propagate(sf)
+                        self._state.propagate(sf)
                         if self._acc.get(sf, {}).get("diff_status") in {DIFF_HAS_DIFFS, DIFF_DROPBOX_ONLY}:
                             self._note_diff(remote_path, self._acc[sf].get("first_diff_path") or sf)
-                        self._on_subtree_complete(sf)
+                        self._state.on_subtree_complete(sf)
                         continue
                     if sf in self._direct_done and not self._pending_children.get(sf):
                         # A previously canceled child can be left with direct
@@ -857,14 +783,6 @@ class FolderCacheManager:
     # ------------------------------------------------------------------
     # Propagation helpers  (all require lock to be held)
     # ------------------------------------------------------------------
-
-    def _has_diff_ancestor(self, path: str) -> bool:
-        current: str | None = path
-        while current:
-            if self._acc.get(current, {}).get("diff_status") in {DIFF_HAS_DIFFS, DIFF_DROPBOX_ONLY}:
-                return True
-            current = self._parent.get(current)
-        return False
 
     def _note_diff(self, path: str, reason: str, diff_status: str = DIFF_HAS_DIFFS) -> None:
         """Record completed diff status without forcing metadata completion."""
@@ -911,7 +829,7 @@ class FolderCacheManager:
             if path in self._direct_done and not self._pending_children.get(path):
                 self._write_cache(path, complete=True)
                 self._trace_locked("subtree_complete", path, diff_status=acc.get("diff_status"))
-                self._on_subtree_complete(path)
+                self._state.on_subtree_complete(path)
             else:
                 self._write_cache(path, complete=False)
             return
@@ -926,53 +844,4 @@ class FolderCacheManager:
             return
         self._write_cache(path, complete=True)
         self._trace_locked("subtree_complete", path, diff_status=acc.get("diff_status"))
-        self._on_subtree_complete(path)
-
-    def _propagate(self, path: str) -> None:
-        """Push this path's accumulated delta to its parent and recurse up."""
-        parent = self._parent.get(path)
-        if parent is None or parent not in self._acc:
-            return
-
-        old = self._child_contrib.get(path, {"size": 0, "count": 0, "mtime": None})
-        new = self._acc[path]
-
-        delta_size = new["size"] - old["size"]
-        delta_count = new["count"] - old["count"]
-
-        # Nothing changed — no need to propagate.
-        if delta_size == 0 and delta_count == 0 and new["mtime"] == old["mtime"]:
-            return
-
-        self._child_contrib[path] = {"size": new["size"], "count": new["count"], "mtime": new["mtime"]}
-
-        pacc = self._acc[parent]
-        pacc["size"] += delta_size
-        pacc["count"] += delta_count
-        if new["mtime"] is not None and (pacc["mtime"] is None or new["mtime"] > pacc["mtime"]):
-            pacc["mtime"] = new["mtime"]
-
-        parent_complete = (
-            parent in self._direct_done
-            and not self._pending_children.get(parent)
-            and parent not in self._abandoned
-        )
-        self._write_cache(parent, complete=parent_complete)
-        self._propagate(parent)
-
-    def _on_subtree_complete(self, path: str) -> None:
-        """Mark this path's subtree done; propagate completeness upward."""
-        parent = self._parent.get(path)
-        if parent is None:
-            return
-        pc = self._pending_children.get(parent)
-        if pc is None:
-            return
-        pc.discard(path)
-        if self._acc.get(path, {}).get("diff_status") in {DIFF_HAS_DIFFS, DIFF_DROPBOX_ONLY}:
-            self._note_diff(parent, self._acc[path].get("first_diff_path") or path)
-        if parent in self._direct_done and not pc:
-            if parent in self._abandoned:
-                self._write_cache(parent, complete=False)
-                return
-            self._maybe_complete(parent)
+        self._state.on_subtree_complete(path)
