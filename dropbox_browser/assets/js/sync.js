@@ -168,6 +168,35 @@
     setBaseDisabled(batchRun, !plan.total);
   }
 
+  function pollPlanStatus(id, fields) {
+    fetch('/sync-status?id=' + encodeURIComponent(id))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var progressText = data.current && data.total ? '[' + data.current + '/' + data.total + '] ' : '';
+        message.textContent = progressText + (data.message || 'Batch planning');
+        command.textContent = data.command || data.label || ('Preparing recursive scan for ' + (fields.path || '/'));
+        if (data.status === 'complete') {
+          if (!data.plan || !data.plan_token) throw new Error('Batch plan response was incomplete');
+          pendingBatch = Object.assign({}, fields, { plan_token: data.plan_token });
+          renderPlan(data.plan);
+          batchConfirm.classList.remove('hidden');
+          finishPopup(data.message || 'Batch plan complete', data.command || data.label || '', true);
+          setSyncBusy(false);
+          return;
+        }
+        if (data.status === 'error') {
+          finishPopup(data.message || 'Batch plan failed', data.command || data.label || '', false);
+          setSyncBusy(false);
+          return;
+        }
+        setTimeout(function () { pollPlanStatus(id, fields); }, 300);
+      })
+      .catch(function (err) {
+        finishPopup(err.message || 'Batch plan failed', '', false);
+        setSyncBusy(false);
+      });
+  }
+
   function openBatchConfirm(action) {
     var gates = gateParams();
     var fields = {
@@ -178,20 +207,17 @@
       enable_write_dropbox: gates.enable_write_dropbox
     };
     setSyncBusy(true);
+    showPopup('Batch planning', 'Preparing recursive scan for ' + (fields.path || '/'));
     fetch('/sync-batch-plan', { method: 'POST', body: formBody(fields) })
       .then(function (r) {
-        if (!r.ok) throw new Error('Could not build batch plan');
+        if (!r.ok) throw new Error('Could not start batch plan');
         return r.json();
       })
-      .then(function (plan) {
-        pendingBatch = fields;
-        renderPlan(plan);
-        batchConfirm.classList.remove('hidden');
+      .then(function (payload) {
+        pollPlanStatus(payload.id, fields);
       })
       .catch(function (err) {
         finishPopup(err.message || 'Batch plan failed', '', false);
-      })
-      .then(function () {
         setSyncBusy(false);
       });
   }

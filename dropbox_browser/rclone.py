@@ -5,6 +5,7 @@ import shlex
 import threading
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
 import subprocess
@@ -16,6 +17,12 @@ from .errors import BrowserError
 
 class RcloneCancelled(Exception):
     """Raised when a cancelable background rclone command is terminated."""
+
+
+class RcloneTimeoutError(BrowserError):
+    def __init__(self, message: str, attempts: int):
+        super().__init__(HTTPStatus.GATEWAY_TIMEOUT, message)
+        self.attempts = attempts
 
 
 class RcloneCancelToken:
@@ -50,11 +57,37 @@ class RcloneCancelToken:
                 pass
 
 
+@dataclass(frozen=True)
+class RcloneRetryPolicy:
+    max_attempts: int = 4
+    min_timeout: float = 10.0
+    timeout_per_gib: float = 20.0
+    max_initial_timeout: float = 300.0
+    timeout_multiplier: float = 2.0
+    max_timeout: float = 600.0
+    retry_sleep: tuple[float, ...] = (1.0, 2.0, 5.0)
+
+    def timeout_for_attempt(self, attempt: int, size_bytes: int | None = None) -> float:
+        size_gib = max(0, size_bytes or 0) / float(1024 ** 3)
+        initial = min(self.max_initial_timeout, self.min_timeout + self.timeout_per_gib * size_gib)
+        return min(self.max_timeout, initial * (self.timeout_multiplier ** max(0, attempt - 1)))
+
+    def sleep_before_attempt(self, attempt: int) -> float:
+        if attempt <= 1 or not self.retry_sleep:
+            return 0.0
+        index = min(attempt - 2, len(self.retry_sleep) - 1)
+        return self.retry_sleep[index]
+
+
+DEFAULT_WRITE_RETRY_POLICY = RcloneRetryPolicy()
+
+
 class RcloneClient:
     def __init__(self, executable: str, config: str | None, log_commands: bool = True):
         self.executable = executable
         self.config = config
         self.log_commands = log_commands
+        self.write_retry_policy = DEFAULT_WRITE_RETRY_POLICY
         # Optional callback returning (completed, dispatched) for the current page.
         # Set externally after construction.
         self.progress_fn: Callable[[], tuple[int, int]] | None = None
@@ -95,6 +128,11 @@ class RcloneClient:
         if self.log_commands:
             ts = time.strftime("%H:%M:%S")
             logoutput.log_plain(ts, msg)
+
+    def _log_retry_event(self, message: str) -> None:
+        logstore.append("rclone", message)
+        if self.log_commands:
+            logoutput.log_plain(time.strftime("%H:%M:%S"), message)
 
     def _lsjson_target(self, args: tuple[str, ...]) -> str | None:
         if len(args) >= 3 and args[0] == "lsjson" and args[-2] == "--":
@@ -148,11 +186,71 @@ class RcloneClient:
                 except OSError:
                     pass
 
+    def _run_with_retry(
+        self,
+        cmd: list[str],
+        input_file: Any | None,
+        policy: RcloneRetryPolicy,
+        size_bytes: int | None,
+        started_at: float,
+    ) -> tuple[subprocess.CompletedProcess[bytes], int]:
+        attempts = max(1, policy.max_attempts)
+        command_text = shlex.join(cmd)
+        last_timeout = 0.0
+        last_stderr = b""
+        for attempt in range(1, attempts + 1):
+            sleep_seconds = policy.sleep_before_attempt(attempt)
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
+            timeout = policy.timeout_for_attempt(attempt, size_bytes)
+            if attempt > 1:
+                self._log_retry_event(
+                    f"[retry attempt={attempt}/{attempts} timeout={timeout:.2f}s size={size_bytes or 0}B] {command_text}"
+                )
+            process = subprocess.Popen(
+                cmd,
+                stdin=input_file,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            try:
+                stdout, stderr = process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                last_timeout = timeout
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+                try:
+                    stdout, stderr = process.communicate()
+                except Exception:
+                    stderr = b""
+                last_stderr = stderr or b""
+                next_timeout = policy.timeout_for_attempt(attempt + 1, size_bytes) if attempt < attempts else 0.0
+                if attempt < attempts:
+                    self._log_retry_event(
+                        f"[{timeout:.2f}s timeout attempt={attempt}/{attempts} next={next_timeout:.2f}s "
+                        f"size={size_bytes or 0}B killed] {command_text}"
+                    )
+                    continue
+                stderr_text = last_stderr.decode("utf-8", "replace").strip()
+                detail = f": {stderr_text}" if stderr_text else ""
+                total_elapsed = time.monotonic() - started_at
+                raise RcloneTimeoutError(
+                    f"rclone timed out after {attempts} attempt(s), last timeout {last_timeout:.2f}s, "
+                    f"elapsed {total_elapsed:.2f}s{detail}",
+                    attempts,
+                )
+            return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr), attempt
+        raise BrowserError(HTTPStatus.GATEWAY_TIMEOUT, "rclone timed out before starting.")
+
     def run(
         self,
         *args: str,
         input_file: Any | None = None,
         cancel_token: RcloneCancelToken | None = None,
+        retry_policy: RcloneRetryPolicy | None = None,
+        size_bytes: int | None = None,
     ) -> subprocess.CompletedProcess[bytes]:
         lsjson_target = self._lsjson_target(args)
         if lsjson_target is not None and input_file is None and cancel_token is None:
@@ -176,9 +274,12 @@ class RcloneClient:
         cmd = self.command(*args)
         logstore_id, logoutput_id = self._log_start(cmd)
         t0 = time.monotonic()
+        attempt_count = 1
         try:
             if cancel_token is not None:
                 result = self._run_cancelable(cmd, input_file, cancel_token)
+            elif retry_policy is not None:
+                result, attempt_count = self._run_with_retry(cmd, input_file, retry_policy, size_bytes, t0)
             else:
                 result = subprocess.run(
                     cmd,
@@ -197,6 +298,13 @@ class RcloneClient:
                 inflight["error"] = exc
             elapsed = time.monotonic() - t0
             prefix = f"[{elapsed:.2f}s canceled]"
+            self._log_complete(cmd, prefix, elapsed, logstore_id, logoutput_id)
+            raise
+        except RcloneTimeoutError as exc:
+            if inflight is not None:
+                inflight["error"] = exc
+            elapsed = time.monotonic() - t0
+            prefix = f"[{elapsed:.2f}s timeout exhausted attempts={exc.attempts}]"
             self._log_complete(cmd, prefix, elapsed, logstore_id, logoutput_id)
             raise
         except Exception as exc:
@@ -222,6 +330,8 @@ class RcloneClient:
         else:
             progress_str = ""
             prefix = f"[{elapsed:.2f}s]"
+        if attempt_count > 1:
+            prefix = prefix[:-1] + f" attempt={attempt_count}/{max(1, (retry_policy or self.write_retry_policy).max_attempts)}]"
         self._log_complete(cmd, prefix, elapsed, logstore_id, logoutput_id)
         return result
 
@@ -238,14 +348,14 @@ class RcloneClient:
         proc = self.run("lsjson", "--", target)
         return proc.returncode == 0
 
-    def copy_file_overwrite(self, source: str | Path, destination: str | Path) -> None:
-        proc = self.run("copyto", "--", str(source), str(destination))
+    def copy_file_overwrite(self, source: str | Path, destination: str | Path, size_bytes: int | None = None) -> None:
+        proc = self.run("copyto", "--", str(source), str(destination), retry_policy=self.write_retry_policy, size_bytes=size_bytes)
         if proc.returncode != 0:
             message = proc.stderr.decode("utf-8", "replace").strip() or "File sync failed."
             raise BrowserError(HTTPStatus.BAD_GATEWAY, message)
 
     def mkdir(self, target: str) -> None:
-        proc = self.run("mkdir", "--", target)
+        proc = self.run("mkdir", "--", target, retry_policy=self.write_retry_policy, size_bytes=0)
         if proc.returncode != 0:
             message = proc.stderr.decode("utf-8", "replace").strip() or "Folder sync failed."
             raise BrowserError(HTTPStatus.BAD_GATEWAY, message)

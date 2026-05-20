@@ -174,7 +174,7 @@ class SimulatedRclone:
     def exists(self, target: str) -> bool:
         return target in self.cat_data
 
-    def copy_file_overwrite(self, source: str | Path, destination: str | Path) -> None:
+    def copy_file_overwrite(self, source: str | Path, destination: str | Path, size_bytes: int | None = None) -> None:
         self.run("copyto", "--", str(source), str(destination))
 
     def mkdir(self, target: str) -> None:

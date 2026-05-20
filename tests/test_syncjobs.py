@@ -120,7 +120,7 @@ class SyncJobIntegrationTests(IsolatedPathsTestCase):
         release = threading.Event()
         lock = threading.Lock()
 
-        def blocking_copy(source: str | Path, destination: str | Path) -> None:
+        def blocking_copy(source: str | Path, destination: str | Path, size_bytes: int | None = None) -> None:
             nonlocal active, max_active
             with lock:
                 active += 1
@@ -130,17 +130,29 @@ class SyncJobIntegrationTests(IsolatedPathsTestCase):
                     started_two.set()
             if not release.wait(5):
                 raise AssertionError("Timed out waiting to release copy jobs")
-            original_copy(source, destination)
+            original_copy(source, destination, size_bytes=size_bytes)
             with lock:
                 active -= 1
 
         rclone.copy_file_overwrite = blocking_copy  # type: ignore[method-assign]
 
         with TestServer(app) as server:
+            plan_payload = server.post_json("/sync-batch-plan", {
+                "action": "local_to_dropbox_all",
+                "recursive": "0",
+                "enable_write_dropbox": "1",
+            })
+            plan_status = wait_until(
+                lambda: server.get_json("/sync-status?id=" + plan_payload["id"])
+                if server.get_json("/sync-status?id=" + plan_payload["id"]).get("status") != "running"
+                else None,
+                description="parallel batch plan completion",
+            )
             payload = server.post_json("/sync-batch", {
                 "action": "local_to_dropbox_all",
                 "recursive": "0",
                 "enable_write_dropbox": "1",
+                "plan_token": plan_status["plan_token"],
             })
             wait_until(started_two.is_set, description="two copy jobs to start")
             release.set()
