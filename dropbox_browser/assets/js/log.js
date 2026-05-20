@@ -27,6 +27,20 @@
     return clamped;
   }
 
+  function musicMinHeight() {
+    var pane = document.getElementById('music-player-pane');
+    if (!pane) return minHeight;
+    var value = window.getComputedStyle(pane).getPropertyValue('--music-min-pane-height');
+    var parsed = parseInt(value, 10);
+    return isFinite(parsed) ? parsed : minHeight;
+  }
+
+  function ensureMusicPaneHeight() {
+    var current = panel.getBoundingClientRect().height;
+    var target = clampHeight(musicMinHeight());
+    if (current < target) applyHeight(target);
+  }
+
   applyHeight(Settings.get('log-height', defaultHeight));
 
   function startResize(ev) {
@@ -56,7 +70,9 @@
   grip.addEventListener('pointerdown', startResize);
   window.addEventListener('resize', function () { applyHeight(panel.getBoundingClientRect().height); });
   window.addEventListener('bottom-pane-mode-changed', function (ev) {
-    if (ev.detail && ev.detail.mode === 'server-log') scrollLogToBottom();
+    if (!ev.detail) return;
+    if (ev.detail.mode === 'music-player') ensureMusicPaneHeight();
+    if (ev.detail.mode === 'server-log') scrollLogToBottom();
   });
 
   var nextIndex = 0;

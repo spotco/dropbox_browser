@@ -1,13 +1,64 @@
 <div id="music-player-pane" class="bottom-pane-view hidden" data-pane-mode="music-player" hidden>
-  <div class="music-player-stub">
-    <div>
-      <strong>Music Player</strong>
-      <span>Playback controls will appear here.</span>
+  <div class="music-player-shell" aria-label="Music player">
+    <section id="music-library-pane" class="music-subpane music-library-pane" aria-labelledby="music-library-title">
+      <div class="music-subpane-header">
+        <h2 id="music-library-title">Folder Song Library</h2>
+        <button type="button" id="music-library-load">Load Current Folder Library</button>
+      </div>
+      <div id="music-library-status" class="music-library-status" role="status">
+        Library not loaded.
+      </div>
+      <div id="music-library-tree" class="music-library-tree" role="tree" tabindex="0">
+        <div class="music-empty-state">Load the current folder library to show cached songs.</div>
+      </div>
+    </section>
+
+    <section id="music-playlist-pane" class="music-subpane music-playlist-pane" aria-labelledby="music-playlist-title">
+      <div class="music-subpane-header">
+        <h2 id="music-playlist-title">Active Playlist</h2>
+      </div>
+      <div id="music-playlist-future-controls" class="music-playlist-future-controls" aria-label="Future playlist controls">
+        <button type="button" disabled>Name</button>
+        <button type="button" disabled>Save</button>
+        <button type="button" disabled>Load</button>
+      </div>
+      <div class="music-playlist-table" role="table" aria-label="Active playlist">
+        <div class="music-playlist-row music-playlist-heading" role="row">
+          <div role="columnheader">Filename</div>
+          <div role="columnheader">Relative Path</div>
+        </div>
+        <div id="music-playlist-list" class="music-playlist-list" role="rowgroup">
+          <div class="music-empty-state">Playlist is empty.</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="music-playback-pane" class="music-subpane music-playback-pane" aria-labelledby="music-playback-title">
+      <h2 id="music-playback-title">Playback Controls</h2>
+      <div class="music-now-playing">
+        <div id="music-art-placeholder" class="music-art-placeholder" aria-hidden="true"></div>
+        <div class="music-track-details">
+          <div id="music-current-filename" class="music-current-filename">No song selected</div>
+        </div>
+      </div>
+      <div class="music-player-controls" aria-label="Playback controls">
+        <button type="button" id="music-prev">Previous</button>
+        <button type="button" id="music-play">Play</button>
+        <button type="button" id="music-pause">Pause</button>
+        <button type="button" id="music-next">Next</button>
+        <button type="button" id="music-shuffle-toggle" aria-pressed="false">Order</button>
+        <button type="button" id="music-loop-toggle" aria-pressed="false">Loop</button>
+      </div>
+      <audio id="music-audio" preload="metadata"></audio>
+    </section>
+
+    <div id="music-library-context-menu" class="music-context-menu hidden" hidden>
+      <button type="button" data-action="add-selected">Add to playlist</button>
+      <button type="button" data-action="add-folder">Add cached songs in folder</button>
     </div>
-    <div class="music-player-controls" aria-hidden="true">
-      <button type="button" disabled>Previous</button>
-      <button type="button" disabled>Play</button>
-      <button type="button" disabled>Next</button>
+    <div id="music-playlist-context-menu" class="music-context-menu hidden" hidden>
+      <button type="button" data-action="play">Play</button>
+      <button type="button" data-action="remove">Remove</button>
     </div>
   </div>
 </div>
