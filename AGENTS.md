@@ -1,22 +1,3 @@
-# Agent Notes
-
-## TODO: Sync Progress Counters
-
-- Make console rclone progress match the browser sync job queue counter during
-  browser-triggered sync operations.
-- Current symptom: the browser popup can show sync progress such as
-  `[615/17780]`, while the console rclone log shows unrelated background folder
-  metadata progress such as `[194/194]`.
-- Analyze why these counters diverge before changing behavior. The likely cause
-  is that `RcloneClient.progress_fn` is wired to folder-cache progress globally,
-  while sync workers maintain their own operation counters in `syncstate` and
-  `SyncJobManager`.
-- During sync jobs, console rclone log prefixes should report the same current
-  and total values shown in the browser popup for that sync operation. Background
-  folder-cache operations should keep their own progress context.
-- Add regression coverage for the sync rclone log/progress context so future
-  changes cannot accidentally show folder-cache progress on sync commands.
-
 ## Overview
 
 This is a dependency-free Python Dropbox browser/downloader. It runs a local

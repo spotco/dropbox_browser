@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from pathlib import Path
+from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any
 import threading
 
@@ -211,7 +212,15 @@ class SyncJobManager:
             )
         error_message: str | None = None
         try:
-            self._execute_job_operation(job)
+            rclone = getattr(self.app, "rclone", None)
+            context_factory = getattr(rclone, "progress_context", None)
+            context = (
+                context_factory(lambda: self._progress_text(job.op_id))
+                if context_factory is not None
+                else nullcontext()
+            )
+            with context:
+                self._execute_job_operation(job)
         except Exception as exc:
             if group.batch:
                 error_message = f"{job.item['path']}: {exc}"
@@ -251,6 +260,15 @@ class SyncJobManager:
                     syncstate.fail(job.op_id, group.errors[0])
             else:
                 syncstate.complete(job.op_id, group.success_message)
+
+    def _progress_text(self, op_id: str) -> str:
+        with self._lock:
+            group = self._groups.get(op_id)
+            if group is None:
+                op = syncstate.get(op_id) or {}
+                return f"{int(op.get('current') or 0)}/{int(op.get('total') or 0)}]"
+            current = min(group.completed + group.running, group.total)
+            return f"{current}/{group.total}]"
 
     def _execute_job_operation(self, job: SyncJob) -> None:
         if job.kind != "local_dir_to_dropbox":

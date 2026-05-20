@@ -167,3 +167,41 @@ class SyncJobIntegrationTests(IsolatedPathsTestCase):
         self.assertGreaterEqual(max_active, 2)
         self.assertEqual((local_root / "batch-one.txt").read_bytes(), b"one")
         self.assertEqual((local_root / "batch-two.txt").read_bytes(), b"two")
+
+    def test_sync_rclone_progress_uses_sync_group_not_folder_cache_progress(self) -> None:
+        local_root = self.create_local_root({
+            "one.txt": b"one",
+            "two.txt": b"two",
+        })
+        rclone = SimulatedRclone()
+        rclone.progress_fn = lambda: (194, 194)
+        app = self._build_app(rclone, local_root=local_root, workers=1, sync_workers=1)
+
+        op_id = app.sync_jobs.submit(
+            "batch",
+            [
+                (
+                    "local_to_dropbox",
+                    {
+                        "path": "one.txt",
+                        "local_path": str(local_root / "one.txt"),
+                        "remote_path": "dropbox:one.txt",
+                    },
+                ),
+                (
+                    "local_to_dropbox",
+                    {
+                        "path": "two.txt",
+                        "local_path": str(local_root / "two.txt"),
+                        "remote_path": "dropbox:two.txt",
+                    },
+                ),
+            ],
+            batch=True,
+            success_message="Batch sync complete",
+        )
+
+        wait_until(lambda: syncstate.get(op_id) if (syncstate.get(op_id) or {}).get("status") == "complete" else None)
+
+        self.assertEqual(rclone.progress_snapshots, ["1/2]", "2/2]"])
+        self.assertNotIn("194/194]", rclone.progress_snapshots)

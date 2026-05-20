@@ -92,6 +92,14 @@ class SimulatedRclone:
                 "time": time.monotonic(),
             })
 
+    def _record_progress_snapshot(self) -> None:
+        progress_fn = getattr(self._progress_context, "fn", None)
+        if progress_fn is not None:
+            self.progress_snapshots.append(progress_fn())
+        elif self.progress_fn is not None:
+            done, total = self.progress_fn()
+            self.progress_snapshots.append(f"{done}/{total}]")
+
     def _wait(self, response: SimulatedLsjsonResponse, cancel_token: Any | None) -> None:
         if response.started_event is not None:
             response.started_event.set()
@@ -109,9 +117,7 @@ class SimulatedRclone:
         self._record_call(target, args, cancelable=cancel_token is not None)
         response = self._next_response(target)
         self._wait(response, cancel_token)
-        progress_fn = getattr(self._progress_context, "fn", None)
-        if progress_fn is not None:
-            self.progress_snapshots.append(progress_fn())
+        self._record_progress_snapshot()
         if response.exception is not None:
             raise response.exception
         return response
@@ -150,6 +156,7 @@ class SimulatedRclone:
             source = args[-2]
             destination = args[-1]
             self._record_call(destination, args, cancelable=cancel_token is not None)
+            self._record_progress_snapshot()
             source_path = Path(source)
             destination_path = Path(destination)
             if source_path.exists():
@@ -161,6 +168,7 @@ class SimulatedRclone:
         if args[0] == "mkdir":
             target = args[-1]
             self._record_call(target, args, cancelable=cancel_token is not None)
+            self._record_progress_snapshot()
             return CompletedProcess(list(args), 0, b"", b"")
         raise AssertionError(f"Unsupported simulated rclone command: {args!r}")
 
