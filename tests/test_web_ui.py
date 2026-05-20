@@ -112,6 +112,8 @@ class WebUiTests(AppTestCase):
         self.assertIn("body.sync-to-local-enabled .recursive-toggle", css)
         self.assertIn("body.sync-to-dropbox-enabled .recursive-toggle", css)
         self.assertIn("'[' + data.current + '/' + data.total + '] '", js)
+        self.assertIn("Preparing recursive scan for", js)
+        self.assertIn("pollPlanStatus(payload.id, fields)", js)
         self.assertIn("function scrollLogToBottom()", js)
         self.assertIn("body.has-log-panel", css)
         self.assertIn("padding-bottom: var(--log-panel-height)", css)

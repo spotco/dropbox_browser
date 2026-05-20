@@ -25,6 +25,23 @@ except ImportError:
 
 
 class SyncRouteTests(AppTestCase):
+    def _batch_plan(self, server: TestServer, fields: dict[str, str]) -> dict[str, Any]:
+        payload = server.post_json("/sync-batch-plan", fields)
+        return wait_until(
+            lambda: server.get_json("/sync-status?id=" + payload["id"])
+            if server.get_json("/sync-status?id=" + payload["id"]).get("status") != "running"
+            else None,
+            description="batch plan completion",
+        )
+
+    def _submit_batch_from_plan(self, server: TestServer, fields: dict[str, str]) -> tuple[dict[str, Any], dict[str, Any]]:
+        plan_status = self._batch_plan(server, fields)
+        self.assertEqual(plan_status["status"], "complete")
+        run_fields = dict(fields)
+        run_fields["plan_token"] = plan_status["plan_token"]
+        payload = server.post_json("/sync-batch", run_fields)
+        return payload, plan_status["plan"]
+
     def test_sync_post_requires_enabled_guard(self) -> None:
         local_root = self.create_local_root({
             "local.txt": b"local",
@@ -222,38 +239,155 @@ class SyncRouteTests(AppTestCase):
         app = self._build_app(rclone, local_root=local_root, workers=1)
 
         with TestServer(app) as server:
-            nonrecursive = server.post_json("/sync-batch-plan", {
+            nonrecursive = self._batch_plan(server, {
                 "action": "local_to_dropbox_all",
                 "recursive": "0",
                 "enable_write_dropbox": "1",
-            })
-            recursive = server.post_json("/sync-batch-plan", {
+            })["plan"]
+            recursive = self._batch_plan(server, {
                 "action": "local_to_dropbox_all",
                 "recursive": "1",
                 "enable_write_dropbox": "1",
-            })
-            delete_local = server.post_json("/sync-batch-plan", {
+            })["plan"]
+            delete_local = self._batch_plan(server, {
                 "action": "delete_local_only_all",
                 "recursive": "0",
                 "enable_to_local": "1",
-            })
-            copy_to_local = server.post_json("/sync-batch-plan", {
+            })["plan"]
+            copy_to_local = self._batch_plan(server, {
                 "action": "dropbox_only_to_local_all",
                 "recursive": "0",
                 "enable_to_local": "1",
-            })
-            copy_to_local_recursive = server.post_json("/sync-batch-plan", {
+            })["plan"]
+            copy_to_local_recursive = self._batch_plan(server, {
+                "action": "dropbox_only_to_local_all",
+                "recursive": "1",
+                "enable_to_local": "1",
+            })["plan"]
+
+        self.assertEqual([item["path"] for item in nonrecursive["groups"]["local_to_dropbox"]], ["changed.txt", "local.txt"])
+        self.assertEqual([item["size"] for item in nonrecursive["groups"]["local_to_dropbox"]], [5, 5])
+        self.assertEqual([item["path"] for item in recursive["groups"]["local_to_dropbox"]], ["child/local-child.txt", "changed.txt", "local.txt"])
+        self.assertEqual([item["path"] for item in delete_local["groups"]["delete_local"]], ["local.txt"])
+        self.assertEqual([item["path"] for item in copy_to_local["groups"]["dropbox_to_local"]], ["remote.txt"])
+        self.assertEqual([item["size"] for item in copy_to_local["groups"]["dropbox_to_local"]], [6])
+        self.assertEqual([item["path"] for item in copy_to_local_recursive["groups"]["dropbox_to_local"]], ["child/remote-child.txt", "remote.txt"])
+        self.assertNotIn(".DS_Store", str(nonrecursive))
+
+    def test_batch_plan_progress_is_visible_while_planning(self) -> None:
+        local_root = self.create_local_root({})
+        release = threading.Event()
+        started = threading.Event()
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[], wait_event=release, started_event=started)],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            payload = server.post_json("/sync-batch-plan", {
                 "action": "dropbox_only_to_local_all",
                 "recursive": "1",
                 "enable_to_local": "1",
             })
+            wait_until(started.is_set, description="batch planning lsjson start")
+            running = server.get_json("/sync-status?id=" + payload["id"])
+            release.set()
+            complete = wait_until(
+                lambda: server.get_json("/sync-status?id=" + payload["id"])
+                if server.get_json("/sync-status?id=" + payload["id"]).get("status") != "running"
+                else None,
+                description="visible planning completion",
+            )
 
-        self.assertEqual([item["path"] for item in nonrecursive["groups"]["local_to_dropbox"]], ["changed.txt", "local.txt"])
-        self.assertEqual([item["path"] for item in recursive["groups"]["local_to_dropbox"]], ["child/local-child.txt", "changed.txt", "local.txt"])
-        self.assertEqual([item["path"] for item in delete_local["groups"]["delete_local"]], ["local.txt"])
-        self.assertEqual([item["path"] for item in copy_to_local["groups"]["dropbox_to_local"]], ["remote.txt"])
-        self.assertEqual([item["path"] for item in copy_to_local_recursive["groups"]["dropbox_to_local"]], ["child/remote-child.txt", "remote.txt"])
-        self.assertNotIn(".DS_Store", str(nonrecursive))
+        self.assertEqual(running["status"], "running")
+        self.assertEqual(running["message"], "Batch planning")
+        self.assertIn("rclone lsjson -- dropbox:", running["command"])
+        self.assertEqual(running["current"], 1)
+        self.assertEqual(running["total"], 1)
+        self.assertEqual(complete["status"], "complete")
+        self.assertIn("plan_token", complete)
+
+    def test_sync_batch_consumes_preview_plan_without_recomputing(self) -> None:
+        local_root = self.create_local_root({"local.txt": b"local"})
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            payload, plan = self._submit_batch_from_plan(server, {
+                "action": "local_to_dropbox_all",
+                "recursive": "0",
+                "enable_write_dropbox": "1",
+            })
+            result = wait_until(
+                lambda: server.get_json("/sync-status?id=" + payload["id"])
+                if server.get_json("/sync-status?id=" + payload["id"]).get("status") != "running"
+                else None,
+                description="one-plan batch completion",
+            )
+
+        self.assertEqual([item["path"] for item in plan["groups"]["local_to_dropbox"]], ["local.txt"])
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(sum(1 for call in rclone.calls if call["args"][0] == "lsjson" and call["target"] == "dropbox:"), 1)
+        self.assertEqual(rclone.cat_data["dropbox:local.txt"], b"local")
+
+    def test_sync_batch_rejects_mismatched_plan_token(self) -> None:
+        local_root = self.create_local_root({"local.txt": b"local"})
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            plan_status = self._batch_plan(server, {
+                "action": "local_to_dropbox_all",
+                "recursive": "0",
+                "enable_write_dropbox": "1",
+            })
+            request = Request(
+                server.base_url + "/sync-batch",
+                data=(
+                    "action=local_to_dropbox_all&recursive=1&enable_write_dropbox=1&plan_token="
+                    + plan_status["plan_token"]
+                ).encode("utf-8"),
+                method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            with self.assertRaises(HTTPError) as ctx:
+                urlopen(request, timeout=5)
+
+        self.assertEqual(ctx.exception.code, 400)
+        ctx.exception.close()
+
+    def test_sync_batch_rejects_expired_plan_token(self) -> None:
+        local_root = self.create_local_root({"local.txt": b"local"})
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            plan_status = self._batch_plan(server, {
+                "action": "local_to_dropbox_all",
+                "recursive": "0",
+                "enable_write_dropbox": "1",
+            })
+            app.BATCH_PLAN_TTL_SECONDS = -1
+            request = Request(
+                server.base_url + "/sync-batch",
+                data=(
+                    "action=local_to_dropbox_all&recursive=0&enable_write_dropbox=1&plan_token="
+                    + plan_status["plan_token"]
+                ).encode("utf-8"),
+                method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            with self.assertRaises(HTTPError) as ctx:
+                urlopen(request, timeout=5)
+
+        self.assertEqual(ctx.exception.code, 400)
+        ctx.exception.close()
 
     def test_recursive_batch_plan_uses_sync_worker_concurrency(self) -> None:
         local_root = self.create_local_root({})
@@ -369,7 +503,7 @@ class SyncRouteTests(AppTestCase):
         app = self._build_app(rclone, local_root=local_root, workers=1)
 
         with TestServer(app) as server:
-            payload = server.post_json("/sync-batch", {
+            payload, _plan = self._submit_batch_from_plan(server, {
                 "action": "delete_local_only_all",
                 "recursive": "0",
                 "enable_to_local": "1",
@@ -405,7 +539,7 @@ class SyncRouteTests(AppTestCase):
         app = self._build_app(rclone, local_root=local_root, workers=1)
 
         with TestServer(app) as server:
-            payload = server.post_json("/sync-batch", {
+            payload, _plan = self._submit_batch_from_plan(server, {
                 "action": "dropbox_only_to_local_all",
                 "recursive": "0",
                 "enable_to_local": "1",
@@ -435,12 +569,7 @@ class SyncRouteTests(AppTestCase):
         app = self._build_app(rclone, local_root=local_root, workers=1)
 
         with TestServer(app) as server:
-            plan = server.post_json("/sync-batch-plan", {
-                "action": "dropbox_only_to_local_all",
-                "recursive": "1",
-                "enable_to_local": "1",
-            })
-            payload = server.post_json("/sync-batch", {
+            payload, plan = self._submit_batch_from_plan(server, {
                 "action": "dropbox_only_to_local_all",
                 "recursive": "1",
                 "enable_to_local": "1",
@@ -467,12 +596,7 @@ class SyncRouteTests(AppTestCase):
         app = self._build_app(rclone, local_root=local_root, workers=1)
 
         with TestServer(app) as server:
-            plan = server.post_json("/sync-batch-plan", {
-                "action": "local_to_dropbox_all",
-                "recursive": "1",
-                "enable_write_dropbox": "1",
-            })
-            payload = server.post_json("/sync-batch", {
+            payload, plan = self._submit_batch_from_plan(server, {
                 "action": "local_to_dropbox_all",
                 "recursive": "1",
                 "enable_write_dropbox": "1",
@@ -523,12 +647,7 @@ class SyncRouteTests(AppTestCase):
         app = self._build_app(rclone, local_root=local_root, workers=1, sync_workers=4)
 
         with TestServer(app) as server:
-            plan = server.post_json("/sync-batch-plan", {
-                "action": "local_to_dropbox_all",
-                "recursive": "1",
-                "enable_write_dropbox": "1",
-            })
-            payload = server.post_json("/sync-batch", {
+            payload, plan = self._submit_batch_from_plan(server, {
                 "action": "local_to_dropbox_all",
                 "recursive": "1",
                 "enable_write_dropbox": "1",
@@ -579,7 +698,7 @@ class SyncRouteTests(AppTestCase):
         app.listing_cache.set("dropbox:", [])
 
         with TestServer(app) as server:
-            payload = server.post_json("/sync-batch", {
+            payload, _plan = self._submit_batch_from_plan(server, {
                 "action": "local_to_dropbox_all",
                 "recursive": "1",
                 "enable_write_dropbox": "1",
@@ -615,12 +734,7 @@ class SyncRouteTests(AppTestCase):
         app = self._build_app(rclone, local_root=local_root, workers=1)
 
         with TestServer(app) as server:
-            plan = server.post_json("/sync-batch-plan", {
-                "action": "delete_local_only_all",
-                "recursive": "1",
-                "enable_to_local": "1",
-            })
-            payload = server.post_json("/sync-batch", {
+            payload, plan = self._submit_batch_from_plan(server, {
                 "action": "delete_local_only_all",
                 "recursive": "1",
                 "enable_to_local": "1",
@@ -650,16 +764,16 @@ class SyncRouteTests(AppTestCase):
         })
         original_copy = rclone.copy_file_overwrite
 
-        def flaky_copy(source: str | Path, destination: str | Path) -> None:
+        def flaky_copy(source: str | Path, destination: str | Path, size_bytes: int | None = None) -> None:
             if str(destination) == "dropbox:bad.txt":
                 raise BrowserError(HTTPStatus.BAD_GATEWAY, "planned failure")
-            original_copy(source, destination)
+            original_copy(source, destination, size_bytes=size_bytes)
 
         rclone.copy_file_overwrite = flaky_copy  # type: ignore[method-assign]
         app = self._build_app(rclone, local_root=local_root, workers=1)
 
         with TestServer(app) as server:
-            payload = server.post_json("/sync-batch", {
+            payload, _plan = self._submit_batch_from_plan(server, {
                 "action": "local_to_dropbox_all",
                 "recursive": "0",
                 "enable_write_dropbox": "1",

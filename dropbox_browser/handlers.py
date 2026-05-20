@@ -442,9 +442,9 @@ class RequestHandler(BaseHTTPRequestHandler):
         action = params.get("action", [""])[0]
         recursive = params.get("recursive", [""])[0] == "1"
         self._validate_batch_gate(action, params)
-        plan = self.app.plan_batch_sync(rel_path, action, recursive)
-        body = _json.dumps(plan).encode("utf-8")
-        self.send_response(HTTPStatus.OK)
+        op_id = self.app.start_batch_plan(rel_path, action, recursive)
+        body = _json.dumps({"id": op_id}).encode("utf-8")
+        self.send_response(HTTPStatus.ACCEPTED)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -455,8 +455,11 @@ class RequestHandler(BaseHTTPRequestHandler):
         rel_path = clean_rel_path(params.get("path", [""])[0])
         action = params.get("action", [""])[0]
         recursive = params.get("recursive", [""])[0] == "1"
+        plan_token = params.get("plan_token", [""])[0]
         self._validate_batch_gate(action, params)
-        plan = self.app.plan_batch_sync(rel_path, action, recursive)
+        if not plan_token:
+            raise BrowserError(HTTPStatus.BAD_REQUEST, "Batch plan token is required.")
+        plan = self.app.consume_batch_plan(plan_token, rel_path, action, recursive)
         label = f"{action.replace('_', ' ')}: {rel_path or '/'}"
         op_id = self.sync_jobs.submit(
             label,

@@ -5,7 +5,8 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
-from dropbox_browser.rclone import RcloneClient
+from dropbox_browser.errors import BrowserError
+from dropbox_browser.rclone import RcloneClient, RcloneRetryPolicy
 
 
 class FakeCatProcess:
@@ -18,7 +19,109 @@ class FakeCatProcess:
         return self.returncode
 
 
+class TimeoutThenSuccessProcess:
+    instances: list["TimeoutThenSuccessProcess"] = []
+
+    def __init__(self, cmd: list[str], stdin: object | None = None, stdout: object | None = None, stderr: object | None = None) -> None:
+        self.cmd = cmd
+        self.returncode = 0
+        self.killed = False
+        self.communicate_timeouts: list[float | None] = []
+        TimeoutThenSuccessProcess.instances.append(self)
+
+    def communicate(self, timeout: float | None = None) -> tuple[bytes, bytes]:
+        self.communicate_timeouts.append(timeout)
+        if len(TimeoutThenSuccessProcess.instances) == 1 and not self.killed:
+            raise subprocess.TimeoutExpired(self.cmd, timeout)
+        return b"", b""
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+
+
+class AlwaysTimeoutProcess:
+    instances: list["AlwaysTimeoutProcess"] = []
+
+    def __init__(self, cmd: list[str], stdin: object | None = None, stdout: object | None = None, stderr: object | None = None) -> None:
+        self.cmd = cmd
+        self.returncode = 0
+        self.killed = False
+        self.communicate_timeouts: list[float | None] = []
+        AlwaysTimeoutProcess.instances.append(self)
+
+    def communicate(self, timeout: float | None = None) -> tuple[bytes, bytes]:
+        self.communicate_timeouts.append(timeout)
+        if not self.killed:
+            raise subprocess.TimeoutExpired(self.cmd, timeout)
+        return b"", b""
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+
+
 class RcloneLoggingTests(unittest.TestCase):
+    def test_copyto_retries_after_timeout_without_waiting_full_timeout(self) -> None:
+        TimeoutThenSuccessProcess.instances = []
+        policy = RcloneRetryPolicy(
+            max_attempts=2,
+            min_timeout=0.01,
+            timeout_per_gib=0.02,
+            max_initial_timeout=1.0,
+            retry_sleep=(0.0,),
+        )
+        with (
+            patch("dropbox_browser.rclone.subprocess.Popen", side_effect=TimeoutThenSuccessProcess),
+            patch("dropbox_browser.rclone.logstore.append", return_value=11) as append_mock,
+            patch("dropbox_browser.rclone.logstore.update") as update_mock,
+            patch("dropbox_browser.rclone.logoutput.log_start", return_value=22),
+            patch("dropbox_browser.rclone.logoutput.log_complete"),
+            patch("dropbox_browser.rclone.logoutput.log_plain"),
+        ):
+            client = RcloneClient("rclone.exe", None)
+            client.write_retry_policy = policy
+            client.copy_file_overwrite("local.txt", "dropbox:local.txt", size_bytes=1024 ** 3)
+
+        self.assertEqual(len(TimeoutThenSuccessProcess.instances), 2)
+        self.assertTrue(TimeoutThenSuccessProcess.instances[0].killed)
+        self.assertAlmostEqual(TimeoutThenSuccessProcess.instances[0].communicate_timeouts[0] or 0, 0.03, places=3)
+        self.assertAlmostEqual(TimeoutThenSuccessProcess.instances[1].communicate_timeouts[0] or 0, 0.06, places=3)
+        appended_messages = [call.args[1] for call in append_mock.call_args_list]
+        self.assertTrue(any("timeout attempt=1/2" in message and "killed" in message for message in appended_messages))
+        self.assertTrue(any("retry attempt=2/2" in message and "timeout=0.06s" in message for message in appended_messages))
+        self.assertIn("attempt=2/2", update_mock.call_args[0][1])
+
+    def test_mkdir_timeout_exhaustion_raises_and_logs_retry_context(self) -> None:
+        AlwaysTimeoutProcess.instances = []
+        policy = RcloneRetryPolicy(
+            max_attempts=2,
+            min_timeout=0.01,
+            timeout_per_gib=0.0,
+            max_initial_timeout=1.0,
+            retry_sleep=(0.0,),
+        )
+        with (
+            patch("dropbox_browser.rclone.subprocess.Popen", side_effect=AlwaysTimeoutProcess),
+            patch("dropbox_browser.rclone.logstore.append", return_value=11) as append_mock,
+            patch("dropbox_browser.rclone.logstore.update") as update_mock,
+            patch("dropbox_browser.rclone.logoutput.log_start", return_value=22),
+            patch("dropbox_browser.rclone.logoutput.log_complete"),
+            patch("dropbox_browser.rclone.logoutput.log_plain"),
+        ):
+            client = RcloneClient("rclone.exe", None)
+            client.write_retry_policy = policy
+            with self.assertRaises(BrowserError) as ctx:
+                client.mkdir("dropbox:folder")
+
+        self.assertIn("timed out after 2 attempt", str(ctx.exception))
+        self.assertEqual(len(AlwaysTimeoutProcess.instances), 2)
+        self.assertTrue(all(process.killed for process in AlwaysTimeoutProcess.instances))
+        appended_messages = [call.args[1] for call in append_mock.call_args_list]
+        self.assertTrue(any("timeout attempt=1/2" in message for message in appended_messages))
+        self.assertTrue(any("retry attempt=2/2" in message for message in appended_messages))
+        self.assertIn("timeout exhausted", update_mock.call_args[0][1])
+
     def test_lsjson_progress_context_adds_plan_progress_to_log(self) -> None:
         completed = subprocess.CompletedProcess(["rclone"], 0, b"[]", b"")
         with (

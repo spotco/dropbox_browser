@@ -6,11 +6,13 @@ from datetime import datetime
 from http import HTTPStatus
 import shutil
 import time
+import uuid
 from pathlib import Path
 import threading
 from typing import Any
 from contextlib import nullcontext
 
+from . import syncstate
 from .errors import BrowserError
 from .formatting import file_type, parse_rclone_time
 from .ignored import is_ignored_name
@@ -57,8 +59,31 @@ class BatchPlanProgress:
             remaining = max(0, self.dispatched - current)
             return f"{current}/{self.dispatched} planned, {remaining} remaining] (Plan: {self.started_label})"
 
+    def snapshot(self) -> dict[str, int | str]:
+        with self.lock:
+            current = min(self.dispatched, self.completed + self.running)
+            remaining = max(0, self.dispatched - current)
+            return {
+                "current": current,
+                "total": self.dispatched,
+                "remaining": remaining,
+                "text": f"{current}/{self.dispatched} planned, {remaining} remaining] (Plan: {self.started_label})",
+            }
+
+
+@dataclass
+class StoredBatchPlan:
+    token: str
+    created_at: float
+    rel_path: str
+    action: str
+    recursive: bool
+    plan: dict[str, Any]
+
 
 class DropboxBrowser:
+    BATCH_PLAN_TTL_SECONDS = 15 * 60
+
     def __init__(self, rclone: RcloneClient, remote: str, local_root: Path | None, folder_cache: Any = None, listing_cache: ListingCacheManager | None = None):
         self.rclone = rclone
         self.remote = remote
@@ -66,6 +91,8 @@ class DropboxBrowser:
         self.folder_cache = folder_cache
         self.listing_cache = listing_cache
         self.sync_jobs: Any | None = None
+        self._batch_plan_lock = threading.Lock()
+        self._batch_plans: dict[str, StoredBatchPlan] = {}
 
     def shutdown(self) -> None:
         for manager in (self.folder_cache, self.sync_jobs):
@@ -280,6 +307,7 @@ class DropboxBrowser:
                     "path": child_path,
                     "local_path": row.get("local_path") or str(safe_join_local(self.local_root, child_path)),
                     "remote_path": remote_target(self.remote, child_path),
+                    "size": row.get("local_size") or 0,
                 })
             elif not row["local"]:
                 rows.append({
@@ -287,6 +315,7 @@ class DropboxBrowser:
                     "path": child_path,
                     "local_path": str(safe_join_local(self.local_root, child_path)),
                     "remote_path": remote_target(self.remote, child_path),
+                    "size": row.get("remote_size") or 0,
                 })
             elif (row.get("remote_size") or 0) != (row.get("local_size") or 0):
                 rows.append({
@@ -294,6 +323,8 @@ class DropboxBrowser:
                     "path": child_path,
                     "local_path": row.get("local_path") or str(safe_join_local(self.local_root, child_path)),
                     "remote_path": remote_target(self.remote, child_path),
+                    "local_size": row.get("local_size") or 0,
+                    "remote_size": row.get("remote_size") or 0,
                 })
         return rows
 
@@ -312,10 +343,19 @@ class DropboxBrowser:
             and cached.get("diff_status") == "synced"
         )
 
-    def _planning_lsjson(self, remote: str, progress: BatchPlanProgress | None) -> list[dict[str, Any]]:
+    def _planning_lsjson(self, remote: str, progress: BatchPlanProgress | None, status_id: str | None = None) -> list[dict[str, Any]]:
         if progress is None:
             return self.rclone.lsjson(remote)
         progress.start()
+        if status_id is not None:
+            snapshot = progress.snapshot()
+            syncstate.update(
+                status_id,
+                message="Batch planning",
+                command=f"rclone lsjson -- {remote}",
+                current=snapshot["current"],
+                total=snapshot["total"],
+            )
         context_factory = getattr(self.rclone, "progress_context", None)
         context = context_factory(progress.text) if context_factory is not None else nullcontext()
         try:
@@ -323,14 +363,23 @@ class DropboxBrowser:
                 return self.rclone.lsjson(remote)
         finally:
             progress.finish()
+            if status_id is not None:
+                snapshot = progress.snapshot()
+                syncstate.update(
+                    status_id,
+                    message="Batch planning",
+                    command=str(snapshot["text"]),
+                    current=snapshot["current"],
+                    total=snapshot["total"],
+                )
 
-    def _batch_scan(self, rel_path: str, progress: BatchPlanProgress | None = None) -> tuple[list[str], list[dict[str, Any]]]:
+    def _batch_scan(self, rel_path: str, progress: BatchPlanProgress | None = None, status_id: str | None = None) -> tuple[list[str], list[dict[str, Any]]]:
         if self._is_confirmed_synced_subtree(rel_path):
             return [], []
         remote = remote_target(self.remote, rel_path)
         local_folder = resolve_matching_local_path(self.local_root, rel_path) if self.local_root else None
         try:
-            remote_items = self._planning_lsjson(remote, progress)
+            remote_items = self._planning_lsjson(remote, progress, status_id=status_id)
         except BrowserError:
             if not (local_folder and local_folder.exists() and local_folder.is_dir()):
                 raise
@@ -364,16 +413,16 @@ class DropboxBrowser:
         paths.extend(local_children[name] for name in local_children if name not in set(matches.values()))
         return sorted(dict.fromkeys(paths), key=str.casefold)
 
-    def _batch_rows(self, rel_path: str, recursive: bool, workers: int = 1) -> list[dict[str, Any]]:
+    def _batch_rows(self, rel_path: str, recursive: bool, workers: int = 1, status_id: str | None = None) -> list[dict[str, Any]]:
         if recursive:
-            return self._batch_rows_parallel(rel_path, workers)
+            return self._batch_rows_parallel(rel_path, workers, status_id=status_id)
         return self._direct_batch_rows(rel_path)
 
-    def _batch_rows_parallel(self, rel_path: str, workers: int) -> list[dict[str, Any]]:
+    def _batch_rows_parallel(self, rel_path: str, workers: int, status_id: str | None = None) -> list[dict[str, Any]]:
         progress = BatchPlanProgress()
 
         def scan(path: str) -> tuple[str, list[str], list[dict[str, Any]]]:
-            children, rows = self._batch_scan(path, progress)
+            children, rows = self._batch_scan(path, progress, status_id=status_id)
             return path, children, rows
 
         results: dict[str, tuple[list[str], list[dict[str, Any]]]] = {}
@@ -407,13 +456,15 @@ class DropboxBrowser:
     def _sync_plan_workers(self) -> int:
         return max(1, int(getattr(self.sync_jobs, "worker_count", 1) or 1))
 
-    def plan_batch_sync(self, rel_path: str, action: str, recursive: bool) -> dict[str, Any]:
+    def plan_batch_sync(self, rel_path: str, action: str, recursive: bool, status_id: str | None = None) -> dict[str, Any]:
         if self.local_root is None:
             raise BrowserError(HTTPStatus.BAD_REQUEST, "Local comparison is not configured.")
         if action not in {"local_to_dropbox_all", "delete_local_only_all", "dropbox_only_to_local_all"}:
             raise BrowserError(HTTPStatus.BAD_REQUEST, "Unsupported batch sync action.")
 
-        rows = self._batch_rows(rel_path, recursive, workers=self._sync_plan_workers())
+        if status_id is not None:
+            syncstate.update(status_id, message="Batch planning", command=f"Planning {rel_path or '/'}")
+        rows = self._batch_rows(rel_path, recursive, workers=self._sync_plan_workers(), status_id=status_id)
         groups: dict[str, list[dict[str, str]]] = {
             "local_dir_to_dropbox": [],
             "local_to_dropbox": [],
@@ -431,6 +482,7 @@ class DropboxBrowser:
                 if row["status"] == "local_only_dir":
                     groups["local_dir_to_dropbox"].append(item)
                 elif row["status"] in {"local_only", "has_diffs"}:
+                    item["size"] = row.get("local_size", row.get("size", 0))
                     groups["local_to_dropbox"].append(item)
             elif action == "delete_local_only_all":
                 if row["status"] in {"local_only", "local_only_dir"}:
@@ -439,6 +491,7 @@ class DropboxBrowser:
                 if row["status"] == "dropbox_only_dir":
                     groups["dropbox_dir_to_local"].append(item)
                 elif row["status"] == "dropbox_only":
+                    item["size"] = row.get("remote_size", row.get("size", 0))
                     groups["dropbox_to_local"].append(item)
         return {
             "action": action,
@@ -446,6 +499,61 @@ class DropboxBrowser:
             "groups": groups,
             "total": sum(len(items) for items in groups.values()),
         }
+
+    def _cleanup_batch_plans_locked(self, now: float | None = None) -> None:
+        cutoff = (now if now is not None else time.time()) - self.BATCH_PLAN_TTL_SECONDS
+        for token, record in list(self._batch_plans.items()):
+            if record.created_at < cutoff:
+                self._batch_plans.pop(token, None)
+
+    def store_batch_plan(self, rel_path: str, action: str, recursive: bool, plan: dict[str, Any]) -> str:
+        token = uuid.uuid4().hex
+        with self._batch_plan_lock:
+            self._cleanup_batch_plans_locked()
+            self._batch_plans[token] = StoredBatchPlan(
+                token=token,
+                created_at=time.time(),
+                rel_path=rel_path,
+                action=action,
+                recursive=recursive,
+                plan=plan,
+            )
+        return token
+
+    def consume_batch_plan(self, token: str, rel_path: str, action: str, recursive: bool) -> dict[str, Any]:
+        with self._batch_plan_lock:
+            self._cleanup_batch_plans_locked()
+            record = self._batch_plans.pop(token, None)
+        if record is None:
+            raise BrowserError(HTTPStatus.BAD_REQUEST, "Batch plan is missing, expired, or already used.")
+        if record.rel_path != rel_path or record.action != action or record.recursive != recursive:
+            raise BrowserError(HTTPStatus.BAD_REQUEST, "Batch plan does not match the confirmed request.")
+        return record.plan
+
+    def start_batch_plan(self, rel_path: str, action: str, recursive: bool) -> str:
+        label = f"batch plan {action.replace('_', ' ')}: {rel_path or '/'}"
+        op_id = syncstate.start(label)
+        syncstate.update(
+            op_id,
+            percent=0,
+            current=0,
+            total=0,
+            message="Batch planning",
+            command=f"Preparing recursive scan for {rel_path or '/'}",
+        )
+
+        def run_plan() -> None:
+            try:
+                plan = self.plan_batch_sync(rel_path, action, recursive, status_id=op_id)
+                token = self.store_batch_plan(rel_path, action, recursive, plan)
+                syncstate.update(op_id, plan=plan, plan_token=token, total=plan["total"], command="")
+                syncstate.complete(op_id, "Batch plan complete")
+            except Exception as exc:
+                syncstate.fail(op_id, str(exc))
+
+        thread = threading.Thread(target=run_plan, daemon=True, name="sync-batch-plan")
+        thread.start()
+        return op_id
 
     def batch_sync_operations(self, plan: dict[str, Any]) -> list[tuple[str, dict[str, str]]]:
         operations: list[tuple[str, dict[str, str]]] = []
@@ -477,7 +585,8 @@ class DropboxBrowser:
         if kind == "local_to_dropbox":
             if not local_path.is_file():
                 raise BrowserError(HTTPStatus.NOT_FOUND, "Local file not found.")
-            self.rclone.copy_file_overwrite(local_path, remote_path)
+            size_bytes = int(item.get("size") or local_path.stat().st_size)
+            self.rclone.copy_file_overwrite(local_path, remote_path, size_bytes=size_bytes)
         elif kind == "local_dir_to_dropbox":
             if not local_path.is_dir():
                 raise BrowserError(HTTPStatus.NOT_FOUND, "Local folder not found.")
@@ -486,7 +595,8 @@ class DropboxBrowser:
                 self.rclone.mkdir(remote_target(self.remote, "/".join(parts[:index])))
         elif kind == "dropbox_to_local":
             local_path.parent.mkdir(parents=True, exist_ok=True)
-            self.rclone.copy_file_overwrite(remote_path, local_path)
+            size_bytes = int(item["size"]) if item.get("size") is not None else None
+            self.rclone.copy_file_overwrite(remote_path, local_path, size_bytes=size_bytes)
         elif kind == "dropbox_dir_to_local":
             local_path.mkdir(parents=True, exist_ok=True)
         elif kind == "delete_local":
