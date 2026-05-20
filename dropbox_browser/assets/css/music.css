@@ -193,6 +193,38 @@
   text-transform: uppercase;
 }
 
+.music-playlist-entry {
+  border-bottom: 1px solid #223247;
+  color: #d7e0ea;
+  font-size: 12px;
+}
+
+.music-playlist-entry:hover {
+  background: #23364c;
+}
+
+.music-playlist-entry.selected {
+  background: #263f59;
+}
+
+.music-playlist-entry.current {
+  outline: 1px solid #72a3c8;
+  outline-offset: -1px;
+}
+
+.music-playlist-entry.current > div:first-child::before {
+  content: "Playing: ";
+  color: #9fc6e4;
+  font-weight: 700;
+}
+
+.music-playlist-entry > div {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .music-playback-pane {
   padding: 8px;
 }

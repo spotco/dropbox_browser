@@ -118,55 +118,55 @@ player. Design details are summarized in `DESIGN_MUSICPLAYER.md`.
 
 ## Step 7 - Library Selection and Context Menu
 
-- [ ] Implement single selection for folders and songs.
-- [ ] Implement Ctrl-click/Cmd-click toggle selection.
-- [ ] Implement Shift-click range selection where practical.
-- [ ] Preserve selected rows when right-clicking an already selected row.
-- [ ] Add a library context menu.
-- [ ] Add `Add to playlist` for current selected folders/songs.
-- [ ] Add `Add cached songs in folder` for right-clicked folder rows.
-- [ ] Expand selected folders to all currently cached recursive songs already
+- [x] Implement single selection for folders and songs.
+- [x] Implement Ctrl-click/Cmd-click toggle selection.
+- [x] Implement Shift-click range selection where practical.
+- [x] Preserve selected rows when right-clicking an already selected row.
+- [x] Add a library context menu.
+- [x] Add `Add to playlist` for current selected folders/songs.
+- [x] Add `Add cached songs in folder` for right-clicked folder rows.
+- [x] Expand selected folders to all currently cached recursive songs already
   present in the library snapshot.
-- [ ] Dedupe additions by absolute remote path.
-- [ ] Do not trigger any server fetch solely for context-menu expansion.
+- [x] Dedupe additions by absolute remote path.
+- [x] Do not trigger any server fetch solely for context-menu expansion.
 
 ## Step 8 - Playlist State and Rendering
 
-- [ ] Implement an in-memory playlist array keyed by remote path.
-- [ ] Add songs from the library with filename, remote path, stream path, and
+- [x] Implement an in-memory playlist array keyed by remote path.
+- [x] Add songs from the library with filename, remote path, stream path, and
   root-context-relative display path.
-- [ ] Ignore duplicate remote paths while preserving the original row.
-- [ ] Render playlist columns for filename and relative path.
-- [ ] Keep row data structured so future columns can be added.
-- [ ] Implement playlist selection, including multi-select where sensible.
-- [ ] Add playlist context menu with `Play` and `Remove`.
-- [ ] Double-clicking a playlist row plays that song immediately.
-- [ ] Right-click `Play` plays the selected row immediately.
-- [ ] Removing the currently playing song skips to the next playable item.
-- [ ] Removing non-playing songs preserves the current song where possible.
+- [x] Ignore duplicate remote paths while preserving the original row.
+- [x] Render playlist columns for filename and relative path.
+- [x] Keep row data structured so future columns can be added.
+- [x] Implement playlist selection, including multi-select where sensible.
+- [x] Add playlist context menu with `Play` and `Remove`.
+- [x] Double-clicking a playlist row plays that song immediately.
+- [x] Right-click `Play` plays the selected row immediately.
+- [x] Removing the currently playing song skips to the next playable item.
+- [x] Removing non-playing songs preserves the current song where possible.
 
 ## Step 9 - Playback Engine
 
-- [ ] Use the existing `/file?path=<stream_path>&source=remote` route for audio
+- [x] Use the existing `/file?path=<stream_path>&source=remote` route for audio
   sources.
-- [ ] Implement play, pause, next, and previous.
-- [ ] Display the current song filename.
-- [ ] Highlight the currently playing playlist row.
-- [ ] Handle browser playback errors with a compact status message.
-- [ ] On song ended, advance according to shuffle/order and loop settings.
-- [ ] Do not create a new streaming, temp-file, or download route.
+- [x] Implement play, pause, next, and previous.
+- [x] Display the current song filename.
+- [x] Highlight the currently playing playlist row.
+- [x] Handle browser playback errors with a compact status message.
+- [x] On song ended, advance according to shuffle/order and loop settings.
+- [x] Do not create a new streaming, temp-file, or download route.
 
 ## Step 10 - Shuffle and Loop
 
-- [ ] Implement order mode as straight playlist order by default.
-- [ ] Implement shuffle-bag mode:
+- [x] Implement order mode as straight playlist order by default.
+- [x] Implement shuffle-bag mode:
   - every playlist item plays once before repeats;
   - playlist changes reset or reconcile the bag;
   - avoid immediate repeat when possible.
-- [ ] Implement playlist loop toggle.
-- [ ] Ensure loop means playlist loop only.
-- [ ] Do not implement single-song repeat.
-- [ ] Add focused client-level manual test notes or lightweight JS assertions if
+- [x] Implement playlist loop toggle.
+- [x] Ensure loop means playlist loop only.
+- [x] Do not implement single-song repeat.
+- [x] Add focused client-level manual test notes or lightweight JS assertions if
   the test harness supports them later.
 
 ## Step 11 - Test Pass
