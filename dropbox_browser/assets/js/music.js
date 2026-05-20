@@ -5,6 +5,17 @@
   var loadButton = document.getElementById('music-library-load');
   var statusEl = document.getElementById('music-library-status');
   var treeEl = document.getElementById('music-library-tree');
+  var playlistListEl = document.getElementById('music-playlist-list');
+  var libraryMenu = document.getElementById('music-library-context-menu');
+  var playlistMenu = document.getElementById('music-playlist-context-menu');
+  var audio = document.getElementById('music-audio');
+  var currentFilenameEl = document.getElementById('music-current-filename');
+  var playButton = document.getElementById('music-play');
+  var pauseButton = document.getElementById('music-pause');
+  var nextButton = document.getElementById('music-next');
+  var prevButton = document.getElementById('music-prev');
+  var shuffleButton = document.getElementById('music-shuffle-toggle');
+  var loopButton = document.getElementById('music-loop-toggle');
   var controls = pane.querySelector('.music-player-controls');
   var currentFolder = document.body.dataset.currentFolderPath || '';
   var pollDelayMs = 4000;
@@ -17,6 +28,16 @@
   var selectedIds = Object.create(null);
   var visibleNodeIds = [];
   var selectionAnchor = null;
+  var contextNodeId = null;
+  var playlist = [];
+  var playlistRemotePaths = Object.create(null);
+  var selectedPlaylistRemotePaths = Object.create(null);
+  var playlistSelectionAnchor = null;
+  var playlistContextRemotePath = null;
+  var currentPlaylistIndex = -1;
+  var shuffleEnabled = false;
+  var loopPlaylist = false;
+  var shuffleBag = [];
 
   pane.setAttribute('data-player-ready', 'library');
   if (controls) controls.setAttribute('data-controls-ready', 'markup');
@@ -83,6 +104,19 @@
     return map;
   }
 
+  function libraryNodesById() {
+    var nodes = Object.create(null);
+    if (!librarySnapshot) return nodes;
+    if (librarySnapshot.root) nodes[librarySnapshot.root.id] = librarySnapshot.root;
+    (librarySnapshot.folders || []).forEach(function (folder) {
+      nodes[folder.id] = folder;
+    });
+    (librarySnapshot.songs || []).forEach(function (song) {
+      nodes[song.id] = song;
+    });
+    return nodes;
+  }
+
   function nodeStillExists(snapshot, nodeId) {
     if (!snapshot) return false;
     if (snapshot.root && snapshot.root.id === nodeId) return true;
@@ -140,6 +174,9 @@
     row.addEventListener('click', function (ev) {
       selectNode(node.id, ev);
     });
+    row.addEventListener('contextmenu', function (ev) {
+      openLibraryContextMenu(ev, node.id, kind);
+    });
     return row;
   }
 
@@ -175,6 +212,367 @@
       row.setAttribute('aria-selected', selectedIds[row.dataset.nodeId] ? 'true' : 'false');
     });
     pane.dataset.librarySelectionCount = String(selectedCount());
+  }
+
+  function hideLibraryContextMenu() {
+    if (!libraryMenu) return;
+    libraryMenu.hidden = true;
+    libraryMenu.classList.add('hidden');
+    contextNodeId = null;
+  }
+
+  function hidePlaylistContextMenu() {
+    if (!playlistMenu) return;
+    playlistMenu.hidden = true;
+    playlistMenu.classList.add('hidden');
+    playlistContextRemotePath = null;
+  }
+
+  function openLibraryContextMenu(ev, nodeId, kind) {
+    ev.preventDefault();
+    if (!selectedIds[nodeId]) {
+      clearObject(selectedIds);
+      selectedIds[nodeId] = true;
+      selectionAnchor = nodeId;
+      renderSelection();
+    }
+    contextNodeId = nodeId;
+    if (!libraryMenu) return;
+    var folderButton = libraryMenu.querySelector('[data-action="add-folder"]');
+    if (folderButton) folderButton.hidden = kind !== 'folder';
+    libraryMenu.style.left = ev.clientX + 'px';
+    libraryMenu.style.top = ev.clientY + 'px';
+    libraryMenu.hidden = false;
+    libraryMenu.classList.remove('hidden');
+  }
+
+  function songsUnderFolder(folderId) {
+    if (!librarySnapshot) return [];
+    var foldersByParent = indexByParent(librarySnapshot.folders || []);
+    var songsByParent = indexByParent(librarySnapshot.songs || []);
+    var songs = [];
+
+    function collect(parentId) {
+      (songsByParent[parentId] || []).forEach(function (song) {
+        songs.push(song);
+      });
+      (foldersByParent[parentId] || []).forEach(function (folder) {
+        collect(folder.id);
+      });
+    }
+
+    collect(folderId);
+    return songs;
+  }
+
+  function selectedSongsForPlaylist() {
+    var nodes = libraryNodesById();
+    var songsByRemotePath = Object.create(null);
+    Object.keys(selectedIds).forEach(function (nodeId) {
+      var node = nodes[nodeId];
+      if (!node) return;
+      if (nodeId.indexOf('song:') === 0) {
+        songsByRemotePath[node.remote_path] = node;
+      } else {
+        songsUnderFolder(nodeId).forEach(function (song) {
+          songsByRemotePath[song.remote_path] = song;
+        });
+      }
+    });
+    return Object.keys(songsByRemotePath).map(function (remotePath) {
+      return songsByRemotePath[remotePath];
+    });
+  }
+
+  function addSongsToPlaylist(songs) {
+    var added = 0;
+    songs.forEach(function (song) {
+      if (!song.remote_path || playlistRemotePaths[song.remote_path]) return;
+      playlistRemotePaths[song.remote_path] = true;
+      playlist.push({
+        display_name: song.display_name,
+        rel_path: song.rel_path,
+        remote_path: song.remote_path,
+        stream_path: song.stream_path
+      });
+      added += 1;
+    });
+    if (added) resetShuffleBag();
+    renderPlaylist();
+    setStatus(added ? 'Added ' + added + ' cached song' + (added === 1 ? '' : 's') + ' to playlist.' : 'No new cached songs to add.');
+  }
+
+  function playlistIndexByRemotePath(remotePath) {
+    for (var i = 0; i < playlist.length; i += 1) {
+      if (playlist[i].remote_path === remotePath) return i;
+    }
+    return -1;
+  }
+
+  function playlistSelectedCount() {
+    return Object.keys(selectedPlaylistRemotePaths).length;
+  }
+
+  function streamUrl(song) {
+    return '/file?path=' + encodeURIComponent(song.stream_path) + '&source=remote';
+  }
+
+  function resetShuffleBag() {
+    shuffleBag = [];
+  }
+
+  function shuffleBagIndex() {
+    var available = [];
+    playlist.forEach(function (_song, index) {
+      if (index !== currentPlaylistIndex || playlist.length === 1) available.push(index);
+    });
+    shuffleBag = shuffleBag.filter(function (index) {
+      return index >= 0 && index < playlist.length && available.indexOf(index) !== -1;
+    });
+    if (shuffleBag.length === 0) {
+      shuffleBag = available.slice();
+    }
+    if (shuffleBag.length === 0) return -1;
+    var bagOffset = Math.floor(Math.random() * shuffleBag.length);
+    var next = shuffleBag[bagOffset];
+    shuffleBag.splice(bagOffset, 1);
+    return next;
+  }
+
+  function currentSong() {
+    return playlist[currentPlaylistIndex] || null;
+  }
+
+  function setPlaybackStatus(message) {
+    pane.dataset.playbackStatus = message || '';
+    if (message) setStatus(message);
+  }
+
+  function clearCurrentSong() {
+    currentPlaylistIndex = -1;
+    if (audio) {
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+    }
+    if (currentFilenameEl) currentFilenameEl.textContent = 'No song selected';
+    setPlaybackStatus('');
+  }
+
+  function playPlaylistIndex(index) {
+    var song = playlist[index];
+    if (!song) {
+      clearCurrentSong();
+      renderPlaylist();
+      return;
+    }
+    currentPlaylistIndex = index;
+    shuffleBag = shuffleBag.filter(function (bagIndex) { return bagIndex !== index; });
+    if (currentFilenameEl) currentFilenameEl.textContent = song.display_name || 'Unknown song';
+    setPlaybackStatus('');
+    if (audio) {
+      audio.src = streamUrl(song);
+      var playPromise = audio.play();
+      if (playPromise && typeof playPromise.catch === 'function') {
+        playPromise.catch(function (err) {
+          setPlaybackStatus((err && err.message) || 'Browser blocked playback until user interaction.');
+        });
+      }
+    }
+    renderPlaylist();
+  }
+
+  function playCurrentOrFirst() {
+    if (currentSong()) {
+      if (audio) {
+        var playPromise = audio.play();
+        if (playPromise && typeof playPromise.catch === 'function') {
+          playPromise.catch(function (err) {
+            setPlaybackStatus((err && err.message) || 'Browser blocked playback until user interaction.');
+          });
+        }
+      }
+      return;
+    }
+    if (playlist.length > 0) playPlaylistIndex(0);
+  }
+
+  function pausePlayback() {
+    if (audio) audio.pause();
+  }
+
+  function nextPlaylistIndex() {
+    if (playlist.length === 0) return -1;
+    if (shuffleEnabled) return shuffleBagIndex();
+    if (currentPlaylistIndex < 0) return 0;
+    if (currentPlaylistIndex + 1 < playlist.length) return currentPlaylistIndex + 1;
+    if (loopPlaylist) return 0;
+    return -1;
+  }
+
+  function previousPlaylistIndex() {
+    if (playlist.length === 0) return -1;
+    if (currentPlaylistIndex <= 0) return loopPlaylist ? playlist.length - 1 : 0;
+    return currentPlaylistIndex - 1;
+  }
+
+  function playNextSong() {
+    var index = nextPlaylistIndex();
+    if (index === -1) {
+      clearCurrentSong();
+      return;
+    }
+    playPlaylistIndex(index);
+  }
+
+  function playPreviousSong() {
+    var index = previousPlaylistIndex();
+    if (index !== -1) playPlaylistIndex(index);
+  }
+
+  function playPlaylistRemotePath(remotePath) {
+    var index = playlistIndexByRemotePath(remotePath);
+    if (index !== -1) playPlaylistIndex(index);
+  }
+
+  function selectPlaylistRemotePath(remotePath, ev) {
+    var index;
+    var start;
+    var remotePaths = playlist.map(function (song) { return song.remote_path; });
+    if (ev.shiftKey && playlistSelectionAnchor) {
+      index = remotePaths.indexOf(remotePath);
+      start = remotePaths.indexOf(playlistSelectionAnchor);
+      if (index !== -1 && start !== -1) {
+        clearObject(selectedPlaylistRemotePaths);
+        remotePaths.slice(Math.min(start, index), Math.max(start, index) + 1).forEach(function (path) {
+          selectedPlaylistRemotePaths[path] = true;
+        });
+      }
+    } else if (ev.ctrlKey || ev.metaKey) {
+      if (selectedPlaylistRemotePaths[remotePath]) delete selectedPlaylistRemotePaths[remotePath];
+      else selectedPlaylistRemotePaths[remotePath] = true;
+      playlistSelectionAnchor = remotePath;
+    } else {
+      clearObject(selectedPlaylistRemotePaths);
+      selectedPlaylistRemotePaths[remotePath] = true;
+      playlistSelectionAnchor = remotePath;
+    }
+    renderPlaylistSelection();
+  }
+
+  function renderPlaylistSelection() {
+    if (!playlistListEl) return;
+    Array.prototype.forEach.call(playlistListEl.querySelectorAll('.music-playlist-entry'), function (row) {
+      var selected = !!selectedPlaylistRemotePaths[row.dataset.remotePath];
+      row.classList.toggle('selected', selected);
+      row.setAttribute('aria-selected', selected ? 'true' : 'false');
+    });
+    pane.dataset.playlistSelectionCount = String(playlistSelectedCount());
+  }
+
+  function openPlaylistContextMenu(ev, remotePath) {
+    ev.preventDefault();
+    if (!selectedPlaylistRemotePaths[remotePath]) {
+      clearObject(selectedPlaylistRemotePaths);
+      selectedPlaylistRemotePaths[remotePath] = true;
+      playlistSelectionAnchor = remotePath;
+      renderPlaylistSelection();
+    }
+    playlistContextRemotePath = remotePath;
+    if (!playlistMenu) return;
+    playlistMenu.style.left = ev.clientX + 'px';
+    playlistMenu.style.top = ev.clientY + 'px';
+    playlistMenu.hidden = false;
+    playlistMenu.classList.remove('hidden');
+  }
+
+  function removeSelectedPlaylistSongs() {
+    var currentSong = playlist[currentPlaylistIndex] || null;
+    var currentRemotePath = currentSong ? currentSong.remote_path : null;
+    var removedCurrent = !!(currentRemotePath && selectedPlaylistRemotePaths[currentRemotePath]);
+    var oldCurrentIndex = currentPlaylistIndex;
+
+    playlist = playlist.filter(function (song) {
+      if (!selectedPlaylistRemotePaths[song.remote_path]) return true;
+      delete playlistRemotePaths[song.remote_path];
+      return false;
+    });
+    resetShuffleBag();
+    clearObject(selectedPlaylistRemotePaths);
+    playlistSelectionAnchor = null;
+
+    if (removedCurrent) {
+      if (playlist.length > 0) playPlaylistIndex(Math.min(oldCurrentIndex, playlist.length - 1));
+      else clearCurrentSong();
+    } else if (currentRemotePath) {
+      currentPlaylistIndex = playlistIndexByRemotePath(currentRemotePath);
+    }
+    renderPlaylist();
+  }
+
+  function updateModeButtons() {
+    if (shuffleButton) {
+      shuffleButton.setAttribute('aria-pressed', shuffleEnabled ? 'true' : 'false');
+      shuffleButton.textContent = shuffleEnabled ? 'Shuffle' : 'Order';
+    }
+    if (loopButton) {
+      loopButton.setAttribute('aria-pressed', loopPlaylist ? 'true' : 'false');
+      loopButton.textContent = loopPlaylist ? 'Loop On' : 'Loop';
+    }
+  }
+
+  function toggleShuffle() {
+    shuffleEnabled = !shuffleEnabled;
+    resetShuffleBag();
+    updateModeButtons();
+  }
+
+  function toggleLoopPlaylist() {
+    loopPlaylist = !loopPlaylist;
+    updateModeButtons();
+  }
+
+  function renderPlaylist() {
+    if (!playlistListEl) return;
+    playlistListEl.textContent = '';
+    if (playlist.length === 0) {
+      var empty = document.createElement('div');
+      empty.className = 'music-empty-state';
+      empty.textContent = 'Playlist is empty.';
+      playlistListEl.appendChild(empty);
+      return;
+    }
+    playlist.forEach(function (song, index) {
+      var row = document.createElement('div');
+      row.className = 'music-playlist-row music-playlist-entry';
+      row.setAttribute('role', 'row');
+      row.setAttribute('aria-selected', selectedPlaylistRemotePaths[song.remote_path] ? 'true' : 'false');
+      row.dataset.remotePath = song.remote_path;
+      row.dataset.streamPath = song.stream_path;
+      if (selectedPlaylistRemotePaths[song.remote_path]) row.classList.add('selected');
+      if (index === currentPlaylistIndex) row.classList.add('current');
+
+      var nameCell = document.createElement('div');
+      nameCell.setAttribute('role', 'cell');
+      nameCell.textContent = song.display_name || '';
+      row.appendChild(nameCell);
+
+      var pathCell = document.createElement('div');
+      pathCell.setAttribute('role', 'cell');
+      pathCell.textContent = song.rel_path || '';
+      row.appendChild(pathCell);
+      row.addEventListener('click', function (ev) {
+        selectPlaylistRemotePath(song.remote_path, ev);
+      });
+      row.addEventListener('dblclick', function () {
+        playPlaylistRemotePath(song.remote_path);
+      });
+      row.addEventListener('contextmenu', function (ev) {
+        openPlaylistContextMenu(ev, song.remote_path);
+      });
+      playlistListEl.appendChild(row);
+    });
+    renderPlaylistSelection();
   }
 
   function renderLibrary() {
@@ -277,6 +675,46 @@
     fetchLibrary(false);
   });
 
+  if (libraryMenu) {
+    libraryMenu.addEventListener('click', function (ev) {
+      var action = ev.target && ev.target.getAttribute('data-action');
+      if (action === 'add-selected') addSongsToPlaylist(selectedSongsForPlaylist());
+      if (action === 'add-folder' && contextNodeId) addSongsToPlaylist(songsUnderFolder(contextNodeId));
+      hideLibraryContextMenu();
+    });
+  }
+
+  if (playlistMenu) {
+    playlistMenu.addEventListener('click', function (ev) {
+      var action = ev.target && ev.target.getAttribute('data-action');
+      if (action === 'play') playPlaylistRemotePath(playlistContextRemotePath || Object.keys(selectedPlaylistRemotePaths)[0]);
+      if (action === 'remove') removeSelectedPlaylistSongs();
+      hidePlaylistContextMenu();
+    });
+  }
+
+  if (playButton) playButton.addEventListener('click', playCurrentOrFirst);
+  if (pauseButton) pauseButton.addEventListener('click', pausePlayback);
+  if (nextButton) nextButton.addEventListener('click', playNextSong);
+  if (prevButton) prevButton.addEventListener('click', playPreviousSong);
+  if (shuffleButton) shuffleButton.addEventListener('click', toggleShuffle);
+  if (loopButton) loopButton.addEventListener('click', toggleLoopPlaylist);
+  if (audio) {
+    audio.addEventListener('ended', playNextSong);
+    audio.addEventListener('error', function () {
+      setPlaybackStatus('Could not play this audio file.');
+    });
+  }
+
+  document.addEventListener('click', function () {
+    hideLibraryContextMenu();
+    hidePlaylistContextMenu();
+  });
+  window.addEventListener('blur', function () {
+    hideLibraryContextMenu();
+    hidePlaylistContextMenu();
+  });
+
   window.addEventListener('bottom-pane-mode-changed', function (ev) {
     if (!ev.detail) return;
     if (ev.detail.mode === 'music-player') schedulePoll();
@@ -285,4 +723,6 @@
 
   window.addEventListener('beforeunload', stopPolling);
   resetLibraryForCurrentFolder();
+  updateModeButtons();
+  renderPlaylist();
 }());
