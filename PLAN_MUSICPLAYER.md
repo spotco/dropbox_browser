@@ -169,7 +169,68 @@ player. Design details are summarized in `DESIGN_MUSICPLAYER.md`.
 - [x] Add focused client-level manual test notes or lightweight JS assertions if
   the test harness supports them later.
 
-## Step 11 - Test Pass
+## Step 11 - Folder Cache Direct File Metadata
+
+Add direct child file metadata to folder-cache records so the music library can
+use background worker results without depending only on `ListingCacheManager`
+TTL. This is a cross-app cache schema change, but the first consumer will be the
+music library endpoint.
+
+- [x] Read `docs/background-workers.md` before editing folder-cache code.
+- [x] Decide and document the record shape for a new direct-file metadata field,
+  tentatively `direct_files`.
+- [x] Store only direct child remote files for each folder-cache record, not a
+  recursive flattened list in this first change.
+- [x] Include enough metadata for music-player use:
+  - display filename;
+  - direct child name;
+  - folder-relative path segment;
+  - remote absolute path or app-relative stream path;
+  - extension;
+  - size;
+  - parsed mtime.
+- [x] Keep all file extensions in `direct_files`, not only supported audio,
+  because this field is intended for future non-music uses.
+- [x] Exclude ignored/system names using the same `is_ignored_name` path already
+  used by direct listing parsing.
+- [x] Add the field in `dropbox_browser/foldercache_compute.py` while parsing
+  direct `lsjson` results, so no extra `rclone` calls are needed.
+- [x] Store the parsed direct file list in the folder-cache accumulation state
+  for the current folder only.
+- [x] Include `direct_files` in `build_cache_record()` output.
+- [x] Include `direct_files` when reusing a complete child folder-cache record,
+  while making sure parent aggregation still does not treat direct child file
+  lists as recursive parent file lists.
+- [x] Bump `DIFF_CACHE_SCHEMA_VERSION` because old cache records do not contain
+  the new field.
+- [x] Update validation expectations so old complete records are rejected after
+  the schema bump where needed.
+- [x] Update folder-cache record/unit tests for serialization and validation.
+- [x] Update folder-cache worker tests to prove direct files are cached after a
+  worker processes a folder.
+- [x] Update `/music/endpoints/library` to prefer `folder_cache.get(remote_path)`
+  `direct_files` for child file/song data when direct listing cache is missing
+  or expired.
+- [x] Keep `/music/endpoints/library` non-blocking:
+  - do not call `app.list_entries()`;
+  - do not call `rclone`;
+  - do not call `folder_cache.request()`;
+  - do not wait for pending workers.
+- [x] Preserve existing `ListingCacheManager` traversal as a fallback or folder
+  discovery source until folder-cache direct metadata fully covers the library
+  tree.
+- [x] Update music endpoint status wording so folders with folder metadata but
+  no direct listing cache are not labeled misleadingly as fully unavailable.
+- [x] Add music endpoint tests proving songs can be returned from folder-cache
+  `direct_files` even when listing-cache entries are absent.
+- [x] Add tests proving no new `rclone` calls are made by the music endpoint
+  when using folder-cache direct file metadata.
+- [x] Run targeted tests:
+  `python -m tests.run music foldercache-records background-file-info -v`
+- [x] Run compile checks:
+  `python -m compileall -q dropbox_browser.py dropbox_browser`
+
+## Step 12 - Test Pass
 
 - [ ] Run server endpoint tests:
   `python -m unittest tests.test_music_endpoints -v`
@@ -184,7 +245,7 @@ player. Design details are summarized in `DESIGN_MUSICPLAYER.md`.
 - [ ] Run full suite before checkin or after broad shared changes:
   `python -m unittest discover -s tests -v`
 
-## Step 12 - Manual Browser Verification
+## Step 13 - Manual Browser Verification
 
 - [ ] Start locally with:
   `python dropbox_browser.py --remote dropbox:`
