@@ -21,6 +21,8 @@ class FolderCacheRecordTests(unittest.TestCase):
                 "diff_complete": True,
                 "first_diff_path": None,
                 "file_statuses": {"song.mp3": {"diff_status": "synced"}},
+                "direct_files": [{"name": "song.mp3", "remote_path": "dropbox:music/song.mp3"}],
+                "direct_folders": [{"name": "album", "remote_path": "dropbox:music/album"}],
             },
             complete=True,
             local_root="C:\\Music",
@@ -36,6 +38,8 @@ class FolderCacheRecordTests(unittest.TestCase):
         self.assertEqual(record["diff_status"], "synced")
         self.assertTrue(record["diff_complete"])
         self.assertEqual(record["file_statuses"], {"song.mp3": {"diff_status": "synced"}})
+        self.assertEqual(record["direct_files"], [{"name": "song.mp3", "remote_path": "dropbox:music/song.mp3"}])
+        self.assertEqual(record["direct_folders"], [{"name": "album", "remote_path": "dropbox:music/album"}])
         self.assertTrue(record["complete"])
         self.assertEqual(record["cached_at"], 1000.0)
 
@@ -45,6 +49,8 @@ class FolderCacheRecordTests(unittest.TestCase):
         self.assertEqual(record["diff_status"], "unavailable")
         self.assertTrue(record["diff_complete"])
         self.assertEqual(record["file_statuses"], {})
+        self.assertEqual(record["direct_files"], [])
+        self.assertEqual(record["direct_folders"], [])
 
     def test_build_cache_record_defaults_diff_state_when_local_root_is_enabled(self) -> None:
         record = build_cache_record("dropbox:", {}, complete=False, local_root="C:\\Sync", now=1000.0)
@@ -107,6 +113,16 @@ class FolderCacheRecordTests(unittest.TestCase):
         }
 
         self.assertIsNone(validate_cache_record(record, expected_local_root="C:\\Sync", ttl_seconds=10, now=1000.0))
+
+    def test_validate_cache_record_rejects_complete_remote_only_record_missing_direct_metadata(self) -> None:
+        record = {
+            "local_root": None,
+            "schema_version": DIFF_CACHE_SCHEMA_VERSION - 1,
+            "complete": True,
+            "cached_at": 1000.0,
+        }
+
+        self.assertIsNone(validate_cache_record(record, expected_local_root=None, ttl_seconds=10, now=1000.0))
 
     def test_validate_cache_record_rejects_complete_diff_with_loading_file_status(self) -> None:
         record = {

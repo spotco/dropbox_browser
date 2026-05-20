@@ -194,6 +194,7 @@ class WebUiTests(AppTestCase):
         self.assertIn("playlistRemotePaths[song.remote_path]", js)
         self.assertIn("function renderPlaylist()", js)
         self.assertIn("data-action=\"add-folder\"", html)
+        self.assertIn("node.metadata_cached ? 'files cached' : 'not cached'", js)
         self.assertIn("var playlistMenu = document.getElementById('music-playlist-context-menu')", js)
         self.assertIn("var selectedPlaylistRemotePaths = Object.create(null)", js)
         self.assertIn("function selectPlaylistRemotePath(remotePath, ev)", js)

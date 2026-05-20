@@ -668,6 +668,8 @@ class FolderCacheManager:
         direct_mtime = direct_listing.direct_mtime
         subfolders = direct_listing.subfolders
         remote_children = direct_listing.remote_children
+        direct_files = direct_listing.direct_files
+        direct_folders = direct_listing.direct_folders
 
         local_folder = self._local_folder_for_remote(remote_path)
         direct_diff_reason: str | None = None
@@ -701,6 +703,8 @@ class FolderCacheManager:
                 "diff_complete": self.local_root is None,
                 "first_diff_path": None,
                 "file_statuses": file_statuses,
+                "direct_files": direct_files,
+                "direct_folders": direct_folders,
             }
             self._direct_done[remote_path] = page_time
             self._pending_children[remote_path] = set()
@@ -729,6 +733,8 @@ class FolderCacheManager:
                         "diff_complete": cached.get("diff_complete", False),
                         "first_diff_path": cached.get("first_diff_path"),
                         "file_statuses": cached.get("file_statuses", {}),
+                        "direct_files": cached.get("direct_files", []),
+                        "direct_folders": cached.get("direct_folders", []),
                     }
                     self._direct_done[sf] = page_time
                     self._pending_children.setdefault(sf, set())

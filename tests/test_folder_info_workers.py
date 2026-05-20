@@ -61,6 +61,15 @@ class FolderInfoWorkerTests(AppTestCase):
         self.assertEqual(results["sub"]["diff_status"], "synced")
         self.assertTrue(results["sub"]["complete"])
         self.assertEqual(results[""]["file_statuses"]["shared.txt"]["diff_status"], "synced")
+        assert app.folder_cache is not None
+        root_cache = app.folder_cache.get("dropbox:") or {}
+        sub_cache = app.folder_cache.get("dropbox:sub") or {}
+        self.assertEqual(root_cache["direct_files"][0]["name"], "shared.txt")
+        self.assertEqual(root_cache["direct_files"][0]["remote_path"], "dropbox:shared.txt")
+        self.assertEqual(root_cache["direct_folders"][0]["name"], "sub")
+        self.assertEqual(root_cache["direct_folders"][0]["remote_path"], "dropbox:sub")
+        self.assertEqual(sub_cache["direct_files"][0]["name"], "child.txt")
+        self.assertEqual(sub_cache["direct_files"][0]["remote_path"], "dropbox:sub/child.txt")
         events = self.read_trace_events()
         self.assertTrue(any(event["event"] == "job_queued" for event in events))
         self.assertTrue(any(event["event"] == "subtree_complete" and event.get("remote_path") == "dropbox:sub" for event in events))

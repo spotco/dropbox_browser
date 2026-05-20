@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from .folderdiff import DIFF_LOADING, DIFF_UNAVAILABLE
 
-DIFF_CACHE_SCHEMA_VERSION = 6
+DIFF_CACHE_SCHEMA_VERSION = 8
 
 
 def build_cache_record(
@@ -26,6 +26,8 @@ def build_cache_record(
         "diff_complete": acc.get("diff_complete", local_root is None),
         "first_diff_path": acc.get("first_diff_path"),
         "file_statuses": acc.get("file_statuses", {}),
+        "direct_files": acc.get("direct_files", []),
+        "direct_folders": acc.get("direct_folders", []),
         "complete": complete,
         "cached_at": now,
     }
@@ -42,6 +44,10 @@ def validate_cache_record(
     if data.get("local_root") != expected_local_root:
         return None
     if expected_local_root is not None and data.get("schema_version") != DIFF_CACHE_SCHEMA_VERSION:
+        return None
+    if data.get("complete") and data.get("schema_version") != DIFF_CACHE_SCHEMA_VERSION:
+        return None
+    if data.get("complete") and ("direct_files" not in data or "direct_folders" not in data):
         return None
     if data.get("complete") and data.get("diff_complete") and any(
         (status or {}).get("diff_status") == DIFF_LOADING

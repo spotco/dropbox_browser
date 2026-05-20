@@ -167,7 +167,7 @@
     if (kind === 'folder' && node.listing_cached === false) {
       var badge = document.createElement('span');
       badge.className = 'music-tree-badge';
-      badge.textContent = 'not cached';
+      badge.textContent = node.metadata_cached ? 'files cached' : 'not cached';
       row.appendChild(badge);
     }
 
