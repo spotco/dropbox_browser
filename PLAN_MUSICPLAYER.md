@@ -11,57 +11,57 @@ player. Design details are summarized in `DESIGN_MUSICPLAYER.md`.
   points.
 - [x] Write `DESIGN_MUSICPLAYER.md`.
 - [x] Write this implementation plan.
-- [ ] Implement server endpoint module.
+- [x] Implement server endpoint module.
 - [ ] Implement client UI and playback behavior.
 - [ ] Add focused tests.
 - [ ] Run targeted checks.
 
 ## Step 1 - Server Endpoint Skeleton
 
-- [ ] Add `dropbox_browser/music.py`.
-- [ ] Define supported audio extensions: `.mp3`, `.m4a`, `.aac`, `.wav`.
-- [ ] Add a small dispatcher for `/music/endpoints/*` paths.
-- [ ] Register that dispatcher from `dropbox_browser/handlers.py` with a minimal
+- [x] Add `dropbox_browser/music.py`.
+- [x] Define supported audio extensions: `.mp3`, `.m4a`, `.aac`, `.wav`.
+- [x] Add a small dispatcher for `/music/endpoints/*` paths.
+- [x] Register that dispatcher from `dropbox_browser/handlers.py` with a minimal
   route check.
-- [ ] Return `404` for unknown music endpoint paths.
-- [ ] Return JSON using the same response conventions as existing JSON routes.
-- [ ] Add initial tests proving the route is registered and unknown music
+- [x] Return `404` for unknown music endpoint paths.
+- [x] Return JSON using the same response conventions as existing JSON routes.
+- [x] Add initial tests proving the route is registered and unknown music
   endpoints return `404`.
 
 ## Step 2 - Cached Library Builder
 
-- [ ] Implement `GET /music/endpoints/library?path=<rel-path>`.
-- [ ] Validate `path` with `clean_rel_path()`.
-- [ ] Build absolute root remote path with `remote_target(app.remote, rel_path)`.
-- [ ] Traverse cached direct listings from `app.listing_cache.get(remote_path)`
+- [x] Implement `GET /music/endpoints/library?path=<rel-path>`.
+- [x] Validate `path` with `clean_rel_path()`.
+- [x] Build absolute root remote path with `remote_target(app.remote, rel_path)`.
+- [x] Traverse cached direct listings from `app.listing_cache.get(remote_path)`
   only.
-- [ ] Do not call `app.list_entries()`.
-- [ ] Do not call `rclone`.
-- [ ] Do not call `folder_cache.request()`.
-- [ ] Stop traversal at folders whose direct listing is not currently cached.
-- [ ] Include only supported song extensions case-insensitively.
-- [ ] Return folder nodes with stable IDs, parent IDs, absolute remote paths,
+- [x] Do not call `app.list_entries()`.
+- [x] Do not call `rclone`.
+- [x] Do not call `folder_cache.request()`.
+- [x] Stop traversal at folders whose direct listing is not currently cached.
+- [x] Include only supported song extensions case-insensitively.
+- [x] Return folder nodes with stable IDs, parent IDs, absolute remote paths,
   and root-relative display paths.
-- [ ] Return song nodes with stable IDs, parent IDs, absolute remote paths,
+- [x] Return song nodes with stable IDs, parent IDs, absolute remote paths,
   `/file` stream paths, root-relative display paths, filename, extension, size,
   and mtime when available.
-- [ ] Return status metadata that distinguishes complete, partial/updating, and
+- [x] Return status metadata that distinguishes complete, partial/updating, and
   unavailable cache state.
-- [ ] Add endpoint tests for cached-only traversal, extension filtering, stable
+- [x] Add endpoint tests for cached-only traversal, extension filtering, stable
   IDs, relative paths, and no fake-rclone calls.
 
 ## Step 3 - Music Pane Markup
 
-- [ ] Replace `dropbox_browser/assets/templates/music_player.html` stub with
+- [x] Replace `dropbox_browser/assets/templates/music_player.html` stub with
   three semantic sub-panes:
   - folder song library;
   - active playlist;
   - playback controls.
-- [ ] Add a manual library-load button.
-- [ ] Add a library status area.
-- [ ] Add empty states for the library and playlist.
-- [ ] Add a playlist future-controls placeholder for naming/saving/loading.
-- [ ] Add playback controls markup:
+- [x] Add a manual library-load button.
+- [x] Add a library status area.
+- [x] Add empty states for the library and playlist.
+- [x] Add a playlist future-controls placeholder for naming/saving/loading.
+- [x] Add playback controls markup:
   - art placeholder;
   - current filename;
   - previous;
@@ -71,49 +71,49 @@ player. Design details are summarized in `DESIGN_MUSICPLAYER.md`.
   - shuffle/order toggle;
   - loop playlist toggle;
   - audio element if using markup rather than a constructed `Audio` object.
-- [ ] Keep existing page-template integration minimal.
-- [ ] Update web UI tests for the required pane structure.
+- [x] Keep existing page-template integration minimal.
+- [x] Update web UI tests for the required pane structure.
 
 ## Step 4 - Responsive Music Pane Styling
 
-- [ ] Replace `dropbox_browser/assets/css/music.css` stub styles with the final
+- [x] Replace `dropbox_browser/assets/css/music.css` stub styles with the final
   music layout.
-- [ ] Use compact, scrollable regions for library and playlist.
-- [ ] Ensure playback controls remain usable at small pane heights.
-- [ ] Add a CSS custom property or class for the music-player minimum pane
+- [x] Use compact, scrollable regions for library and playlist.
+- [x] Ensure playback controls remain usable at small pane heights.
+- [x] Add a CSS custom property or class for the music-player minimum pane
   height if useful.
-- [ ] Keep styling scoped under the music pane to avoid affecting the file
+- [x] Keep styling scoped under the music pane to avoid affecting the file
   browser and server log.
-- [ ] Verify the pane has no nested-card layout and text does not overflow
+- [x] Verify the pane has no nested-card layout and text does not overflow
   controls.
 
 ## Step 5 - Bottom Pane Minimum Height Behavior
 
-- [ ] Decide whether minimum-height enforcement belongs in
+- [x] Decide whether minimum-height enforcement belongs in
   `bottom-pane.js`, `log.js`, or `music.js`.
-- [ ] When switching to music-player mode, check the current bottom-pane height.
-- [ ] If the pane is below the music minimum, resize it upward.
-- [ ] Clamp the resized height so it does not exceed the usable viewport.
-- [ ] Preserve normal manual resizing behavior.
-- [ ] Add or update UI contract tests where practical.
+- [x] When switching to music-player mode, check the current bottom-pane height.
+- [x] If the pane is below the music minimum, resize it upward.
+- [x] Clamp the resized height so it does not exceed the usable viewport.
+- [x] Preserve normal manual resizing behavior.
+- [x] Add or update UI contract tests where practical.
 
 ## Step 6 - Library Client State and Rendering
 
-- [ ] Replace `dropbox_browser/assets/js/music.js` stub with a music player
+- [x] Replace `dropbox_browser/assets/js/music.js` stub with a music player
   controller.
-- [ ] Keep state in browser memory only.
-- [ ] Track the current folder root from `document.body.dataset.currentFolderPath`.
-- [ ] Keep the library empty until the user clicks the load button.
-- [ ] Fetch `/music/endpoints/library` only after manual request.
-- [ ] Render the folder tree from returned folder/song nodes.
-- [ ] Preserve expanded folder IDs across refreshes.
-- [ ] Preserve selected IDs where those nodes still exist.
-- [ ] Preserve library scroll position across refreshes.
-- [ ] Show cache completeness/status in the library pane.
-- [ ] Poll every 3-5 seconds only while music-player mode is visible and a
+- [x] Keep state in browser memory only.
+- [x] Track the current folder root from `document.body.dataset.currentFolderPath`.
+- [x] Keep the library empty until the user clicks the load button.
+- [x] Fetch `/music/endpoints/library` only after manual request.
+- [x] Render the folder tree from returned folder/song nodes.
+- [x] Preserve expanded folder IDs across refreshes.
+- [x] Preserve selected IDs where those nodes still exist.
+- [x] Preserve library scroll position across refreshes.
+- [x] Show cache completeness/status in the library pane.
+- [x] Poll every 3-5 seconds only while music-player mode is visible and a
   library has been requested.
-- [ ] Stop polling when another bottom-pane mode is selected.
-- [ ] On main folder navigation, keep playlist state but reset the library to an
+- [x] Stop polling when another bottom-pane mode is selected.
+- [x] On main folder navigation, keep playlist state but reset the library to an
   unloaded state for the new current folder.
 
 ## Step 7 - Library Selection and Context Menu

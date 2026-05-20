@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from . import logoutput, logstore, syncstate
 from .errors import BrowserError
 from .formatting import display_date, human_size
+from .music import MUSIC_ENDPOINT_PREFIX, handle_music_get
 from .paths import clean_rel_path, remote_target, safe_join_local
 from .services import DropboxBrowser
 from .streaming import (
@@ -60,6 +61,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.serve_sync_status(parsed.query)
             elif parsed.path == "/folder-info":
                 self.serve_folder_info(parsed.query)
+            elif parsed.path.startswith(MUSIC_ENDPOINT_PREFIX):
+                self.serve_music_endpoint(parsed.path, parsed.query)
             elif parsed.path.startswith(ASSET_ROUTE_PREFIX):
                 self.serve_asset(parsed.path)
             else:
@@ -349,6 +352,15 @@ class RequestHandler(BaseHTTPRequestHandler):
                 results[rel_path] = {"status": "calculating", "complete": False}
         body = _json.dumps({"results": results}).encode("utf-8")
         self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def serve_music_endpoint(self, path: str, query: str) -> None:
+        status, payload = handle_music_get(self.app, path, query)
+        body = _json.dumps(payload).encode("utf-8")
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()

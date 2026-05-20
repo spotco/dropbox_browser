@@ -57,4 +57,7 @@ def main() -> int:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nStopped.")
+    finally:
+        server.server_close()
+        app.shutdown()
     return 0
