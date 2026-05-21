@@ -1,125 +1,177 @@
 # Navigation Cache And Priority Plan
 
-This plan tracks two related improvements:
-
-1. Make normal folder navigation render from cached direct listings when the
-   folder cache already has them.
-2. Improve navigation priority only after the cached path is implemented and
-   measured.
-
-The implementation should happen in that order. The cached navigation path is
-well-scoped and low risk. Priority/foreground coordination is more invasive and
-should be added only where tests or trace logs show remaining latency.
-
 ## Goal
 
-Make `GET /?path=...` faster without changing sync safety, upload behavior,
-delete behavior, streaming behavior, or Windows-safe local name matching.
+Make `GET /?path=...` fast even while background folder workers are active and
+while multiple browser tabs are navigating the app.
 
-Expected listing order for normal navigation:
+The page response should be blocked only by the current folder listing needed to
+render visible rows. Child folder metadata is opportunistic:
 
-1. `ListingCacheManager`
-2. `FolderCacheManager.get_direct_listing()`
-3. `rclone.lsjson`
+- use cached child metadata when it already exists;
+- render missing child metadata as loading/unknown;
+- enqueue background metadata work without waiting for it;
+- update existing rows through `/folder-info` polling when work completes.
 
-Explicit refreshes (`?refresh=1`) must bypass cached navigation data and force a
-fresh listing.
+Keep sync safety, upload behavior, delete behavior, streaming behavior, and
+Windows-safe local name matching unchanged.
 
-## Progress
+## Current Diagnosis
 
-- [x] Implement cached navigation.
-- [x] Add focused tests.
-- [x] Update docs.
-- [x] Validate with targeted and full checks.
-- [ ] Measure navigation traces.
-- [ ] Implement priority improvements only if still needed.
+The cached listing path is working, but logs show navigation can still be slow
+for two different reasons.
 
-## Phase 1 - Cached Navigation
+Run `1779339545` showed child-folder metadata and eager background cancellation
+on the request path:
 
-- [x] Extend `DirectListingMetadata` with `direct_items`, a filtered list of the
-      original direct child `rclone lsjson` item dicts.
-- [x] Populate `direct_items` in `parse_direct_listing()` from the same valid
-      direct children used for `remote_children`.
-- [x] Store `direct_items` in `FolderCacheManager._compute()` accumulator state.
-- [x] Persist `direct_items` in `foldercache_records.build_cache_record()`.
-- [x] Bump `DIFF_CACHE_SCHEMA_VERSION`.
-- [x] Reject complete records missing `direct_items` in
-      `validate_cache_record()`.
-- [x] Keep existing `direct_files` and `direct_folders`; they are still used by
-      folder metadata, tests, and music endpoints.
-- [x] Add `FolderCacheManager.get_direct_listing(remote_path)`.
-- [x] Implement `get_direct_listing()` as read-only:
-      - call `self.get(remote_path)` so schema, TTL, and local-root validation
-        are reused;
-      - return a shallow copy of `direct_items` on hit;
-      - return `None` on miss, stale/invalid record, or missing `direct_items`.
-- [x] Wire `DropboxBrowser.list_entries()` to check folder-cache direct listings
-      after `ListingCacheManager` and before `rclone.lsjson`.
-- [x] Bypass folder-cache direct listings when `force_refresh=True`.
-- [x] Keep `_entries_from_remote_items()` as the only row-building path so
-      ignored names and Windows-safe local matching remain centralized.
-- [x] Keep `render_index()` focused on page flow, cache requests, status maps,
-      sorting, and rendering. Do not duplicate listing source logic there.
-- [x] Preserve current fallback behavior when remote listing fails and a local
-      folder exists.
+- `af_vid_dl`: listing cache hit in about 5 ms, but page render took about 12 s.
+- root back navigation: listing cache hit in about 2 ms, but
+  `notify_page_load()` took about 6.3 s.
+- `music`: listing cache hit in about 16 ms, but total render took about 33.7 s;
+  child folder cache/status mapping took about 24.1 s for 388 folders.
 
-## Phase 2 - Tests
+Phases 1-3 removed child metadata from first paint, stopped bulk cancellation
+inside `notify_page_load()`, and coalesced duplicate folder metadata requests.
 
-- [x] Add `foldercache_compute` tests for `direct_items` preservation and
-      filtering.
-- [x] Add `foldercache_records` tests for `direct_items` persistence and schema
-      rejection of old complete records.
-- [x] Add folder-cache worker coverage that normal `_compute()` writes usable
-      `direct_items`.
-- [x] Add service tests proving `list_entries()` uses folder-cache direct data
-      without calling rclone when the listing cache misses.
-- [x] Add service tests proving `force_refresh=True` bypasses folder-cache
-      direct data and calls rclone.
-- [x] Add web tests proving rendered navigation can show rows from folder-cache
-      direct data without a new rclone listing call.
-- [x] Include a Windows-name matching case for cached navigation if practical.
+Run `1779340888` showed the remaining bottlenecks:
 
-## Phase 3 - Docs
+- `music/aldnoah_zero_ost`: foreground listing used `rclone` and took about
+  8.8 s. The folder had been queued for background metadata, but the queued job
+  never completed before navigation and was later skipped as stale. This was a
+  real foreground `rclone lsjson` miss, not cache/render overhead.
+- `af_vid_dl`: listing was fast, but `notify_page_load()` waited about 7.3 s
+  for `FolderCacheManager._lock`.
+- `af_vid_dl/downloads`: listing took about 0.67 s, but `notify_page_load()`
+  waited about 6.1 s for the manager lock.
+- `spotco_game_archive`: listing was fast, but `notify_page_load()` waited
+  about 9.6 s for the manager lock.
 
-- [x] Update `docs/architecture.md` to describe navigation listing order:
-      listing cache, folder-cache direct listing, then rclone.
-- [x] Update `docs/background-workers.md` to note that folder-cache records
-      persist direct child listing items for navigation reuse.
-- [x] Update `docs/testing.md` only if a new test group is added.
+The manager-lock waits line up with background workers finishing large folder
+listings and then holding the lock while updating state, writing cache records,
+enqueuing children, and tracing. Example background jobs from run `1779340888`:
 
-## Phase 4 - Validation
+- `dropbox:Camera Uploads`: `rclone`, about 23.6 s, 26,124 items.
+- `dropbox:spotco_game_archive/.../graphics/jk`: `rclone`, about 14.1 s,
+  4,089 items.
+- `dropbox:af_vid_dl/audio_downloads`: `rclone`, about 3.1 s, 2,367 items.
 
+The next fixes should make page-load priority not wait behind long worker
+critical sections, and should improve foreground behavior when the exact
+navigated folder was already queued but not yet cached.
+
+## Completed
+
+- Implemented cached navigation listing order:
+  `ListingCacheManager`, then `FolderCacheManager.get_direct_listing()`, then
+  `rclone lsjson`.
+- Added `direct_items` to folder-cache direct-listing metadata and persisted it
+  with a schema bump.
+- Added tests for direct-item parsing, persistence, schema validation, service
+  listing behavior, web rendering, cache invalidation, and name matching.
+- Updated architecture, background-worker, and testing docs for cached
+  navigation.
+- Added foreground navigation trace events:
+  `navigation_listing_source`, `navigation_render_complete`, and page-load lock
+  timing.
+- Added per-server-run trace directories under
+  `Temp/runs/<unix-start-time>/`, with `Temp/current-run.txt` pointing at the
+  active run.
+- Validated with targeted groups and the full unittest suite.
+
+## Remaining Work
+
+### Phase 1 - Non-Blocking Child Folder Metadata
+
+- [x] Change `render_index()` so no child folder metadata is required before the
+      page is returned.
+- [x] Keep rendering all current-folder rows immediately.
+- [x] Use already-cached child folder metadata when available.
+- [x] Show loading/unknown state for child folders whose metadata is missing.
+- [x] Ensure `/folder-info` polling updates those rows after background metadata
+      completes.
+- [x] Add trace fields for child metadata behavior:
+      cached child metadata hits, missing child metadata count, deferred
+      request count, `/folder-info` queued request count, status counts, and
+      elapsed time.
+
+### Phase 2 - Cheap Page-Load Priority
+
+- [x] Make `FolderCacheManager.notify_page_load()` cheap on the request path.
+- [x] Stop doing bulk queued-job cancellation/removal while the HTTP request is
+      waiting.
+- [x] Reprioritize the latest navigated page quickly.
+- [x] Let workers skip stale queued jobs lazily when they dequeue work.
+- [x] Keep older tab work functional, but lower priority than the latest
+      navigated tab.
+
+### Phase 3 - Background Work Deduplication
+
+- [x] Ensure a folder has at most one queued or active metadata job at a time.
+- [x] When multiple tabs request the same folder metadata, update priority
+      instead of adding duplicate work.
+- [x] Preserve current in-progress work where possible rather than canceling and
+      restarting it.
+- [x] Add tests covering duplicate request coalescing and latest-page priority.
+
+### Phase 4 - Validation
+
+- [x] Run focused tests:
+      `python -m tests.run background-file-info cache web -v`
 - [x] Run compile checks:
       `python -m py_compile dropbox_browser.py`
 - [x] Run compileall:
       `python -m compileall -q dropbox_browser.py dropbox_browser`
-- [x] Run focused tests:
-      `python -m tests.run cache background-file-info web names -v`
-- [x] Run any specific new tests directly while iterating.
 - [x] Run the full suite before handoff:
       `python -m unittest discover -s tests -v`
-- [ ] Manually verify:
-      - previously populated folders navigate without a new visible-row
-        `rclone lsjson`;
-      - `?refresh=1` forces a fresh listing;
-      - status labels, child folder size/date columns, sorting, and local-only
-        rows still behave correctly;
-      - `/file` and `/download` byte-range streaming are unaffected.
+- [ ] Manually verify navigation with active background workers:
+      root, `af_vid_dl`, back to root, `music`, and another tab navigating a
+      different folder.
+- [ ] Confirm wide folders render before child metadata finishes and later
+      update through `/folder-info`.
 
-## Phase 5 - Priority Improvements If Needed
+### Phase 5 - Reduce Folder-Cache Lock Contention
 
-Do this only after Phase 1 is working and traces show remaining navigation
-latency from background contention.
+Problem: `notify_page_load()` no longer performs expensive cancellation, but it
+still needs `FolderCacheManager._lock`. If a background worker holds that lock
+for seconds after a large `rclone lsjson`, navigation still blocks before the
+page can render.
 
-- [x] Add lightweight trace events around navigation listing source:
-      cache hit, folder-cache direct hit, rclone fallback.
-- [ ] Measure whether background workers still block common navigation misses.
-- [ ] If needed, add a short wait for an already-active exact folder job before
-      issuing a foreground `lsjson`.
-- [ ] If needed, design foreground coordination using the existing
-      `notify_page_load`, generation, cancellation, `_active_jobs`, and
-      `_in_progress` mechanics.
-- [ ] Avoid adding a separate foreground executor or second priority queue unless
-      measurement proves the existing system cannot support the needed behavior.
-- [ ] Do not lower `FolderCacheWorkers` by default unless measurements show that
-      configuration is still necessary after cached navigation lands.
+- [ ] Add trace around long lock-held sections in folder-cache workers:
+      `_compute()` state update, cache writes, child enqueue loops,
+      propagation/completion, and trace-heavy loops.
+- [ ] Measure lock hold time separately from rclone time. Preserve existing
+      `page_load lock_wait_ms` tracing so before/after runs are comparable.
+- [ ] Move slow work out of the manager lock where safe, especially cache file
+      writes and per-child queue/trace work.
+- [ ] Batch child enqueue decisions under the lock, then perform queue puts and
+      trace appends after releasing it when correctness allows.
+- [ ] Keep shared state mutation protected: `_in_progress`, `_active_jobs`,
+      `_direct_done`, `_pending_children`, `_parent`, `_child_contrib`, `_acc`,
+      progress counters, and abandoned/generation state must remain consistent.
+- [ ] Add tests that simulate a worker holding or updating many child folders
+      and assert `notify_page_load()` stays fast.
+
+### Phase 6 - Exact Queued Folder Navigation Handoff
+
+Problem: a folder can be queued for background metadata but still not have a
+usable cached direct listing when the user navigates to it. In run `1779340888`,
+`music/aldnoah_zero_ost` was queued/requeued several times, but navigation still
+fell back to foreground `rclone lsjson` for about 8.8 s and the background job
+was later skipped as stale.
+
+- [ ] Add an API on `FolderCacheManager` to detect whether the exact current
+      folder is queued or active and to refresh its priority for the latest page
+      without duplicating work.
+- [ ] Consider a short bounded wait for an exact active/queued folder to finish
+      direct listing before foreground navigation starts its own `rclone lsjson`.
+      The wait must be small and configurable in code, not an unbounded block.
+- [ ] If the exact queued job is stale only because a newer page epoch arrived,
+      requeue it at the latest page priority instead of allowing it to be
+      skipped after the user navigates directly to that folder.
+- [ ] Avoid duplicate rclone calls for the same exact folder. If foreground
+      navigation must fall back to `rclone`, ensure the background job is
+      coalesced, canceled, or marked satisfied so it does not repeat the same
+      listing.
+- [ ] Add tests for a queued exact folder, an active exact folder, a stale exact
+      folder refreshed by navigation, and timeout fallback to foreground
+      `rclone`.

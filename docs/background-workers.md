@@ -11,12 +11,20 @@ Normal page loads should not synchronously recurse through Dropbox. Page loads
 request background work, then `/folder-info` polling returns updated size, date,
 count, and status fields.
 
+Initial HTML rendering does not wait for child folder metadata. It uses cached
+child metadata when already available, renders missing child metadata as loading,
+and relies on `/folder-info` polling to queue and update child folder rows after
+the page is visible.
+
 Folder cache jobs:
 
 - use `rclone lsjson` for Dropbox children;
 - use the listing cache when available;
 - write JSON cache files under `Cache/FolderInfo`;
-- support cancellation when a newer page epoch supersedes old work;
+- keep page-load priority changes cheap by advancing the current epoch without
+  bulk-canceling queued or active work on the HTTP request path;
+- skip stale queued jobs lazily in workers when a newer page epoch supersedes
+  old queued work;
 - continue metadata work even after a direct diff is discovered, because size,
   date, and count still need to finish before `complete: true`.
 
@@ -78,8 +86,11 @@ Useful event names:
 - `page_load`, `page_load_reused` - page epoch changes.
 - `navigation_listing_source` - foreground page listing source and row count.
 - `navigation_render_complete` - foreground page render phase timings.
-- `request_enqueued`, `request_reenqueued`, `request_skipped_cached` - public
-  folder-cache requests.
+- `folder_info_poll` - `/folder-info` batch size, queued request count, and
+  status counts.
+- `request_enqueued`, `request_reenqueued`, `request_refreshed`,
+  `request_deduplicated`, `request_skipped_cached` - public folder-cache
+  requests and duplicate coalescing.
 - `job_queued`, `job_started`, `job_finished`, `job_aborted`,
   `job_canceled_running`, `job_failed` - worker lifecycle.
 - `folder_listing_loaded` - direct `lsjson` result loaded from rclone or cache.

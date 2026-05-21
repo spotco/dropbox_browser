@@ -257,7 +257,7 @@ class FolderInfoWorkerTests(AppTestCase):
         self.assertEqual(results["slow"]["diff_status"], "synced")
         self.assertEqual(sum(1 for call in rclone.calls if call["target"] == "dropbox:slow"), 1)
 
-    def test_newer_page_load_cancels_stale_folder_job_and_allows_new_page_to_finish(self) -> None:
+    def test_newer_page_load_keeps_active_old_job_and_allows_new_page_to_finish(self) -> None:
         a_started = threading.Event()
         a_release = threading.Event()
         rclone = SimulatedRclone({
@@ -278,12 +278,12 @@ class FolderInfoWorkerTests(AppTestCase):
         a_release.set()
 
         wait_until(lambda: (cache.get("dropbox:b") or {}).get("complete"), description="folder b completion")
-        wait_until(lambda: cache.status("dropbox:a") != "calculating", description="folder a cancellation")
+        wait_until(lambda: cache.status("dropbox:a") != "calculating", description="folder a completion")
 
         self.assertTrue((cache.get("dropbox:b") or {}).get("complete"))
-        self.assertNotEqual(cache.status("dropbox:a"), "calculating")
+        self.assertTrue((cache.get("dropbox:a") or {}).get("complete"))
         events = self.read_trace_events()
-        self.assertTrue(any(event["event"] == "job_canceled_running" and event.get("remote_path") == "dropbox:a" for event in events))
+        self.assertFalse(any(event["event"] == "job_canceled_running" and event.get("remote_path") == "dropbox:a" for event in events))
 
     def test_stale_parent_with_subfolders_does_not_persist_complete_zero_metadata(self) -> None:
         root_started = threading.Event()
@@ -383,7 +383,82 @@ class FolderInfoWorkerTests(AppTestCase):
         events = self.read_trace_events()
         self.assertFalse(any(event["event"] == "job_queued" and event.get("job_type") == "hash" for event in events))
 
-    def test_canceled_child_rerun_allows_parent_tree_to_complete(self) -> None:
+    def test_duplicate_queued_folder_requests_coalesce_to_latest_priority(self) -> None:
+        block_started = threading.Event()
+        block_release = threading.Event()
+        rclone = SimulatedRclone({
+            "dropbox:block": [SimulatedLsjsonResponse(items=[], wait_event=block_release, started_event=block_started)],
+            "dropbox:root": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, local_root=None, workers=1)
+        cache = app.folder_cache
+        assert cache is not None
+
+        page0 = time.time()
+        cache.request("dropbox:block", page0)
+        wait_until(block_started.is_set, description="block folder to start")
+
+        page1 = page0 + 1
+        page2 = page1 + 1
+        page3 = page2 + 1
+        cache.request("dropbox:root", page1)
+        cache.request("dropbox:root", page2)
+        cache.request("dropbox:root", page3)
+        block_release.set()
+
+        wait_until(lambda: (cache.get("dropbox:root") or {}).get("complete"), description="root completion")
+
+        self.assertEqual(sum(1 for call in rclone.calls if call["target"] == "dropbox:root"), 1)
+        events = self.read_trace_events()
+        root_requeues = [
+            event for event in events
+            if event["event"] == "request_reenqueued" and event.get("remote_path") == "dropbox:root"
+        ]
+        self.assertEqual(len(root_requeues), 2)
+        self.assertTrue(all(event.get("removed_jobs") == 1 for event in root_requeues))
+        root_starts = [
+            event for event in events
+            if event["event"] == "job_started" and event.get("remote_path") == "dropbox:root"
+        ]
+        self.assertEqual(len(root_starts), 1)
+        self.assertEqual(root_starts[0].get("page_epoch"), page3)
+
+    def test_duplicate_active_folder_requests_refresh_without_duplicate_work(self) -> None:
+        slow_started = threading.Event()
+        slow_release = threading.Event()
+        rclone = SimulatedRclone({
+            "dropbox:slow": [SimulatedLsjsonResponse(items=[], wait_event=slow_release, started_event=slow_started)],
+        })
+        app = self._build_app(rclone, local_root=None, workers=1)
+        cache = app.folder_cache
+        assert cache is not None
+
+        page1 = time.time()
+        cache.request("dropbox:slow", page1)
+        wait_until(slow_started.is_set, description="slow folder to start")
+
+        page2 = page1 + 1
+        page3 = page2 + 1
+        cache.request("dropbox:slow", page2)
+        cache.request("dropbox:slow", page3)
+        slow_release.set()
+
+        wait_until(lambda: (cache.get("dropbox:slow") or {}).get("complete"), description="slow folder completion")
+
+        self.assertEqual(sum(1 for call in rclone.calls if call["target"] == "dropbox:slow"), 1)
+        events = self.read_trace_events()
+        refreshes = [
+            event for event in events
+            if event["event"] == "request_refreshed" and event.get("remote_path") == "dropbox:slow"
+        ]
+        self.assertEqual(len(refreshes), 2)
+        starts = [
+            event for event in events
+            if event["event"] == "job_started" and event.get("remote_path") == "dropbox:slow"
+        ]
+        self.assertEqual(len(starts), 1)
+
+    def test_active_child_can_complete_parent_after_newer_page_load(self) -> None:
         extras_started = threading.Event()
         extras_release = threading.Event()
         local_root = self.create_local_root({
@@ -422,7 +497,7 @@ class FolderInfoWorkerTests(AppTestCase):
 
         root_data = wait_until(
             lambda: cache.get("dropbox:root") if (cache.get("dropbox:root") or {}).get("complete") else None,
-            description="root completion after canceled child rerun",
+            description="root completion after active child finishes",
         )
         season_data = cache.get("dropbox:root/season") or {}
         extras_data = cache.get("dropbox:root/season/extras") or {}
@@ -433,12 +508,12 @@ class FolderInfoWorkerTests(AppTestCase):
         self.assertTrue(season_data.get("complete"))
         self.assertEqual(extras_data.get("diff_status"), "synced")
         self.assertTrue(extras_data.get("complete"))
-        self.assertGreaterEqual(
+        self.assertEqual(
             sum(1 for call in rclone.calls if call["target"] == "dropbox:root/season/extras"),
-            2,
+            1,
         )
 
-    def test_refreshed_queued_root_is_reenqueued_after_old_job_canceled(self) -> None:
+    def test_refreshed_queued_root_is_reenqueued_after_lazy_stale_skip(self) -> None:
         block_started = threading.Event()
         block_release = threading.Event()
         local_root = self.create_local_root({
@@ -467,14 +542,14 @@ class FolderInfoWorkerTests(AppTestCase):
         page3 = page2 + 1
         cache.notify_page_load(page3)
         block_release.set()
-        wait_until(lambda: cache.status("dropbox:block") != "calculating", description="block folder cancellation")
+        wait_until(lambda: cache.status("dropbox:block") != "calculating", description="block folder completion")
 
         page4 = page3 + 1
         cache.request("dropbox:root", page4)
 
         data = wait_until(
             lambda: cache.get("dropbox:root") if (cache.get("dropbox:root") or {}).get("complete") else None,
-            description="root completion after queued job cancellation",
+            description="root completion after lazy stale skip",
         )
 
         self.assertEqual(data["diff_status"], "synced")
@@ -483,6 +558,10 @@ class FolderInfoWorkerTests(AppTestCase):
             sum(1 for call in rclone.calls if call["target"] == "dropbox:root"),
             1,
         )
+        events = self.read_trace_events()
+        page_load_events = [event for event in events if event["event"] == "page_load" and event.get("page_epoch") == page3]
+        self.assertEqual(page_load_events[-1].get("removed_jobs"), 0)
+        self.assertTrue(any(event["event"] == "job_skipped_stale" and event.get("remote_path") == "dropbox:root" for event in events))
 
     def test_folder_worker_exception_completes_with_failure_state(self) -> None:
         local_root = self.create_local_root({})
