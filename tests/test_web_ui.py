@@ -68,6 +68,44 @@ class WebUiTests(AppTestCase):
         self.assertEqual(folder_cache.requests, ["direct:dropbox:"])
         self.assertEqual(rclone.calls, [])
 
+    def test_page_render_defers_child_folder_metadata_requests(self) -> None:
+        class RecordingChildFolderCache:
+            def __init__(self) -> None:
+                self.requests: list[str] = []
+
+            def notify_page_load(self, *_args, **_kwargs) -> None:
+                return None
+
+            def invalidate(self, _remote_path: str) -> None:
+                return None
+
+            def get(self, _remote_path: str) -> dict | None:
+                return None
+
+            def request(self, remote_path: str, *_args, **_kwargs) -> None:
+                self.requests.append(remote_path)
+
+        local_root = self.create_local_root({
+            "alpha/file.txt": b"alpha",
+            "beta/file.txt": b"beta",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[
+                remote_dir_item("alpha"),
+                remote_dir_item("beta"),
+            ])],
+        })
+        listing_cache = ListingCacheManager(ttl_seconds=1800)
+        folder_cache = RecordingChildFolderCache()
+        app = DropboxBrowser(rclone, "dropbox:", local_root, folder_cache=folder_cache, listing_cache=listing_cache)
+
+        with TestServer(app) as server:
+            html = server.get_text("/")
+
+        self.assertIn('data-folder-path="alpha"', html)
+        self.assertIn('data-folder-path="beta"', html)
+        self.assertEqual(folder_cache.requests, ["dropbox:"])
+
     def test_page_title_uses_current_folder_name_and_dropbox_path(self) -> None:
         rel_path = "Music & Videos/Album <One>"
         rclone = SimulatedRclone({

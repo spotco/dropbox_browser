@@ -148,13 +148,15 @@ class RequestHandler(BaseHTTPRequestHandler):
                 cache.request(current_remote, page_time)
         current_cache_elapsed_ms = round((time.perf_counter() - current_cache_started) * 1000, 3)
 
-        # Build folder cache map; stamp cached_size onto folder entries so
-        # sort_entries can sort by size.  Trigger background fetch as needed.
+        # Build folder cache map from data that is already available. Child
+        # metadata must not block first paint; /folder-info polling queues any
+        # missing child work after the page is visible.
         folder_map_started = time.perf_counter()
         folder_cache_map: dict = {}
         remote_folder_count = 0
         folder_cache_hits = 0
         folder_cache_requests = 0
+        folder_cache_missing = 0
         if cache:
             for entry in entries:
                 if entry["is_dir"] and entry["remote"]:
@@ -166,12 +168,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                     cached_data = cache.get(full_remote)
                     if cached_data is not None:
                         folder_cache_hits += 1
+                    else:
+                        folder_cache_missing += 1
                     folder_cache_map[entry["name"]] = cached_data
                     entry["cached_size"] = cached_data.get("size") if cached_data else None
                     entry["cached_mtime"] = cached_data.get("newest_mtime") if cached_data else None
-                    if cached_data is None or not cached_data.get("complete"):
-                        folder_cache_requests += 1
-                        cache.request(full_remote, page_time)
         folder_map_elapsed_ms = round((time.perf_counter() - folder_map_started) * 1000, 3)
 
         status_started = time.perf_counter()
@@ -204,7 +205,12 @@ class RequestHandler(BaseHTTPRequestHandler):
             row_count=len(entries),
             remote_folder_count=remote_folder_count,
             folder_cache_hits=folder_cache_hits,
+            folder_cache_missing=folder_cache_missing,
             folder_cache_requests=folder_cache_requests,
+            child_metadata_cached_hits=folder_cache_hits,
+            child_metadata_missing_count=folder_cache_missing,
+            child_metadata_requests_queued=folder_cache_requests,
+            child_metadata_requests_deferred=folder_cache_missing,
             notify_elapsed_ms=notify_elapsed_ms,
             list_elapsed_ms=list_elapsed_ms,
             current_cache_elapsed_ms=current_cache_elapsed_ms,
@@ -346,6 +352,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def serve_folder_info(self, query: str) -> None:
+        started = time.perf_counter()
         params = parse_qs(query, keep_blank_values=True)
 
         def _folder_info_rel_path(raw: str) -> str:
@@ -371,12 +378,16 @@ class RequestHandler(BaseHTTPRequestHandler):
             rel_paths.append(current_rel)
         cache = self.app.folder_cache
         results: dict = {}
+        requested_count = 0
+        status_counts: dict[str, int] = {}
         for rel_path in rel_paths:
             if not cache:
                 results[rel_path] = {"status": "unavailable"}
+                status_counts["unavailable"] = status_counts.get("unavailable", 0) + 1
                 continue
             full_remote = remote_target(self.app.remote, rel_path)
             st = cache.status(full_remote)
+            status_counts[st] = status_counts.get(st, 0) + 1
             if st in ("complete", "partial"):
                 data = cache.get(full_remote) or {}
                 sz = data.get("size")
@@ -399,7 +410,16 @@ class RequestHandler(BaseHTTPRequestHandler):
             else:
                 # calculating or pending — ensure it's queued
                 cache.request(full_remote)
+                requested_count += 1
                 results[rel_path] = {"status": "calculating", "complete": False}
+        workertrace.append(
+            "folder_info_poll",
+            path_count=len(rel_paths),
+            requested_count=requested_count,
+            status_counts=status_counts,
+            current_rel=current_rel,
+            elapsed_ms=round((time.perf_counter() - started) * 1000, 3),
+        )
         body = _json.dumps({"results": results}).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json")
