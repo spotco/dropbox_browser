@@ -5,6 +5,6 @@
   "LogHttpRequests": true,
   "FolderCacheWorkers": 8,
   "SyncJobWorkers": 8,
-  "FolderCacheTTLSeconds": 86400,
+  "FolderCacheTTLSeconds": 1209600,
   "ListingCacheTTLSeconds": 1800
 }
