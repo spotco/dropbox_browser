@@ -21,6 +21,22 @@ class FolderCacheRecordTests(unittest.TestCase):
                 "diff_complete": True,
                 "first_diff_path": None,
                 "file_statuses": {"song.mp3": {"diff_status": "synced"}},
+                "direct_items": [
+                    {
+                        "Name": "song.mp3",
+                        "Path": "song.mp3",
+                        "IsDir": False,
+                        "Size": 42,
+                        "ModTime": "2024-01-01T00:00:00Z",
+                    },
+                    {
+                        "Name": "album",
+                        "Path": "album",
+                        "IsDir": True,
+                        "Size": 0,
+                        "ModTime": "2024-01-02T00:00:00Z",
+                    },
+                ],
                 "direct_files": [{"name": "song.mp3", "remote_path": "dropbox:music/song.mp3"}],
                 "direct_folders": [{"name": "album", "remote_path": "dropbox:music/album"}],
             },
@@ -38,6 +54,25 @@ class FolderCacheRecordTests(unittest.TestCase):
         self.assertEqual(record["diff_status"], "synced")
         self.assertTrue(record["diff_complete"])
         self.assertEqual(record["file_statuses"], {"song.mp3": {"diff_status": "synced"}})
+        self.assertEqual(
+            record["direct_items"],
+            [
+                {
+                    "Name": "song.mp3",
+                    "Path": "song.mp3",
+                    "IsDir": False,
+                    "Size": 42,
+                    "ModTime": "2024-01-01T00:00:00Z",
+                },
+                {
+                    "Name": "album",
+                    "Path": "album",
+                    "IsDir": True,
+                    "Size": 0,
+                    "ModTime": "2024-01-02T00:00:00Z",
+                },
+            ],
+        )
         self.assertEqual(record["direct_files"], [{"name": "song.mp3", "remote_path": "dropbox:music/song.mp3"}])
         self.assertEqual(record["direct_folders"], [{"name": "album", "remote_path": "dropbox:music/album"}])
         self.assertTrue(record["complete"])
@@ -49,6 +84,7 @@ class FolderCacheRecordTests(unittest.TestCase):
         self.assertEqual(record["diff_status"], "unavailable")
         self.assertTrue(record["diff_complete"])
         self.assertEqual(record["file_statuses"], {})
+        self.assertEqual(record["direct_items"], [])
         self.assertEqual(record["direct_files"], [])
         self.assertEqual(record["direct_folders"], [])
 
@@ -117,8 +153,20 @@ class FolderCacheRecordTests(unittest.TestCase):
     def test_validate_cache_record_rejects_complete_remote_only_record_missing_direct_metadata(self) -> None:
         record = {
             "local_root": None,
-            "schema_version": DIFF_CACHE_SCHEMA_VERSION - 1,
+            "schema_version": DIFF_CACHE_SCHEMA_VERSION,
             "complete": True,
+            "cached_at": 1000.0,
+        }
+
+        self.assertIsNone(validate_cache_record(record, expected_local_root=None, ttl_seconds=10, now=1000.0))
+
+    def test_validate_cache_record_rejects_complete_record_missing_direct_items(self) -> None:
+        record = {
+            "local_root": None,
+            "schema_version": DIFF_CACHE_SCHEMA_VERSION,
+            "complete": True,
+            "direct_files": [],
+            "direct_folders": [],
             "cached_at": 1000.0,
         }
 

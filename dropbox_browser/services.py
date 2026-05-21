@@ -12,7 +12,7 @@ import threading
 from typing import Any
 from contextlib import nullcontext
 
-from . import syncstate
+from . import syncstate, workertrace
 from .errors import BrowserError
 from .formatting import file_type, parse_rclone_time
 from .ignored import is_ignored_name
@@ -160,12 +160,22 @@ class DropboxBrowser:
         return rows
 
     def list_entries(self, rel_path: str, force_refresh: bool = False) -> list[dict[str, Any]]:
+        started = time.perf_counter()
         remote = remote_target(self.remote, rel_path)
         local_folder = resolve_matching_local_path(self.local_root, rel_path) if self.local_root else None
 
         remote_items = None
+        source = "rclone"
         if self.listing_cache and not force_refresh:
             remote_items = self.listing_cache.get(remote)
+            if remote_items is not None:
+                source = "listing_cache"
+        if remote_items is None and self.folder_cache and not force_refresh:
+            get_direct_listing = getattr(self.folder_cache, "get_direct_listing", None)
+            if get_direct_listing is not None:
+                remote_items = get_direct_listing(remote)
+                if remote_items is not None:
+                    source = "folder_cache_direct"
         if remote_items is None:
             try:
                 remote_items = self.rclone.lsjson(remote)
@@ -173,11 +183,23 @@ class DropboxBrowser:
                 if not (local_folder and local_folder.exists() and local_folder.is_dir()):
                     raise
                 remote_items = []
+                source = "local_only_after_remote_error"
             else:
                 if self.listing_cache:
                     self.listing_cache.set(remote, remote_items)
 
-        return self._entries_from_remote_items(rel_path, remote_items)
+        entries = self._entries_from_remote_items(rel_path, remote_items)
+        workertrace.append(
+            "navigation_listing_source",
+            rel_path=rel_path,
+            remote_path=remote,
+            source=source,
+            force_refresh=force_refresh,
+            item_count=len(remote_items),
+            row_count=len(entries),
+            elapsed_ms=round((time.perf_counter() - started) * 1000, 3),
+        )
+        return entries
 
     def local_display_path(self, rel_path: str) -> Path | None:
         """Return the actual local path for a displayed Dropbox-relative path.

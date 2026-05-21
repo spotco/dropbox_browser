@@ -48,6 +48,7 @@ class CliShutdownTests(unittest.TestCase):
                     },
                 ),
                 patch.object(cli, "find_dropbox_folder", return_value=local_root),
+                patch.object(cli.workertrace, "configure_server_run", return_value=local_root / "runs" / "1779341234") as configure_run,
                 patch.object(cli, "RcloneClient", return_value=Mock()),
                 patch.object(cli, "ListingCacheManager", return_value=Mock()),
                 patch.object(cli, "FolderCacheManager", return_value=Mock(current_progress=Mock())),
@@ -63,3 +64,6 @@ class CliShutdownTests(unittest.TestCase):
         server = created_servers[0]
         server.server_close.assert_called_once_with()
         app.shutdown.assert_called_once_with()
+        configure_run.assert_called_once()
+        self.assertEqual(configure_run.call_args.kwargs["metadata"]["remote"], "dropbox:")
+        self.assertEqual(configure_run.call_args.kwargs["metadata"]["local_root"], str(local_root))

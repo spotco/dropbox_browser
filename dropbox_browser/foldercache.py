@@ -235,6 +235,16 @@ class FolderCacheManager:
         except Exception:
             return None
 
+    def get_direct_listing(self, remote_path: str) -> list[dict] | None:
+        """Return cached direct lsjson items for one folder, or None on miss."""
+        data = self.get(remote_path)
+        if data is None:
+            return None
+        direct_items = data.get("direct_items")
+        if not isinstance(direct_items, list) or not all(isinstance(item, dict) for item in direct_items):
+            return None
+        return [dict(item) for item in direct_items]
+
     def invalidate(self, remote_path: str) -> None:
         """Forget cached and in-memory metadata for one remote folder."""
         with self._lock:
@@ -355,9 +365,18 @@ class FolderCacheManager:
 
     def notify_page_load(self, page_time: float, *, page_key: str | None = None, force: bool = False) -> None:
         """Start a new page epoch and cancel queued work from older pages."""
+        started = time.perf_counter()
+        lock_wait_started = time.perf_counter()
         with self._lock:
+            lock_wait_ms = round((time.perf_counter() - lock_wait_started) * 1000, 3)
             if not force and page_key is not None and page_key == self._current_page_key:
-                self._trace_locked("page_load_reused", page_epoch=page_time, page_key=page_key)
+                self._trace_locked(
+                    "page_load_reused",
+                    page_epoch=page_time,
+                    page_key=page_key,
+                    lock_wait_ms=lock_wait_ms,
+                    elapsed_ms=round((time.perf_counter() - started) * 1000, 3),
+                )
                 return
             removed = self._queue.remove_matching(
                 lambda item: isinstance(item, FolderJob) and item.page_epoch < page_time
@@ -373,6 +392,8 @@ class FolderCacheManager:
                 removed_jobs=len(removed),
                 page_key=page_key,
                 force=force,
+                lock_wait_ms=lock_wait_ms,
+                elapsed_ms=round((time.perf_counter() - started) * 1000, 3),
             )
 
     def _advance_page_time(self, page_time: float) -> None:
@@ -668,6 +689,7 @@ class FolderCacheManager:
         direct_mtime = direct_listing.direct_mtime
         subfolders = direct_listing.subfolders
         remote_children = direct_listing.remote_children
+        direct_items = direct_listing.direct_items
         direct_files = direct_listing.direct_files
         direct_folders = direct_listing.direct_folders
 
@@ -703,6 +725,7 @@ class FolderCacheManager:
                 "diff_complete": self.local_root is None,
                 "first_diff_path": None,
                 "file_statuses": file_statuses,
+                "direct_items": direct_items,
                 "direct_files": direct_files,
                 "direct_folders": direct_folders,
             }
@@ -733,6 +756,7 @@ class FolderCacheManager:
                         "diff_complete": cached.get("diff_complete", False),
                         "first_diff_path": cached.get("first_diff_path"),
                         "file_statuses": cached.get("file_statuses", {}),
+                        "direct_items": cached.get("direct_items", []),
                         "direct_files": cached.get("direct_files", []),
                         "direct_folders": cached.get("direct_folders", []),
                     }

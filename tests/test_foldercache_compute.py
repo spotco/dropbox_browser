@@ -43,6 +43,32 @@ class FolderCacheComputeTests(unittest.TestCase):
         )
         self.assertEqual(list(result.remote_children), ["small.txt", "empty.txt", "negative.txt"])
         self.assertEqual(
+            result.direct_items,
+            [
+                {
+                    "Name": "small.txt",
+                    "Path": "small.txt",
+                    "IsDir": False,
+                    "Size": 5,
+                    "ModTime": "2024-01-01T00:00:00Z",
+                },
+                {
+                    "Name": "empty.txt",
+                    "Path": "empty.txt",
+                    "IsDir": False,
+                    "Size": 0,
+                    "ModTime": "2024-01-03T00:00:00Z",
+                },
+                {
+                    "Name": "negative.txt",
+                    "Path": "negative.txt",
+                    "IsDir": False,
+                    "Size": -7,
+                    "ModTime": "2024-01-02T00:00:00Z",
+                },
+            ],
+        )
+        self.assertEqual(
             result.direct_files,
             [
                 {
@@ -116,6 +142,7 @@ class FolderCacheComputeTests(unittest.TestCase):
         self.assertEqual(result.direct_count, 1)
         self.assertEqual(result.subfolders, [])
         self.assertEqual(list(result.remote_children), ["song.mp3"])
+        self.assertEqual(result.direct_items, [{"Name": "song.mp3", "Path": "song.mp3", "IsDir": False, "Size": 11}])
         self.assertEqual(result.direct_files[0]["remote_path"], "dropbox:music/song.mp3")
         self.assertEqual(result.direct_folders, [])
 
