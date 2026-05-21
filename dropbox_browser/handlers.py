@@ -99,6 +99,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.handle_sync_batch_plan()
             elif parsed.path == "/sync-batch":
                 self.handle_sync_batch()
+            elif parsed.path == "/local-only-delete-bat":
+                self.handle_local_only_delete_bat()
             elif parsed.path == "/refresh-cache":
                 self.handle_refresh_cache()
             else:
@@ -512,7 +514,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         if action == "local_to_dropbox_all":
             if params.get("enable_write_dropbox", [""])[0] != "1":
                 raise BrowserError(HTTPStatus.FORBIDDEN, "Enable sync to Dropbox before starting a batch copy.")
-        elif action in {"delete_local_only_all", "dropbox_only_to_local_all"}:
+        elif action == "dropbox_only_to_local_all":
             if params.get("enable_to_local", [""])[0] != "1":
                 raise BrowserError(HTTPStatus.FORBIDDEN, "Enable sync to local before starting a batch copy.")
         else:
@@ -552,6 +554,25 @@ class RequestHandler(BaseHTTPRequestHandler):
         body = _json.dumps({"id": op_id, "total": plan["total"]}).encode("utf-8")
         self.send_response(HTTPStatus.ACCEPTED)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def handle_local_only_delete_bat(self) -> None:
+        params = self._read_form()
+        rel_path = clean_rel_path(params.get("path", [""])[0])
+        recursive = params.get("recursive", [""])[0] == "1"
+        if params.get("enable_to_local", [""])[0] != "1":
+            raise BrowserError(HTTPStatus.FORBIDDEN, "Enable sync to local before downloading delete commands.")
+        script, total = self.app.local_only_delete_batch(rel_path, recursive)
+        body = script.encode("utf-8-sig")
+        safe_name = (Path(rel_path).name if rel_path else "root") or "root"
+        safe_name = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in safe_name)
+        filename = f"delete-local-only-{safe_name}.bat"
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/x-msdos-program")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("X-Local-Only-File-Count", str(total))
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

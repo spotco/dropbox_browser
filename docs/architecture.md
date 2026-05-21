@@ -67,7 +67,7 @@ Rules:
   `dropbox_browser/services.py`.
 - Background folder metadata and folder diff cache:
   `dropbox_browser/foldercache.py`.
-- Browser-triggered sync/delete workers:
+- Browser-triggered sync workers:
   `dropbox_browser/syncjobs.py`.
 - Rclone command execution and logging:
   `dropbox_browser/rclone.py`.

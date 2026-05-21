@@ -185,7 +185,7 @@ th {
   font-size: 12px;
   padding: 5px 8px;
 }
-.batch-delete-local {
+.batch-delete-command {
   background: #8a1f1f;
 }
 body.sync-to-dropbox-enabled .batch-to-dropbox,

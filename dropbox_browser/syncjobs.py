@@ -1,18 +1,16 @@
-"""Parallel sync/delete job queue for browser-triggered file operations.
+"""Parallel sync job queue for browser-triggered file operations.
 
 Design decisions:
 
-- Keep sync/delete work separate from folder metadata workers. Metadata jobs are
-  page-driven, cancelable, and read-only; sync/delete jobs are side-effecting
+- Keep sync work separate from folder metadata workers. Metadata jobs are
+  page-driven, cancelable, and read-only; sync jobs are side-effecting
   and should keep running once accepted.
 - Use one fixed-size worker pool with one queued job per file/path operation so
   batch sync is no longer single-threaded.
 - Preserve one browser-visible operation id per user action. A batch request is
   shown as one operation in ``syncstate`` while many child jobs run underneath.
-- Give single-file sync requests higher priority than batch jobs. Recursive
-  delete jobs still run safely by deleting files before directories and deeper
-  directories before their parents.
-- Keep logging/error handling uniform across all sync/delete work by driving
+- Give single-file sync requests higher priority than batch jobs.
+- Keep logging/error handling uniform across all sync work by driving
   browser progress and completion from this manager rather than raw threads in
   request handlers.
 """
@@ -98,10 +96,7 @@ def _job_message(kind: str, item: dict[str, str]) -> tuple[str, str]:
             f"Copying Dropbox to local: {rel_path}",
             f"rclone copyto -- {remote_path} {local_path}",
         )
-    return (
-        f"Deleting local-only item: {rel_path}",
-        f"delete local -- {local_path}",
-    )
+    return (f"Unsupported sync operation: {rel_path}", "")
 
 
 class SyncJobManager:
@@ -158,13 +153,9 @@ class SyncJobManager:
     def _make_job(self, op_id: str, kind: str, item: dict[str, str], *, batch: bool, submit_order: int) -> SyncJob:
         phase_rank = 0
         depth_rank = 0
-        local_path = Path(item["local_path"])
         if kind in {"local_dir_to_dropbox", "dropbox_dir_to_local"}:
             phase_rank = -1
             depth_rank = len(Path(item["path"]).parts)
-        if kind == "delete_local" and local_path.is_dir():
-            phase_rank = 1
-            depth_rank = -len(Path(item["path"]).parts)
         message, command = _job_message(kind, item)
         parent_rel = str(Path(item["path"]).parent).replace("\\", "/")
         if parent_rel == ".":
@@ -234,7 +225,7 @@ class SyncJobManager:
             group.running = max(0, group.running - 1)
             group.completed += 1
             group.touched_parents.add(job.parent_rel)
-            if job.kind in {"local_dir_to_dropbox", "dropbox_dir_to_local"} or (job.kind == "delete_local" and job.phase_rank == 1):
+            if job.kind in {"local_dir_to_dropbox", "dropbox_dir_to_local"}:
                 group.touched_parents.add(job.item["path"])
             if error_message is not None:
                 group.errors.append(error_message)

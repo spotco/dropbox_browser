@@ -183,7 +183,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         f'<a class="dropbox-link" href="{html.escape(dropbox_home_url(rel_path))}" target="_blank" rel="noopener noreferrer">Go to Dropbox</a>'
         '<label class="recursive-toggle"><input type="checkbox" id="batch-recursive"> Recursive</label>'
         '<button type="button" class="batch-sync batch-to-dropbox" data-batch-action="local_to_dropbox_all">Sync All Local to Dropbox</button>'
-        '<button type="button" class="batch-sync batch-to-local batch-delete-local" data-batch-action="delete_local_only_all">Delete all Local-Only Files</button>'
+        '<button type="button" class="batch-sync batch-to-local batch-delete-command" data-batch-action="download_local_only_delete_bat">DL .bat file to delete all local-only files</button>'
         '<button type="button" class="batch-sync batch-to-local" data-batch-action="dropbox_only_to_local_all">Copy all Dropbox-Only Files to Local</button>'
         '</div>'
         if app.local_root

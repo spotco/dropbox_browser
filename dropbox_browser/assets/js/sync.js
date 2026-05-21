@@ -131,6 +131,14 @@
     bar.style.background = ok ? '#17633a' : '#8a1f1f';
   }
 
+  function finishPopupTemporary(text, cmd, ok) {
+    finishPopup(text, cmd, ok);
+    setTimeout(function () {
+      if (!popup) return;
+      popup.classList.add('hidden');
+    }, 1800);
+  }
+
   function gateParams() {
     return {
       enable_to_local: enableToLocal && enableToLocal.checked ? '1' : '0',
@@ -144,18 +152,35 @@
     return params;
   }
 
+  function submitDownload(url, fields) {
+    var form = document.createElement('form');
+    form.method = 'post';
+    form.action = url;
+    form.style.display = 'none';
+    Object.keys(fields).forEach(function (key) {
+      var input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = key;
+      input.value = fields[key];
+      form.appendChild(input);
+    });
+    document.body.appendChild(form);
+    form.submit();
+    document.body.removeChild(form);
+  }
+
   function groupTitle(key) {
     if (key === 'local_dir_to_dropbox') return 'Create Dropbox Folders';
     if (key === 'local_to_dropbox') return 'Copy Local -> Dropbox';
     if (key === 'dropbox_dir_to_local') return 'Create Local Folders';
     if (key === 'dropbox_to_local') return 'Copy Dropbox -> Local';
-    return 'Delete Local';
+    return key;
   }
 
   function renderPlan(plan) {
     batchSummary.textContent = plan.total + ' item(s) will be affected.';
     var html = '';
-    ['local_dir_to_dropbox', 'local_to_dropbox', 'dropbox_dir_to_local', 'dropbox_to_local', 'delete_local'].forEach(function (key) {
+    ['local_dir_to_dropbox', 'local_to_dropbox', 'dropbox_dir_to_local', 'dropbox_to_local'].forEach(function (key) {
       var items = (plan.groups && plan.groups[key]) || [];
       if (!items.length) return;
       html += '<h3>' + esc(groupTitle(key)) + ' (' + items.length + ')</h3><ul>';
@@ -287,7 +312,17 @@
     if (syncBusyCount > 0) return;
     var action = button.getAttribute('data-batch-action') || '';
     if (action === 'local_to_dropbox_all' && (!enableWriteDropbox || !enableWriteDropbox.checked)) return;
-    if ((action === 'delete_local_only_all' || action === 'dropbox_only_to_local_all') && (!enableToLocal || !enableToLocal.checked)) return;
+    if (action === 'dropbox_only_to_local_all' && (!enableToLocal || !enableToLocal.checked)) return;
+    if (action === 'download_local_only_delete_bat') {
+      if (!enableToLocal || !enableToLocal.checked) return;
+      submitDownload('/local-only-delete-bat', {
+        path: pageState.currentFolderPath || '',
+        recursive: batchRecursive && batchRecursive.checked ? '1' : '0',
+        enable_to_local: '1'
+      });
+      finishPopupTemporary('Batch file download started', 'Review the downloaded .bat before running it.', true);
+      return;
+    }
     openBatchConfirm(action);
   });
 
