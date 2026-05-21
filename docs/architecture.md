@@ -18,6 +18,9 @@ Dropbox SDK.
 ## Dropbox and Local Data
 
 - Dropbox folder listings use `rclone lsjson`.
+- Normal page navigation checks cached listing data first: `ListingCacheManager`,
+  then `FolderCacheManager.get_direct_listing()`, then `rclone lsjson`.
+  Explicit refreshes bypass these cached listing paths.
 - File previews/downloads stream through `rclone cat`.
 - Local comparison is optional and configured with `--local-root` or
   `DropboxFolder` in config.

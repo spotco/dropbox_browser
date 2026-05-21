@@ -25,6 +25,41 @@ except ImportError:
 
 
 class ListingMergeNameTests(AppTestCase):
+    def test_cached_navigation_uses_windows_safe_local_name_matching(self) -> None:
+        class DirectListingFolderCache:
+            def get_direct_listing(self, _remote_path: str) -> list[dict]:
+                return [
+                    {
+                        "Name": remote_name,
+                        "Path": remote_name,
+                        "IsDir": False,
+                        "Size": len(b"audio"),
+                        "ModTime": "2024-01-01T12:00:00Z",
+                    },
+                ]
+
+        remote_name = "Sak Noel - Loca People (What the f*ck).mp3"
+        local_name = "Sak Noel - Loca People (What the f\uff0ack).mp3"
+        local_root = self.create_local_root({
+            f"music/{local_name}": b"audio",
+        })
+        rclone = SimulatedRclone()
+        app = DropboxBrowser(
+            rclone,
+            "dropbox:",
+            local_root,
+            folder_cache=DirectListingFolderCache(),
+            listing_cache=ListingCacheManager(ttl_seconds=1800),
+        )
+
+        entries = app.list_entries("music")
+
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["name"], remote_name)
+        self.assertEqual(entries[0]["local_name"], local_name)
+        self.assertEqual(entries[0]["local_path"], str(local_root / "music" / local_name))
+        self.assertEqual(rclone.calls, [])
+
     def test_windows_safe_unicode_replacement_names_merge_for_page_and_live_status(self) -> None:
         remote_name = "Sak Noel - Loca People (What the f*ck).mp3"
         local_name = "Sak Noel - Loca People (What the f\uff0ack).mp3"

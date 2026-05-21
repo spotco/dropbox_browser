@@ -9,7 +9,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, unquote, urlparse
 
-from . import logoutput, logstore, syncstate
+from . import logoutput, logstore, syncstate, workertrace
 from .errors import BrowserError
 from .formatting import display_date, human_size
 from .music import MUSIC_ENDPOINT_PREFIX, handle_music_get
@@ -109,6 +109,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.render_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
     def render_index(self, query: str, head_only: bool = False) -> None:
+        render_started = time.perf_counter()
         params = parse_qs(query, keep_blank_values=True)
         rel_path = clean_rel_path(params.get("path", [""])[0])
         sort_key = params.get("sort", ["name"])[0]
@@ -122,13 +123,18 @@ class RequestHandler(BaseHTTPRequestHandler):
         cache = self.app.folder_cache
         page_time = time.time()
         current_remote = remote_target(self.app.remote, rel_path)
+        notify_started = time.perf_counter()
         if cache:
             cache.notify_page_load(page_time, page_key=rel_path, force=force_refresh)
             if force_refresh:
                 cache.invalidate(current_remote)
+        notify_elapsed_ms = round((time.perf_counter() - notify_started) * 1000, 3)
 
+        list_started = time.perf_counter()
         entries = self.app.list_entries(rel_path, force_refresh=force_refresh)
+        list_elapsed_ms = round((time.perf_counter() - list_started) * 1000, 3)
 
+        current_cache_started = time.perf_counter()
         current_folder_cache: dict | None = None
         if cache and self.app.local_root:
             current_folder_cache = cache.get(current_remote)
@@ -140,33 +146,77 @@ class RequestHandler(BaseHTTPRequestHandler):
                 current_folder_cache["file_statuses"] = live_file_statuses
             if current_folder_cache is None or not current_folder_cache.get("complete"):
                 cache.request(current_remote, page_time)
+        current_cache_elapsed_ms = round((time.perf_counter() - current_cache_started) * 1000, 3)
 
         # Build folder cache map; stamp cached_size onto folder entries so
         # sort_entries can sort by size.  Trigger background fetch as needed.
+        folder_map_started = time.perf_counter()
         folder_cache_map: dict = {}
+        remote_folder_count = 0
+        folder_cache_hits = 0
+        folder_cache_requests = 0
         if cache:
             for entry in entries:
                 if entry["is_dir"] and entry["remote"]:
+                    remote_folder_count += 1
                     child = posixpath.join(rel_path, entry["name"]) if rel_path else entry["name"]
                     full_remote = remote_target(self.app.remote, child)
                     if force_refresh:
                         cache.invalidate(full_remote)
                     cached_data = cache.get(full_remote)
+                    if cached_data is not None:
+                        folder_cache_hits += 1
                     folder_cache_map[entry["name"]] = cached_data
                     entry["cached_size"] = cached_data.get("size") if cached_data else None
                     entry["cached_mtime"] = cached_data.get("newest_mtime") if cached_data else None
                     if cached_data is None or not cached_data.get("complete"):
+                        folder_cache_requests += 1
                         cache.request(full_remote, page_time)
+        folder_map_elapsed_ms = round((time.perf_counter() - folder_map_started) * 1000, 3)
 
+        status_started = time.perf_counter()
         for entry in entries:
             entry["status_label"] = self.app.status_label_for_entry(entry, folder_cache_map, current_folder_cache)
+        status_elapsed_ms = round((time.perf_counter() - status_started) * 1000, 3)
 
+        sort_started = time.perf_counter()
         entries = self.app.sort_entries(entries, sort_key, direction)
+        sort_elapsed_ms = round((time.perf_counter() - sort_started) * 1000, 3)
 
+        html_started = time.perf_counter()
+        body = page_html(
+            self.app,
+            rel_path,
+            entries,
+            sort_key,
+            direction,
+            params.get("msg", [""])[0],
+            folder_cache_map or None,
+            current_folder_cache,
+        )
+        html_elapsed_ms = round((time.perf_counter() - html_started) * 1000, 3)
+        workertrace.append(
+            "navigation_render_complete",
+            rel_path=rel_path,
+            remote_path=current_remote,
+            force_refresh=force_refresh,
+            head_only=head_only,
+            row_count=len(entries),
+            remote_folder_count=remote_folder_count,
+            folder_cache_hits=folder_cache_hits,
+            folder_cache_requests=folder_cache_requests,
+            notify_elapsed_ms=notify_elapsed_ms,
+            list_elapsed_ms=list_elapsed_ms,
+            current_cache_elapsed_ms=current_cache_elapsed_ms,
+            folder_map_elapsed_ms=folder_map_elapsed_ms,
+            status_elapsed_ms=status_elapsed_ms,
+            sort_elapsed_ms=sort_elapsed_ms,
+            html_elapsed_ms=html_elapsed_ms,
+            total_elapsed_ms=round((time.perf_counter() - render_started) * 1000, 3),
+        )
         self.send_html(
             HTTPStatus.OK,
-            page_html(self.app, rel_path, entries, sort_key, direction,
-                      params.get("msg", [""])[0], folder_cache_map or None, current_folder_cache),
+            body,
             head_only=head_only,
         )
 

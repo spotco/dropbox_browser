@@ -25,6 +25,49 @@ except ImportError:
 
 
 class WebUiTests(AppTestCase):
+    def test_page_renders_rows_from_folder_cache_direct_listing_without_rclone_call(self) -> None:
+        class DirectListingFolderCache:
+            def __init__(self) -> None:
+                self.notified: list[tuple[str | None, bool]] = []
+                self.requests: list[str] = []
+
+            def notify_page_load(self, _page_time: float, *, page_key: str | None = None, force: bool = False) -> None:
+                self.notified.append((page_key, force))
+
+            def invalidate(self, _remote_path: str) -> None:
+                return None
+
+            def get(self, _remote_path: str) -> dict | None:
+                return None
+
+            def request(self, remote_path: str, *_args, **_kwargs) -> None:
+                self.requests.append(remote_path)
+
+            def get_direct_listing(self, remote_path: str) -> list[dict]:
+                self.requests.append(f"direct:{remote_path}")
+                return [
+                    {
+                        "Name": "cached.txt",
+                        "Path": "cached.txt",
+                        "IsDir": False,
+                        "Size": 6,
+                        "ModTime": "2024-01-01T12:00:00Z",
+                    },
+                ]
+
+        rclone = SimulatedRclone()
+        listing_cache = ListingCacheManager(ttl_seconds=1800)
+        folder_cache = DirectListingFolderCache()
+        app = DropboxBrowser(rclone, "dropbox:", None, folder_cache=folder_cache, listing_cache=listing_cache)
+
+        with TestServer(app) as server:
+            html = server.get_text("/")
+
+        self.assertIn("cached.txt", html)
+        self.assertEqual(folder_cache.notified, [("", False)])
+        self.assertEqual(folder_cache.requests, ["direct:dropbox:"])
+        self.assertEqual(rclone.calls, [])
+
     def test_page_title_uses_current_folder_name_and_dropbox_path(self) -> None:
         rel_path = "Music & Videos/Album <One>"
         rclone = SimulatedRclone({

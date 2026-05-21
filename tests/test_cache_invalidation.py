@@ -25,6 +25,84 @@ except ImportError:
 
 
 class CacheInvalidationTests(AppTestCase):
+    def test_list_entries_uses_folder_cache_direct_listing_when_listing_cache_misses(self) -> None:
+        class DirectListingFolderCache:
+            def __init__(self) -> None:
+                self.requests: list[str] = []
+
+            def get_direct_listing(self, remote_path: str) -> list[dict]:
+                self.requests.append(remote_path)
+                return [
+                    {
+                        "Name": "cached.txt",
+                        "Path": "cached.txt",
+                        "IsDir": False,
+                        "Size": 6,
+                        "ModTime": "2024-01-01T12:00:00Z",
+                    },
+                ]
+
+        rclone = SimulatedRclone()
+        listing_cache = ListingCacheManager(ttl_seconds=1800)
+        folder_cache = DirectListingFolderCache()
+        app = DropboxBrowser(rclone, "dropbox:", None, folder_cache=folder_cache, listing_cache=listing_cache)
+
+        entries = app.list_entries("")
+
+        self.assertEqual([entry["name"] for entry in entries], ["cached.txt"])
+        self.assertEqual(entries[0]["remote_size"], 6)
+        self.assertEqual(folder_cache.requests, ["dropbox:"])
+        self.assertEqual(rclone.calls, [])
+
+    def test_list_entries_force_refresh_bypasses_folder_cache_direct_listing(self) -> None:
+        class DirectListingFolderCache:
+            def __init__(self) -> None:
+                self.requests: list[str] = []
+
+            def get_direct_listing(self, remote_path: str) -> list[dict]:
+                self.requests.append(remote_path)
+                return [
+                    {
+                        "Name": "cached.txt",
+                        "Path": "cached.txt",
+                        "IsDir": False,
+                        "Size": 6,
+                        "ModTime": "2024-01-01T12:00:00Z",
+                    },
+                ]
+
+        rclone = SimulatedRclone({
+            "dropbox:": [
+                SimulatedLsjsonResponse(items=[
+                    {
+                        "Name": "fresh.txt",
+                        "Path": "fresh.txt",
+                        "IsDir": False,
+                        "Size": 9,
+                        "ModTime": "2024-01-02T12:00:00Z",
+                    },
+                ]),
+            ],
+        })
+        listing_cache = ListingCacheManager(ttl_seconds=1800)
+        listing_cache.set("dropbox:", [
+            {
+                "Name": "listing-cache.txt",
+                "Path": "listing-cache.txt",
+                "IsDir": False,
+                "Size": 1,
+                "ModTime": "2024-01-01T12:00:00Z",
+            },
+        ])
+        folder_cache = DirectListingFolderCache()
+        app = DropboxBrowser(rclone, "dropbox:", None, folder_cache=folder_cache, listing_cache=listing_cache)
+
+        entries = app.list_entries("", force_refresh=True)
+
+        self.assertEqual([entry["name"] for entry in entries], ["fresh.txt"])
+        self.assertEqual(folder_cache.requests, [])
+        self.assertEqual([call["target"] for call in rclone.calls], ["dropbox:"])
+
     def test_refresh_cache_post_invalidates_current_folder_only(self) -> None:
         rclone = SimulatedRclone()
         listing_cache = ListingCacheManager(ttl_seconds=1800)

@@ -16,6 +16,7 @@ class DirectListingMetadata:
     direct_mtime: float | None
     subfolders: list[str]
     remote_children: dict[str, dict[str, Any]]
+    direct_items: list[dict[str, Any]]
     direct_files: list[dict[str, Any]]
     direct_folders: list[dict[str, Any]]
 
@@ -27,6 +28,7 @@ def parse_direct_listing(items: list[dict[str, Any]], remote_path: str) -> Direc
     direct_mtime: float | None = None
     subfolders: list[str] = []
     remote_children: dict[str, dict[str, Any]] = {}
+    direct_items: list[dict[str, Any]] = []
     direct_files: list[dict[str, Any]] = []
     direct_folders: list[dict[str, Any]] = []
 
@@ -35,6 +37,7 @@ def parse_direct_listing(items: list[dict[str, Any]], remote_path: str) -> Direc
         if not name or "/" in name or is_ignored_name(name):
             continue
         remote_children[name] = item
+        direct_items.append(dict(item))
         item_time = parse_rclone_time(item.get("ModTime"))
         if item_time and (direct_mtime is None or item_time > direct_mtime):
             direct_mtime = item_time
@@ -70,6 +73,7 @@ def parse_direct_listing(items: list[dict[str, Any]], remote_path: str) -> Direc
         direct_mtime=direct_mtime,
         subfolders=subfolders,
         remote_children=remote_children,
+        direct_items=direct_items,
         direct_files=direct_files,
         direct_folders=direct_folders,
     )

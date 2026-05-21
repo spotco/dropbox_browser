@@ -64,6 +64,19 @@ class FolderInfoWorkerTests(AppTestCase):
         assert app.folder_cache is not None
         root_cache = app.folder_cache.get("dropbox:") or {}
         sub_cache = app.folder_cache.get("dropbox:sub") or {}
+        self.assertEqual([item["Name"] for item in root_cache["direct_items"]], ["shared.txt", "sub"])
+        self.assertEqual(root_cache["direct_items"][0]["ModTime"], "2024-01-01T12:00:00Z")
+        self.assertEqual(sub_cache["direct_items"][0]["Name"], "child.txt")
+        root_direct_listing = app.folder_cache.get_direct_listing("dropbox:")
+        self.assertIsNotNone(root_direct_listing)
+        assert root_direct_listing is not None
+        self.assertEqual([item["Name"] for item in root_direct_listing], ["shared.txt", "sub"])
+        root_direct_listing.append({"Name": "mutated.txt", "Path": "mutated.txt", "IsDir": False})
+        self.assertEqual(
+            [item["Name"] for item in app.folder_cache.get_direct_listing("dropbox:") or []],
+            ["shared.txt", "sub"],
+        )
+        self.assertIsNone(app.folder_cache.get_direct_listing("dropbox:missing"))
         self.assertEqual(root_cache["direct_files"][0]["name"], "shared.txt")
         self.assertEqual(root_cache["direct_files"][0]["remote_path"], "dropbox:shared.txt")
         self.assertEqual(root_cache["direct_folders"][0]["name"], "sub")

@@ -22,6 +22,9 @@ Folder cache jobs:
 
 Folder cache data can expose diff status before recursive metadata is complete.
 This lets the UI show `Has Diffs` while size/date cells continue loading.
+Cache records also persist filtered direct child `lsjson` items. Normal page
+navigation can reuse those direct items for visible rows when the listing cache
+misses, without waiting for recursive size/date/count work to finish.
 
 ## Diff Status
 
@@ -46,11 +49,16 @@ Semantics:
 
 ## Trace Log
 
-Folder-cache workers write JSONL trace events to:
+Folder-cache workers and foreground navigation write JSONL trace events under
+the current server run directory:
 
 ```text
-Temp/foldercache_threads.jsonl
+Temp/runs/<unix-start-time>/foldercache_threads.jsonl
 ```
+
+`Temp/current-run.txt` contains the current run id. Each run directory also
+contains `server.json` with startup metadata such as PID, remote, local root,
+host, and port.
 
 Each line is one JSON object. Common fields include:
 
@@ -68,6 +76,8 @@ Useful event names:
 
 - `manager_started`, `worker_started` - worker pool startup.
 - `page_load`, `page_load_reused` - page epoch changes.
+- `navigation_listing_source` - foreground page listing source and row count.
+- `navigation_render_complete` - foreground page render phase timings.
 - `request_enqueued`, `request_reenqueued`, `request_skipped_cached` - public
   folder-cache requests.
 - `job_queued`, `job_started`, `job_finished`, `job_aborted`,

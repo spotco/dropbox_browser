@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from http.server import ThreadingHTTPServer
 
 from .config import find_default_config, find_default_rclone, find_dropbox_folder, load_app_config
 from .foldercache import FolderCacheManager
 from .handlers import RequestHandler
-from . import logoutput
+from . import logoutput, workertrace
 from .listingcache import ListingCacheManager
 from .rclone import RcloneClient
 from .services import DropboxBrowser
@@ -26,12 +27,22 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    started_at = time.time()
     app_config = load_app_config()
     local_root = find_dropbox_folder(app_config)
     if local_root.exists() and not local_root.is_dir():
         print(f"DropboxFolder is not a directory: {local_root}", file=sys.stderr)
         return 2
     local_root.mkdir(parents=True, exist_ok=True)
+    trace_run_dir = workertrace.configure_server_run(
+        started_at=started_at,
+        metadata={
+            "host": args.host,
+            "port": args.port,
+            "remote": args.remote,
+            "local_root": str(local_root),
+        },
+    )
 
     rclone = RcloneClient(args.rclone, args.rclone_config, log_commands=bool(app_config["LogRcloneCommands"]))
     listing_cache = ListingCacheManager(ttl_seconds=float(app_config["ListingCacheTTLSeconds"]))
@@ -52,6 +63,7 @@ def main() -> int:
 
     print(f"Serving {args.remote} at http://{args.host}:{args.port}/")
     print(f"Comparing with local folder: {local_root}")
+    print(f"Trace log: {trace_run_dir / 'foldercache_threads.jsonl'}")
     logoutput.start()
     try:
         server.serve_forever()
