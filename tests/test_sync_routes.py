@@ -249,11 +249,6 @@ class SyncRouteTests(AppTestCase):
                 "recursive": "1",
                 "enable_write_dropbox": "1",
             })["plan"]
-            delete_local = self._batch_plan(server, {
-                "action": "delete_local_only_all",
-                "recursive": "0",
-                "enable_to_local": "1",
-            })["plan"]
             copy_to_local = self._batch_plan(server, {
                 "action": "dropbox_only_to_local_all",
                 "recursive": "0",
@@ -268,11 +263,97 @@ class SyncRouteTests(AppTestCase):
         self.assertEqual([item["path"] for item in nonrecursive["groups"]["local_to_dropbox"]], ["changed.txt", "local.txt"])
         self.assertEqual([item["size"] for item in nonrecursive["groups"]["local_to_dropbox"]], [5, 5])
         self.assertEqual([item["path"] for item in recursive["groups"]["local_to_dropbox"]], ["child/local-child.txt", "changed.txt", "local.txt"])
-        self.assertEqual([item["path"] for item in delete_local["groups"]["delete_local"]], ["local.txt"])
         self.assertEqual([item["path"] for item in copy_to_local["groups"]["dropbox_to_local"]], ["remote.txt"])
         self.assertEqual([item["size"] for item in copy_to_local["groups"]["dropbox_to_local"]], [6])
         self.assertEqual([item["path"] for item in copy_to_local_recursive["groups"]["dropbox_to_local"]], ["child/remote-child.txt", "remote.txt"])
         self.assertNotIn(".DS_Store", str(nonrecursive))
+
+    def test_sync_batch_plan_rejects_unsupported_action(self) -> None:
+        local_root = self.create_local_root({"local.txt": b"local"})
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            request = Request(
+                server.base_url + "/sync-batch-plan",
+                data=b"action=unsupported_batch_action&recursive=0&enable_to_local=1",
+                method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            with self.assertRaises(HTTPError) as ctx:
+                urlopen(request, timeout=5)
+
+        self.assertEqual(ctx.exception.code, 400)
+        ctx.exception.close()
+
+    def test_local_only_delete_bat_download_lists_each_file_without_deleting(self) -> None:
+        local_root = self.create_local_root({
+            "root-local.txt": b"local",
+            "percent%file.txt": b"percent",
+            "local-folder/nested.txt": b"nested",
+            "synced.txt": b"synced",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[
+                remote_file_item("synced.txt", local_root / "synced.txt"),
+            ])],
+            "dropbox:local-folder": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            request = Request(
+                server.base_url + "/local-only-delete-bat",
+                data=b"recursive=1&enable_to_local=1",
+                method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            with urlopen(request, timeout=5) as response:
+                body = response.read().decode("utf-8-sig")
+                count = response.headers["X-Local-Only-File-Count"]
+                disposition = response.headers["Content-Disposition"]
+
+        self.assertEqual(count, "3")
+        self.assertIn('attachment; filename="delete-local-only-root.bat"', disposition)
+        self.assertIn("@echo off", body)
+        self.assertIn("setlocal DisableDelayedExpansion", body)
+        self.assertIn("Are you sure you want to delete 3 file(s)? Enter y to continue:", body)
+        self.assertIn('if /i not "%CONFIRM%"=="y" exit /b 0', body)
+        self.assertEqual(body.count("\r\ndel /f /q "), 3)
+        self.assertIn('percent%%file.txt"', body)
+        self.assertIn('root-local.txt"', body)
+        self.assertIn('nested.txt"', body)
+        self.assertNotIn("synced.txt", body)
+        self.assertTrue((local_root / "root-local.txt").exists())
+        self.assertTrue((local_root / "local-folder" / "nested.txt").exists())
+
+    def test_local_only_delete_bat_nonrecursive_skips_child_folder_files(self) -> None:
+        local_root = self.create_local_root({
+            "root-local.txt": b"local",
+            "local-folder/nested.txt": b"nested",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[])],
+            "dropbox:local-folder": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            request = Request(
+                server.base_url + "/local-only-delete-bat",
+                data=b"recursive=0&enable_to_local=1",
+                method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            with urlopen(request, timeout=5) as response:
+                body = response.read().decode("utf-8-sig")
+                count = response.headers["X-Local-Only-File-Count"]
+
+        self.assertEqual(count, "1")
+        self.assertIn('root-local.txt"', body)
+        self.assertNotIn("nested.txt", body)
 
     def test_batch_plan_progress_is_visible_while_planning(self) -> None:
         local_root = self.create_local_root({})
@@ -487,41 +568,6 @@ class SyncRouteTests(AppTestCase):
         )
         self.assertFalse(any(call["target"] == "dropbox:synced" for call in rclone.calls))
 
-    def test_batch_delete_local_only_runs_per_file(self) -> None:
-        local_root = self.create_local_root({
-            "local.txt": b"local",
-            "local-folder/inside.txt": b"inside",
-            "changed.txt": b"local",
-            "synced.txt": b"synced",
-        })
-        rclone = SimulatedRclone({
-            "dropbox:": [SimulatedLsjsonResponse(items=[
-                {"Name": "changed.txt", "Path": "changed.txt", "IsDir": False, "Size": 6, "ModTime": "2024-01-01T12:00:00Z"},
-                remote_file_item("synced.txt", local_root / "synced.txt"),
-            ])],
-        })
-        app = self._build_app(rclone, local_root=local_root, workers=1)
-
-        with TestServer(app) as server:
-            payload, _plan = self._submit_batch_from_plan(server, {
-                "action": "delete_local_only_all",
-                "recursive": "0",
-                "enable_to_local": "1",
-            })
-            result = wait_until(
-                lambda: server.get_json("/sync-status?id=" + payload["id"])
-                if server.get_json("/sync-status?id=" + payload["id"]).get("status") != "running"
-                else None,
-                description="batch delete completion",
-            )
-
-        self.assertEqual(result["status"], "complete")
-        self.assertEqual(result["message"], "Batch sync complete")
-        self.assertFalse((local_root / "local.txt").exists())
-        self.assertFalse((local_root / "local-folder").exists())
-        self.assertEqual((local_root / "changed.txt").read_bytes(), b"local")
-        self.assertFalse(any(call["args"][0] == "copyto" and call["target"] == str(local_root / "changed.txt") for call in rclone.calls))
-
     def test_batch_copy_dropbox_only_to_local_runs_per_file(self) -> None:
         local_root = self.create_local_root({
             "changed.txt": b"local",
@@ -715,44 +761,6 @@ class SyncRouteTests(AppTestCase):
         folder_row = html.split('<span class="entry-name">local-folder</span></a></td>', 1)[1].split("</tr>", 1)[0]
         self.assertNotIn("Local Only", folder_row)
         self.assertGreaterEqual(sum(1 for call in rclone.calls if call["target"] == "dropbox:"), 2)
-
-    def test_recursive_batch_delete_removes_nested_local_only_folders_after_children(self) -> None:
-        local_root = self.create_local_root({
-            "keep-remote/remote.txt": b"same",
-            "local-folder/nested/file.txt": b"delete",
-        })
-        rclone = SimulatedRclone({
-            "dropbox:": [SimulatedLsjsonResponse(items=[
-                remote_dir_item("keep-remote"),
-            ])],
-            "dropbox:keep-remote": [SimulatedLsjsonResponse(items=[
-                remote_file_item("remote.txt", local_root / "keep-remote" / "remote.txt"),
-            ])],
-            "dropbox:local-folder": [SimulatedLsjsonResponse(items=[])],
-            "dropbox:local-folder/nested": [SimulatedLsjsonResponse(items=[])],
-        })
-        app = self._build_app(rclone, local_root=local_root, workers=1)
-
-        with TestServer(app) as server:
-            payload, plan = self._submit_batch_from_plan(server, {
-                "action": "delete_local_only_all",
-                "recursive": "1",
-                "enable_to_local": "1",
-            })
-            result = wait_until(
-                lambda: server.get_json("/sync-status?id=" + payload["id"])
-                if server.get_json("/sync-status?id=" + payload["id"]).get("status") != "running"
-                else None,
-                description="recursive folder delete completion",
-            )
-
-        self.assertEqual(
-            [item["path"] for item in plan["groups"]["delete_local"]],
-            ["local-folder/nested/file.txt", "local-folder/nested", "local-folder"],
-        )
-        self.assertEqual(result["status"], "complete")
-        self.assertFalse((local_root / "local-folder").exists())
-        self.assertTrue((local_root / "keep-remote").exists())
 
     def test_batch_sync_continues_after_file_error_and_reports_it(self) -> None:
         local_root = self.create_local_root({

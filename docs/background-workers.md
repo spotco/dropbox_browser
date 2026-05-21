@@ -103,13 +103,12 @@ same JSONL format from the isolated temp directory.
 
 ## Sync Job Workers
 
-`SyncJobManager` owns browser-triggered sync/delete work and grouped progress.
+`SyncJobManager` owns browser-triggered sync work and grouped progress.
 Single-file jobs have priority over queued batch jobs. Batch operations must
 continue after per-file failures and report errors in `/sync-status`.
 
 Sync may overwrite the selected destination in the selected direction, but it
-must not delete destination-only files except for explicit local-delete actions
-that the UI and route guard already require.
+must not delete destination-only files.
 
 Known performance caveat: `/sync-batch-plan` computes a plan for confirmation,
 then `/sync-batch` recomputes before queuing jobs. On large recursive folders

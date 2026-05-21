@@ -34,7 +34,7 @@ Useful `config.json` settings in the repository root:
 - `config_local.json`, when present, overrides `config.json` properties and is
   ignored by git for machine-local settings.
 - `FolderCacheWorkers` controls the background folder metadata/diff worker pool.
-- `SyncJobWorkers` controls the browser-triggered sync/delete worker pool.
+- `SyncJobWorkers` controls the browser-triggered sync worker pool.
 - `FolderCacheTTLSeconds` and `ListingCacheTTLSeconds` tune cache freshness.
 
 ## Run
@@ -66,7 +66,8 @@ Useful options:
 
 ## Safety Rules
 
-- The server has no delete endpoint.
+- The server does not execute delete operations. It can download a `.bat` file
+  containing local-only file delete commands for the user to review and run.
 - Browser uploads are not supported.
 - File sync, when enabled in the browser, is copy-only and may overwrite the
   selected destination file. It does not delete destination-only files.
