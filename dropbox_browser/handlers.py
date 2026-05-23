@@ -598,7 +598,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             else:
                 cache.invalidate(full_remote)
                 invalidated.append(full_remote)
-            cache.request(full_remote, page_time)
+                cache.request(full_remote, page_time)
         body = _json.dumps({
             "status": "refreshing",
             "path": rel_path,

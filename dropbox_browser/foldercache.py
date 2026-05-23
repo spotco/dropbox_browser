@@ -63,6 +63,15 @@ CACHE_DIR = PROJECT_ROOT / "Cache" / "FolderInfo"
 BREADTH_FIRST_DEPTH_CAP = 3
 
 
+def _same_or_child_path(path: str, root: str) -> bool:
+    root = root.rstrip("/")
+    if path == root:
+        return True
+    if root.endswith(":"):
+        return path.startswith(root)
+    return path.startswith(root + "/")
+
+
 @dataclass(order=True, frozen=True)
 class FolderJob:
     """Queued folder-cache job.
@@ -155,6 +164,7 @@ class FolderCacheManager:
         self._parent = self._state.parent
         self._child_contrib = self._state.child_contrib
         self._reschedule_after_cancel: dict[str, float] = {}
+        self._tree_invalidations: dict[str, float] = {}
         self._shutdown = False
         self._workers: list[threading.Thread] = []
 
@@ -227,6 +237,9 @@ class FolderCacheManager:
             return None
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
+            invalidated_at = self._tree_invalidated_at(remote_path)
+            if invalidated_at is not None and data.get("cached_at", 0) <= invalidated_at:
+                return None
             expected_local_root = str(self.local_root) if self.local_root is not None else None
             return validate_cache_record(
                 data,
@@ -270,9 +283,10 @@ class FolderCacheManager:
 
     def invalidate_tree(self, remote_path: str) -> list[str]:
         """Forget cached and in-memory metadata for a folder and known descendants."""
-        prefix = remote_path.rstrip("/") + "/"
+        invalidated_at = time.time()
         paths = {remote_path}
         with self._lock:
+            self._tree_invalidations[remote_path.rstrip("/")] = invalidated_at
             known_paths: set[str] = set(self._acc)
             known_paths.update(self._direct_done)
             known_paths.update(self._pending_children)
@@ -282,19 +296,47 @@ class FolderCacheManager:
             for child_paths in self._pending_children.values():
                 known_paths.update(child_paths)
             for path in known_paths:
-                if path == remote_path or path.startswith(prefix):
+                if _same_or_child_path(path, remote_path):
                     paths.add(path)
+        for path in sorted(paths, key=lambda value: value.count("/"), reverse=True):
+            self.invalidate(path)
+        self._start_tree_cleanup(remote_path, invalidated_at)
+        return sorted(paths, key=str.casefold)
+
+    def _tree_invalidated_at(self, remote_path: str) -> float | None:
+        with self._lock:
+            invalidated_at: float | None = None
+            for root, cutoff in self._tree_invalidations.items():
+                if _same_or_child_path(remote_path, root):
+                    invalidated_at = cutoff if invalidated_at is None else max(invalidated_at, cutoff)
+            return invalidated_at
+
+    def _start_tree_cleanup(self, remote_path: str, invalidated_at: float) -> None:
+        thread = threading.Thread(
+            target=self._cleanup_tree,
+            args=(remote_path, invalidated_at),
+            daemon=True,
+            name="folder-cache-cleanup",
+        )
+        thread.start()
+
+    def _cleanup_tree(self, remote_path: str, invalidated_at: float) -> None:
         for cache_file in list(CACHE_DIR.glob("*.json")):
             try:
                 data = json.loads(cache_file.read_text(encoding="utf-8"))
             except Exception:
                 continue
             cached_path = data.get("remote_path")
-            if isinstance(cached_path, str) and (cached_path == remote_path or cached_path.startswith(prefix)):
-                paths.add(cached_path)
-        for path in sorted(paths, key=lambda value: value.count("/"), reverse=True):
-            self.invalidate(path)
-        return sorted(paths, key=str.casefold)
+            cached_at = data.get("cached_at", 0)
+            if (
+                isinstance(cached_path, str)
+                and _same_or_child_path(cached_path, remote_path)
+                and cached_at <= invalidated_at
+            ):
+                try:
+                    cache_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
     def _write_cache(self, remote_path: str, complete: bool) -> None:
         """Flush current accumulated state to disk.  Lock must be held."""
