@@ -18,10 +18,20 @@ from .config import PROJECT_ROOT
 CACHE_DIR = PROJECT_ROOT / "Cache" / "ListingCache"
 
 
+def _same_or_child_path(path: str, root: str) -> bool:
+    root = root.rstrip("/")
+    if path == root:
+        return True
+    if root.endswith(":"):
+        return path.startswith(root)
+    return path.startswith(root + "/")
+
+
 class ListingCacheManager:
     def __init__(self, ttl_seconds: float = 1800):
         self.ttl_seconds = ttl_seconds
         self._lock = threading.Lock()
+        self._tree_invalidations: dict[str, float] = {}
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     def _cache_path(self, remote_path: str) -> Path:
@@ -35,6 +45,9 @@ class ListingCacheManager:
             return None
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
+            invalidated_at = self._tree_invalidated_at(remote_path)
+            if invalidated_at is not None and data.get("cached_at", 0) <= invalidated_at:
+                return None
             if time.time() - data.get("cached_at", 0) > self.ttl_seconds:
                 return None
             return data["items"]
@@ -56,21 +69,48 @@ class ListingCacheManager:
                 pass
 
     def invalidate_tree(self, remote_path: str) -> list[str]:
-        """Delete cached listings for a folder and known descendants."""
-        prefix = remote_path.rstrip("/") + "/"
-        paths = {remote_path}
+        """Invalidate cached listings for a folder and known descendants."""
+        invalidated_at = time.time()
         with self._lock:
-            for cache_file in list(CACHE_DIR.glob("*.json")):
+            self._tree_invalidations[remote_path.rstrip("/")] = invalidated_at
+            try:
+                self._cache_path(remote_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+        self._start_tree_cleanup(remote_path, invalidated_at)
+        return [remote_path]
+
+    def _tree_invalidated_at(self, remote_path: str) -> float | None:
+        with self._lock:
+            invalidated_at: float | None = None
+            for root, cutoff in self._tree_invalidations.items():
+                if _same_or_child_path(remote_path, root):
+                    invalidated_at = cutoff if invalidated_at is None else max(invalidated_at, cutoff)
+            return invalidated_at
+
+    def _start_tree_cleanup(self, remote_path: str, invalidated_at: float) -> None:
+        thread = threading.Thread(
+            target=self._cleanup_tree,
+            args=(remote_path, invalidated_at),
+            daemon=True,
+            name="listing-cache-cleanup",
+        )
+        thread.start()
+
+    def _cleanup_tree(self, remote_path: str, invalidated_at: float) -> None:
+        for cache_file in list(CACHE_DIR.glob("*.json")):
+            try:
+                data = json.loads(cache_file.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            cached_path = data.get("remote_path")
+            cached_at = data.get("cached_at", 0)
+            if (
+                isinstance(cached_path, str)
+                and _same_or_child_path(cached_path, remote_path)
+                and cached_at <= invalidated_at
+            ):
                 try:
-                    data = json.loads(cache_file.read_text(encoding="utf-8"))
-                except Exception:
-                    continue
-                cached_path = data.get("remote_path")
-                if isinstance(cached_path, str) and (cached_path == remote_path or cached_path.startswith(prefix)):
-                    paths.add(cached_path)
-            for path in paths:
-                try:
-                    self._cache_path(path).unlink(missing_ok=True)
+                    cache_file.unlink(missing_ok=True)
                 except Exception:
                     pass
-        return sorted(paths, key=str.casefold)

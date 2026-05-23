@@ -142,7 +142,61 @@ class CacheInvalidationTests(AppTestCase):
         self.assertIsNone(listing_cache.get("dropbox:music"))
         self.assertIsNone(listing_cache.get("dropbox:music/child"))
         self.assertIsNotNone(listing_cache.get("dropbox:other"))
-        self.assertEqual(folder_cache.requests, ["dropbox:music"])
+        self.assertEqual(folder_cache.requests, [])
+
+    def test_recursive_refresh_does_not_enqueue_recursive_folder_rebuild(self) -> None:
+        started = threading.Event()
+        wait_event = threading.Event()
+        rclone = SimulatedRclone({
+            "dropbox:music": [
+                SimulatedLsjsonResponse(
+                    items=[remote_dir_item("child")],
+                    started_event=started,
+                    wait_event=wait_event,
+                ),
+            ],
+        })
+        app = self._build_app(rclone, local_root=None, workers=1)
+        assert app.folder_cache is not None
+
+        with TestServer(app) as server:
+            server.post_json("/refresh-cache", {"path": "music", "recursive": "1"})
+
+            cache = app.folder_cache
+            with cache._lock:
+                self.assertNotIn("dropbox:music", cache._in_progress)
+
+            self.assertFalse(started.wait(0.05))
+            self.assertEqual(rclone.calls, [])
+
+        wait_event.set()
+
+    def test_listing_cache_invalidate_tree_marks_descendants_stale_without_scanning(self) -> None:
+        cache = ListingCacheManager(ttl_seconds=1800)
+        cache.set("dropbox:music", [{"Name": "old.txt"}])
+        cache.set("dropbox:music/child", [{"Name": "child.txt"}])
+        cache.set("dropbox:other", [{"Name": "other.txt"}])
+
+        invalidated = cache.invalidate_tree("dropbox:music")
+
+        self.assertEqual(invalidated, ["dropbox:music"])
+        self.assertIsNone(cache.get("dropbox:music"))
+        self.assertIsNone(cache.get("dropbox:music/child"))
+        self.assertIsNotNone(cache.get("dropbox:other"))
+
+        cache.set("dropbox:music/child", [{"Name": "fresh.txt"}])
+        self.assertEqual(cache.get("dropbox:music/child"), [{"Name": "fresh.txt"}])
+
+    def test_listing_cache_invalidate_tree_handles_remote_root_descendants(self) -> None:
+        cache = ListingCacheManager(ttl_seconds=1800)
+        cache.set("dropbox:", [{"Name": "old-root.txt"}])
+        cache.set("dropbox:music", [{"Name": "old-child.txt"}])
+
+        invalidated = cache.invalidate_tree("dropbox:")
+
+        self.assertEqual(invalidated, ["dropbox:"])
+        self.assertIsNone(cache.get("dropbox:"))
+        self.assertIsNone(cache.get("dropbox:music"))
 
     def test_folder_cache_invalidate_tree_removes_current_and_known_child_files(self) -> None:
         rclone = SimulatedRclone()
@@ -166,11 +220,27 @@ class CacheInvalidationTests(AppTestCase):
 
         invalidated = cache.invalidate_tree("dropbox:music")
 
-        self.assertEqual(invalidated, ["dropbox:music", "dropbox:music/child", "dropbox:music/live"])
+        self.assertEqual(invalidated, ["dropbox:music", "dropbox:music/live"])
         self.assertFalse(cache._cache_path("dropbox:music").exists())
-        self.assertFalse(cache._cache_path("dropbox:music/child").exists())
+        self.assertIsNone(cache.get("dropbox:music/child"))
         self.assertTrue(cache._cache_path("dropbox:other").exists())
         self.assertNotIn("dropbox:music/live", cache._acc)
+
+        with cache._lock:
+            cache._acc["dropbox:music/child"] = {
+                "size": 0,
+                "count": 0,
+                "mtime": None,
+                "diff_status": "unavailable",
+                "diff_complete": True,
+                "first_diff_path": None,
+                "file_statuses": {},
+                "direct_items": [],
+                "direct_files": [],
+                "direct_folders": [],
+            }
+            cache._write_cache("dropbox:music/child", complete=True)
+        self.assertIsNotNone(cache.get("dropbox:music/child"))
 
     def test_manual_refresh_invalidates_current_folder_metadata_cache(self) -> None:
         local_root = self.create_local_root({
