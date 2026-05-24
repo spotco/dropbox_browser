@@ -59,7 +59,7 @@ class RcloneCancelToken:
 
 @dataclass(frozen=True)
 class RcloneRetryPolicy:
-    max_attempts: int = 4
+    max_attempts: int = 25
     min_timeout: float = 10.0
     timeout_per_gib: float = 20.0
     max_initial_timeout: float = 300.0
