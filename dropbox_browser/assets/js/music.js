@@ -51,6 +51,7 @@
   var scrubberDragging = false;
   var defaultVolume = 1;
   var metadataRequestId = 0;
+  var metadataLoadedRemotePath = null;
   var metadataChunkSize = 262144;
   var currentArtObjectUrl = null;
   var metadataTitleLoading = 'Loading title...';
@@ -261,6 +262,8 @@
     var start;
     var end;
 
+    if (treeEl && document.activeElement !== treeEl) treeEl.focus();
+
     if (ev.shiftKey && selectionAnchor) {
       index = visibleNodeIds.indexOf(nodeId);
       start = visibleNodeIds.indexOf(selectionAnchor);
@@ -288,6 +291,55 @@
       row.setAttribute('aria-selected', selectedIds[row.dataset.nodeId] ? 'true' : 'false');
     });
     pane.dataset.librarySelectionCount = String(selectedCount());
+  }
+
+  function primarySelectedLibraryNodeId() {
+    if (selectionAnchor && selectedIds[selectionAnchor]) return selectionAnchor;
+    return Object.keys(selectedIds)[0] || null;
+  }
+
+  function selectAllVisibleLibraryNodes() {
+    clearObject(selectedIds);
+    visibleNodeIds.forEach(function (nodeId) {
+      selectedIds[nodeId] = true;
+    });
+    if (!selectedIds[selectionAnchor]) selectionAnchor = visibleNodeIds[0] || null;
+    renderSelection();
+  }
+
+  function selectVisibleLibrarySiblingsOfCurrentSelection() {
+    var nodes = libraryNodesById();
+    var primaryNodeId = primarySelectedLibraryNodeId();
+    var primaryNode = primaryNodeId ? nodes[primaryNodeId] : null;
+    var parentId;
+    if (!primaryNode) {
+      selectAllVisibleLibraryNodes();
+      return;
+    }
+    parentId = primaryNode.parent_id || '';
+    clearObject(selectedIds);
+    visibleNodeIds.forEach(function (nodeId) {
+      var node = nodes[nodeId];
+      if (node && (node.parent_id || '') === parentId) selectedIds[nodeId] = true;
+    });
+    selectionAnchor = primaryNodeId;
+    renderSelection();
+  }
+
+  function handleLibrarySelectAllShortcut(ev) {
+    if (!(ev.ctrlKey || ev.metaKey) || ev.shiftKey || ev.altKey) return;
+    if (String(ev.key || '').toLowerCase() !== 'a') return;
+    ev.preventDefault();
+    performLibrarySelectAll();
+  }
+
+  function performLibrarySelectAll() {
+    if (treeEl && document.activeElement !== treeEl) treeEl.focus();
+    if (selectedCount() === 0) {
+      selectAllVisibleLibraryNodes();
+      return;
+    }
+    selectVisibleLibrarySiblingsOfCurrentSelection();
   }
 
   function hideLibraryContextMenu() {
@@ -877,6 +929,14 @@
       });
   }
 
+  function maybeStartCurrentSongMetadataLoad() {
+    var song = currentSong();
+    if (!song || !song.remote_path) return;
+    if (metadataLoadedRemotePath === song.remote_path) return;
+    metadataLoadedRemotePath = song.remote_path;
+    startMetadataLoad(song);
+  }
+
   function clampVolume(value) {
     if (!Number.isFinite(value)) return defaultVolume;
     return Math.max(0, Math.min(value, 1));
@@ -940,6 +1000,7 @@
 
   function clearCurrentSong() {
     metadataRequestId += 1;
+    metadataLoadedRemotePath = null;
     revokeCurrentArtObjectUrl();
     currentPlaylistIndex = -1;
     if (audio) {
@@ -964,7 +1025,7 @@
     resetNowPlayingForSong(song);
     setPlaybackStatus('');
     setPlayPauseVisualState(true);
-    startMetadataLoad(song);
+    metadataLoadedRemotePath = null;
     restoreVolume();
     if (audio) {
       audio.src = streamUrl(song);
@@ -1058,6 +1119,7 @@
     var index;
     var start;
     var remotePaths = playlist.map(function (song) { return song.remote_path; });
+    if (playlistListEl && document.activeElement !== playlistListEl) playlistListEl.focus();
     if (ev.shiftKey && playlistSelectionAnchor) {
       index = remotePaths.indexOf(remotePath);
       start = remotePaths.indexOf(playlistSelectionAnchor);
@@ -1087,6 +1149,29 @@
       row.setAttribute('aria-selected', selected ? 'true' : 'false');
     });
     pane.dataset.playlistSelectionCount = String(playlistSelectedCount());
+  }
+
+  function selectAllPlaylistSongs() {
+    clearObject(selectedPlaylistRemotePaths);
+    playlist.forEach(function (song) {
+      if (song && song.remote_path) selectedPlaylistRemotePaths[song.remote_path] = true;
+    });
+    if (!selectedPlaylistRemotePaths[playlistSelectionAnchor]) {
+      playlistSelectionAnchor = playlist[0] ? playlist[0].remote_path : null;
+    }
+    renderPlaylistSelection();
+  }
+
+  function handlePlaylistSelectAllShortcut(ev) {
+    if (!(ev.ctrlKey || ev.metaKey) || ev.shiftKey || ev.altKey) return;
+    if (String(ev.key || '').toLowerCase() !== 'a') return;
+    ev.preventDefault();
+    performPlaylistSelectAll();
+  }
+
+  function performPlaylistSelectAll() {
+    if (playlistListEl && document.activeElement !== playlistListEl) playlistListEl.focus();
+    selectAllPlaylistSongs();
   }
 
   function openPlaylistContextMenu(ev, remotePath) {
@@ -1205,7 +1290,7 @@
     if (!snapshot) {
       var empty = document.createElement('div');
       empty.className = 'music-empty-state';
-      empty.textContent = 'Load the current folder library to show cached songs.';
+      empty.textContent = 'Load the current folder to show cached songs.';
       treeEl.appendChild(empty);
       return;
     }
@@ -1309,6 +1394,7 @@
     libraryMenu.addEventListener('click', function (ev) {
       var action = ev.target && ev.target.getAttribute('data-action');
       if (action === 'add-selected') addSongsToPlaylist(selectedSongsForPlaylist());
+      if (action === 'select-all') performLibrarySelectAll();
       hideLibraryContextMenu();
     });
   }
@@ -1318,6 +1404,7 @@
       var action = ev.target && ev.target.getAttribute('data-action');
       if (action === 'play') playPlaylistRemotePath(playlistContextRemotePath || Object.keys(selectedPlaylistRemotePaths)[0]);
       if (action === 'remove') removeSelectedPlaylistSongs();
+      if (action === 'select-all') performPlaylistSelectAll();
       hidePlaylistContextMenu();
     });
   }
@@ -1350,6 +1437,8 @@
       applySeekFromSlider();
     });
   }
+  if (treeEl) treeEl.addEventListener('keydown', handleLibrarySelectAllShortcut);
+  if (playlistListEl) playlistListEl.addEventListener('keydown', handlePlaylistSelectAllShortcut);
   if (audio) {
     audio.addEventListener('loadedmetadata', function () {
       syncDurationDisplay();
@@ -1374,6 +1463,9 @@
       setPlayPauseVisualState(true);
       syncDurationDisplay();
       syncCurrentTimeDisplay();
+    });
+    audio.addEventListener('playing', function () {
+      maybeStartCurrentSongMetadataLoad();
     });
     audio.addEventListener('pause', function () {
       setPlayPauseVisualState(false);

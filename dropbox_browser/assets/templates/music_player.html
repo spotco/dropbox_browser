@@ -2,14 +2,14 @@
   <div class="music-player-shell" aria-label="Music player">
     <section id="music-library-pane" class="music-subpane music-library-pane" aria-labelledby="music-library-title">
       <div class="music-subpane-header">
-        <h2 id="music-library-title">Folder Song Library</h2>
-        <button type="button" id="music-library-load">Load Current Folder Library</button>
+        <h2 id="music-library-title">Song Library</h2>
+        <button type="button" id="music-library-load">Load Current Folder</button>
       </div>
       <div id="music-library-status" class="music-library-status" role="status">
         Library not loaded.
       </div>
       <div id="music-library-tree" class="music-library-tree" role="tree" tabindex="0">
-        <div class="music-empty-state">Load the current folder library to show cached songs.</div>
+        <div class="music-empty-state">Load the current folder to show cached songs.</div>
       </div>
     </section>
 
@@ -27,7 +27,7 @@
           <div role="columnheader">Filename</div>
           <div role="columnheader">Relative Path</div>
         </div>
-        <div id="music-playlist-list" class="music-playlist-list" role="rowgroup">
+        <div id="music-playlist-list" class="music-playlist-list" role="rowgroup" tabindex="0">
           <div class="music-empty-state">Playlist is empty.</div>
         </div>
       </div>
@@ -91,10 +91,12 @@
 
     <div id="music-library-context-menu" class="music-context-menu hidden" hidden>
       <button type="button" data-action="add-selected">Add to playlist</button>
+      <button type="button" data-action="select-all">Select All</button>
     </div>
     <div id="music-playlist-context-menu" class="music-context-menu hidden" hidden>
       <button type="button" data-action="play">Play</button>
       <button type="button" data-action="remove">Remove</button>
+      <button type="button" data-action="select-all">Select All</button>
     </div>
   </div>
 </div>
