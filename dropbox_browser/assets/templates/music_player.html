@@ -35,19 +35,60 @@
 
     <section id="music-playback-pane" class="music-subpane music-playback-pane" aria-labelledby="music-playback-title">
       <h2 id="music-playback-title">Playback Controls</h2>
-      <div class="music-now-playing">
-        <div id="music-art-placeholder" class="music-art-placeholder" aria-hidden="true"></div>
-        <div class="music-track-details">
-          <div id="music-current-filename" class="music-current-filename">No song selected</div>
+      <div class="music-playback-surface" aria-label="Playback controls">
+        <div class="music-now-playing">
+          <div class="music-art-shell">
+            <img id="music-cover-art" class="music-cover-art hidden" alt="Current song cover art" hidden>
+            <div id="music-art-placeholder" class="music-art-placeholder" aria-label="No cover art available"></div>
+          </div>
+          <div class="music-track-details">
+            <div id="music-current-filename" class="music-current-filename" title="Current filename">No song selected</div>
+            <div id="music-song-title" class="music-song-title" title="Song title">Title unavailable</div>
+            <div id="music-song-artist" class="music-song-artist" title="Song artist">Artist unavailable</div>
+          </div>
         </div>
-      </div>
-      <div class="music-player-controls" aria-label="Playback controls">
-        <button type="button" id="music-prev">Previous</button>
-        <button type="button" id="music-play">Play</button>
-        <button type="button" id="music-pause">Pause</button>
-        <button type="button" id="music-next">Next</button>
-        <button type="button" id="music-shuffle-toggle" aria-pressed="false">Order</button>
-        <button type="button" id="music-loop-toggle" aria-pressed="false">Loop</button>
+        <div class="music-progress-group">
+          <input type="range" id="music-progress-slider" class="music-progress-slider" min="0" max="0" value="0" step="1" aria-label="Playback position">
+          <div class="music-time-row" aria-label="Playback time">
+            <span id="music-elapsed-time" class="music-time-label">00:00:00</span>
+            <span id="music-total-time" class="music-time-label">00:00:00</span>
+          </div>
+        </div>
+        <div class="music-transport-row">
+          <button type="button" id="music-prev" aria-label="Previous track" title="Previous track">
+            <img class="music-button-icon" src="/assets/icons/material-icon-theme/music-prev.svg" alt="" aria-hidden="true">
+            <span class="music-button-label">Prev</span>
+          </button>
+          <button type="button" id="music-play" aria-label="Play" title="Play">
+            <img class="music-button-icon" src="/assets/icons/material-icon-theme/music-play.svg" alt="" aria-hidden="true">
+            <span class="music-button-label">Play</span>
+          </button>
+          <button type="button" id="music-pause" aria-label="Pause" title="Pause" class="hidden" hidden>
+            <img class="music-button-icon" src="/assets/icons/material-icon-theme/music-pause.svg" alt="" aria-hidden="true">
+            <span class="music-button-label">Pause</span>
+          </button>
+          <button type="button" id="music-next" aria-label="Next track" title="Next track">
+            <img class="music-button-icon" src="/assets/icons/material-icon-theme/music-next.svg" alt="" aria-hidden="true">
+            <span class="music-button-label">Next</span>
+          </button>
+        </div>
+        <div class="music-player-controls" aria-label="Playback mode controls">
+          <button type="button" id="music-shuffle-toggle" aria-pressed="false" title="Toggle shuffle">
+            <img class="music-button-icon" src="/assets/icons/material-icon-theme/music-shuffle.svg" alt="" aria-hidden="true">
+            <span class="music-button-label">Order</span>
+          </button>
+          <button type="button" id="music-loop-toggle" aria-pressed="false" title="Toggle loop">
+            <img class="music-button-icon" src="/assets/icons/material-icon-theme/music-loop.svg" alt="" aria-hidden="true">
+            <span class="music-button-label">Loop</span>
+          </button>
+        </div>
+        <div class="music-volume-row">
+          <label class="music-volume-label" for="music-volume-slider">
+            <img class="music-button-icon" src="/assets/icons/material-icon-theme/music-volume.svg" alt="" aria-hidden="true">
+            <span class="music-button-label">Volume</span>
+          </label>
+          <input type="range" id="music-volume-slider" class="music-volume-slider" min="0" max="1" value="1" step="0.01" aria-label="Volume">
+        </div>
       </div>
       <audio id="music-audio" preload="metadata"></audio>
     </section>
