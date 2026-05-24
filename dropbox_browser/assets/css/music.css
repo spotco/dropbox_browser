@@ -39,8 +39,8 @@
 
 .music-player-shell {
   display: grid;
-  gap: 1px;
-  grid-template-columns: minmax(190px, 1.05fr) minmax(210px, 1.15fr) minmax(220px, 0.8fr);
+  gap: 0;
+  grid-template-columns: minmax(190px, 1.05fr) 8px minmax(210px, 1.15fr) 8px minmax(220px, 0.8fr);
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -53,6 +53,39 @@
   min-height: 0;
   min-width: 0;
   overflow: hidden;
+}
+
+.music-pane-resizer {
+  background: #0f1724;
+  border-left: 1px solid #223247;
+  border-right: 1px solid #223247;
+  cursor: col-resize;
+  min-height: 0;
+  position: relative;
+  touch-action: none;
+}
+
+.music-pane-resizer::before {
+  background: #5f90b7;
+  border-radius: 999px;
+  content: "";
+  height: 32px;
+  left: 50%;
+  opacity: 0.35;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+}
+
+.music-pane-resizer:hover,
+.music-pane-resizer.dragging {
+  background: #172434;
+}
+
+.music-pane-resizer:hover::before,
+.music-pane-resizer.dragging::before {
+  opacity: 0.85;
 }
 
 .music-subpane-header {
@@ -88,6 +121,7 @@
 .music-playlist-list {
   flex: 1 1 auto;
   min-height: 0;
+  overscroll-behavior: contain;
   overflow: auto;
 }
 
@@ -543,6 +577,10 @@
 @media (max-width: 860px) {
   .music-player-shell {
     grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr);
+  }
+
+  .music-pane-resizer {
+    display: none;
   }
 
   .music-playback-pane {
