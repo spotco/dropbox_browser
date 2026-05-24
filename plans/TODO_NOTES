@@ -1,5 +1,6 @@
-- music player:			
-- active playlist
+- music player: right click context menu icons
+
+- music player active playlist:
 	list should display:
 		filename
 		path (relative to dropbox root)
@@ -7,8 +8,24 @@
 	
 	save/load playlists
 	import playlists from poweramp format
+	persist current playlist
+
+- music player song library:
+	sort by name or date
+		keep window focused on same first selected element
+		
+- music player:
+	coverart not working (test?)
+		
+- page loading: should be client side (but maintain deep URL links)
+	re-sorting: should not be a page refresh.
+	make camera uploads folder performant
+	client-only filters for current page	
 
 - anime player with switch audio/subtitles in browser
 - add file search as a tab from cache only
 - add image preview with cache
-- add openmap/googlemap image location visualization
+- add openmap/googlemap image location visualization (for camera uploads)
+
+- music player:
+	intensity graph of song (if window focused)

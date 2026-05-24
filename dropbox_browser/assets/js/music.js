@@ -2,12 +2,18 @@
   var pane = document.getElementById('music-player-pane');
   if (!pane) return;
 
+  var playerShell = pane.querySelector('.music-player-shell');
   var loadButton = document.getElementById('music-library-load');
   var statusEl = document.getElementById('music-library-status');
   var treeEl = document.getElementById('music-library-tree');
+  var libraryPane = document.getElementById('music-library-pane');
+  var libraryPlaylistResizer = document.getElementById('music-resizer-library-playlist');
   var playlistListEl = document.getElementById('music-playlist-list');
+  var playlistPane = document.getElementById('music-playlist-pane');
+  var playlistPlaybackResizer = document.getElementById('music-resizer-playlist-playback');
   var libraryMenu = document.getElementById('music-library-context-menu');
   var playlistMenu = document.getElementById('music-playlist-context-menu');
+  var playbackPane = document.getElementById('music-playback-pane');
   var audio = document.getElementById('music-audio');
   var currentFilenameEl = document.getElementById('music-current-filename');
   var songTitleEl = document.getElementById('music-song-title');
@@ -44,6 +50,11 @@
   var playlistSelectionAnchor = null;
   var playlistContextRemotePath = null;
   var currentPlaylistIndex = -1;
+  var musicPaneWidthSettingKey = 'music-pane-widths';
+  var musicPaneResizerWidth = 8;
+  var defaultMusicPanePercents = [35, 38.333333, 26.666667];
+  var minMusicPaneWidthsPx = [190, 210, 220];
+  var currentMusicPanePercents = defaultMusicPanePercents.slice();
   var shuffleEnabled = false;
   var loopPlaylist = false;
   var shuffleBag = [];
@@ -73,6 +84,136 @@
     Object.keys(obj).forEach(function (key) {
       delete obj[key];
     });
+  }
+
+  function normalizeMusicPanePercents(values) {
+    if (!Array.isArray(values) || values.length !== 3) return defaultMusicPanePercents.slice();
+    var parsed = values.map(function (value) {
+      return Number(value);
+    });
+    if (parsed.some(function (value) { return !Number.isFinite(value) || value <= 0; })) {
+      return defaultMusicPanePercents.slice();
+    }
+    var total = parsed[0] + parsed[1] + parsed[2];
+    if (!Number.isFinite(total) || total <= 0) return defaultMusicPanePercents.slice();
+    return parsed.map(function (value) {
+      return (value / total) * 100;
+    });
+  }
+
+  function musicPaneResizeEnabled() {
+    return !!(playerShell && libraryPlaylistResizer && playlistPlaybackResizer &&
+      window.getComputedStyle(libraryPlaylistResizer).display !== 'none' &&
+      window.getComputedStyle(playlistPlaybackResizer).display !== 'none');
+  }
+
+  function musicPaneAvailableWidth() {
+    if (!playerShell) return 0;
+    return Math.max(
+      0,
+      playerShell.getBoundingClientRect().width - (musicPaneResizerWidth * 2)
+    );
+  }
+
+  function adjustedMusicPanePixels(rawWidths, totalWidth) {
+    var minimumTotal = minMusicPaneWidthsPx[0] + minMusicPaneWidthsPx[1] + minMusicPaneWidthsPx[2];
+    var targetTotal = Math.max(totalWidth, minimumTotal);
+    var remaining = targetTotal - minimumTotal;
+    var extras = rawWidths.map(function (width, index) {
+      return Math.max(0, width - minMusicPaneWidthsPx[index]);
+    });
+    var extraTotal = extras[0] + extras[1] + extras[2];
+    if (extraTotal <= 0) {
+      extras = defaultMusicPanePercents.map(function (percent, index) {
+        return Math.max(0, (targetTotal * percent / 100) - minMusicPaneWidthsPx[index]);
+      });
+      extraTotal = extras[0] + extras[1] + extras[2];
+    }
+    if (extraTotal <= 0) {
+      extras = [1, 1, 1];
+      extraTotal = 3;
+    }
+    return minMusicPaneWidthsPx.map(function (minimum, index) {
+      return minimum + (remaining * extras[index] / extraTotal);
+    });
+  }
+
+  function persistMusicPanePercents(widths) {
+    currentMusicPanePercents = normalizeMusicPanePercents(widths);
+    Settings.set(musicPaneWidthSettingKey, currentMusicPanePercents);
+  }
+
+  function applyMusicPanePercents(widths, persist) {
+    var normalized = normalizeMusicPanePercents(widths);
+    var availableWidth;
+    var pixels;
+    currentMusicPanePercents = normalized.slice();
+    if (!playerShell) return normalized;
+    if (!musicPaneResizeEnabled()) {
+      playerShell.style.removeProperty('grid-template-columns');
+      if (persist !== false) persistMusicPanePercents(normalized);
+      return normalized;
+    }
+    availableWidth = musicPaneAvailableWidth();
+    pixels = adjustedMusicPanePixels(normalized.map(function (percent) {
+      return availableWidth * percent / 100;
+    }), availableWidth);
+    normalized = normalizeMusicPanePercents(pixels);
+    currentMusicPanePercents = normalized.slice();
+    playerShell.style.gridTemplateColumns =
+      pixels[0] + 'px ' + musicPaneResizerWidth + 'px ' +
+      pixels[1] + 'px ' + musicPaneResizerWidth + 'px ' +
+      pixels[2] + 'px';
+    if (persist !== false) persistMusicPanePercents(normalized);
+    return normalized;
+  }
+
+  function readSavedMusicPanePercents() {
+    return normalizeMusicPanePercents(Settings.get(musicPaneWidthSettingKey, defaultMusicPanePercents));
+  }
+
+  function currentMusicPanePixels() {
+    return [
+      libraryPane ? libraryPane.getBoundingClientRect().width : 0,
+      playlistPane ? playlistPane.getBoundingClientRect().width : 0,
+      playbackPane ? playbackPane.getBoundingClientRect().width : 0
+    ];
+  }
+
+  function startMusicPaneResize(resizerIndex, ev) {
+    if (!musicPaneResizeEnabled()) return;
+    ev.preventDefault();
+    var startX = ev.clientX;
+    var startWidths = currentMusicPanePixels();
+    var activeResizer = resizerIndex === 0 ? libraryPlaylistResizer : playlistPlaybackResizer;
+    if (!activeResizer) return;
+    activeResizer.classList.add('dragging');
+
+    function move(moveEv) {
+      var delta = moveEv.clientX - startX;
+      var widths = startWidths.slice();
+      var pairStartIndex = resizerIndex;
+      var totalPairWidth = startWidths[pairStartIndex] + startWidths[pairStartIndex + 1];
+      var nextWidth = Math.min(
+        Math.max(startWidths[pairStartIndex] + delta, minMusicPaneWidthsPx[pairStartIndex]),
+        totalPairWidth - minMusicPaneWidthsPx[pairStartIndex + 1]
+      );
+      widths[pairStartIndex] = nextWidth;
+      widths[pairStartIndex + 1] = totalPairWidth - nextWidth;
+      applyMusicPanePercents(widths, false);
+    }
+
+    function end() {
+      activeResizer.classList.remove('dragging');
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', end);
+      persistMusicPanePercents(currentMusicPanePercents);
+    }
+
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
   }
 
   function selectedCount() {
@@ -1437,6 +1578,16 @@
       applySeekFromSlider();
     });
   }
+  if (libraryPlaylistResizer) {
+    libraryPlaylistResizer.addEventListener('pointerdown', function (ev) {
+      startMusicPaneResize(0, ev);
+    });
+  }
+  if (playlistPlaybackResizer) {
+    playlistPlaybackResizer.addEventListener('pointerdown', function (ev) {
+      startMusicPaneResize(1, ev);
+    });
+  }
   if (treeEl) treeEl.addEventListener('keydown', handleLibrarySelectAllShortcut);
   if (playlistListEl) playlistListEl.addEventListener('keydown', handlePlaylistSelectAllShortcut);
   if (audio) {
@@ -1499,14 +1650,21 @@
 
   window.addEventListener('bottom-pane-mode-changed', function (ev) {
     if (!ev.detail) return;
-    if (ev.detail.mode === 'music-player') schedulePoll();
+    if (ev.detail.mode === 'music-player') {
+      applyMusicPanePercents(readSavedMusicPanePercents(), false);
+      schedulePoll();
+    }
     else stopPolling();
     scheduleNowPlayingMarqueeRefresh();
   });
 
-  window.addEventListener('resize', scheduleNowPlayingMarqueeRefresh);
+  window.addEventListener('resize', function () {
+    applyMusicPanePercents(currentMusicPanePercents, false);
+    scheduleNowPlayingMarqueeRefresh();
+  });
   window.addEventListener('beforeunload', stopPolling);
   resetLibraryForCurrentFolder();
+  applyMusicPanePercents(readSavedMusicPanePercents(), false);
   resetProgressDisplay();
   showUnknownMetadata();
   restoreVolume();
