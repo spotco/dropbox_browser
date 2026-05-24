@@ -1,3 +1,7 @@
+sync to local: 
+	only 4 retries, is this true?
+	should be infinite retries - verify timeout time is doubling every time
+
 - music player:			
 - active playlist
 	list should display:
@@ -7,7 +11,8 @@
 	
 	save/load playlists
 	import playlists from poweramp format
-		
+
+- anime player with switch audio/subtitles in browser
 - add file search as a tab from cache only
 - add image preview with cache
 - add openmap/googlemap image location visualization

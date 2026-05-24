@@ -7,6 +7,7 @@ Upstream: https://github.com/material-extensions/vscode-material-icon-theme
 License: MIT, included in `LICENSE`.
 
 These assets are used for file/folder icon rendering and the browser favicon.
+The music player also uses local playback-control SVGs in this same directory.
 
 Notes for later mapping:
 
