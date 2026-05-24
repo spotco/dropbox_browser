@@ -1,7 +1,7 @@
 # Music Player Implementation Plan
 
 This plan tracks sequential implementation tasks for the bottom-pane music
-player. Design details are summarized in `DESIGN_MUSICPLAYER.md`.
+player. Design details are summarized in `plans/DESIGN_MUSICPLAYER.md`.
 
 ## Progress
 
@@ -9,7 +9,7 @@ player. Design details are summarized in `DESIGN_MUSICPLAYER.md`.
   `docs/testing.md`.
 - [x] Inspect current bottom-pane, asset, streaming, and cache integration
   points.
-- [x] Write `DESIGN_MUSICPLAYER.md`.
+- [x] Write `plans/DESIGN_MUSICPLAYER.md`.
 - [x] Write this implementation plan.
 - [x] Implement server endpoint module.
 - [ ] Implement client UI and playback behavior.
