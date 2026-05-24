@@ -1,7 +1,3 @@
-sync to local: 
-	only 4 retries, is this true?
-	should be infinite retries - verify timeout time is doubling every time
-
 - music player:			
 - active playlist
 	list should display:
