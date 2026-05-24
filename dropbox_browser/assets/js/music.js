@@ -18,7 +18,8 @@
   var loopButton = document.getElementById('music-loop-toggle');
   var controls = pane.querySelector('.music-player-controls');
   var currentFolder = document.body.dataset.currentFolderPath || '';
-  var pollDelayMs = 4000;
+  var defaultPollDelayMs = 4000;
+  var pollDelayMs = defaultPollDelayMs;
   var pollTimer = null;
   var libraryRequested = false;
   var loading = false;
@@ -38,6 +39,7 @@
   var shuffleEnabled = false;
   var loopPlaylist = false;
   var shuffleBag = [];
+  var lastLibraryFingerprint = '';
 
   pane.setAttribute('data-player-ready', 'library');
   if (controls) controls.setAttribute('data-controls-ready', 'markup');
@@ -87,6 +89,28 @@
     pollTimer = window.setTimeout(function () {
       fetchLibrary(true);
     }, pollDelayMs);
+  }
+
+  function libraryFingerprint(data) {
+    var fingerprintData;
+    var status;
+    if (!data) return JSON.stringify(null);
+    fingerprintData = {
+      root: data.root || null,
+      folders: data.folders || [],
+      songs: data.songs || [],
+      status: null
+    };
+    status = data.status || null;
+    if (status) {
+      fingerprintData.status = {
+        cache_status: status.cache_status || '',
+        complete: !!status.complete,
+        message: status.message || '',
+        missing_listing_count: status.missing_listing_count || 0
+      };
+    }
+    return JSON.stringify(fingerprintData);
   }
 
   function indexByParent(items) {
@@ -174,6 +198,11 @@
     row.addEventListener('click', function (ev) {
       selectNode(node.id, ev);
     });
+    if (kind === 'song') {
+      row.addEventListener('dblclick', function () {
+        addSongToPlaylistAndPlay(node);
+      });
+    }
     row.addEventListener('contextmenu', function (ev) {
       openLibraryContextMenu(ev, node.id, kind);
     });
@@ -238,8 +267,6 @@
     }
     contextNodeId = nodeId;
     if (!libraryMenu) return;
-    var folderButton = libraryMenu.querySelector('[data-action="add-folder"]');
-    if (folderButton) folderButton.hidden = kind !== 'folder';
     libraryMenu.style.left = ev.clientX + 'px';
     libraryMenu.style.top = ev.clientY + 'px';
     libraryMenu.hidden = false;
@@ -300,6 +327,20 @@
     if (added) resetShuffleBag();
     renderPlaylist();
     setStatus(added ? 'Added ' + added + ' cached song' + (added === 1 ? '' : 's') + ' to playlist.' : 'No new cached songs to add.');
+  }
+
+  function focusPlaylistRemotePath(remotePath) {
+    var rows;
+    var target = null;
+    if (!playlistListEl || !remotePath) return;
+    rows = playlistListEl.querySelectorAll('.music-playlist-entry');
+    Array.prototype.forEach.call(rows, function (row) {
+      if (!target && row.dataset.remotePath === remotePath) target = row;
+    });
+    if (!target) return;
+    if (typeof target.scrollIntoView === 'function') {
+      target.scrollIntoView({block: 'nearest'});
+    }
   }
 
   function playlistIndexByRemotePath(remotePath) {
@@ -433,6 +474,17 @@
   function playPlaylistRemotePath(remotePath) {
     var index = playlistIndexByRemotePath(remotePath);
     if (index !== -1) playPlaylistIndex(index);
+  }
+
+  function addSongToPlaylistAndPlay(song) {
+    if (!song || !song.remote_path) return;
+    addSongsToPlaylist([song]);
+    clearObject(selectedPlaylistRemotePaths);
+    selectedPlaylistRemotePaths[song.remote_path] = true;
+    playlistSelectionAnchor = song.remote_path;
+    renderPlaylistSelection();
+    focusPlaylistRemotePath(song.remote_path);
+    playPlaylistRemotePath(song.remote_path);
   }
 
   function selectPlaylistRemotePath(remotePath, ev) {
@@ -626,6 +678,13 @@
   }
 
   function applyLibrarySnapshot(data) {
+    var fingerprint = libraryFingerprint(data);
+    if (fingerprint && fingerprint === lastLibraryFingerprint) {
+      pollDelayMs *= 2;
+    } else {
+      pollDelayMs = defaultPollDelayMs;
+      lastLibraryFingerprint = fingerprint;
+    }
     librarySnapshot = data;
     if (data.root && data.root.id && expandedIds[data.root.id] === undefined) {
       expandedIds[data.root.id] = true;
@@ -661,6 +720,8 @@
     libraryRoot = currentFolder;
     libraryRequested = false;
     librarySnapshot = null;
+    lastLibraryFingerprint = '';
+    pollDelayMs = defaultPollDelayMs;
     selectionAnchor = null;
     clearObject(expandedIds);
     clearObject(selectedIds);
@@ -679,7 +740,6 @@
     libraryMenu.addEventListener('click', function (ev) {
       var action = ev.target && ev.target.getAttribute('data-action');
       if (action === 'add-selected') addSongsToPlaylist(selectedSongsForPlaylist());
-      if (action === 'add-folder' && contextNodeId) addSongsToPlaylist(songsUnderFolder(contextNodeId));
       hideLibraryContextMenu();
     });
   }

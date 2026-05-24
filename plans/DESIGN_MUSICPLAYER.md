@@ -1,7 +1,7 @@
 # Music Player Design
 
 This document summarizes the initial browser-based music player design. The
-implementation plan is tracked in `PLAN_MUSICPLAYER.md`.
+implementation plan is tracked in `plans/PLAN_MUSICPLAYER.md`.
 
 ## Goals
 
