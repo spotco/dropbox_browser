@@ -5,6 +5,12 @@ import {initLibrary} from './music-library.js';
 
 (function () {
   var pane = document.getElementById('music-player-pane');
+  var body = document.body;
+  var pollDelayAttr = body ? body.dataset.musicLibraryPollDelayMs : '';
+  var parsedPollDelayMs = Number.parseInt(pollDelayAttr || '', 10);
+  var defaultPollDelayMs = Number.isFinite(parsedPollDelayMs) && parsedPollDelayMs > 0
+    ? parsedPollDelayMs
+    : 4000;
   if (!pane) return;
 
   var ctx = {
@@ -43,7 +49,7 @@ import {initLibrary} from './music-library.js';
     state: {
       currentFolder: document.body.dataset.currentFolderPath || '',
       loadButtonDefaultText: '',
-      defaultPollDelayMs: 4000,
+      defaultPollDelayMs: defaultPollDelayMs,
       pollTimer: null,
       loadTimer: null,
       libraryPollingActive: false,
