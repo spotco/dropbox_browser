@@ -1,8 +1,18 @@
 import {setTextOrFallback} from './music-shared.js';
+import {resolveCoverArtFromMetadata, supportedArtMime} from './music-coverart.js';
 
 export function createMetadataController(ctx) {
   var els = ctx.els;
   var state = ctx.state;
+  var metadataDebugLoggingEnabled = false;
+
+  function metadataLog(eventName, details) {
+    if (!metadataDebugLoggingEnabled) return;
+    var payload = details || {};
+    try {
+      console.log('[music-metadata]', eventName, payload);
+    } catch (_err) {}
+  }
 
   function setMarqueeState(el) {
     var shouldScroll;
@@ -41,18 +51,23 @@ export function createMetadataController(ctx) {
     state.currentArtObjectUrl = null;
   }
 
-  function supportedArtMime(mime) {
-    return mime === 'image/jpeg' || mime === 'image/png' || mime === 'image/gif' || mime === 'image/webp';
-  }
-
   function setCoverArtImage(art) {
     var blob;
     revokeCurrentArtObjectUrl();
     if (!els.coverArtEl || !art || !art.bytes || !art.bytes.length) {
+      metadataLog('coverart-missing', {
+        hasElement: !!els.coverArtEl,
+        hasArt: !!art,
+        byteLength: art && art.bytes ? art.bytes.length : 0,
+      });
       setCoverArtPlaceholderState('empty');
       return false;
     }
     if (!supportedArtMime(art.mime || '')) {
+      metadataLog('coverart-unsupported', {
+        mime: art.mime || '',
+        byteLength: art.bytes.length,
+      });
       setCoverArtPlaceholderState('unsupported');
       return false;
     }
@@ -62,6 +77,11 @@ export function createMetadataController(ctx) {
     els.coverArtEl.hidden = false;
     els.coverArtEl.classList.remove('hidden');
     if (els.artPlaceholderEl) els.artPlaceholderEl.setAttribute('data-art-state', 'ready');
+    metadataLog('coverart-applied', {
+      mime: art.mime,
+      byteLength: art.bytes.length,
+      objectUrl: state.currentArtObjectUrl,
+    });
     return true;
   }
 
@@ -145,41 +165,8 @@ export function createMetadataController(ctx) {
       (bytes[offset + 3] & 0x7F);
   }
 
-  function parseApic(bytes) {
-    var encoding;
-    var index = 1;
-    var mimeEnd;
-    var descriptionEnd;
-    var artBytes;
-    if (!bytes || bytes.length < 4) return null;
-    encoding = bytes[0];
-    mimeEnd = bytes.indexOf(0, index);
-    if (mimeEnd === -1) return null;
-    index = mimeEnd + 1;
-    index += 1;
-    if (encoding === 0 || encoding === 3) {
-      descriptionEnd = bytes.indexOf(0, index);
-      if (descriptionEnd === -1) descriptionEnd = index;
-      index = descriptionEnd + 1;
-    } else {
-      while (index + 1 < bytes.length) {
-        if (bytes[index] === 0 && bytes[index + 1] === 0) {
-          index += 2;
-          break;
-        }
-        index += 2;
-      }
-    }
-    artBytes = bytes.slice(index);
-    if (!artBytes.length) return null;
-    return {
-      mime: decodeLatin1(bytes.slice(1, mimeEnd)).trim(),
-      bytes: artBytes
-    };
-  }
-
   function parseId3Metadata(bytes) {
-    var result = {title: '', artist: '', art: null};
+    var result = {title: '', artist: ''};
     var version;
     var tagSize;
     var offset;
@@ -197,14 +184,13 @@ export function createMetadataController(ctx) {
       if (!frameId.replace(/\u0000/g, '').trim() || frameSize <= 0 || frameDataEnd > bytes.length) break;
       if (frameId === 'TIT2') result.title = decodeId3Text(bytes.slice(frameDataStart, frameDataEnd));
       if (frameId === 'TPE1') result.artist = decodeId3Text(bytes.slice(frameDataStart, frameDataEnd));
-      if (frameId === 'APIC' && !result.art) result.art = parseApic(bytes.slice(frameDataStart, frameDataEnd));
       offset = frameDataEnd;
     }
     return result;
   }
 
   function parseWavInfoMetadata(bytes) {
-    var result = {title: '', artist: '', art: null};
+    var result = {title: '', artist: ''};
     var offset = 12;
     if (bytes.length < 12 || decodeLatin1(bytes.slice(0, 4)) !== 'RIFF' || decodeLatin1(bytes.slice(8, 12)) !== 'WAVE') return result;
     while (offset + 8 <= bytes.length) {
@@ -232,10 +218,6 @@ export function createMetadataController(ctx) {
     return result;
   }
 
-  function readAtomSize(bytes, offset) {
-    return ((bytes[offset] << 24) >>> 0) + (bytes[offset + 1] << 16) + (bytes[offset + 2] << 8) + bytes[offset + 3];
-  }
-
   function parseMp4TextData(bytes, offset, end) {
     var innerOffset = offset;
     while (innerOffset + 8 <= end) {
@@ -251,27 +233,8 @@ export function createMetadataController(ctx) {
     return '';
   }
 
-  function parseMp4CoverData(bytes, offset, end) {
-    var innerOffset = offset;
-    while (innerOffset + 8 <= end) {
-      var atomSize = readAtomSize(bytes, innerOffset);
-      var atomType = decodeLatin1(bytes.slice(innerOffset + 4, innerOffset + 8));
-      var atomEnd = innerOffset + atomSize;
-      if (atomSize < 8 || atomEnd > end) break;
-      if (atomType === 'data' && atomSize >= 16) {
-        var dataType = bytes[innerOffset + 11];
-        return {
-          mime: dataType === 13 ? 'image/jpeg' : dataType === 14 ? 'image/png' : '',
-          bytes: bytes.slice(innerOffset + 16, atomEnd)
-        };
-      }
-      innerOffset = atomEnd;
-    }
-    return null;
-  }
-
   function parseMp4Metadata(bytes) {
-    var result = {title: '', artist: '', art: null};
+    var result = {title: '', artist: ''};
     var stack = [{offset: 0, end: bytes.length}];
     while (stack.length) {
       var frame = stack.pop();
@@ -285,7 +248,6 @@ export function createMetadataController(ctx) {
         else if (atomType === 'moov' || atomType === 'udta' || atomType === 'ilst') stack.push({offset: offset + 8, end: atomEnd});
         else if (atomType === '\u00a9nam') result.title = result.title || parseMp4TextData(bytes, offset + 8, atomEnd);
         else if (atomType === '\u00a9ART' || atomType === 'aART') result.artist = result.artist || parseMp4TextData(bytes, offset + 8, atomEnd);
-        else if (atomType === 'covr' && !result.art) result.art = parseMp4CoverData(bytes, offset + 8, atomEnd);
         offset = atomEnd;
       }
     }
@@ -293,13 +255,27 @@ export function createMetadataController(ctx) {
   }
 
   async function fetchRangeBytes(url, start, end) {
+    metadataLog('range-fetch-start', {
+      url: url,
+      start: start,
+      end: end,
+    });
     var response = await fetch(url, {
       headers: {
         Range: 'bytes=' + start + '-' + end
       }
     });
     if (!response.ok && response.status !== 206) throw new Error('Metadata request failed with HTTP ' + response.status);
-    return new Uint8Array(await response.arrayBuffer());
+    var bytes = new Uint8Array(await response.arrayBuffer());
+    metadataLog('range-fetch-done', {
+      url: url,
+      start: start,
+      end: end,
+      status: response.status,
+      byteLength: bytes.length,
+      contentRange: response.headers.get('Content-Range'),
+    });
+    return bytes;
   }
 
   async function fetchHeadContentLength(url) {
@@ -307,6 +283,11 @@ export function createMetadataController(ctx) {
     var value;
     if (!response.ok) return null;
     value = Number(response.headers.get('Content-Length'));
+    metadataLog('head-content-length', {
+      url: url,
+      status: response.status,
+      contentLength: Number.isFinite(value) && value > 0 ? value : null,
+    });
     return Number.isFinite(value) && value > 0 ? value : null;
   }
 
@@ -324,15 +305,14 @@ export function createMetadataController(ctx) {
 
   function parseMetadataBuffers(buffers, extension) {
     var ext = String(extension || '').toLowerCase();
-    var parsed = {title: '', artist: '', art: null};
+    var parsed = {title: '', artist: ''};
     buffers.forEach(function (bytes) {
-      var next = {title: '', artist: '', art: null};
+      var next = {title: '', artist: ''};
       if (ext === '.mp3') next = parseId3Metadata(bytes);
       else if (ext === '.wav') next = parseWavInfoMetadata(bytes);
       else if (ext === '.m4a' || ext === '.aac' || ext === '.mp4') next = parseMp4Metadata(bytes);
       if (!parsed.title && next.title) parsed.title = next.title;
       if (!parsed.artist && next.artist) parsed.artist = next.artist;
-      if (!parsed.art && next.art) parsed.art = next.art;
     });
     return parsed;
   }
@@ -341,22 +321,113 @@ export function createMetadataController(ctx) {
     return '/file?path=' + encodeURIComponent(song.stream_path) + '&source=remote';
   }
 
+  function artworkFetchAllowed() {
+    return !document.hidden && state.windowFocused;
+  }
+
+  function songMayHaveEmbeddedArt(song) {
+    var extension = metadataExtension(song);
+    return extension === '.mp3' || extension === '.m4a' || extension === '.aac' || extension === '.mp4';
+  }
+
+  function maybeResolveCoverArt(song, requestId, extension, buffers) {
+    if (!song || !song.remote_path) return Promise.resolve(null);
+    if (!artworkFetchAllowed()) {
+      if (songMayHaveEmbeddedArt(song)) state.pendingArtworkRemotePath = song.remote_path;
+      metadataLog('coverart-deferred', {
+        remotePath: song.remote_path,
+        extension: extension,
+        documentHidden: document.hidden,
+        windowFocused: state.windowFocused,
+      });
+      return Promise.resolve(null);
+    }
+    state.pendingArtworkRemotePath = null;
+    metadataLog('coverart-resolve-start', {
+      remotePath: song.remote_path,
+      extension: extension,
+      bufferLengths: buffers.map(function (bytes) { return bytes.length; }),
+      requestId: requestId,
+    });
+    return resolveCoverArtFromMetadata({
+      extension: extension,
+      buffers: buffers,
+      probeSize: state.metadataChunkSize,
+      fetchRangeBytes: function (start, end) {
+        return fetchRangeBytes(streamUrl(song), start, end);
+      },
+      fetchHeadContentLength: fetchHeadContentLength
+    }).catch(function () {
+      metadataLog('coverart-resolve-error', {
+        remotePath: song.remote_path,
+        extension: extension,
+      });
+      return null;
+    }).then(function (art) {
+      if (requestId !== state.metadataRequestId) return null;
+      metadataLog('coverart-resolve-done', {
+        remotePath: song.remote_path,
+        extension: extension,
+        found: !!art,
+        mime: art && art.mime ? art.mime : '',
+        byteLength: art && art.bytes ? art.bytes.length : 0,
+      });
+      return art;
+    });
+  }
+
   function startMetadataLoad(song) {
     var requestId = state.metadataRequestId + 1;
     var url = streamUrl(song);
     var extension = metadataExtension(song);
     state.metadataRequestId = requestId;
+    metadataLog('metadata-load-start', {
+      remotePath: song && song.remote_path ? song.remote_path : '',
+      streamPath: song && song.stream_path ? song.stream_path : '',
+      extension: extension,
+      requestId: requestId,
+      artworkAllowed: artworkFetchAllowed(),
+      documentHidden: document.hidden,
+      windowFocused: state.windowFocused,
+    });
     showMetadataPlaceholders();
     fetchMetadataBytes(url, extension)
       .then(function (buffers) {
-        return parseMetadataBuffers(buffers, extension);
+        metadataLog('metadata-buffers-ready', {
+          remotePath: song.remote_path,
+          extension: extension,
+          requestId: requestId,
+          bufferLengths: buffers.map(function (bytes) { return bytes.length; }),
+        });
+        return Promise.all([
+          Promise.resolve(parseMetadataBuffers(buffers, extension)),
+          maybeResolveCoverArt(song, requestId, extension, buffers)
+        ]);
       })
-      .then(function (metadata) {
+      .then(function (results) {
+        var metadata = results[0];
+        metadata.art = results[1];
         if (requestId !== state.metadataRequestId) return;
+        metadataLog('metadata-load-apply', {
+          remotePath: song.remote_path,
+          extension: extension,
+          requestId: requestId,
+          title: metadata.title || '',
+          artist: metadata.artist || '',
+          hasArt: !!metadata.art,
+          artMime: metadata.art && metadata.art.mime ? metadata.art.mime : '',
+          artByteLength: metadata.art && metadata.art.bytes ? metadata.art.bytes.length : 0,
+        });
         applyMetadataResult(metadata);
       })
-      .catch(function () {
+      .catch(function (err) {
         if (requestId !== state.metadataRequestId) return;
+        metadataLog('metadata-load-error', {
+          remotePath: song && song.remote_path ? song.remote_path : '',
+          extension: extension,
+          requestId: requestId,
+          message: err && err.message ? err.message : String(err || ''),
+        });
         showUnknownMetadata();
       });
   }
@@ -366,6 +437,25 @@ export function createMetadataController(ctx) {
     if (!song || !song.remote_path) return;
     if (state.metadataLoadedRemotePath === song.remote_path) return;
     state.metadataLoadedRemotePath = song.remote_path;
+    startMetadataLoad(song);
+  }
+
+  function resumeDeferredArtworkLoad() {
+    var song = ctx.playbackApi.currentSong();
+    metadataLog('coverart-resume-check', {
+      hasSong: !!song,
+      remotePath: song && song.remote_path ? song.remote_path : '',
+      pendingRemotePath: state.pendingArtworkRemotePath,
+      artworkAllowed: artworkFetchAllowed(),
+      documentHidden: document.hidden,
+      windowFocused: state.windowFocused,
+    });
+    if (!artworkFetchAllowed() || !song || !song.remote_path) return;
+    if (state.pendingArtworkRemotePath !== song.remote_path) return;
+    metadataLog('coverart-resume-start', {
+      remotePath: song.remote_path,
+    });
+    state.metadataLoadedRemotePath = null;
     startMetadataLoad(song);
   }
 
@@ -396,6 +486,7 @@ export function createMetadataController(ctx) {
     refreshNowPlayingMarqueeStates: refreshNowPlayingMarqueeStates,
     resetNowPlayingForSong: resetNowPlayingForSong,
     revokeCurrentArtObjectUrl: revokeCurrentArtObjectUrl,
+    resumeDeferredArtworkLoad: resumeDeferredArtworkLoad,
     scheduleNowPlayingMarqueeRefresh: scheduleNowPlayingMarqueeRefresh,
     setCoverArtImage: setCoverArtImage,
     setCoverArtPlaceholderState: setCoverArtPlaceholderState,

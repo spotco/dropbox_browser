@@ -88,6 +88,8 @@ import {initLibrary} from './music-library.js';
       metadataLoadedRemotePath: null,
       metadataChunkSize: 262144,
       currentArtObjectUrl: null,
+      pendingArtworkRemotePath: null,
+      windowFocused: document.hasFocus ? document.hasFocus() : true,
       metadataTitleLoading: 'Loading title...',
       metadataArtistLoading: 'Loading artist...',
       metadataTitleUnknown: 'Title unavailable',
@@ -160,15 +162,23 @@ import {initLibrary} from './music-library.js';
       ctx.layoutApi.flushDeferredMusicPaneUpdates();
       ctx.layoutApi.resumeLibraryUpdates();
       ctx.playbackApi.repaintPlaybackDisplay();
+      ctx.state.windowFocused = document.hasFocus ? document.hasFocus() : true;
+      ctx.playbackApi.metadata.resumeDeferredArtworkLoad();
     }
     else {
+      ctx.state.windowFocused = false;
       ctx.libraryApi.stopPolling();
       ctx.layoutApi.clearPlaybackUiPaintTimer();
     }
   });
   window.addEventListener('focus', function () {
+    ctx.state.windowFocused = true;
     ctx.layoutApi.flushDeferredMusicPaneUpdates();
     ctx.playbackApi.repaintPlaybackDisplay();
+    ctx.playbackApi.metadata.resumeDeferredArtworkLoad();
+  });
+  window.addEventListener('blur', function () {
+    ctx.state.windowFocused = false;
   });
   window.addEventListener('resize', function () {
     ctx.layoutApi.applyMusicPanePercents(ctx.state.currentMusicPanePercents, false);
@@ -178,6 +188,13 @@ import {initLibrary} from './music-library.js';
     ctx.layoutApi.clearPlaybackUiPaintTimer();
     ctx.libraryApi.stopPolling();
   });
+
+  if (ctx.els.coverArtEl) {
+    ctx.els.coverArtEl.addEventListener('click', function () {
+      if (!ctx.state.currentArtObjectUrl) return;
+      window.open(ctx.state.currentArtObjectUrl, '_blank', 'noopener');
+    });
+  }
 
   ctx.libraryApi.resetLibraryForCurrentFolder();
   ctx.layoutApi.applyMusicPanePercents(ctx.layoutApi.readSavedMusicPanePercents(), false);
