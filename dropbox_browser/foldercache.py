@@ -350,6 +350,43 @@ class FolderCacheManager:
         )
         write_json_atomic(self._cache_path(remote_path), data)
 
+    def prime_direct_listing(self, remote_path: str, items: list[dict], page_time: float | None = None) -> None:
+        """Seed direct child metadata from a foreground listing.
+
+        This keeps cache-only consumers, such as the music library endpoint, in
+        sync with the current page after a forced refresh without doing
+        recursive metadata work on the request thread.
+        """
+        direct_listing = parse_direct_listing(items, remote_path)
+        if page_time is None:
+            page_time = time.time()
+        current = self.get(remote_path)
+        if current is not None and current.get("complete"):
+            return
+        with self._lock:
+            if self._shutdown:
+                return
+            self._acc[remote_path] = {
+                "size": direct_listing.direct_size,
+                "count": direct_listing.direct_count,
+                "mtime": direct_listing.direct_mtime,
+                "diff_status": DIFF_UNAVAILABLE if self.local_root is None else DIFF_LOADING,
+                "diff_complete": self.local_root is None,
+                "first_diff_path": None,
+                "file_statuses": {},
+                "direct_items": direct_listing.direct_items,
+                "direct_files": direct_listing.direct_files,
+                "direct_folders": direct_listing.direct_folders,
+            }
+            self._write_cache(remote_path, complete=False)
+            self._trace_locked(
+                "direct_listing_primed",
+                remote_path,
+                page_epoch=page_time,
+                direct_files=direct_listing.direct_count,
+                subfolders=len(direct_listing.subfolders),
+            )
+
     def _trace(self, event: str, remote_path: str | None = None, **details: object) -> None:
         payload: dict[str, object] = {
             "queue_size": self._queue.qsize(),
@@ -434,6 +471,21 @@ class FolderCacheManager:
                 elapsed_ms=round((time.perf_counter() - started) * 1000, 3),
             )
 
+    def page_epoch_for(self, page_key: str) -> float:
+        """Return the active page epoch for the current page key when available.
+
+        Fallback requests intentionally become the newest epoch because the user
+        explicitly asked to load music for a non-current or stale page context.
+        """
+        with self._lock:
+            if (
+                self._min_page_time
+                and self._current_page_key is not None
+                and page_key == self._current_page_key
+            ):
+                return self._min_page_time
+        return time.time()
+
     def _advance_page_time(self, page_time: float) -> None:
         """Update _min_page_time and reset progress counters.  Lock must be held."""
         if page_time > self._min_page_time:
@@ -488,18 +540,16 @@ class FolderCacheManager:
         if page_epoch >= self._min_page_time:
             self._page_completed += 1
 
-    def request(self, remote_path: str, page_time: float | None = None) -> None:
-        """Enqueue a folder at depth 0 (page-level) for background computation."""
-        if page_time is None:
-            page_time = time.time()
+    def _request_with_depth(self, remote_path: str, page_time: float, breadth_depth: int) -> bool:
+        """Ensure one folder is queued, preserving the requested breadth depth."""
         data = self.get(remote_path)
         if data is not None and data.get("complete"):
             self._trace("request_skipped_cached", remote_path, page_epoch=page_time)
-            return
+            return False
         enqueue_refresh = False
         with self._lock:
             if self._shutdown:
-                return
+                return False
             if remote_path in self._direct_done:
                 # Its direct listing has already been fetched in this process.
                 # If child work is still finishing, do not start a second
@@ -507,7 +557,7 @@ class FolderCacheManager:
                 # page and must be allowed to restart cleanly.
                 if self._pending_children.get(remote_path) and remote_path not in self._abandoned:
                     self._trace_locked("request_deduplicated", remote_path, page_epoch=page_time)
-                    return
+                    return False
                 self._abandoned.discard(remote_path)
                 self._direct_done.pop(remote_path, None)
                 self._pending_children.pop(remote_path, None)
@@ -545,13 +595,72 @@ class FolderCacheManager:
                         active=active is not None,
                     )
                 if not enqueue_refresh:
-                    return
+                    return False
             else:
                 self._in_progress[remote_path] = page_time
                 self._advance_page_time(page_time)
                 self._record_dispatched(page_time)
                 self._trace_locked("request_enqueued", remote_path, page_epoch=page_time)
-        self._queue_job(FolderJob.create(remote_path, page_time, 0), "request_reenqueue" if enqueue_refresh else "request")
+        self._queue_job(
+            FolderJob.create(remote_path, page_time, breadth_depth),
+            "request_reenqueue" if enqueue_refresh else "request",
+        )
+        return True
+
+    def request(self, remote_path: str, page_time: float | None = None) -> None:
+        """Enqueue a folder at depth 0 (page-level) for background computation."""
+        if page_time is None:
+            page_time = time.time()
+        self._request_with_depth(remote_path, page_time, 0)
+
+    def ensure_known_subtree(self, remote_path: str, page_epoch: float) -> dict[str, int | float]:
+        """Queue known missing or incomplete subtree records without blocking.
+
+        Traversal uses cached ``direct_folders`` only, so this never runs
+        rclone work on the request thread and only queues folders the cache can
+        already identify.
+        """
+        result: dict[str, int | float] = {
+            "page_epoch": page_epoch,
+            "queued_folder_count": 0,
+            "pending_folder_count": 0,
+            "missing_folder_count": 0,
+        }
+        seen: set[str] = set()
+        queue: list[tuple[str, int]] = [(remote_path, 0)]
+        index = 0
+
+        while index < len(queue):
+            current_path, breadth_depth = queue[index]
+            index += 1
+            if current_path in seen:
+                continue
+            seen.add(current_path)
+
+            current_data = self.get(current_path)
+            current_status = self.status(current_path)
+            if current_status != "complete":
+                result["pending_folder_count"] += 1
+                if current_data is None:
+                    result["missing_folder_count"] += 1
+                if self._request_with_depth(current_path, page_epoch, breadth_depth):
+                    result["queued_folder_count"] += 1
+
+            if current_data is None:
+                continue
+
+            direct_folders = current_data.get("direct_folders", [])
+            if not isinstance(direct_folders, list):
+                continue
+            child_depth = min(breadth_depth + 1, BREADTH_FIRST_DEPTH_CAP)
+            for child in direct_folders:
+                if not isinstance(child, dict):
+                    continue
+                child_remote_path = child.get("remote_path")
+                if isinstance(child_remote_path, str) and child_remote_path:
+                    queue.append((child_remote_path, child_depth))
+
+        return result
 
     # ------------------------------------------------------------------
     # Worker

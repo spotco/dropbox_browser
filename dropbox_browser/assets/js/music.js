@@ -32,9 +32,13 @@
   var loopButton = document.getElementById('music-loop-toggle');
   var controls = pane.querySelector('.music-player-controls');
   var currentFolder = document.body.dataset.currentFolderPath || '';
+  var loadButtonDefaultText = loadButton.textContent || 'Load Current Folder';
   var defaultPollDelayMs = 4000;
-  var pollDelayMs = defaultPollDelayMs;
   var pollTimer = null;
+  var loadTimer = null;
+  var libraryPollingActive = false;
+  var lastLibraryPollResponseAt = 0;
+  var libraryPollSequence = 0;
   var libraryRequested = false;
   var loading = false;
   var libraryRoot = currentFolder;
@@ -58,7 +62,6 @@
   var shuffleEnabled = false;
   var loopPlaylist = false;
   var shuffleBag = [];
-  var lastLibraryFingerprint = '';
   var scrubberDragging = false;
   var defaultVolume = 1;
   var metadataRequestId = 0;
@@ -233,15 +236,55 @@
   function escStatus(status) {
     if (!status) return 'Library status unavailable.';
     var message = status.message || '';
-    var count = status.missing_listing_count || 0;
+    var count = status.missing_folder_count || status.missing_listing_count || 0;
     if (status.cache_status === 'complete') return 'Complete cached library.';
-    if (status.cache_status === 'unavailable') return message || 'No cached listing is available for this folder yet.';
+    if (status.cache_status === 'unavailable') return message || 'No cached folder metadata is available for this folder yet.';
     if (count) return (message || 'Library may update as cached metadata arrives.') + ' Missing cached folders: ' + count + '.';
     return message || 'Library may update as cached metadata arrives.';
   }
 
   function setStatus(text) {
     statusEl.textContent = text;
+  }
+
+  function itemCount(data, key) {
+    var items = data && data[key];
+    return Array.isArray(items) ? items.length : 0;
+  }
+
+  function plural(count, singular, pluralName) {
+    return count + ' ' + (count === 1 ? singular : pluralName);
+  }
+
+  function updateLoadButtonTimer() {
+    var elapsedSeconds = 0;
+    if (!libraryPollingActive) {
+      loadButton.textContent = loadButtonDefaultText;
+      return;
+    }
+    if (lastLibraryPollResponseAt) {
+      elapsedSeconds = Math.floor((Date.now() - lastLibraryPollResponseAt) / 1000);
+    }
+    loadButton.textContent = loadButtonDefaultText + ' (' + elapsedSeconds + ')';
+  }
+
+  function startLibraryPollingUi() {
+    libraryPollingActive = true;
+    lastLibraryPollResponseAt = Date.now();
+    loadButton.disabled = true;
+    updateLoadButtonTimer();
+    if (loadTimer !== null) window.clearInterval(loadTimer);
+    loadTimer = window.setInterval(updateLoadButtonTimer, 1000);
+  }
+
+  function stopLibraryPollingUi() {
+    libraryPollingActive = false;
+    if (loadTimer !== null) {
+      window.clearInterval(loadTimer);
+      loadTimer = null;
+    }
+    loadButton.disabled = false;
+    loadButton.textContent = loadButtonDefaultText;
   }
 
   function setTextOrFallback(el, text, fallback) {
@@ -271,8 +314,12 @@
     });
   }
 
-  function libraryUrl() {
-    return '/music/endpoints/library?path=' + encodeURIComponent(libraryRoot);
+  function libraryUrl(isRefresh, scheduledDelayMs) {
+    libraryPollSequence += 1;
+    return '/music/endpoints/library?path=' + encodeURIComponent(libraryRoot) +
+      '&poll_seq=' + encodeURIComponent(String(libraryPollSequence)) +
+      '&poll_delay_ms=' + encodeURIComponent(String(scheduledDelayMs || 0)) +
+      '&poll_refresh=' + (isRefresh ? '1' : '0');
   }
 
   function stopPolling() {
@@ -282,34 +329,19 @@
     }
   }
 
-  function schedulePoll() {
-    stopPolling();
-    if (!libraryRequested || !playbackUiMayPaint()) return;
-    pollTimer = window.setTimeout(function () {
-      fetchLibrary(true);
-    }, pollDelayMs);
+  function shouldPollLibrary() {
+    return !(librarySnapshot && librarySnapshot.status && librarySnapshot.status.complete);
   }
 
-  function libraryFingerprint(data) {
-    var fingerprintData;
-    var status;
-    if (!data) return JSON.stringify(null);
-    fingerprintData = {
-      root: data.root || null,
-      folders: data.folders || [],
-      songs: data.songs || [],
-      status: null
-    };
-    status = data.status || null;
-    if (status) {
-      fingerprintData.status = {
-        cache_status: status.cache_status || '',
-        complete: !!status.complete,
-        message: status.message || '',
-        missing_listing_count: status.missing_listing_count || 0
-      };
-    }
-    return JSON.stringify(fingerprintData);
+  function schedulePoll() {
+    var scheduledDelayMs;
+    stopPolling();
+    if (!libraryRequested || !playbackUiMayPaint()) return;
+    if (!shouldPollLibrary()) return;
+    scheduledDelayMs = defaultPollDelayMs;
+    pollTimer = window.setTimeout(function () {
+      fetchLibrary(true, scheduledDelayMs);
+    }, scheduledDelayMs);
   }
 
   function indexByParent(items) {
@@ -1591,41 +1623,68 @@
   }
 
   function applyLibrarySnapshot(data) {
-    var fingerprint = libraryFingerprint(data);
-    if (fingerprint && fingerprint === lastLibraryFingerprint) {
-      pollDelayMs *= 2;
-    } else {
-      pollDelayMs = defaultPollDelayMs;
-      lastLibraryFingerprint = fingerprint;
-    }
+    var previousSnapshot = librarySnapshot;
     librarySnapshot = data;
     if (data.root && data.root.id && expandedIds[data.root.id] === undefined) {
       expandedIds[data.root.id] = true;
     }
-    setLibraryStatus(escStatus(data.status));
+    setLibraryStatus(libraryPollingMessage(data, previousSnapshot));
     renderLibrary();
   }
 
-  function fetchLibrary(isRefresh) {
+  function libraryPollingMessage(data, previousSnapshot) {
+    var status = data.status || {};
+    var songCount = itemCount(data, 'songs');
+    var folderCount = itemCount(data, 'folders');
+    var previousSongCount = itemCount(previousSnapshot, 'songs');
+    var previousFolderCount = itemCount(previousSnapshot, 'folders');
+    var addedSongs = Math.max(0, songCount - previousSongCount);
+    var addedFolders = Math.max(0, folderCount - previousFolderCount);
+    var pendingFolders = status.pending_folder_count || 0;
+    var missingFolders = status.missing_folder_count || status.missing_listing_count || 0;
+    var seq = libraryPollSequence ? 'Poll #' + libraryPollSequence + ': ' : '';
+    if (status.complete) {
+      return 'Loaded ' + plural(songCount, 'song', 'songs') + ' and ' + plural(folderCount, 'folder', 'folders') + '.';
+    }
+    return seq +
+      '+' + plural(addedSongs, 'song', 'songs') + ', +' + plural(addedFolders, 'folder', 'folders') +
+      ' loaded this response. Totals: ' + plural(songCount, 'song', 'songs') + ', ' +
+      plural(folderCount, 'folder', 'folders') + '. Remaining: ' +
+      plural(pendingFolders, 'pending folder', 'pending folders') + ', ' +
+      plural(missingFolders, 'missing cache record', 'missing cache records') + '. ' +
+      escStatus(status);
+  }
+
+  function fetchLibrary(isRefresh, scheduledDelayMs) {
+    var requestFailed = false;
     if (loading) return;
     loading = true;
     loadButton.disabled = true;
     if (!isRefresh) setLibraryStatus('Loading cached song library...');
-    fetch(libraryUrl())
+    fetch(libraryUrl(isRefresh, scheduledDelayMs))
       .then(function (response) {
         if (!response.ok) throw new Error('Library request failed with HTTP ' + response.status);
         return response.json();
       })
       .then(function (data) {
+        lastLibraryPollResponseAt = Date.now();
+        updateLoadButtonTimer();
         applyLibrarySnapshot(data);
       })
       .catch(function (err) {
+        requestFailed = true;
+        stopLibraryPollingUi();
         setLibraryStatus(err.message || 'Could not load cached song library.');
       })
       .then(function () {
         loading = false;
-        loadButton.disabled = false;
-        schedulePoll();
+        if (requestFailed) return;
+        if (shouldPollLibrary()) {
+          loadButton.disabled = libraryPollingActive;
+          schedulePoll();
+        } else {
+          stopLibraryPollingUi();
+        }
       });
   }
 
@@ -1633,20 +1692,23 @@
     libraryRoot = currentFolder;
     libraryRequested = false;
     librarySnapshot = null;
-    lastLibraryFingerprint = '';
-    pollDelayMs = defaultPollDelayMs;
+    libraryPollSequence = 0;
     selectionAnchor = null;
     clearObject(expandedIds);
     clearObject(selectedIds);
     setLibraryStatus('Library not loaded.');
     stopPolling();
+    stopLibraryPollingUi();
     renderLibrary();
   }
 
   loadButton.addEventListener('click', function () {
     libraryRoot = currentFolder;
     libraryRequested = true;
-    fetchLibrary(false);
+    librarySnapshot = null;
+    libraryPollSequence = 0;
+    startLibraryPollingUi();
+    fetchLibrary(false, 0);
   });
 
   if (libraryMenu) {

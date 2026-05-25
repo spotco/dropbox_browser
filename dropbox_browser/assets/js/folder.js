@@ -116,7 +116,7 @@
     pending.forEach(function (relPath) {
       parts.push('paths=' + encodeURIComponent(relPath));
     });
-    if (pollCurrent) parts.push('current=' + encodeURIComponent(currentFolderPath));
+    parts.push('current=' + encodeURIComponent(currentFolderPath));
     fetch('/folder-info?' + parts.join('&'))
       .then(function (r) { return r.json(); })
       .then(function (data) {

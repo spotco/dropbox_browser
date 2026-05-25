@@ -133,7 +133,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         notify_elapsed_ms = round((time.perf_counter() - notify_started) * 1000, 3)
 
         list_started = time.perf_counter()
-        entries = self.app.list_entries(rel_path, force_refresh=force_refresh)
+        entries = self.app.list_entries(rel_path, force_refresh=force_refresh, page_time=page_time)
         list_elapsed_ms = round((time.perf_counter() - list_started) * 1000, 3)
 
         current_cache_started = time.perf_counter()
@@ -379,6 +379,12 @@ class RequestHandler(BaseHTTPRequestHandler):
         if current_rel is not None and current_rel not in seen_paths:
             rel_paths.append(current_rel)
         cache = self.app.folder_cache
+        request_page_time: float | None = None
+        if cache:
+            if current_rel is not None and hasattr(cache, "page_epoch_for"):
+                request_page_time = cache.page_epoch_for(current_rel)
+            else:
+                request_page_time = time.time()
         results: dict = {}
         requested_count = 0
         status_counts: dict[str, int] = {}
@@ -411,7 +417,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 }
             else:
                 # calculating or pending — ensure it's queued
-                cache.request(full_remote)
+                cache.request(full_remote, request_page_time)
                 requested_count += 1
                 results[rel_path] = {"status": "calculating", "complete": False}
         workertrace.append(
@@ -420,6 +426,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             requested_count=requested_count,
             status_counts=status_counts,
             current_rel=current_rel,
+            request_page_time=request_page_time,
             elapsed_ms=round((time.perf_counter() - started) * 1000, 3),
         )
         body = _json.dumps({"results": results}).encode("utf-8")
@@ -430,7 +437,32 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def serve_music_endpoint(self, path: str, query: str) -> None:
+        started = time.perf_counter()
         status, payload = handle_music_get(self.app, path, query)
+        endpoint = path.removeprefix(MUSIC_ENDPOINT_PREFIX)
+        if endpoint == "library":
+            params = parse_qs(query, keep_blank_values=True)
+            payload_status = payload.get("status", {}) if isinstance(payload, dict) else {}
+            payload_root = payload.get("root", {}) if isinstance(payload, dict) else {}
+            workertrace.append(
+                "music_library_poll",
+                endpoint=endpoint,
+                query_path=params.get("path", [""])[0],
+                root_remote_path=payload_root.get("remote_path") if isinstance(payload_root, dict) else None,
+                http_status=int(status),
+                cache_status=payload_status.get("cache_status") if isinstance(payload_status, dict) else None,
+                complete=payload_status.get("complete") if isinstance(payload_status, dict) else None,
+                pending=payload_status.get("pending") if isinstance(payload_status, dict) else None,
+                pending_folder_count=payload_status.get("pending_folder_count") if isinstance(payload_status, dict) else None,
+                queued_folder_count=payload_status.get("queued_folder_count") if isinstance(payload_status, dict) else None,
+                missing_folder_count=payload_status.get("missing_folder_count") if isinstance(payload_status, dict) else None,
+                folder_count=len(payload.get("folders", [])) if isinstance(payload, dict) else None,
+                song_count=len(payload.get("songs", [])) if isinstance(payload, dict) else None,
+                client_poll_seq=params.get("poll_seq", [""])[0],
+                client_poll_delay_ms=params.get("poll_delay_ms", [""])[0],
+                client_poll_refresh=params.get("poll_refresh", [""])[0],
+                elapsed_ms=round((time.perf_counter() - started) * 1000, 3),
+            )
         body = _json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
