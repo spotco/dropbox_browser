@@ -1,13 +1,3 @@
-- implement PLAN_INTEGRATION_TEST_MUSIC_PLAYER.md
-
-- music player song library:
-	load current folder polling: keep window focused on same first selected element when repaint
-
-	sort by name or date
-		on sort: keep window focused on same first selected element
-
-- music player: right click context menu icons
-
 - music player active playlist:
 	list should display:
 		filename
@@ -16,6 +6,8 @@
 	save/load playlists
 	import playlists from poweramp format
 	persist current playlist
+
+- music player - all panes: right click context menu, add icons before text
 		
 - music player:
 	coverart not working (test?)
