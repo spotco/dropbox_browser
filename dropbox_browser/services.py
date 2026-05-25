@@ -158,7 +158,7 @@ class DropboxBrowser:
 
         return rows
 
-    def list_entries(self, rel_path: str, force_refresh: bool = False) -> list[dict[str, Any]]:
+    def list_entries(self, rel_path: str, force_refresh: bool = False, page_time: float | None = None) -> list[dict[str, Any]]:
         started = time.perf_counter()
         remote = remote_target(self.remote, rel_path)
         local_folder = resolve_matching_local_path(self.local_root, rel_path) if self.local_root else None
@@ -186,6 +186,9 @@ class DropboxBrowser:
             else:
                 if self.listing_cache:
                     self.listing_cache.set(remote, remote_items)
+                prime_direct_listing = getattr(self.folder_cache, "prime_direct_listing", None)
+                if prime_direct_listing is not None:
+                    prime_direct_listing(remote, remote_items, page_time)
 
         entries = self._entries_from_remote_items(rel_path, remote_items)
         workertrace.append(

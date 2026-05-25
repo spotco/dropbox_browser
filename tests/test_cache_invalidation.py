@@ -171,6 +171,28 @@ class CacheInvalidationTests(AppTestCase):
 
         wait_event.set()
 
+    def test_refresh_reload_primes_current_folder_direct_listing_for_music(self) -> None:
+        for recursive in ("0", "1"):
+            with self.subTest(recursive=recursive):
+                rclone = SimulatedRclone({
+                    "dropbox:music": [
+                        SimulatedLsjsonResponse(items=[remote_dir_item("album")]),
+                    ],
+                })
+                app = self._build_app(rclone, local_root=None, workers=1)
+                cache = app.folder_cache
+                assert cache is not None
+
+                with TestServer(app) as server:
+                    server.post_json("/refresh-cache", {"path": "music", "recursive": recursive})
+                    server.get_text("/?path=music")
+
+                data = cache.get("dropbox:music") or {}
+                self.assertEqual(
+                    [(folder["name"], folder["remote_path"]) for folder in data.get("direct_folders", [])],
+                    [("album", "dropbox:music/album")],
+                )
+
     def test_listing_cache_invalidate_tree_marks_descendants_stale_without_scanning(self) -> None:
         cache = ListingCacheManager(ttl_seconds=1800)
         cache.set("dropbox:music", [{"Name": "old.txt"}])

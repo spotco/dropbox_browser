@@ -88,6 +88,8 @@ Useful event names:
 - `navigation_render_complete` - foreground page render phase timings.
 - `folder_info_poll` - `/folder-info` batch size, queued request count, and
   status counts.
+- `music_library_poll` - `/music/endpoints/library` response timing, cache
+  status, returned folder/song counts, and client poll scheduling fields.
 - `request_enqueued`, `request_reenqueued`, `request_refreshed`,
   `request_deduplicated`, `request_skipped_cached` - public folder-cache
   requests and duplicate coalescing.

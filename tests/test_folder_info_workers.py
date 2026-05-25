@@ -9,6 +9,7 @@ from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+from unittest.mock import patch
 
 from dropbox_browser.errors import BrowserError
 from dropbox_browser.foldercache import DIFF_CACHE_SCHEMA_VERSION
@@ -598,3 +599,314 @@ class FolderInfoWorkerTests(AppTestCase):
 
         self.assertEqual(cache.current_progress(), (0, 1))
         self.assertEqual(cache._progress_text_for_epoch(100.0), "3/10]")
+
+    def test_page_epoch_for_current_page_reuses_active_navigation_epoch(self) -> None:
+        rclone = SimulatedRclone({})
+        app = self._build_app(rclone, workers=1)
+        cache = app.folder_cache
+        assert cache is not None
+
+        cache.notify_page_load(1234.5, page_key="Music")
+
+        self.assertEqual(cache.page_epoch_for("Music"), 1234.5)
+
+    def test_page_epoch_for_other_page_uses_fresh_time(self) -> None:
+        rclone = SimulatedRclone({})
+        app = self._build_app(rclone, workers=1)
+        cache = app.folder_cache
+        assert cache is not None
+
+        cache.notify_page_load(1234.5, page_key="Music")
+        with patch("dropbox_browser.foldercache.time.time", return_value=4321.25):
+            self.assertEqual(cache.page_epoch_for("Other"), 4321.25)
+        with patch("dropbox_browser.foldercache.time.time", return_value=6789.0):
+            self.assertEqual(cache.page_epoch_for("Music"), 1234.5)
+
+    def test_ensure_known_subtree_queues_missing_descendant_under_complete_root(self) -> None:
+        rclone = SimulatedRclone({
+            "dropbox:Music/Album": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, workers=1)
+        cache = app.folder_cache
+        assert cache is not None
+
+        with cache._lock:
+            cache._acc["dropbox:Music"] = {
+                "size": 0,
+                "count": 0,
+                "mtime": None,
+                "diff_status": "unavailable",
+                "diff_complete": True,
+                "first_diff_path": None,
+                "file_statuses": {},
+                "direct_items": [],
+                "direct_files": [],
+                "direct_folders": [
+                    {"name": "Album", "remote_path": "dropbox:Music/Album"},
+                ],
+            }
+            cache._write_cache("dropbox:Music", complete=True)
+
+        result = cache.ensure_known_subtree("dropbox:Music", 100.0)
+        child_data = wait_until(
+            lambda: cache.get("dropbox:Music/Album") if (cache.get("dropbox:Music/Album") or {}).get("complete") else None,
+            description="music album completion from ensure_known_subtree",
+        )
+
+        self.assertEqual(result["queued_folder_count"], 1)
+        self.assertEqual(result["pending_folder_count"], 1)
+        self.assertEqual(result["missing_folder_count"], 1)
+        self.assertTrue(child_data["complete"])
+        self.assertEqual(sum(1 for call in rclone.calls if call["target"] == "dropbox:Music/Album"), 1)
+        events = self.read_trace_events()
+        starts = [
+            event for event in events
+            if event["event"] == "job_started" and event.get("remote_path") == "dropbox:Music/Album"
+        ]
+        self.assertEqual(starts[0].get("breadth_depth"), 1)
+
+    def test_duplicate_ensure_known_subtree_calls_do_not_start_duplicate_rclone_work(self) -> None:
+        child_started = threading.Event()
+        child_release = threading.Event()
+        rclone = SimulatedRclone({
+            "dropbox:Music/Album": [
+                SimulatedLsjsonResponse(items=[], wait_event=child_release, started_event=child_started),
+            ],
+        })
+        app = self._build_app(rclone, workers=1)
+        cache = app.folder_cache
+        assert cache is not None
+
+        with cache._lock:
+            cache._acc["dropbox:Music"] = {
+                "size": 0,
+                "count": 0,
+                "mtime": None,
+                "diff_status": "unavailable",
+                "diff_complete": True,
+                "first_diff_path": None,
+                "file_statuses": {},
+                "direct_items": [],
+                "direct_files": [],
+                "direct_folders": [
+                    {"name": "Album", "remote_path": "dropbox:Music/Album"},
+                ],
+            }
+            cache._write_cache("dropbox:Music", complete=True)
+
+        first = cache.ensure_known_subtree("dropbox:Music", 100.0)
+        wait_until(child_started.is_set, description="ensure_known_subtree child to start")
+        second = cache.ensure_known_subtree("dropbox:Music", 100.0)
+        child_release.set()
+        wait_until(lambda: (cache.get("dropbox:Music/Album") or {}).get("complete"), description="ensure_known_subtree child completion")
+
+        self.assertEqual(first["queued_folder_count"], 1)
+        self.assertEqual(second["queued_folder_count"], 0)
+        self.assertEqual(sum(1 for call in rclone.calls if call["target"] == "dropbox:Music/Album"), 1)
+
+    def test_ensure_known_subtree_preserves_breadth_first_depth(self) -> None:
+        block_started = threading.Event()
+        block_release = threading.Event()
+        rclone = SimulatedRclone({
+            "dropbox:block": [SimulatedLsjsonResponse(items=[], wait_event=block_release, started_event=block_started)],
+            "dropbox:Root/Other": [SimulatedLsjsonResponse(items=[])],
+            "dropbox:Root/Album/Disc 2": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, workers=1)
+        cache = app.folder_cache
+        assert cache is not None
+
+        cache.request("dropbox:block", 10.0)
+        wait_until(block_started.is_set, description="block folder start for ensure_known_subtree ordering")
+
+        with cache._lock:
+            cache._acc["dropbox:Root"] = {
+                "size": 0,
+                "count": 0,
+                "mtime": None,
+                "diff_status": "unavailable",
+                "diff_complete": True,
+                "first_diff_path": None,
+                "file_statuses": {},
+                "direct_items": [],
+                "direct_files": [],
+                "direct_folders": [
+                    {"name": "Album", "remote_path": "dropbox:Root/Album"},
+                    {"name": "Other", "remote_path": "dropbox:Root/Other"},
+                ],
+            }
+            cache._write_cache("dropbox:Root", complete=True)
+            cache._acc["dropbox:Root/Album"] = {
+                "size": 0,
+                "count": 0,
+                "mtime": None,
+                "diff_status": "unavailable",
+                "diff_complete": True,
+                "first_diff_path": None,
+                "file_statuses": {},
+                "direct_items": [],
+                "direct_files": [],
+                "direct_folders": [
+                    {"name": "Disc 2", "remote_path": "dropbox:Root/Album/Disc 2"},
+                ],
+            }
+            cache._write_cache("dropbox:Root/Album", complete=True)
+
+        first = cache.ensure_known_subtree("dropbox:Root", 100.0)
+        block_release.set()
+        wait_until(lambda: (cache.get("dropbox:Root/Other") or {}).get("complete"), description="root other completion")
+        wait_until(lambda: (cache.get("dropbox:Root/Album/Disc 2") or {}).get("complete"), description="disc 2 completion")
+
+        self.assertEqual(first["queued_folder_count"], 2)
+        starts = [
+            event for event in self.read_trace_events()
+            if event["event"] == "job_started" and event.get("remote_path") in {
+                "dropbox:Root/Other",
+                "dropbox:Root/Album/Disc 2",
+            }
+        ]
+        self.assertEqual(
+            [event.get("remote_path") for event in starts],
+            ["dropbox:Root/Other", "dropbox:Root/Album/Disc 2"],
+        )
+        self.assertEqual(
+            [event.get("breadth_depth") for event in starts],
+            [1, 2],
+        )
+
+    def test_ensure_known_subtree_preserves_newer_page_priority(self) -> None:
+        block_started = threading.Event()
+        block_release = threading.Event()
+        rclone = SimulatedRclone({
+            "dropbox:block": [SimulatedLsjsonResponse(items=[], wait_event=block_release, started_event=block_started)],
+            "dropbox:Root/Other": [SimulatedLsjsonResponse(items=[])],
+            "dropbox:NewRoot/Fresh": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, workers=1)
+        cache = app.folder_cache
+        assert cache is not None
+
+        cache.request("dropbox:block", 10.0)
+        wait_until(block_started.is_set, description="block folder start for ensure_known_subtree newer page priority")
+
+        with cache._lock:
+            cache._acc["dropbox:Root"] = {
+                "size": 0,
+                "count": 0,
+                "mtime": None,
+                "diff_status": "unavailable",
+                "diff_complete": True,
+                "first_diff_path": None,
+                "file_statuses": {},
+                "direct_items": [],
+                "direct_files": [],
+                "direct_folders": [
+                    {"name": "Other", "remote_path": "dropbox:Root/Other"},
+                ],
+            }
+            cache._write_cache("dropbox:Root", complete=True)
+            cache._acc["dropbox:NewRoot"] = {
+                "size": 0,
+                "count": 0,
+                "mtime": None,
+                "diff_status": "unavailable",
+                "diff_complete": True,
+                "first_diff_path": None,
+                "file_statuses": {},
+                "direct_items": [],
+                "direct_files": [],
+                "direct_folders": [
+                    {"name": "Fresh", "remote_path": "dropbox:NewRoot/Fresh"},
+                ],
+            }
+            cache._write_cache("dropbox:NewRoot", complete=True)
+
+        first = cache.ensure_known_subtree("dropbox:Root", 100.0)
+        second = cache.ensure_known_subtree("dropbox:NewRoot", 200.0)
+        block_release.set()
+        wait_until(lambda: (cache.get("dropbox:NewRoot/Fresh") or {}).get("complete"), description="new root fresh completion")
+        wait_until(lambda: cache.status("dropbox:Root/Other") != "calculating", description="stale older page descendant resolution")
+
+        self.assertEqual(first["queued_folder_count"], 1)
+        self.assertEqual(second["queued_folder_count"], 1)
+        starts = [
+            event for event in self.read_trace_events()
+            if event["event"] == "job_started" and event.get("remote_path") in {
+                "dropbox:Root/Other",
+                "dropbox:NewRoot/Fresh",
+            }
+        ]
+        self.assertEqual([event.get("remote_path") for event in starts], ["dropbox:NewRoot/Fresh"])
+        events = self.read_trace_events()
+        self.assertTrue(any(
+            event["event"] == "job_skipped_stale" and event.get("remote_path") == "dropbox:Root/Other"
+            for event in events
+        ))
+
+    def test_ensure_known_subtree_pending_counts_only_include_non_complete_observable_folders(self) -> None:
+        rclone = SimulatedRclone({
+            "dropbox:Root/Partial": [SimulatedLsjsonResponse(items=[])],
+            "dropbox:Root/Missing": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, workers=1)
+        cache = app.folder_cache
+        assert cache is not None
+
+        with cache._lock:
+            cache._acc["dropbox:Root"] = {
+                "size": 0,
+                "count": 0,
+                "mtime": None,
+                "diff_status": "unavailable",
+                "diff_complete": True,
+                "first_diff_path": None,
+                "file_statuses": {},
+                "direct_items": [],
+                "direct_files": [],
+                "direct_folders": [
+                    {"name": "Complete", "remote_path": "dropbox:Root/Complete"},
+                    {"name": "Partial", "remote_path": "dropbox:Root/Partial"},
+                    {"name": "Calculating", "remote_path": "dropbox:Root/Calculating"},
+                    {"name": "Missing", "remote_path": "dropbox:Root/Missing"},
+                ],
+            }
+            cache._write_cache("dropbox:Root", complete=True)
+            cache._acc["dropbox:Root/Complete"] = {
+                "size": 0,
+                "count": 0,
+                "mtime": None,
+                "diff_status": "unavailable",
+                "diff_complete": True,
+                "first_diff_path": None,
+                "file_statuses": {},
+                "direct_items": [],
+                "direct_files": [],
+                "direct_folders": [],
+            }
+            cache._write_cache("dropbox:Root/Complete", complete=True)
+            cache._acc["dropbox:Root/Partial"] = {
+                "size": 0,
+                "count": 0,
+                "mtime": None,
+                "diff_status": "unavailable",
+                "diff_complete": False,
+                "first_diff_path": None,
+                "file_statuses": {},
+                "direct_items": [],
+                "direct_files": [],
+                "direct_folders": [],
+            }
+            cache._write_cache("dropbox:Root/Partial", complete=False)
+            cache._in_progress["dropbox:Root/Calculating"] = 100.0
+
+        result = cache.ensure_known_subtree("dropbox:Root", 100.0)
+        wait_until(lambda: (cache.get("dropbox:Root/Partial") or {}).get("complete"), description="partial child completion from ensure_known_subtree")
+        wait_until(lambda: (cache.get("dropbox:Root/Missing") or {}).get("complete"), description="missing child completion from ensure_known_subtree")
+
+        self.assertEqual(result["pending_folder_count"], 3)
+        self.assertEqual(result["missing_folder_count"], 2)
+        self.assertEqual(result["queued_folder_count"], 2)
+        self.assertEqual(sum(1 for call in rclone.calls if call["target"] == "dropbox:Root/Complete"), 0)
+        self.assertEqual(sum(1 for call in rclone.calls if call["target"] == "dropbox:Root/Partial"), 1)
+        self.assertEqual(sum(1 for call in rclone.calls if call["target"] == "dropbox:Root/Missing"), 1)
+        self.assertEqual(sum(1 for call in rclone.calls if call["target"] == "dropbox:Root/Calculating"), 0)

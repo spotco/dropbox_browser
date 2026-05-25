@@ -1,8 +1,4 @@
-"""Music player endpoint helpers.
-
-The initial music endpoints are intentionally read-only and do not trigger
-Dropbox listing work. Future library endpoints should use cached metadata only.
-"""
+"""Music player endpoint helpers."""
 from __future__ import annotations
 
 import posixpath
@@ -13,8 +9,6 @@ from typing import Any
 from urllib.parse import parse_qs
 
 from .errors import BrowserError
-from .formatting import parse_rclone_time
-from .ignored import is_ignored_name
 from .paths import child_remote_path, clean_rel_path, remote_target
 
 
@@ -34,13 +28,6 @@ def _display_name_for_root(rel_path: str) -> str:
     return posixpath.basename(rel_path) if rel_path else "Dropbox"
 
 
-def _item_name(item: dict[str, Any]) -> str:
-    name = item.get("Name") or item.get("Path") or ""
-    if not isinstance(name, str):
-        return ""
-    return posixpath.basename(name)
-
-
 def _is_supported_song(name: str) -> bool:
     return Path(name).suffix.casefold() in SUPPORTED_AUDIO_EXTENSIONS
 
@@ -53,8 +40,12 @@ def _folder_cache_data(app: Any, remote_path: str) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _folder_complete(app: Any, remote_path: str) -> bool:
-    return bool(_folder_cache_data(app, remote_path).get("complete"))
+def _folder_cache_status(app: Any, remote_path: str) -> str:
+    cache = getattr(app, "folder_cache", None)
+    if cache is None or not hasattr(cache, "status"):
+        return "unavailable"
+    status = cache.status(remote_path)
+    return status if isinstance(status, str) else "unavailable"
 
 
 def _remote_rel_path(remote_root: str, remote_path: str) -> str:
@@ -70,13 +61,13 @@ def _remote_rel_path(remote_root: str, remote_path: str) -> str:
     return ""
 
 
-def _direct_files(app: Any, remote_path: str) -> list[dict[str, Any]]:
-    files = _folder_cache_data(app, remote_path).get("direct_files", [])
+def _direct_files(folder_data: dict[str, Any]) -> list[dict[str, Any]]:
+    files = folder_data.get("direct_files", [])
     return files if isinstance(files, list) else []
 
 
-def _direct_folders(app: Any, remote_path: str) -> list[dict[str, Any]]:
-    folders = _folder_cache_data(app, remote_path).get("direct_folders", [])
+def _direct_folders(folder_data: dict[str, Any]) -> list[dict[str, Any]]:
+    folders = folder_data.get("direct_folders", [])
     return folders if isinstance(folders, list) else []
 
 
@@ -101,6 +92,8 @@ def _song_from_direct_file(app: Any, root_rel_path: str, parent_id: str, file_da
         "stream_path": stream_path,
         "rel_path": rel_path,
         "display_name": name,
+        "filename": name,
+        "type": "file",
         "extension": Path(name).suffix.casefold(),
         "size": file_data.get("size"),
         "mtime": file_data.get("mtime"),
@@ -112,10 +105,24 @@ def _library_endpoint(app: Any, query: str) -> tuple[HTTPStatus, dict]:
     root_rel_path = clean_rel_path(params.get("path", [""])[0])
     root_remote_path = remote_target(app.remote, root_rel_path)
     root_id = _folder_id(root_remote_path)
-    listing_cache = getattr(app, "listing_cache", None)
-    root_listing = listing_cache.get(root_remote_path) if listing_cache is not None else None
-    root_direct_files = _direct_files(app, root_remote_path)
-    root_direct_folders = _direct_folders(app, root_remote_path)
+    ensure_result: dict[str, int | float] = {
+        "queued_folder_count": 0,
+        "pending_folder_count": 0,
+        "missing_folder_count": 0,
+    }
+    folder_cache = getattr(app, "folder_cache", None)
+    if (
+        folder_cache is not None
+        and hasattr(folder_cache, "page_epoch_for")
+        and hasattr(folder_cache, "ensure_known_subtree")
+    ):
+        page_epoch = folder_cache.page_epoch_for(root_rel_path)
+        ensure_result = folder_cache.ensure_known_subtree(root_remote_path, page_epoch)
+    root_data = _folder_cache_data(app, root_remote_path)
+    root_status = _folder_cache_status(app, root_remote_path)
+    pending_folder_count = int(ensure_result.get("pending_folder_count", 0) or 0)
+    queued_folder_count = int(ensure_result.get("queued_folder_count", 0) or 0)
+    missing_folder_count = int(ensure_result.get("missing_folder_count", 0) or 0)
 
     root = {
         "id": root_id,
@@ -125,15 +132,24 @@ def _library_endpoint(app: Any, query: str) -> tuple[HTTPStatus, dict]:
         "display_name": _display_name_for_root(root_rel_path),
     }
 
-    if root_listing is None and not root_direct_files and not root_direct_folders:
+    if not root_data:
+        pending = pending_folder_count > 0
         return HTTPStatus.OK, {
             "root": root,
             "status": {
                 "cache_status": "unavailable",
                 "complete": False,
-                "message": "No cached listing is available for this folder yet.",
+                "pending": pending,
+                "pending_folder_count": pending_folder_count,
+                "queued_folder_count": queued_folder_count,
+                "missing_folder_count": missing_folder_count,
+                "message": (
+                    "Library metadata is loading."
+                    if pending or root_status in {"pending", "calculating"}
+                    else "No cached folder metadata is available for this folder yet."
+                ),
                 "generated_at": time.time(),
-                "missing_listing_count": 1,
+                "missing_listing_count": missing_folder_count or 1,
             },
             "folders": [],
             "songs": [],
@@ -143,17 +159,27 @@ def _library_endpoint(app: Any, query: str) -> tuple[HTTPStatus, dict]:
     songs: list[dict[str, Any]] = []
     seen_song_remote_paths: set[str] = set()
     seen_folder_remote_paths: set[str] = set()
-    missing_listing_count = 0
+    incomplete_folder_count = 0
 
-    def append_direct_file_songs(parent_id: str, folder_remote_path: str) -> None:
-        for file_data in _direct_files(app, folder_remote_path):
+    def append_direct_file_songs(parent_id: str, folder_data: dict[str, Any]) -> None:
+        for file_data in _direct_files(folder_data):
             song = _song_from_direct_file(app, root_rel_path, parent_id, file_data)
             if song is None or song["remote_path"] in seen_song_remote_paths:
                 continue
             seen_song_remote_paths.add(song["remote_path"])
             songs.append(song)
 
-    def folder_node(parent_id: str, folder_rel_path: str, folder_stream_path: str, folder_remote_path: str, name: str, listing_cached: bool, metadata_cached: bool) -> dict[str, Any]:
+    def folder_node(
+        parent_id: str,
+        folder_rel_path: str,
+        folder_stream_path: str,
+        folder_remote_path: str,
+        name: str,
+        folder_mtime: float | None,
+        folder_data: dict[str, Any] | None,
+        folder_status: str,
+    ) -> dict[str, Any]:
+        metadata_cached = folder_data is not None
         return {
             "id": _folder_id(folder_remote_path),
             "parent_id": parent_id,
@@ -161,101 +187,76 @@ def _library_endpoint(app: Any, query: str) -> tuple[HTTPStatus, dict]:
             "rel_path": folder_rel_path,
             "stream_path": folder_stream_path,
             "display_name": name,
-            "listing_cached": listing_cached,
+            "filename": name,
+            "type": "folder",
+            "listing_cached": metadata_cached,
             "metadata_cached": metadata_cached,
-            "complete": _folder_complete(app, folder_remote_path),
+            "complete": bool(folder_data and folder_data.get("complete")),
+            "pending": folder_status in {"pending", "calculating", "partial"},
+            "mtime": folder_data.get("mtime") if folder_data and folder_data.get("mtime") is not None else folder_mtime,
+            "recursive_mtime": folder_data.get("newest_mtime") if folder_data else None,
         }
 
-    def append_listing_song(parent_id: str, item_rel_path: str, item_stream_path: str, item_remote_path: str, item: dict[str, Any]) -> None:
-        name = posixpath.basename(item_rel_path)
-        if item_remote_path in seen_song_remote_paths or not _is_supported_song(name):
-            return
-        seen_song_remote_paths.add(item_remote_path)
-        songs.append({
-            "id": _song_id(item_remote_path),
-            "parent_id": parent_id,
-            "remote_path": item_remote_path,
-            "stream_path": item_stream_path,
-            "rel_path": item_rel_path,
-            "display_name": name,
-            "extension": Path(name).suffix.casefold(),
-            "size": item.get("Size"),
-            "mtime": parse_rclone_time(item.get("ModTime")),
-        })
-
-    def visit_metadata(parent_id: str, folder_rel_path: str, folder_remote_path: str) -> None:
-        nonlocal missing_listing_count
-        append_direct_file_songs(parent_id, folder_remote_path)
-        for folder_data in _direct_folders(app, folder_remote_path):
-            name = folder_data.get("name") or folder_data.get("path") or ""
-            child_remote_path = folder_data.get("remote_path") or ""
-            if not isinstance(name, str) or not isinstance(child_remote_path, str) or not name or child_remote_path in seen_folder_remote_paths:
-                continue
-            item_rel_path = child_remote_path_for_display(root_rel_path, folder_rel_path, name, child_remote_path)
-            item_stream_path = _remote_rel_path(app.remote, child_remote_path)
-            item_id = _folder_id(child_remote_path)
-            seen_folder_remote_paths.add(child_remote_path)
-            child_has_metadata = bool(_direct_files(app, child_remote_path) or _direct_folders(app, child_remote_path))
-            child_listing = listing_cache.get(child_remote_path) if listing_cache is not None else None
-            if child_listing is None and not child_has_metadata:
-                missing_listing_count += 1
-            folders.append(folder_node(parent_id, item_rel_path, item_stream_path, child_remote_path, name, child_listing is not None, child_has_metadata))
-            if child_has_metadata:
-                visit_metadata(item_id, item_rel_path, child_remote_path)
-            elif child_listing is not None:
-                visit(item_id, item_rel_path, child_remote_path, child_listing)
-
-    def child_remote_path_for_display(root_rel_path: str, parent_rel_path: str, name: str, remote_path: str) -> str:
+    def child_remote_path_for_display(parent_rel_path: str, remote_path: str, name: str) -> str:
         stream_path = _remote_rel_path(app.remote, remote_path)
         if root_rel_path and stream_path.startswith(root_rel_path.rstrip("/") + "/"):
             return stream_path[len(root_rel_path.rstrip("/") + "/"):]
         return child_remote_path(parent_rel_path, name)
 
-    def visit(parent_id: str, folder_rel_path: str, folder_remote_path: str, items: list[dict[str, Any]]) -> None:
-        nonlocal missing_listing_count
-        append_direct_file_songs(parent_id, folder_remote_path)
-        for item in items:
-            name = _item_name(item)
-            if not name or "/" in name or is_ignored_name(name):
+    def visit_folder(parent_id: str, folder_rel_path: str, folder_remote_path: str, folder_data: dict[str, Any]) -> None:
+        nonlocal incomplete_folder_count
+        append_direct_file_songs(parent_id, folder_data)
+        for child_folder in _direct_folders(folder_data):
+            name = child_folder.get("name") or child_folder.get("path") or ""
+            child_remote_path = child_folder.get("remote_path") or ""
+            child_folder_mtime = child_folder.get("mtime")
+            if not isinstance(name, str) or not isinstance(child_remote_path, str) or not name or child_remote_path in seen_folder_remote_paths:
                 continue
-            item_rel_path = child_remote_path(folder_rel_path, name)
-            item_stream_path = child_remote_path(root_rel_path, item_rel_path)
-            item_remote_path = remote_target(app.remote, item_stream_path)
-            if item.get("IsDir"):
-                item_id = _folder_id(item_remote_path)
-                if item_remote_path in seen_folder_remote_paths:
-                    continue
-                seen_folder_remote_paths.add(item_remote_path)
-                child_listing = listing_cache.get(item_remote_path)
-                metadata_cached = bool(_direct_files(app, item_remote_path) or _direct_folders(app, item_remote_path))
-                listing_cached = child_listing is not None
-                if not listing_cached and not metadata_cached:
-                    missing_listing_count += 1
-                folders.append(folder_node(parent_id, item_rel_path, item_stream_path, item_remote_path, name, listing_cached, metadata_cached))
-                if metadata_cached:
-                    visit_metadata(item_id, item_rel_path, item_remote_path)
-                elif child_listing is not None:
-                    visit(item_id, item_rel_path, item_remote_path, child_listing)
-                continue
-            append_listing_song(parent_id, item_rel_path, item_stream_path, item_remote_path, item)
+            item_rel_path = child_remote_path_for_display(folder_rel_path, child_remote_path, name)
+            item_stream_path = _remote_rel_path(app.remote, child_remote_path)
+            child_data = _folder_cache_data(app, child_remote_path)
+            child_status = _folder_cache_status(app, child_remote_path)
+            seen_folder_remote_paths.add(child_remote_path)
+            if child_data and not child_data.get("complete"):
+                incomplete_folder_count += 1
+            folders.append(
+                folder_node(
+                    parent_id,
+                    item_rel_path,
+                    item_stream_path,
+                    child_remote_path,
+                    name,
+                    child_folder_mtime if isinstance(child_folder_mtime, (int, float)) else None,
+                    child_data or None,
+                    child_status,
+                )
+            )
+            if child_data:
+                visit_folder(_folder_id(child_remote_path), item_rel_path, child_remote_path, child_data)
 
-    if root_listing is None:
-        visit_metadata(root_id, "", root_remote_path)
-    else:
-        visit(root_id, "", root_remote_path, root_listing)
-    complete = missing_listing_count == 0 and _folder_complete(app, root_remote_path)
+    if not root_data.get("complete"):
+        incomplete_folder_count += 1
+    visit_folder(root_id, "", root_remote_path, root_data)
+    pending = pending_folder_count > 0
+    complete = not pending and incomplete_folder_count == 0
     return HTTPStatus.OK, {
         "root": root,
         "status": {
             "cache_status": "complete" if complete else "partial",
             "complete": complete,
+            "pending": pending,
+            "pending_folder_count": pending_folder_count,
+            "queued_folder_count": queued_folder_count,
+            "missing_folder_count": missing_folder_count,
             "message": (
                 "Cached library is complete."
                 if complete
+                else "Library is loading cached metadata."
+                if pending
                 else "Library may update as cached metadata arrives."
             ),
             "generated_at": time.time(),
-            "missing_listing_count": missing_listing_count,
+            "missing_listing_count": missing_folder_count,
         },
         "folders": folders,
         "songs": songs,
