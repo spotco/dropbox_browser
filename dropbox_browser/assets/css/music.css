@@ -623,13 +623,51 @@
   background: transparent;
   border: 0;
   color: #1f2937;
+  display: flex;
+  align-items: center;
   justify-content: flex-start;
+  gap: 8px;
+  min-width: 100%;
+  padding: 6px 10px;
   text-align: left;
 }
 
 .music-context-menu button:hover,
 .music-context-menu button:focus-visible {
   background: #dce8f4;
+}
+
+.music-context-menu-group {
+  position: relative;
+}
+
+.music-context-menu-parent {
+  justify-content: space-between;
+}
+
+.music-context-menu-arrow {
+  color: #64748b;
+  flex: 0 0 auto;
+}
+
+.music-context-submenu {
+  background: #f8fafc;
+  border: 1px solid #94a3b8;
+  border-radius: 4px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
+  display: none;
+  flex-direction: column;
+  left: calc(100% - 2px);
+  min-width: 180px;
+  padding: 4px;
+  position: absolute;
+  top: -5px;
+  z-index: 301;
+}
+
+.music-context-menu-group:hover > .music-context-submenu,
+.music-context-menu-group:focus-within > .music-context-submenu {
+  display: flex;
 }
 
 @media (max-width: 860px) {
