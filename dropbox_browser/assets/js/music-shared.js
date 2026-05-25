@@ -32,3 +32,19 @@ export function formatPlaybackTime(seconds) {
     String(minutes).padStart(2, '0') + ':' +
     String(secs).padStart(2, '0');
 }
+
+export function formatShortDateTime(epochSeconds) {
+  var ms = Number(epochSeconds || 0) * 1000;
+  var date;
+  if (!Number.isFinite(ms) || ms <= 0) return '--';
+  date = new Date(ms);
+  if (Number.isNaN(date.getTime())) return '--';
+  return date.toLocaleString([], {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
+}

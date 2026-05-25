@@ -1,4 +1,11 @@
-import {clearObject, itemCount, plural} from './music-shared.js';
+import {clearObject, formatShortDateTime, itemCount, plural} from './music-shared.js';
+import {
+  compareLibraryNames,
+  firstSelectedVisibleNodeId,
+  libraryNameSortKey,
+  libraryNodeDateSortValue,
+  sortLibraryItems
+} from './music-library-helpers.js';
 
 export function initLibrary(ctx) {
   var els = ctx.els;
@@ -65,22 +72,6 @@ export function initLibrary(ctx) {
     }, scheduledDelayMs);
   }
 
-  function libraryNameSortKey(name) {
-    return String(name || '').toLowerCase();
-  }
-
-  function compareLibraryNames(left, right) {
-    var leftKey = libraryNameSortKey(left && left.display_name);
-    var rightKey = libraryNameSortKey(right && right.display_name);
-    if (leftKey < rightKey) return -1;
-    if (leftKey > rightKey) return 1;
-    leftKey = String((left && left.display_name) || '');
-    rightKey = String((right && right.display_name) || '');
-    if (leftKey < rightKey) return -1;
-    if (leftKey > rightKey) return 1;
-    return 0;
-  }
-
   function indexByParent(items) {
     var map = Object.create(null);
     items.forEach(function (item) {
@@ -89,7 +80,7 @@ export function initLibrary(ctx) {
       map[key].push(item);
     });
     Object.keys(map).forEach(function (key) {
-      map[key].sort(compareLibraryNames);
+      map[key] = sortLibraryItems(map[key], state.librarySortKey, state.librarySortDirection);
     });
     return map;
   }
@@ -154,12 +145,21 @@ export function initLibrary(ctx) {
     name.textContent = node.display_name || node.rel_path || '';
     row.appendChild(name);
 
+    var details = document.createElement('span');
+    details.className = 'music-tree-details';
+    row.appendChild(details);
+
     if (kind === 'folder' && node.listing_cached === false) {
       var badge = document.createElement('span');
       badge.className = 'music-tree-badge';
       badge.textContent = node.metadata_cached ? 'files cached' : 'not cached';
-      row.appendChild(badge);
+      details.appendChild(badge);
     }
+
+    var date = document.createElement('span');
+    date.className = 'music-tree-date';
+    date.textContent = formatShortDateTime(libraryNodeDateSortValue(node));
+    details.appendChild(date);
 
     row.addEventListener('click', function (ev) {
       selectNode(node.id, ev);
@@ -215,9 +215,124 @@ export function initLibrary(ctx) {
     ctx.pane.dataset.librarySelectionCount = String(selectedCount());
   }
 
+  function currentLibrarySortKey() {
+    return state.librarySortKey === 'date' ? 'date' : 'name';
+  }
+
+  function currentLibrarySortDirection() {
+    return state.librarySortDirection === 'desc' ? 'desc' : 'asc';
+  }
+
+  function defaultLibrarySortDirection(sortKey) {
+    return sortKey === 'date' ? 'desc' : 'asc';
+  }
+
+  function normalizeLibrarySort(sortState) {
+    var sortKey = sortState && sortState.key === 'date' ? 'date' : 'name';
+    var sortDirection = sortState && sortState.direction === 'desc' ? 'desc' : 'asc';
+    return {
+      key: sortKey,
+      direction: sortDirection
+    };
+  }
+
+  function persistLibrarySort() {
+    if (typeof Settings === 'undefined' || !Settings || typeof Settings.set !== 'function') return;
+    Settings.set(state.librarySortSettingKey, {
+      key: currentLibrarySortKey(),
+      direction: currentLibrarySortDirection()
+    });
+  }
+
+  function restoreLibrarySort() {
+    var restored;
+    if (typeof Settings === 'undefined' || !Settings || typeof Settings.get !== 'function') return;
+    restored = normalizeLibrarySort(Settings.get(state.librarySortSettingKey, {
+      key: state.librarySortKey,
+      direction: state.librarySortDirection
+    }));
+    state.librarySortKey = restored.key;
+    state.librarySortDirection = restored.direction;
+  }
+
+  function sortButtonLabel(sortKey, sortDirection) {
+    var directionArrow = sortDirection === 'desc' ? '↓' : '↑';
+    if (sortKey === 'date') return 'Date ' + directionArrow;
+    return 'Name ' + directionArrow;
+  }
+
+  function updateSortButtons() {
+    Array.prototype.forEach.call(els.librarySortButtons || [], function (button) {
+      var buttonSortKey = button.getAttribute('data-library-sort-key') || 'name';
+      var selected = buttonSortKey === currentLibrarySortKey();
+      var displayDirection = selected ? currentLibrarySortDirection() : defaultLibrarySortDirection(buttonSortKey);
+      button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+      button.textContent = sortButtonLabel(buttonSortKey, displayDirection);
+    });
+  }
+
   function primarySelectedLibraryNodeId() {
     if (state.selectionAnchor && state.selectedIds[state.selectionAnchor]) return state.selectionAnchor;
     return Object.keys(state.selectedIds)[0] || null;
+  }
+
+  function firstSelectedRowNodeId() {
+    return firstSelectedVisibleNodeId(state.visibleNodeIds, state.selectedIds, state.selectionAnchor);
+  }
+
+  function findLibraryRowByNodeId(nodeId) {
+    var match = null;
+    if (!els.treeEl || !nodeId) return null;
+    Array.prototype.some.call(els.treeEl.querySelectorAll('.music-tree-row'), function (row) {
+      if (row.dataset.nodeId !== nodeId) return false;
+      match = row;
+      return true;
+    });
+    return match;
+  }
+
+  function captureLibraryViewportAnchor() {
+    var nodeId = firstSelectedRowNodeId();
+    var row = findLibraryRowByNodeId(nodeId);
+    return {
+      nodeId: row ? row.dataset.nodeId : nodeId,
+      offsetTop: row ? row.offsetTop - els.treeEl.scrollTop : 0,
+      scrollTop: els.treeEl.scrollTop
+    };
+  }
+
+  function restoreLibraryViewportAnchor(anchor) {
+    var nextScrollTop;
+    var row;
+    var maxScrollTop;
+
+    if (!els.treeEl) return;
+    nextScrollTop = anchor ? anchor.scrollTop : els.treeEl.scrollTop;
+    if (anchor && anchor.nodeId) {
+      row = findLibraryRowByNodeId(anchor.nodeId);
+      if (row) nextScrollTop = row.offsetTop - anchor.offsetTop;
+    }
+    maxScrollTop = Math.max(0, els.treeEl.scrollHeight - els.treeEl.clientHeight);
+    if (nextScrollTop < 0) nextScrollTop = 0;
+    if (nextScrollTop > maxScrollTop) nextScrollTop = maxScrollTop;
+    els.treeEl.scrollTop = nextScrollTop;
+  }
+
+  function setLibrarySort(sortKey, sortDirection) {
+    var nextSortKey = sortKey === 'date' ? 'date' : 'name';
+    var nextSortDirection = sortDirection === 'desc' ? 'desc' : 'asc';
+    state.librarySortKey = nextSortKey;
+    state.librarySortDirection = nextSortDirection;
+    persistLibrarySort();
+    updateSortButtons();
+    renderLibrary();
+  }
+
+  function toggleLibrarySort(sortKey) {
+    var nextSortKey = sortKey === 'date' ? 'date' : 'name';
+    var nextSortDirection = nextSortKey === 'date' ? 'desc' : 'asc';
+    if (state.librarySortKey === nextSortKey) nextSortDirection = currentLibrarySortDirection() === 'asc' ? 'desc' : 'asc';
+    setLibrarySort(nextSortKey, nextSortDirection);
   }
 
   function selectAllVisibleLibraryNodes() {
@@ -327,7 +442,7 @@ export function initLibrary(ctx) {
 
   function paintLibrary() {
     var snapshot = state.librarySnapshot;
-    var scrollTop = els.treeEl.scrollTop;
+    var viewportAnchor = captureLibraryViewportAnchor();
     state.libraryRenderDirty = false;
     state.visibleNodeIds = [];
     els.treeEl.textContent = '';
@@ -373,7 +488,7 @@ export function initLibrary(ctx) {
     }
 
     renderSelection();
-    els.treeEl.scrollTop = scrollTop;
+    restoreLibraryViewportAnchor(viewportAnchor);
   }
 
   function renderLibrary() {
@@ -469,6 +584,7 @@ export function initLibrary(ctx) {
     ctx.setLibraryStatus('Library not loaded.');
     stopPolling();
     stopLibraryPollingUi();
+    updateSortButtons();
     renderLibrary();
   }
 
@@ -493,6 +609,7 @@ export function initLibrary(ctx) {
     resetLibraryForCurrentFolder: resetLibraryForCurrentFolder,
     schedulePoll: schedulePoll,
     selectedSongsForPlaylist: selectedSongsForPlaylist,
+    setLibrarySort: setLibrarySort,
     selectAllVisibleLibraryNodes: selectAllVisibleLibraryNodes,
     selectVisibleLibrarySiblingsOfCurrentSelection: selectVisibleLibrarySiblingsOfCurrentSelection,
     shouldPollLibrary: shouldPollLibrary,
@@ -502,6 +619,9 @@ export function initLibrary(ctx) {
     stopPolling: stopPolling,
     updateLoadButtonTimer: updateLoadButtonTimer
   };
+
+  restoreLibrarySort();
+  updateSortButtons();
 
   els.loadButton.addEventListener('click', function () {
     state.libraryRoot = state.currentFolder;
@@ -520,5 +640,10 @@ export function initLibrary(ctx) {
       hideLibraryContextMenu();
     });
   }
+  Array.prototype.forEach.call(els.librarySortButtons || [], function (button) {
+    button.addEventListener('click', function () {
+      toggleLibrarySort(button.getAttribute('data-library-sort-key'));
+    });
+  });
   if (els.treeEl) els.treeEl.addEventListener('keydown', handleLibrarySelectAllShortcut);
 }
