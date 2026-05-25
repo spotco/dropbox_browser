@@ -634,9 +634,11 @@ export function initLibrary(ctx) {
 
   if (els.libraryMenu) {
     els.libraryMenu.addEventListener('click', function (ev) {
-      var action = ev.target && ev.target.getAttribute('data-action');
+      var actionEl = ev.target && ev.target.closest ? ev.target.closest('[data-action]') : null;
+      var action = actionEl && actionEl.getAttribute('data-action');
       if (action === 'add-selected') ctx.playlistApi.addSongsToPlaylist(selectedSongsForPlaylist());
       if (action === 'select-all') performLibrarySelectAll();
+      if (!action) return;
       hideLibraryContextMenu();
     });
   }
