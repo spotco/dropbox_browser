@@ -44,6 +44,34 @@ python -m unittest discover -s tests -v
 Use the full suite before checkin/commit, before handoff of broad cross-module
 changes, or when a shared helper used by multiple groups changes.
 
+## JavaScript and Browser Tests
+
+Node-based tests live under `tests/js/` and use the built-in `node:test`
+runner:
+
+```powershell
+npm run test:js
+```
+
+Browser integration tests live under `tests/e2e/` and use Playwright against a
+real Python server process:
+
+```powershell
+npm run test:e2e
+```
+
+The Playwright harness launches `python -m dropbox_browser.cli` with an
+isolated `--local-root` through `tests/e2e/support/run_server.py` plus
+`tests/fake_rclone.cmd`, which forwards to `tests/fake_rclone.py`. The
+Playwright worker starts and stops that server explicitly so short E2E runs do
+not hang during teardown. Remote Dropbox data comes from the fixture configured
+by `DROPBOX_BROWSER_E2E_FIXTURE`.
+
+Keep the split intentional:
+
+- `tests/js/` for focused JavaScript behavior that does not need a full browser.
+- `tests/e2e/` for end-to-end browser and server interactions.
+
 ## Regression Workflow
 
 When a regression can be represented in the test harness:

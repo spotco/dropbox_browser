@@ -8,3 +8,6 @@ Temp/
 Cache/
 DropboxLocal/
 .vscode/
+node_modules/
+playwright-report/
+test-results/
