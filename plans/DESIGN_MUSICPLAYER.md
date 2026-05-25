@@ -38,8 +38,13 @@ implementation plan is tracked in `plans/PLAN_MUSICPLAYER.md`.
 - Browser assets are served by the existing constrained `/assets/...` handler.
 - Streaming is already implemented by `/file` and `/download` through
   `RequestHandler.serve_file()` and `dropbox_browser/streaming.py`.
-- Recursive folder metadata and cached child listings are owned by
-  `dropbox_browser/foldercache.py` and `dropbox_browser/listingcache.py`.
+- Recursive folder metadata, direct child file/folder records, background
+  queueing, and folder-info status are owned by
+  `dropbox_browser/foldercache.py`.
+- `dropbox_browser/listingcache.py` remains an implementation detail that
+  folder navigation and `FolderCacheManager` may use to avoid rclone calls. The
+  music endpoint should not directly use `ListingCacheManager` as a separate
+  source of truth.
 
 ## Proposed File Layout
 
@@ -48,7 +53,8 @@ implementation plan is tracked in `plans/PLAN_MUSICPLAYER.md`.
   - Owns supported audio extension filtering.
   - Owns cached-library JSON shape.
   - Must not call `rclone`.
-  - Must not call `folder_cache.request()`.
+  - May call `folder_cache.request()` to queue background work, but must not
+    wait for that work or run it inline.
 - `dropbox_browser/assets/js/music.js`
   - Replace the current stub with the music player client controller.
   - Owns in-memory playlist, selection, context menus, audio element, shuffle
@@ -76,18 +82,34 @@ GET /music/endpoints/library?path=<current-folder-relative-path>
 ```
 
 The endpoint returns a JSON snapshot of all currently cached supported song
-files under the requested Dropbox folder. It uses only current cache state:
+files under the requested Dropbox folder. It reads from the same folder-info
+cache system used by folder navigation background metadata:
 
 - `clean_rel_path()` validates the requested root path.
 - `remote_target(app.remote, rel_path)` builds absolute Dropbox remote paths.
-- `app.listing_cache.get(remote_path)` provides direct child listings when
-  available.
-- `app.folder_cache.get(remote_path)` and `app.folder_cache.status(remote_path)`
-  provide completeness/status hints.
-- Missing listing-cache entries stop traversal for that subtree.
+- `app.folder_cache.get(remote_path)` provides cached `direct_files`,
+  `direct_folders`, dates, and completion fields.
+- `app.folder_cache.status(remote_path)` provides complete, partial,
+  calculating, or pending state.
+- `app.folder_cache.request(remote_path, page_epoch)` may be used to enqueue
+  missing or incomplete background folder-cache work.
+- A small public `FolderCacheManager` page-epoch helper should return the active
+  navigation epoch when the requested music root matches the current page key,
+  otherwise a fresh epoch for the explicit music request.
+- A `FolderCacheManager` known-subtree ensure helper should queue missing or
+  incomplete folder-cache records discovered from cached `direct_folders`,
+  including missing descendants under an otherwise complete root record.
+- Missing folder-cache records stop traversal for that subtree until a later
+  poll sees new cache data.
 - The endpoint must not wait for pending workers.
-- The endpoint must not enqueue new folder-cache work.
 - The endpoint must not run `rclone`.
+- The endpoint must not call `app.list_entries()`.
+- The endpoint must not directly read `app.listing_cache`.
+- `FolderCacheManager` may still use `ListingCacheManager` internally when its
+  workers need a direct listing.
+- The music endpoint should not manually queue every descendant as depth-0 work;
+  descendant queueing that needs priority/depth semantics belongs in
+  `FolderCacheManager`.
 
 Suggested response shape:
 
@@ -103,7 +125,10 @@ Suggested response shape:
     "cache_status": "partial",
     "complete": false,
     "message": "Library may update as cached metadata arrives.",
-    "generated_at": 1779210000.0
+    "generated_at": 1779210000.0,
+    "pending": true,
+    "pending_folder_count": 2,
+    "missing_folder_count": 1
   },
   "folders": [
     {
@@ -112,8 +137,14 @@ Suggested response shape:
       "remote_path": "dropbox:Music/Album",
       "rel_path": "Album",
       "display_name": "Album",
-      "listing_cached": true,
-      "complete": false
+      "filename": "Album",
+      "stream_path": "Music/Album",
+      "type": "folder",
+      "mtime": 1779210000.0,
+      "recursive_mtime": 1779210000.0,
+      "metadata_cached": true,
+      "complete": false,
+      "pending": true
     }
   ],
   "songs": [
@@ -124,6 +155,8 @@ Suggested response shape:
       "stream_path": "Music/Album/song.mp3",
       "rel_path": "Album/song.mp3",
       "display_name": "song.mp3",
+      "filename": "song.mp3",
+      "type": "file",
       "extension": ".mp3",
       "size": 1234,
       "mtime": 1779210000.0
@@ -135,6 +168,10 @@ Suggested response shape:
 `stream_path` is the relative path passed to `/file?path=...&source=remote`.
 `rel_path` is relative to the requested music-library root and is used for
 display. `remote_path` is stable for dedupe, selection, and playlist playback.
+`filename`, `remote_path`, `mtime`, and `type`/`extension` should be present now
+so future sorting can be added without changing the payload contract. For
+folders, `mtime` means the folder's direct-listing date when available.
+Recursive aggregate date should be exposed separately as `recursive_mtime`.
 
 ## Library Semantics
 
@@ -157,14 +194,43 @@ display. `remote_path` is stable for dedupe, selection, and playlist playback.
 
 ## Cache Completeness
 
-The library can be partial because it only uses cached metadata. The UI should
-show this directly in the library pane.
+The library can be partial because it only returns cached metadata immediately.
+The UI should show this directly in the library pane.
 
 Recommended status language:
 
 - Complete: all known recursive metadata for this root is complete.
 - Partial/updating: cached library may update as background metadata arrives.
-- Unavailable: no cached listing exists for this root yet.
+- Unavailable: no root folder-cache data exists yet.
+
+`Load Current Folder` starts browser polling of the music API. It should also
+actively queue missing or incomplete folder-cache work through
+`FolderCacheManager` using the current page epoch. The response must still be
+fast and must not block on rclone or worker completion. An incomplete
+folder-info state may be shown initially, then updated on later polls as
+folder-cache records are written.
+
+The page epoch contract is part of `FolderCacheManager`: if the requested music
+root matches the current navigation page key, queueing uses the existing page
+epoch from navigation. If it does not match, queueing uses a fresh epoch for the
+explicit music request. The music endpoint should not call `notify_page_load()`
+directly.
+
+A complete root record does not by itself prove the music library can display
+all descendant songs, because the library needs each descendant folder's
+`direct_files` and `direct_folders`. The folder-cache ensure helper must walk
+cached `direct_folders` and queue missing or incomplete descendant records even
+when the root aggregate record is already complete.
+
+When a folder's folder-info status is no longer loading, all descendant
+supported music files available in that completed folder-cache subtree should be
+visible in the Song Library on the next poll.
+
+Polling backoff should be based on pending work, not on whether the latest JSON
+payload is identical to the previous payload. If the response reports pending
+folder-cache work, keep polling at the default fast interval. Increase the wait
+time only after a response reports no pending jobs for the requested library
+root.
 
 While music player mode is visible after a library request, the client should
 poll the library endpoint every 3-5 seconds. Polling stops when the music player
