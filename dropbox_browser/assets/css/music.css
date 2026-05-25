@@ -637,6 +637,10 @@
   background: #dce8f4;
 }
 
+.music-context-menu .music-button-icon {
+  filter: brightness(0) invert(1);
+}
+
 .music-context-menu-group {
   position: relative;
 }
