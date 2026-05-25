@@ -34,7 +34,7 @@ class CliShutdownTests(unittest.TestCase):
             app = Mock()
 
             with (
-                patch.object(cli, "parse_args", return_value=Mock(host="127.0.0.1", port=8000, remote="dropbox:", rclone="rclone.exe", rclone_config=None)),
+                patch.object(cli, "parse_args", return_value=Mock(host="127.0.0.1", port=8000, remote="dropbox:", rclone="rclone.exe", rclone_config=None, local_root=None)),
                 patch.object(
                     cli,
                     "load_app_config",
@@ -67,3 +67,45 @@ class CliShutdownTests(unittest.TestCase):
         configure_run.assert_called_once()
         self.assertEqual(configure_run.call_args.kwargs["metadata"]["remote"], "dropbox:")
         self.assertEqual(configure_run.call_args.kwargs["metadata"]["local_root"], str(local_root))
+
+    def test_local_root_arg_bypasses_config_lookup(self) -> None:
+        created_servers: list[FakeServer] = []
+
+        def create_server(address: tuple[str, int], handler: object) -> FakeServer:
+            server = FakeServer(address, handler)
+            created_servers.append(server)
+            return server
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_root = Path(temp_dir) / "isolated-local"
+            app = Mock()
+
+            with (
+                patch.object(cli, "parse_args", return_value=Mock(host="127.0.0.1", port=8000, remote="dropbox:", rclone="rclone.exe", rclone_config=None, local_root=str(local_root))),
+                patch.object(
+                    cli,
+                    "load_app_config",
+                    return_value={
+                        "LogRcloneCommands": False,
+                        "ListingCacheTTLSeconds": 30,
+                        "FolderCacheTTLSeconds": 30,
+                        "FolderCacheWorkers": 1,
+                        "SyncJobWorkers": 1,
+                        "LogHttpRequests": False,
+                    },
+                ),
+                patch.object(cli, "find_dropbox_folder") as find_dropbox_folder,
+                patch.object(cli.workertrace, "configure_server_run", return_value=local_root / "runs" / "1779341234") as configure_run,
+                patch.object(cli, "RcloneClient", return_value=Mock()),
+                patch.object(cli, "ListingCacheManager", return_value=Mock()),
+                patch.object(cli, "FolderCacheManager", return_value=Mock(current_progress=Mock())),
+                patch.object(cli, "DropboxBrowser", return_value=app),
+                patch.object(cli, "SyncJobManager", return_value=Mock()),
+                patch.object(cli, "ThreadingHTTPServer", side_effect=create_server),
+                patch.object(cli.logoutput, "start"),
+            ):
+                result = cli.main()
+
+        self.assertEqual(result, 0)
+        find_dropbox_folder.assert_not_called()
+        self.assertEqual(configure_run.call_args.kwargs["metadata"]["local_root"], str(local_root.resolve()))

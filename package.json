@@ -1,0 +1,14 @@
+{
+  "name": "dropbox_browser",
+  "private": true,
+  "scripts": {
+    "test": "npm run test:js",
+    "test:js": "node --test tests/js/**/*.test.js",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:all": "npm run test:js && npm run test:e2e"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0"
+  }
+}

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import signal
 import sys
+import threading
 import time
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 
 from .config import find_default_config, find_default_rclone, find_dropbox_folder, load_app_config
 from .foldercache import FolderCacheManager
@@ -22,6 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--remote", default="dropbox:")
     parser.add_argument("--rclone", default=find_default_rclone())
     parser.add_argument("--rclone-config", default=find_default_config())
+    parser.add_argument("--local-root", default=None)
     return parser.parse_args()
 
 
@@ -29,7 +33,7 @@ def main() -> int:
     args = parse_args()
     started_at = time.time()
     app_config = load_app_config()
-    local_root = find_dropbox_folder(app_config)
+    local_root = Path(args.local_root).resolve() if args.local_root else find_dropbox_folder(app_config)
     if local_root.exists() and not local_root.is_dir():
         print(f"DropboxFolder is not a directory: {local_root}", file=sys.stderr)
         return 2
@@ -60,16 +64,37 @@ def main() -> int:
     server = ThreadingHTTPServer((args.host, args.port), RequestHandler)
     server.app = app  # type: ignore[attr-defined]
     server.log_requests = bool(app_config["LogHttpRequests"])  # type: ignore[attr-defined]
+    stop_signal: int | None = None
+
+    def request_shutdown(signum: int, _frame: object) -> None:
+        nonlocal stop_signal
+        stop_signal = signum
+        threading.Thread(target=server.shutdown, daemon=True, name="http-server-shutdown").start()
 
     print(f"Serving {args.remote} at http://{args.host}:{args.port}/")
     print(f"Comparing with local folder: {local_root}")
     print(f"Trace log: {trace_run_dir / 'foldercache_threads.jsonl'}")
     logoutput.start()
+    previous_sigint = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, request_shutdown)
+    previous_sigterm = None
+    if hasattr(signal, "SIGTERM"):
+        previous_sigterm = signal.getsignal(signal.SIGTERM)
+        signal.signal(signal.SIGTERM, request_shutdown)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nStopped.")
     finally:
+        signal.signal(signal.SIGINT, previous_sigint)
+        if previous_sigterm is not None and hasattr(signal, "SIGTERM"):
+            signal.signal(signal.SIGTERM, previous_sigterm)
+        if stop_signal is not None:
+            print(f"\nStopped by signal {stop_signal}.")
         server.server_close()
         app.shutdown()
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

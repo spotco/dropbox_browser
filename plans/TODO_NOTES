@@ -1,8 +1,12 @@
-- music player: right click context menu icons
+- implement PLAN_INTEGRATION_TEST_MUSIC_PLAYER.md
 
 - music player song library:
+	load current folder polling: keep window focused on same first selected element when repaint
+
 	sort by name or date
-		keep window focused on same first selected element
+		on sort: keep window focused on same first selected element
+
+- music player: right click context menu icons
 
 - music player active playlist:
 	list should display:
