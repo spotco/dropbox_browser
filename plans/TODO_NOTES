@@ -1,18 +1,17 @@
 - music player: right click context menu icons
 
+- music player song library:
+	sort by name or date
+		keep window focused on same first selected element
+
 - music player active playlist:
 	list should display:
 		filename
 		path (relative to dropbox root)
-	ctrl+a to select all
 	
 	save/load playlists
 	import playlists from poweramp format
 	persist current playlist
-
-- music player song library:
-	sort by name or date
-		keep window focused on same first selected element
 		
 - music player:
 	coverart not working (test?)
