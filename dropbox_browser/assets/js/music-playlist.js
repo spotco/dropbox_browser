@@ -11,6 +11,7 @@ export function initPlaylist(ctx) {
       state.playlistRemotePaths[song.remote_path] = true;
       state.playlist.push({
         display_name: song.display_name,
+        filename: song.filename || song.display_name,
         rel_path: song.rel_path,
         remote_path: song.remote_path,
         stream_path: song.stream_path,
@@ -146,6 +147,55 @@ export function initPlaylist(ctx) {
     performPlaylistSelectAll();
   }
 
+  function playlistSongByRemotePath(remotePath) {
+    var index = playlistIndexByRemotePath(remotePath);
+    if (index === -1) return null;
+    return state.playlist[index] || null;
+  }
+
+  function contextPlaylistSong() {
+    var remotePath = state.playlistContextRemotePath || Object.keys(state.selectedPlaylistRemotePaths)[0] || null;
+    return remotePath ? playlistSongByRemotePath(remotePath) : null;
+  }
+
+  function absolutePlaylistPath(song) {
+    if (!song) return '';
+    return song.stream_path || song.rel_path || song.display_name || '';
+  }
+
+  function dropboxHomeUrl(path) {
+    var encoded = String(path || '')
+      .split('/')
+      .map(function (segment) { return encodeURIComponent(segment); })
+      .join('/');
+    return 'https://www.dropbox.com/home' + (encoded ? '/' + encoded : '');
+  }
+
+  function copyText(text) {
+    if (!text) return Promise.resolve(false);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(function () { return true; }).catch(function () { return false; });
+    }
+    return new Promise(function (resolve) {
+      var input = document.createElement('input');
+      input.type = 'text';
+      input.value = text;
+      input.setAttribute('readonly', 'readonly');
+      input.style.position = 'fixed';
+      input.style.left = '-9999px';
+      document.body.appendChild(input);
+      input.select();
+      input.setSelectionRange(0, input.value.length);
+      try {
+        resolve(document.execCommand('copy'));
+      } catch (_err) {
+        resolve(false);
+      } finally {
+        document.body.removeChild(input);
+      }
+    });
+  }
+
   function performPlaylistSelectAll() {
     if (els.playlistListEl && document.activeElement !== els.playlistListEl) els.playlistListEl.focus();
     selectAllPlaylistSongs();
@@ -228,7 +278,7 @@ export function initPlaylist(ctx) {
 
       var pathCell = document.createElement('div');
       pathCell.setAttribute('role', 'cell');
-      pathCell.textContent = song.rel_path || '';
+      pathCell.textContent = absolutePlaylistPath(song);
       row.appendChild(pathCell);
       row.addEventListener('click', function (ev) {
         selectPlaylistRemotePath(song.remote_path, ev);
@@ -273,10 +323,16 @@ export function initPlaylist(ctx) {
 
   if (els.playlistMenu) {
     els.playlistMenu.addEventListener('click', function (ev) {
-      var action = ev.target && ev.target.getAttribute('data-action');
+      var actionEl = ev.target && ev.target.closest ? ev.target.closest('[data-action]') : null;
+      var action = actionEl && actionEl.getAttribute('data-action');
+      var song = contextPlaylistSong();
       if (action === 'play') ctx.playbackApi.playPlaylistRemotePath(state.playlistContextRemotePath || Object.keys(state.selectedPlaylistRemotePaths)[0]);
       if (action === 'remove') removeSelectedPlaylistSongs();
       if (action === 'select-all') performPlaylistSelectAll();
+      if (action === 'copy-filename' && song) copyText(song.filename || song.display_name || '');
+      if (action === 'copy-absolute-path' && song) copyText(absolutePlaylistPath(song));
+      if (action === 'copy-dropbox-url' && song) copyText(dropboxHomeUrl(absolutePlaylistPath(song)));
+      if (!action) return;
       hidePlaylistContextMenu();
     });
   }

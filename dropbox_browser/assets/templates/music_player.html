@@ -32,7 +32,7 @@
       <div class="music-playlist-table" role="table" aria-label="Active playlist">
         <div class="music-playlist-row music-playlist-heading" role="row">
           <div role="columnheader">Filename</div>
-          <div role="columnheader">Relative Path</div>
+          <div role="columnheader">Absolute Path</div>
         </div>
         <div id="music-playlist-list" class="music-playlist-list" role="rowgroup" tabindex="0">
           <div class="music-empty-state">Playlist is empty.</div>
@@ -98,13 +98,48 @@
     </section>
 
     <div id="music-library-context-menu" class="music-context-menu hidden" hidden>
-      <button type="button" data-action="add-selected">Add to playlist</button>
-      <button type="button" data-action="select-all">Select All</button>
+      <button type="button" data-action="add-selected">Add to Playlist</button>
+      <div class="music-context-menu-group">
+        <button type="button" class="music-context-menu-parent" aria-haspopup="true">
+          <span>Select</span>
+          <span class="music-context-menu-arrow" aria-hidden="true">></span>
+        </button>
+        <div class="music-context-submenu">
+          <button type="button" data-action="select-all">All</button>
+        </div>
+      </div>
     </div>
     <div id="music-playlist-context-menu" class="music-context-menu hidden" hidden>
       <button type="button" data-action="play">Play</button>
-      <button type="button" data-action="remove">Remove</button>
-      <button type="button" data-action="select-all">Select All</button>
+      <div class="music-context-menu-group">
+        <button type="button" class="music-context-menu-parent" aria-haspopup="true">
+          <span>Select</span>
+          <span class="music-context-menu-arrow" aria-hidden="true">></span>
+        </button>
+        <div class="music-context-submenu">
+          <button type="button" data-action="select-all">All</button>
+        </div>
+      </div>
+      <div class="music-context-menu-group">
+        <button type="button" class="music-context-menu-parent" aria-haspopup="true">
+          <span>Playlist</span>
+          <span class="music-context-menu-arrow" aria-hidden="true">></span>
+        </button>
+        <div class="music-context-submenu">
+          <button type="button" data-action="remove">Remove</button>
+        </div>
+      </div>
+      <div class="music-context-menu-group">
+        <button type="button" class="music-context-menu-parent" aria-haspopup="true">
+          <span>Copy</span>
+          <span class="music-context-menu-arrow" aria-hidden="true">></span>
+        </button>
+        <div class="music-context-submenu">
+          <button type="button" data-action="copy-filename">Filename</button>
+          <button type="button" data-action="copy-absolute-path">Absolute Path</button>
+          <button type="button" data-action="copy-dropbox-url">Dropbox URL</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
