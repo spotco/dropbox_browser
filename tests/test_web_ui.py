@@ -138,6 +138,7 @@ class WebUiTests(AppTestCase):
             music_css = server.get_text("/assets/css/music.css")
             music_entry_js = server.get_text("/assets/js/music.js")
             music_layout_js = server.get_text("/assets/js/music-layout.js")
+            music_coverart_js = server.get_text("/assets/js/music-coverart.js")
             music_library_js = server.get_text("/assets/js/music-library.js")
             music_library_helpers_js = server.get_text("/assets/js/music-library-helpers.js")
             music_playlist_js = server.get_text("/assets/js/music-playlist.js")
@@ -150,6 +151,7 @@ class WebUiTests(AppTestCase):
                 server.get_text("/assets/js/log.js"),
                 music_entry_js,
                 music_layout_js,
+                music_coverart_js,
                 music_library_js,
                 music_playlist_js,
                 music_playback_js,
@@ -322,6 +324,8 @@ class WebUiTests(AppTestCase):
         self.assertIn(".music-art-shell", music_css)
         self.assertIn("aspect-ratio: 1 / 1", music_css)
         self.assertIn(".music-cover-art.hidden", music_css)
+        self.assertIn("cursor: pointer", music_css)
+        self.assertIn('.music-art-placeholder[data-art-state="ready"]', music_css)
         self.assertIn(".music-art-placeholder::before", music_css)
         self.assertIn(".music-song-title", music_css)
         self.assertIn(".music-song-artist", music_css)
@@ -482,12 +486,14 @@ class WebUiTests(AppTestCase):
         self.assertIn("metadataRequestId: 0", music_entry_js)
         self.assertIn("metadataChunkSize: 262144", music_entry_js)
         self.assertIn("currentArtObjectUrl: null", music_entry_js)
+        self.assertIn("pendingArtworkRemotePath: null", music_entry_js)
+        self.assertIn("windowFocused: document.hasFocus ? document.hasFocus() : true", music_entry_js)
         self.assertIn("function showMetadataPlaceholders()", music_metadata_js)
+        self.assertIn("var metadataDebugLoggingEnabled = false", music_metadata_js)
         self.assertIn("function showUnknownMetadata()", music_metadata_js)
         self.assertIn("function applyMetadataResult(metadata)", music_metadata_js)
         self.assertIn("function revokeCurrentArtObjectUrl()", music_metadata_js)
         self.assertIn("URL.revokeObjectURL(state.currentArtObjectUrl)", music_metadata_js)
-        self.assertIn("function supportedArtMime(mime)", music_metadata_js)
         self.assertIn("function setCoverArtImage(art)", music_metadata_js)
         self.assertIn("URL.createObjectURL(blob)", music_metadata_js)
         self.assertIn("function startMetadataLoad(song)", music_metadata_js)
@@ -496,10 +502,19 @@ class WebUiTests(AppTestCase):
         self.assertIn("function fetchHeadContentLength(url)", music_metadata_js)
         self.assertIn("function fetchMetadataBytes(url, extension)", music_metadata_js)
         self.assertIn("function parseMetadataBuffers(buffers, extension)", music_metadata_js)
+        self.assertIn("function artworkFetchAllowed()", music_metadata_js)
+        self.assertIn("function maybeResolveCoverArt(song, requestId, extension, buffers)", music_metadata_js)
+        self.assertIn("function resumeDeferredArtworkLoad()", music_metadata_js)
+        self.assertIn("resolveCoverArtFromMetadata", music_metadata_js)
         self.assertIn("if (requestId !== state.metadataRequestId) return;", music_metadata_js)
         self.assertIn("state.metadataRequestId += 1;", music_metadata_js)
         self.assertIn("metadataLoadedRemotePath: null", music_entry_js)
         self.assertIn("function maybeStartCurrentSongMetadataLoad()", music_metadata_js)
+        self.assertIn("window.open(ctx.state.currentArtObjectUrl, '_blank', 'noopener')", music_entry_js)
+        self.assertIn("function supportedArtMime(mime)", music_coverart_js)
+        self.assertIn("function extractId3ArtFromTagBytes(bytes)", music_coverart_js)
+        self.assertIn("function extractMp4ArtFromBytes(bytes)", music_coverart_js)
+        self.assertIn("async function resolveCoverArtFromMetadata(options)", music_coverart_js)
         self.assertIn("function clampVolume(value)", music_playback_js)
         self.assertIn("function restoreVolume()", music_playback_js)
         self.assertIn("function persistVolume(volume)", music_playback_js)

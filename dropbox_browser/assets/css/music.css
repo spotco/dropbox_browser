@@ -365,6 +365,7 @@
 
 .music-cover-art {
   background: #101826;
+  cursor: pointer;
   display: block;
   height: 100%;
   object-fit: cover;
@@ -387,6 +388,10 @@
   min-width: 0;
   overflow: hidden;
   width: 100%;
+}
+
+.music-art-placeholder[data-art-state="ready"] {
+  display: none;
 }
 
 .music-art-placeholder::before {
