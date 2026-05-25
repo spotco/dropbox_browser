@@ -72,6 +72,16 @@
   var marqueeRefreshToken = 0;
   var defaultShuffleEnabled = false;
   var defaultLoopPlaylist = false;
+  var playbackUiThrottleMs = 1000;
+  var playbackUiPaintTimer = null;
+  var playbackUiLastPaintMs = 0;
+  var playbackDurationDirty = false;
+  var playbackCurrentTimeDirty = false;
+  var libraryRenderDirty = false;
+  var pendingLibraryStatusText = null;
+  var playlistRenderDirty = false;
+  var playlistSelectionDirty = false;
+  var pendingPlaylistFocusRemotePath = null;
 
   pane.setAttribute('data-player-ready', 'library');
   if (controls) controls.setAttribute('data-controls-ready', 'markup');
@@ -274,7 +284,7 @@
 
   function schedulePoll() {
     stopPolling();
-    if (!libraryRequested || !isVisible()) return;
+    if (!libraryRequested || !playbackUiMayPaint()) return;
     pollTimer = window.setTimeout(function () {
       fetchLibrary(true);
     }, pollDelayMs);
@@ -574,6 +584,10 @@
     var rows;
     var target = null;
     if (!playlistListEl || !remotePath) return;
+    if (!playbackUiMayPaint()) {
+      pendingPlaylistFocusRemotePath = remotePath;
+      return;
+    }
     rows = playlistListEl.querySelectorAll('.music-playlist-entry');
     Array.prototype.forEach.call(rows, function (row) {
       if (!target && row.dataset.remotePath === remotePath) target = row;
@@ -769,7 +783,17 @@
     setTimeLabel(totalTimeEl, 0);
   }
 
-  function syncDurationDisplay() {
+  function playbackUiMayPaint() {
+    return !document.hidden && isVisible();
+  }
+
+  function clearPlaybackUiPaintTimer() {
+    if (!playbackUiPaintTimer) return;
+    window.clearTimeout(playbackUiPaintTimer);
+    playbackUiPaintTimer = null;
+  }
+
+  function paintDurationDisplay() {
     var duration = finiteDuration();
     if (progressSlider) {
       progressSlider.min = '0';
@@ -781,13 +805,57 @@
     setTimeLabel(totalTimeEl, duration === null ? 0 : duration);
   }
 
-  function syncCurrentTimeDisplay() {
+  function paintCurrentTimeDisplay() {
     var duration = finiteDuration();
     var currentTime = finiteCurrentTime();
     if (progressSlider && !scrubberDragging) {
       progressSlider.value = String(Math.min(currentTime, duration === null ? currentTime : duration));
     }
     setTimeLabel(elapsedTimeEl, currentTime);
+  }
+
+  function paintPlaybackDisplay() {
+    var shouldPaintDuration = playbackDurationDirty;
+    var shouldPaintCurrentTime = playbackCurrentTimeDirty;
+    playbackDurationDirty = false;
+    playbackCurrentTimeDirty = false;
+    if (shouldPaintDuration) paintDurationDisplay();
+    if (shouldPaintCurrentTime) paintCurrentTimeDisplay();
+    playbackUiLastPaintMs = Date.now();
+  }
+
+  function schedulePlaybackDisplayPaint() {
+    var delay;
+    if (!playbackUiMayPaint()) return;
+    if (document.hasFocus()) {
+      clearPlaybackUiPaintTimer();
+      paintPlaybackDisplay();
+      return;
+    }
+    if (playbackUiPaintTimer) return;
+    delay = Math.max(0, playbackUiThrottleMs - (Date.now() - playbackUiLastPaintMs));
+    playbackUiPaintTimer = window.setTimeout(function () {
+      playbackUiPaintTimer = null;
+      if (playbackUiMayPaint()) paintPlaybackDisplay();
+    }, delay);
+  }
+
+  function syncDurationDisplay() {
+    playbackDurationDirty = true;
+    schedulePlaybackDisplayPaint();
+  }
+
+  function syncCurrentTimeDisplay() {
+    playbackCurrentTimeDirty = true;
+    schedulePlaybackDisplayPaint();
+  }
+
+  function repaintPlaybackDisplay() {
+    playbackDurationDirty = true;
+    playbackCurrentTimeDirty = true;
+    if (!playbackUiMayPaint()) return;
+    clearPlaybackUiPaintTimer();
+    paintPlaybackDisplay();
   }
 
   function applySeekFromSlider() {
@@ -1282,14 +1350,21 @@
     renderPlaylistSelection();
   }
 
-  function renderPlaylistSelection() {
+  function paintPlaylistSelection() {
     if (!playlistListEl) return;
+    playlistSelectionDirty = false;
     Array.prototype.forEach.call(playlistListEl.querySelectorAll('.music-playlist-entry'), function (row) {
       var selected = !!selectedPlaylistRemotePaths[row.dataset.remotePath];
       row.classList.toggle('selected', selected);
       row.setAttribute('aria-selected', selected ? 'true' : 'false');
     });
     pane.dataset.playlistSelectionCount = String(playlistSelectedCount());
+  }
+
+  function renderPlaylistSelection() {
+    playlistSelectionDirty = true;
+    if (!playbackUiMayPaint()) return;
+    paintPlaylistSelection();
   }
 
   function selectAllPlaylistSongs() {
@@ -1379,14 +1454,17 @@
     updateModeButtons();
   }
 
-  function renderPlaylist() {
+  function paintPlaylist() {
     if (!playlistListEl) return;
+    playlistRenderDirty = false;
+    playlistSelectionDirty = false;
     playlistListEl.textContent = '';
     if (playlist.length === 0) {
       var empty = document.createElement('div');
       empty.className = 'music-empty-state';
       empty.textContent = 'Playlist is empty.';
       playlistListEl.appendChild(empty);
+      pane.dataset.playlistSelectionCount = String(playlistSelectedCount());
       return;
     }
     playlist.forEach(function (song, index) {
@@ -1419,12 +1497,19 @@
       });
       playlistListEl.appendChild(row);
     });
-    renderPlaylistSelection();
+    paintPlaylistSelection();
   }
 
-  function renderLibrary() {
+  function renderPlaylist() {
+    playlistRenderDirty = true;
+    if (!playbackUiMayPaint()) return;
+    paintPlaylist();
+  }
+
+  function paintLibrary() {
     var snapshot = librarySnapshot;
     var scrollTop = treeEl.scrollTop;
+    libraryRenderDirty = false;
     visibleNodeIds = [];
     treeEl.textContent = '';
 
@@ -1472,6 +1557,39 @@
     treeEl.scrollTop = scrollTop;
   }
 
+  function renderLibrary() {
+    libraryRenderDirty = true;
+    if (!playbackUiMayPaint()) return;
+    paintLibrary();
+  }
+
+  function setLibraryStatus(text) {
+    pendingLibraryStatusText = text;
+    if (!playbackUiMayPaint()) return;
+    setStatus(pendingLibraryStatusText);
+    pendingLibraryStatusText = null;
+  }
+
+  function flushDeferredMusicPaneUpdates() {
+    var focusRemotePath;
+    if (!playbackUiMayPaint()) return;
+    if (pendingLibraryStatusText !== null) {
+      setStatus(pendingLibraryStatusText);
+      pendingLibraryStatusText = null;
+    }
+    if (libraryRenderDirty) paintLibrary();
+    if (playlistRenderDirty) paintPlaylist();
+    else if (playlistSelectionDirty) paintPlaylistSelection();
+    focusRemotePath = pendingPlaylistFocusRemotePath;
+    pendingPlaylistFocusRemotePath = null;
+    if (focusRemotePath) focusPlaylistRemotePath(focusRemotePath);
+  }
+
+  function resumeLibraryUpdates() {
+    if (!libraryRequested || !playbackUiMayPaint() || loading) return;
+    fetchLibrary(true);
+  }
+
   function applyLibrarySnapshot(data) {
     var fingerprint = libraryFingerprint(data);
     if (fingerprint && fingerprint === lastLibraryFingerprint) {
@@ -1484,7 +1602,7 @@
     if (data.root && data.root.id && expandedIds[data.root.id] === undefined) {
       expandedIds[data.root.id] = true;
     }
-    setStatus(escStatus(data.status));
+    setLibraryStatus(escStatus(data.status));
     renderLibrary();
   }
 
@@ -1492,7 +1610,7 @@
     if (loading) return;
     loading = true;
     loadButton.disabled = true;
-    if (!isRefresh) setStatus('Loading cached song library...');
+    if (!isRefresh) setLibraryStatus('Loading cached song library...');
     fetch(libraryUrl())
       .then(function (response) {
         if (!response.ok) throw new Error('Library request failed with HTTP ' + response.status);
@@ -1502,7 +1620,7 @@
         applyLibrarySnapshot(data);
       })
       .catch(function (err) {
-        setStatus(err.message || 'Could not load cached song library.');
+        setLibraryStatus(err.message || 'Could not load cached song library.');
       })
       .then(function () {
         loading = false;
@@ -1520,7 +1638,7 @@
     selectionAnchor = null;
     clearObject(expandedIds);
     clearObject(selectedIds);
-    setStatus('Library not loaded.');
+    setLibraryStatus('Library not loaded.');
     stopPolling();
     renderLibrary();
   }
@@ -1652,17 +1770,40 @@
     if (!ev.detail) return;
     if (ev.detail.mode === 'music-player') {
       applyMusicPanePercents(readSavedMusicPanePercents(), false);
-      schedulePoll();
+      flushDeferredMusicPaneUpdates();
+      resumeLibraryUpdates();
+      repaintPlaybackDisplay();
     }
-    else stopPolling();
+    else {
+      stopPolling();
+      clearPlaybackUiPaintTimer();
+    }
     scheduleNowPlayingMarqueeRefresh();
   });
 
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) {
+      flushDeferredMusicPaneUpdates();
+      resumeLibraryUpdates();
+      repaintPlaybackDisplay();
+    }
+    else {
+      stopPolling();
+      clearPlaybackUiPaintTimer();
+    }
+  });
+  window.addEventListener('focus', function () {
+    flushDeferredMusicPaneUpdates();
+    repaintPlaybackDisplay();
+  });
   window.addEventListener('resize', function () {
     applyMusicPanePercents(currentMusicPanePercents, false);
     scheduleNowPlayingMarqueeRefresh();
   });
-  window.addEventListener('beforeunload', stopPolling);
+  window.addEventListener('beforeunload', function () {
+    clearPlaybackUiPaintTimer();
+    stopPolling();
+  });
   resetLibraryForCurrentFolder();
   applyMusicPanePercents(readSavedMusicPanePercents(), false);
   resetProgressDisplay();
