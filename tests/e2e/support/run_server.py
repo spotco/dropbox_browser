@@ -1,12 +1,18 @@
 from __future__ import annotations
 
-import atexit
 import json
 import os
-import shutil
 import sys
-import tempfile
 from pathlib import Path
+
+
+def _create_repo_temp_root(repo_root: Path, prefix: str) -> Path:
+    base = repo_root / ".dropbox-browser-temp" / "e2e"
+    base.mkdir(parents=True, exist_ok=True)
+    run_id = f"{prefix}-{__import__('time').time_ns()}-{os.getpid()}"
+    temp_root = base / run_id
+    temp_root.mkdir(parents=True, exist_ok=False)
+    return temp_root
 
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[3]
@@ -20,8 +26,7 @@ def main() -> int:
         )
     )
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
-    temp_root = Path(tempfile.mkdtemp(prefix="dropbox-browser-e2e-"))
-    atexit.register(lambda: shutil.rmtree(temp_root, ignore_errors=True))
+    temp_root = _create_repo_temp_root(repo_root, "run")
 
     local_root = temp_root / "local"
     local_root.mkdir(parents=True, exist_ok=True)

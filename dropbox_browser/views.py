@@ -189,6 +189,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         if app.local_root
         else ""
     )
+    music_library_poll_delay_ms = int(getattr(app, "music_library_poll_delay_ms", 4000) or 4000)
 
     def sort_link(label: str, key: str) -> str:
         next_dir = "desc" if sort_key == key and direction == "asc" else "asc"
@@ -218,6 +219,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         current_folder_attr=html.escape(rel_path, quote=True),
         current_sort_key_attr=html.escape(sort_key, quote=True),
         current_sort_direction_attr=html.escape(direction, quote=True),
+        music_library_poll_delay_ms_attr=html.escape(str(music_library_poll_delay_ms), quote=True),
     )
 
 

@@ -103,6 +103,17 @@ For live debugging, inspect the tail while loading pages or polling
 `/folder-info`. In tests, `IsolatedPathsTestCase.read_trace_events()` reads the
 same JSONL format from the isolated temp directory.
 
+The music-library Playwright integration test also uses these trace events. The
+dedicated `8011` integration harness drives an uncached `/?path=music` page,
+opens `Music Player`, clicks `Load Current Folder`, and verifies that:
+
+- the initial request returns without blocking on descendant folder recursion;
+- Song Library can start in a partial `not cached` state while folder-cache
+  workers are still computing descendants;
+- staged subtree completion grows the library incrementally through polling
+  without another manual click;
+- the final library state becomes complete after the background workers finish.
+
 ## Sync Job Workers
 
 `SyncJobManager` owns browser-triggered sync work and grouped progress.

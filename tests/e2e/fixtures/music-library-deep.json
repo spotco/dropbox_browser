@@ -1,0 +1,296 @@
+{
+  "scenario": "music-library-deep-integration",
+  "notes": "Deterministic trimmed deep-music fixture for Music Player -> Song Library integration coverage.",
+  "music_library_checkpoints": {
+    "initial_partial": {
+      "folder_count": 7,
+      "song_count": 13,
+      "pending_folders": [
+        "Blue Sky Sessions",
+        "Live at River Hall/Encore",
+        "Midnight FM/Instrumentals"
+      ]
+    },
+    "after_blue_listing": {
+      "folder_count": 9,
+      "song_count": 14,
+      "pending_folders": [
+        "Blue Sky Sessions/Disc 1",
+        "Blue Sky Sessions/Disc 2",
+        "Live at River Hall/Encore",
+        "Midnight FM/Instrumentals"
+      ]
+    },
+    "after_first_growth": {
+      "folder_count": 9,
+      "song_count": 20,
+      "pending_folders": [
+        "Blue Sky Sessions/Disc 2",
+        "Midnight FM/Instrumentals"
+      ]
+    },
+    "final_complete": {
+      "folder_count": 9,
+      "song_count": 26,
+      "pending_folders": []
+    }
+  },
+  "integration_gates": [
+    {
+      "name": "release-blue-listing",
+      "paths": [
+        "dropbox:music/Blue Sky Sessions"
+      ]
+    },
+    {
+      "name": "release-first-growth",
+      "paths": [
+        "dropbox:music/Blue Sky Sessions/Disc 1",
+        "dropbox:music/Live at River Hall/Encore"
+      ]
+    },
+    {
+      "name": "release-final-growth",
+      "paths": [
+        "dropbox:music/Blue Sky Sessions/Disc 2",
+        "dropbox:music/Midnight FM/Instrumentals"
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "path": "music",
+      "type": "dir",
+      "mod_time": "2024-02-01T12:00:00Z"
+    },
+    {
+      "path": "music/00 - Lobby Theme.mp3",
+      "type": "file",
+      "content": "audio fixture 00 lobby theme\n",
+      "mod_time": "2024-02-01T12:01:00Z"
+    },
+    {
+      "path": "music/Analog Dreams",
+      "type": "dir",
+      "mod_time": "2024-02-02T12:00:00Z"
+    },
+    {
+      "path": "music/Analog Dreams/01 - Neon Coast.mp3",
+      "type": "file",
+      "content": "audio fixture analog dreams 01\n",
+      "mod_time": "2024-02-02T12:01:00Z"
+    },
+    {
+      "path": "music/Analog Dreams/02 - Static Bloom.m4a",
+      "type": "file",
+      "content": "audio fixture analog dreams 02\n",
+      "mod_time": "2024-02-02T12:02:00Z"
+    },
+    {
+      "path": "music/Analog Dreams/03 - Glass Avenue.aac",
+      "type": "file",
+      "content": "audio fixture analog dreams 03\n",
+      "mod_time": "2024-02-02T12:03:00Z"
+    },
+    {
+      "path": "music/Analog Dreams/04 - Slow Signal.wav",
+      "type": "file",
+      "content": "audio fixture analog dreams 04\n",
+      "mod_time": "2024-02-02T12:04:00Z"
+    },
+    {
+      "path": "music/Blue Sky Sessions",
+      "type": "dir",
+      "mod_time": "2024-02-03T12:00:00Z"
+    },
+    {
+      "path": "music/Blue Sky Sessions/00 - Overture.mp3",
+      "type": "file",
+      "content": "audio fixture blue sky overture\n",
+      "mod_time": "2024-02-03T12:01:00Z"
+    },
+    {
+      "path": "music/Blue Sky Sessions/Disc 1",
+      "type": "dir",
+      "mod_time": "2024-02-03T12:10:00Z"
+    },
+    {
+      "path": "music/Blue Sky Sessions/Disc 1/01 - Northbound Lights.mp3",
+      "type": "file",
+      "content": "audio fixture blue sky disc1 01\n",
+      "mod_time": "2024-02-03T12:11:00Z"
+    },
+    {
+      "path": "music/Blue Sky Sessions/Disc 1/02 - Station Echoes.m4a",
+      "type": "file",
+      "content": "audio fixture blue sky disc1 02\n",
+      "mod_time": "2024-02-03T12:12:00Z"
+    },
+    {
+      "path": "music/Blue Sky Sessions/Disc 1/03 - April Lines.aac",
+      "type": "file",
+      "content": "audio fixture blue sky disc1 03\n",
+      "mod_time": "2024-02-03T12:13:00Z"
+    },
+    {
+      "path": "music/Blue Sky Sessions/Disc 1/04 - Tape Hiss Morning.wav",
+      "type": "file",
+      "content": "audio fixture blue sky disc1 04\n",
+      "mod_time": "2024-02-03T12:14:00Z"
+    },
+    {
+      "path": "music/Blue Sky Sessions/Disc 2",
+      "type": "dir",
+      "mod_time": "2024-02-03T12:20:00Z"
+    },
+    {
+      "path": "music/Blue Sky Sessions/Disc 2/01 - Runway Glow.mp3",
+      "type": "file",
+      "content": "audio fixture blue sky disc2 01\n",
+      "mod_time": "2024-02-03T12:21:00Z"
+    },
+    {
+      "path": "music/Blue Sky Sessions/Disc 2/02 - Late Check-In.m4a",
+      "type": "file",
+      "content": "audio fixture blue sky disc2 02\n",
+      "mod_time": "2024-02-03T12:22:00Z"
+    },
+    {
+      "path": "music/Blue Sky Sessions/Disc 2/03 - Departure Board.aac",
+      "type": "file",
+      "content": "audio fixture blue sky disc2 03\n",
+      "mod_time": "2024-02-03T12:23:00Z"
+    },
+    {
+      "path": "music/Blue Sky Sessions/Disc 2/04 - Skylane Reprise.wav",
+      "type": "file",
+      "content": "audio fixture blue sky disc2 04\n",
+      "mod_time": "2024-02-03T12:24:00Z"
+    },
+    {
+      "path": "music/Chill Singles",
+      "type": "dir",
+      "mod_time": "2024-02-04T12:00:00Z"
+    },
+    {
+      "path": "music/Chill Singles/01 - Window Seat.mp3",
+      "type": "file",
+      "content": "audio fixture chill singles 01\n",
+      "mod_time": "2024-02-04T12:01:00Z"
+    },
+    {
+      "path": "music/Chill Singles/02 - Paperback Rain.m4a",
+      "type": "file",
+      "content": "audio fixture chill singles 02\n",
+      "mod_time": "2024-02-04T12:02:00Z"
+    },
+    {
+      "path": "music/Chill Singles/03 - Dayroom Static.aac",
+      "type": "file",
+      "content": "audio fixture chill singles 03\n",
+      "mod_time": "2024-02-04T12:03:00Z"
+    },
+    {
+      "path": "music/Live at River Hall",
+      "type": "dir",
+      "mod_time": "2024-02-05T12:00:00Z"
+    },
+    {
+      "path": "music/Live at River Hall/01 - Doors Open.mp3",
+      "type": "file",
+      "content": "audio fixture river hall 01\n",
+      "mod_time": "2024-02-05T12:01:00Z"
+    },
+    {
+      "path": "music/Live at River Hall/02 - Main Set.m4a",
+      "type": "file",
+      "content": "audio fixture river hall 02\n",
+      "mod_time": "2024-02-05T12:02:00Z"
+    },
+    {
+      "path": "music/Live at River Hall/Encore",
+      "type": "dir",
+      "mod_time": "2024-02-05T12:10:00Z"
+    },
+    {
+      "path": "music/Live at River Hall/Encore/01 - Night Walk.aac",
+      "type": "file",
+      "content": "audio fixture river hall encore 01\n",
+      "mod_time": "2024-02-05T12:11:00Z"
+    },
+    {
+      "path": "music/Live at River Hall/Encore/02 - Last Train.wav",
+      "type": "file",
+      "content": "audio fixture river hall encore 02\n",
+      "mod_time": "2024-02-05T12:12:00Z"
+    },
+    {
+      "path": "music/Midnight FM",
+      "type": "dir",
+      "mod_time": "2024-02-06T12:00:00Z"
+    },
+    {
+      "path": "music/Midnight FM/01 - Broadcast Intro.mp3",
+      "type": "file",
+      "content": "audio fixture midnight fm 01\n",
+      "mod_time": "2024-02-06T12:01:00Z"
+    },
+    {
+      "path": "music/Midnight FM/02 - City Repeat.m4a",
+      "type": "file",
+      "content": "audio fixture midnight fm 02\n",
+      "mod_time": "2024-02-06T12:02:00Z"
+    },
+    {
+      "path": "music/Midnight FM/03 - Sign-Off.aac",
+      "type": "file",
+      "content": "audio fixture midnight fm 03\n",
+      "mod_time": "2024-02-06T12:03:00Z"
+    },
+    {
+      "path": "music/Midnight FM/Instrumentals",
+      "type": "dir",
+      "mod_time": "2024-02-06T12:10:00Z"
+    },
+    {
+      "path": "music/Midnight FM/Instrumentals/01 - Empty Streets.mp3",
+      "type": "file",
+      "content": "audio fixture midnight fm instrumentals 01\n",
+      "mod_time": "2024-02-06T12:11:00Z"
+    },
+    {
+      "path": "music/Midnight FM/Instrumentals/02 - Tower Lights.wav",
+      "type": "file",
+      "content": "audio fixture midnight fm instrumentals 02\n",
+      "mod_time": "2024-02-06T12:12:00Z"
+    }
+  ],
+  "lsjson_responses": {
+    "dropbox:music/Blue Sky Sessions": [
+      {
+        "gate": "release-blue-listing"
+      }
+    ],
+    "dropbox:music/Blue Sky Sessions/Disc 1": [
+      {
+        "gate": "release-first-growth"
+      }
+    ],
+    "dropbox:music/Blue Sky Sessions/Disc 2": [
+      {
+        "gate": "release-final-growth"
+      }
+    ],
+    "dropbox:music/Live at River Hall/Encore": [
+      {
+        "gate": "release-first-growth"
+      }
+    ],
+    "dropbox:music/Midnight FM/Instrumentals": [
+      {
+        "gate": "release-final-growth"
+      }
+    ]
+  },
+  "local_files": []
+}

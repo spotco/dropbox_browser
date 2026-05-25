@@ -67,6 +67,19 @@ Playwright worker starts and stops that server explicitly so short E2E runs do
 not hang during teardown. Remote Dropbox data comes from the fixture configured
 by `DROPBOX_BROWSER_E2E_FIXTURE`.
 
+The music-library integration test uses a separate harness on non-default port
+`8011` through `tests/e2e/support/integration_server.js` and
+`tests/e2e/support/run_integration_server.py`. It loads the committed deep-music
+fixture `tests/e2e/fixtures/music-library-deep.json`, keeps temp/cache paths
+isolated, and verifies `Music Player -> Song Library -> Load Current Folder`
+through partial cached-library polling and final completion.
+
+Run that integration test directly:
+
+```powershell
+npx playwright test tests/e2e/music-library.integration.spec.js
+```
+
 Keep the split intentional:
 
 - `tests/js/` for focused JavaScript behavior that does not need a full browser.
