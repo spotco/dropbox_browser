@@ -48,9 +48,11 @@ import {PlaylistStore} from './music-playlist-store.js';
       playlistOverwriteConfirmButton: document.getElementById('music-playlist-overwrite-confirm'),
       playlistLoadDialog: document.getElementById('music-playlist-load-dialog'),
       playlistLoadListEl: document.getElementById('music-playlist-load-list'),
+      playlistLoadNewButton: document.getElementById('music-playlist-load-new'),
       playlistLoadCancelButton: document.getElementById('music-playlist-load-cancel'),
       playlistLoadConfirmButton: document.getElementById('music-playlist-load-confirm'),
       playlistLoadSortButtons: pane.querySelectorAll('[data-playlist-sort-key]'),
+      playlistLoadMenu: document.getElementById('music-playlist-load-context-menu'),
       libraryMenu: document.getElementById('music-library-context-menu'),
       playlistMenu: document.getElementById('music-playlist-context-menu'),
       playbackPane: document.getElementById('music-playback-pane'),
@@ -109,6 +111,7 @@ import {PlaylistStore} from './music-playlist-store.js';
       playlistLoadSortDirection: 'desc',
       playlistLoadSortSettingKey: 'music-playlist-load-sort',
       selectedPersistedPlaylistName: null,
+      playlistLoadContextName: null,
       pendingPlaylistConfirmAction: null,
       playlistSaveToastTimer: null,
       currentPlaylistIndex: -1,
@@ -182,10 +185,12 @@ import {PlaylistStore} from './music-playlist-store.js';
   document.addEventListener('click', function () {
     ctx.libraryApi.hideLibraryContextMenu();
     ctx.playlistApi.hidePlaylistContextMenu();
+    ctx.playlistApi.hidePlaylistLoadContextMenu();
   });
   window.addEventListener('blur', function () {
     ctx.libraryApi.hideLibraryContextMenu();
     ctx.playlistApi.hidePlaylistContextMenu();
+    ctx.playlistApi.hidePlaylistLoadContextMenu();
   });
 
   window.addEventListener('bottom-pane-mode-changed', function (ev) {

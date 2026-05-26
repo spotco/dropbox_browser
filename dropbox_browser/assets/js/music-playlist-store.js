@@ -258,11 +258,27 @@ export class PlaylistStore {
     return null;
   }
 
+  deletePersistedPlaylistByName(name) {
+    var normalizedName = normalizePlaylistName(name);
+    for (var i = 0; i < this.persistedPlaylists.length; i += 1) {
+      if (this.persistedPlaylists[i].name !== normalizedName) continue;
+      return this.persistedPlaylists.splice(i, 1)[0] || null;
+    }
+    return null;
+  }
+
   upsertPersistedPlaylist(playlist, options) {
     var settings = options || {};
     var nextPlaylist = playlist instanceof PlaylistModel ? playlist.clone() : this.createPlaylist(playlist);
+    var replaceName = typeof settings.replaceName === 'string' && settings.replaceName.trim()
+      ? normalizePlaylistName(settings.replaceName)
+      : '';
     var existing = this.findPersistedPlaylistByName(nextPlaylist.name);
     if (settings.touch !== false) nextPlaylist.touch(this.clock());
+    if (replaceName && replaceName !== nextPlaylist.name) {
+      this.deletePersistedPlaylistByName(replaceName);
+      existing = this.findPersistedPlaylistByName(nextPlaylist.name);
+    }
     if (existing) {
       existing.last_modified = nextPlaylist.last_modified;
       existing.replaceSongs(nextPlaylist.songs);

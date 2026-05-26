@@ -477,6 +477,10 @@
   justify-content: flex-end;
 }
 
+#music-playlist-load-new {
+  margin-right: auto;
+}
+
 .music-playlist-load-table {
   border: 1px solid #2f4258;
   border-radius: 8px;
