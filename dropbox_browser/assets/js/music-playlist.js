@@ -245,6 +245,7 @@ export function initPlaylist(ctx) {
 
   function closeLoadDialog() {
     setPlaylistModalVisible(els.playlistLoadDialog, false);
+    hidePlaylistLoadContextMenu();
   }
 
   function closePlaylistDialogs() {
@@ -324,6 +325,13 @@ export function initPlaylist(ctx) {
     if (!els.playlistLoadListEl) return;
     updatePlaylistLoadSortButtons();
     els.playlistLoadListEl.textContent = '';
+    if (!selectedPersistedPlaylist()) {
+      state.selectedPersistedPlaylistName = preferredPlaylistLoadSelection(
+        activePlaylistName(),
+        state.activePlaylistSavedName,
+        state.persistedPlaylists.map(function (playlist) { return playlist.name; })
+      );
+    }
     if (!state.persistedPlaylists.length) {
       var empty = document.createElement('div');
       empty.className = 'music-empty-state';
@@ -356,6 +364,9 @@ export function initPlaylist(ctx) {
         state.selectedPersistedPlaylistName = playlist.name;
         renderPlaylistLoadList();
         confirmLoadPlaylist();
+      });
+      row.addEventListener('contextmenu', function (ev) {
+        openPlaylistLoadContextMenu(ev, playlist.name);
       });
       els.playlistLoadListEl.appendChild(row);
     });
@@ -439,6 +450,43 @@ export function initPlaylist(ctx) {
     renderPlaylistLoadList();
   }
 
+  function hidePlaylistLoadContextMenu() {
+    if (!els.playlistLoadMenu) return;
+    els.playlistLoadMenu.hidden = true;
+    els.playlistLoadMenu.classList.add('hidden');
+    state.playlistLoadContextName = null;
+  }
+
+  function openPlaylistLoadContextMenu(ev, playlistName) {
+    ev.preventDefault();
+    state.selectedPersistedPlaylistName = playlistName;
+    renderPlaylistLoadList();
+    state.playlistLoadContextName = playlistName;
+    if (!els.playlistLoadMenu) return;
+    els.playlistLoadMenu.style.left = ev.clientX + 'px';
+    els.playlistLoadMenu.style.top = ev.clientY + 'px';
+    els.playlistLoadMenu.hidden = false;
+    els.playlistLoadMenu.classList.remove('hidden');
+  }
+
+  function deletePersistedPlaylist(name) {
+    var targetName = String(name || state.playlistLoadContextName || state.selectedPersistedPlaylistName || '').trim();
+    var deleted;
+    if (!targetName) return false;
+    deleted = state.playlistStore.deletePersistedPlaylistByName(targetName);
+    if (!deleted) return false;
+    if (state.activePlaylistSavedName === targetName) {
+      state.activePlaylistSavedName = null;
+      state.activePlaylistSavedSignature = '';
+      syncActivePlaylistDirtyState();
+    }
+    if (state.selectedPersistedPlaylistName === targetName) state.selectedPersistedPlaylistName = null;
+    hidePlaylistLoadContextMenu();
+    persistPlaylistStore();
+    ctx.setStatus('Deleted saved playlist "' + targetName + '".');
+    return true;
+  }
+
   function overwriteConfirmationRequired(name) {
     var existing = state.playlistStore.findPersistedPlaylistByName(name);
     return !!(existing && state.activePlaylistSavedName !== name);
@@ -485,25 +533,42 @@ export function initPlaylist(ctx) {
     return true;
   }
 
+  function renamePlaylist(name, skipOverwriteConfirmation) {
+    var targetName = String(name || '').trim() || DEFAULT_PLAYLIST_NAME;
+    var replaceName = state.activePlaylistSavedName;
+    if (!skipOverwriteConfirmation && overwriteConfirmationRequired(targetName)) {
+      closeRenameDialog();
+      openOverwriteDialog(
+        'A saved playlist named "' + targetName + '" already exists. Overwrite it?',
+        function () {
+          closeOverwriteDialog();
+          renamePlaylist(targetName, true);
+        }
+      );
+      return false;
+    }
+    state.playlistStore.renameActivePlaylist(targetName);
+    var savedPlaylist = state.playlistStore.saveActivePlaylist({
+      replaceName: replaceName,
+      touch: true
+    });
+    ctx.syncPlaylistState();
+    markActivePlaylistSaved(savedPlaylist ? savedPlaylist.name : targetName);
+    updateActivePlaylistName();
+    renderPlaylistLoadList();
+    closeRenameDialog();
+    persistPlaylistStore();
+    ctx.setStatus('Renamed active playlist to "' + activePlaylistName() + '" and saved it.');
+    return true;
+  }
+
   function confirmRenameDialog() {
     var nextName = els.playlistRenameInput ? String(els.playlistRenameInput.value || '').trim() : '';
     if (state.playlistRenameMode === 'save') {
       savePlaylist(nextName);
       return;
     }
-    state.playlistStore.renameActivePlaylist(nextName || DEFAULT_PLAYLIST_NAME);
-    ctx.syncPlaylistState();
-    syncActivePlaylistDirtyState();
-    updateActivePlaylistName();
-    closeRenameDialog();
-    if (activePlaylistHasNameConflict()) {
-      ctx.setStatus(
-        'Renamed active playlist to "' + activePlaylistName() +
-        '". Saving or loading this name will require confirmation.'
-      );
-      return;
-    }
-    ctx.setStatus('Renamed active playlist to "' + activePlaylistName() + '".');
+    renamePlaylist(nextName);
   }
 
   function loadPlaylistByName(name) {
@@ -527,6 +592,27 @@ export function initPlaylist(ctx) {
     return true;
   }
 
+  function loadNewPlaylist() {
+    state.playlistStore.replaceActivePlaylist({
+      name: DEFAULT_PLAYLIST_NAME,
+      songs: []
+    });
+    ctx.syncPlaylistState();
+    state.activePlaylistSavedName = null;
+    state.activePlaylistSavedSignature = activePlaylistSignature();
+    state.activePlaylistDirty = false;
+    state.currentPlaylistIndex = -1;
+    resetPlaylistSelections();
+    resetShuffleBag();
+    updateActivePlaylistName();
+    ctx.playbackApi.clearCurrentSong();
+    renderPlaylist();
+    renderPlaylistLoadList();
+    closeLoadDialog();
+    ctx.setStatus('Loaded new playlist "' + DEFAULT_PLAYLIST_NAME + '".');
+    return true;
+  }
+
   function confirmLoadPlaylist() {
     var playlist = selectedPersistedPlaylist();
     if (!playlist) return false;
@@ -535,6 +621,17 @@ export function initPlaylist(ctx) {
       'Loading "' + playlist.name + '" will discard unsaved changes to "' + activePlaylistName() + '". Continue?',
       function () {
         loaded = loadPlaylistByName(playlist.name);
+      }
+    );
+    return loaded;
+  }
+
+  function confirmLoadNewPlaylist() {
+    var loaded = false;
+    maybeConfirmDiscardUnsavedPlaylist(
+      'Loading a new playlist will discard unsaved changes to "' + activePlaylistName() + '". Continue?',
+      function () {
+        loaded = loadNewPlaylist();
       }
     );
     return loaded;
@@ -1188,8 +1285,11 @@ export function initPlaylist(ctx) {
     activePlaylistHasNameConflict: activePlaylistHasNameConflict,
     closePlaylistDialogs: closePlaylistDialogs,
     confirmLoadPlaylist: confirmLoadPlaylist,
+    confirmLoadNewPlaylist: confirmLoadNewPlaylist,
+    deletePersistedPlaylist: deletePersistedPlaylist,
     exportPersistedPlaylists: exportPersistedPlaylists,
     focusPlaylistRemotePath: focusPlaylistRemotePath,
+    hidePlaylistLoadContextMenu: hidePlaylistLoadContextMenu,
     handlePlaylistSelectAllShortcut: handlePlaylistSelectAllShortcut,
     hidePlaylistContextMenu: hidePlaylistContextMenu,
     importPlaylistFiles: importPlaylistFiles,
@@ -1290,6 +1390,11 @@ export function initPlaylist(ctx) {
       confirmLoadPlaylist();
     });
   }
+  if (els.playlistLoadNewButton) {
+    els.playlistLoadNewButton.addEventListener('click', function () {
+      confirmLoadNewPlaylist();
+    });
+  }
   if (els.playlistLoadSortButtons) {
     Array.prototype.forEach.call(els.playlistLoadSortButtons, function (button) {
       button.addEventListener('click', function () {
@@ -1324,6 +1429,15 @@ export function initPlaylist(ctx) {
       if (action === 'copy-dropbox-url' && song) copyText(dropboxHomeUrl(absolutePlaylistPath(song)));
       if (!action) return;
       hidePlaylistContextMenu();
+    });
+  }
+  if (els.playlistLoadMenu) {
+    els.playlistLoadMenu.addEventListener('click', function (ev) {
+      var actionEl = ev.target && ev.target.closest ? ev.target.closest('[data-action]') : null;
+      var action = actionEl && actionEl.getAttribute('data-action');
+      if (action === 'delete') deletePersistedPlaylist(state.playlistLoadContextName);
+      if (!action) return;
+      hidePlaylistLoadContextMenu();
     });
   }
   if (els.playlistListEl) els.playlistListEl.addEventListener('keydown', handlePlaylistSelectAllShortcut);

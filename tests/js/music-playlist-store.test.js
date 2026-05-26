@@ -273,3 +273,46 @@ test("PlaylistStore mergePersistedPlaylists validates and overwrites by imported
     ],
   );
 });
+
+test("PlaylistStore can replace an old persisted playlist name while saving the renamed active playlist", async () => {
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
+  const store = new playlistModule.PlaylistStore({
+    clock: () => 9876000,
+  });
+
+  store.activePlaylist.addSongs([song("/Music/alpha.mp3")]);
+  store.saveActivePlaylist({ name: "Focus" });
+  store.renameActivePlaylist("Road Trip");
+  const saved = store.saveActivePlaylist({ replaceName: "Focus" });
+
+  assert.equal(saved.name, "Road Trip");
+  assert.equal(store.findPersistedPlaylistByName("Focus"), null);
+  assert.deepEqual(
+    store.listPersistedPlaylists("name", "asc").map((playlist) => playlist.name),
+    ["Road Trip"],
+  );
+});
+
+test("PlaylistStore deletePersistedPlaylistByName removes the matching saved playlist only", async () => {
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
+  const store = new playlistModule.PlaylistStore();
+
+  store.upsertPersistedPlaylist(new playlistModule.PlaylistModel({
+    last_modified: 10,
+    name: "Alpha",
+    songs: [song("/Music/alpha.mp3")],
+  }), { touch: false });
+  store.upsertPersistedPlaylist(new playlistModule.PlaylistModel({
+    last_modified: 20,
+    name: "Bravo",
+    songs: [song("/Music/bravo.mp3")],
+  }), { touch: false });
+
+  const deleted = store.deletePersistedPlaylistByName("Alpha");
+
+  assert.equal(deleted.name, "Alpha");
+  assert.deepEqual(
+    store.listPersistedPlaylists("name", "asc").map((playlist) => playlist.name),
+    ["Bravo"],
+  );
+});

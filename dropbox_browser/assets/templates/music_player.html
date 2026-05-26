@@ -32,9 +32,9 @@
         </div>
       </div>
       <div id="music-playlist-controls" class="music-playlist-toolbar music-playlist-toolbar-secondary">
-        <div class="music-playlist-toolbar-group" role="group" aria-label="Playlist rename and load">
-          <button type="button" id="music-playlist-rename">Rename</button>
-          <button type="button" id="music-playlist-load">Load</button>
+        <div class="music-playlist-toolbar-group" role="group" aria-label="Playlist load and rename">
+          <button type="button" id="music-playlist-load">Load Playlist</button>
+          <button type="button" id="music-playlist-rename">Rename Playlist</button>
         </div>
         <div class="music-playlist-toolbar-group music-playlist-toolbar-save" role="group" aria-label="Playlist save">
           <button type="button" id="music-playlist-save">Save</button>
@@ -112,8 +112,20 @@
             </div>
           </div>
           <div class="music-playlist-modal-actions">
+            <button type="button" id="music-playlist-load-new">New Playlist</button>
             <button type="button" id="music-playlist-load-cancel">Cancel</button>
             <button type="button" id="music-playlist-load-confirm">OK</button>
+          </div>
+        </div>
+      </div>
+      <div id="music-playlist-load-context-menu" class="music-context-menu hidden" hidden>
+        <div class="music-context-menu-group">
+          <button type="button" class="music-context-menu-parent" aria-haspopup="true">
+            <span>Playlist</span>
+            <span class="music-context-menu-arrow" aria-hidden="true">></span>
+          </button>
+          <div class="music-context-submenu">
+            <button type="button" data-action="delete">Delete</button>
           </div>
         </div>
       </div>
