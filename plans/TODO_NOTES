@@ -1,17 +1,3 @@
-- music player active playlist:
-	list should display:
-		filename
-		path (relative to dropbox root)
-	
-	save/load playlists
-	import playlists from poweramp format
-	persist current playlist
-
-- music player - all panes: right click context menu, add icons before text
-		
-- music player:
-	coverart not working (test?)
-		
 - page loading: should be client side (but maintain deep URL links)
 	re-sorting: should not be a page refresh.
 	make camera uploads folder performant
