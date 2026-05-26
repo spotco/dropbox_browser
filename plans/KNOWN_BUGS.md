@@ -74,3 +74,29 @@ exit code 0
 
 This isolates the problem to `rclone` handling of the local source path, not
 the browser sync route or the Dropbox remote.
+
+
+### FIX FROM CLAUDE (needs testing)
+Your instinct is correct — this is a real rclone bug/quirk, and it's a well-known one.
+
+**What's happening:** The filename contains `？` (U+FF1F, FULLWIDTH QUESTION MARK). On Windows, rclone's local backend encoder maps certain Unicode "fullwidth" punctuation characters — specifically the ones that are illegal in Windows filenames (`:`, `?`, `*`, `<`, `>`, `|`, `\`, `"`) — to their fullwidth Unicode equivalents as an escape mechanism. The problem is that when rclone is given a *source path* that already contains one of these fullwidth characters, it escapes it *again* with the `‛` (U+201B, SINGLE HIGH-REVERSED-9 QUOTATION MARK) prefix, mangling the path so Windows can't find it.
+
+So `？` (fullwidth question mark) in the source path gets double-encoded into something that no longer resolves to the real file — hence "directory not found" even though the file is right there.
+
+**This is the same class of bug as** [rclone issue #5512](https://github.com/rclone/rclone/issues/5512) (Unicode colon causing identical failure, same error message, same root cause in the encoder). It was reported in 2021 and similar variants have appeared since.
+
+**Workaround:** Pass `--local-encoding` to strip the offending character classes from the encoder. The fullwidth question mark maps from `Question`, so try:
+
+```powershell
+.\rclone.exe copyto --local-encoding "Slash,LtGt,DoubleQuote,Asterisk,Pipe,BackSlash,Ctl,RightSpace,RightPeriod,InvalidUtf8,Dot" -- $bad $dest
+```
+
+(That's the default Windows local encoding with `Colon` and `Question` removed.) Or the blunter option:
+
+```powershell
+.\rclone.exe copyto --local-encoding None -- $bad $dest
+```
+
+`--local-encoding None` disables the encoding entirely and passes the raw path through, which works as long as you're copying *to* somewhere that can handle the characters.
+
+So yes — your code agent was right that it's a bug, just wrong to attribute it to your code. This lives entirely inside rclone's local backend encoder on Windows.

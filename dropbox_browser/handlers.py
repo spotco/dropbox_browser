@@ -13,6 +13,7 @@ from . import logoutput, logstore, syncstate, workertrace
 from .errors import BrowserError
 from .formatting import display_date, human_size
 from .music import MUSIC_ENDPOINT_PREFIX, handle_music_get
+from .namekeys import filename_compare_key
 from .paths import clean_rel_path, remote_target, safe_join_local
 from .services import DropboxBrowser
 from .streaming import (
@@ -228,15 +229,31 @@ class RequestHandler(BaseHTTPRequestHandler):
             head_only=head_only,
         )
 
-    def _remote_file_size(self, rel_path: str) -> int:
+    def _resolve_remote_file(self, rel_path: str) -> tuple[str, int]:
         parent = posixpath.dirname(rel_path)
         name = posixpath.basename(rel_path)
+        normalized_name = filename_compare_key(name)
+        normalized_match: dict | None = None
         for entry in self.app.list_entries(parent):
-            if entry.get("name") == name and entry.get("remote") and not entry.get("is_dir"):
+            if not entry.get("remote") or entry.get("is_dir"):
+                continue
+            entry_name = entry.get("name")
+            if entry_name == name:
                 size = entry.get("remote_size")
                 if size is None:
                     break
-                return int(size)
+                return (posixpath.join(parent, entry_name) if parent else entry_name, int(size))
+            if (
+                normalized_match is None
+                and isinstance(entry_name, str)
+                and filename_compare_key(entry_name) == normalized_name
+            ):
+                normalized_match = entry
+        if normalized_match is not None:
+            size = normalized_match.get("remote_size")
+            entry_name = normalized_match.get("name")
+            if isinstance(entry_name, str) and size is not None:
+                return (posixpath.join(parent, entry_name) if parent else entry_name, int(size))
         raise BrowserError(HTTPStatus.NOT_FOUND, "Remote file not found.")
 
     def _send_file_headers(
@@ -288,7 +305,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     raise
             return
 
-        file_size = self._remote_file_size(rel_path)
+        remote_rel_path, file_size = self._resolve_remote_file(rel_path)
         try:
             plan = plan_stream(self.headers.get("Range"), file_size)
         except RangeNotSatisfiable:
@@ -299,7 +316,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
 
         proc = self.app.rclone.open_cat(
-            remote_target(self.app.remote, rel_path),
+            remote_target(self.app.remote, remote_rel_path),
             offset=plan.start if plan.is_partial else None,
             count=plan.length if plan.is_partial else None,
         )
