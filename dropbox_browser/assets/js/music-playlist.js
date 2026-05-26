@@ -1,8 +1,151 @@
 import {clearObject} from './music-shared.js';
 
+function copySelectedRemotePathMap(selectedRemotePaths) {
+  var copied = Object.create(null);
+  if (!selectedRemotePaths) return copied;
+  Object.keys(selectedRemotePaths).forEach(function (remotePath) {
+    if (selectedRemotePaths[remotePath]) copied[remotePath] = true;
+  });
+  return copied;
+}
+
+function playlistRemotePathOrder(playlist) {
+  return playlist.map(function (song) {
+    return song && song.remote_path ? song.remote_path : '';
+  });
+}
+
+export function draggedPlaylistBlockRemotePaths(playlist, selectedRemotePaths, anchorRemotePath) {
+  var draggedRemotePaths = [];
+  if (!anchorRemotePath) return draggedRemotePaths;
+  if (selectedRemotePaths && selectedRemotePaths[anchorRemotePath]) {
+    playlist.forEach(function (song) {
+      if (song && song.remote_path && selectedRemotePaths[song.remote_path]) {
+        draggedRemotePaths.push(song.remote_path);
+      }
+    });
+  }
+  if (draggedRemotePaths.length === 0) draggedRemotePaths.push(anchorRemotePath);
+  return draggedRemotePaths;
+}
+
+export function reorderPlaylistBlock(playlist, selectedRemotePaths, anchorRemotePath, targetRemotePath, insertAfter, currentPlaylistIndex) {
+  var currentSong = playlist[currentPlaylistIndex] || null;
+  var currentRemotePath = currentSong && currentSong.remote_path ? currentSong.remote_path : null;
+  var draggedRemotePaths = draggedPlaylistBlockRemotePaths(playlist, selectedRemotePaths, anchorRemotePath);
+  var nextSelectedRemotePaths = Object.create(null);
+  var draggedRemotePathSet = Object.create(null);
+  var draggedSongs = [];
+  var remainingSongs = [];
+  var targetIndex = -1;
+  var insertIndex;
+  var nextPlaylist;
+  var nextCurrentPlaylistIndex = -1;
+  var moved = false;
+
+  draggedRemotePaths.forEach(function (remotePath) {
+    draggedRemotePathSet[remotePath] = true;
+    nextSelectedRemotePaths[remotePath] = true;
+  });
+  if (!draggedRemotePaths.length || !targetRemotePath || draggedRemotePathSet[targetRemotePath]) {
+    return {
+      draggedRemotePaths: draggedRemotePaths,
+      moved: false,
+      playlist: playlist.slice(),
+      currentPlaylistIndex: currentPlaylistIndex,
+      selectedRemotePaths: copySelectedRemotePathMap(selectedRemotePaths)
+    };
+  }
+
+  playlist.forEach(function (song) {
+    if (!song || !song.remote_path) return;
+    if (draggedRemotePathSet[song.remote_path]) draggedSongs.push(song);
+    else remainingSongs.push(song);
+  });
+
+  for (var i = 0; i < remainingSongs.length; i += 1) {
+    if (remainingSongs[i].remote_path === targetRemotePath) {
+      targetIndex = i;
+      break;
+    }
+  }
+  if (targetIndex === -1) {
+    return {
+      draggedRemotePaths: draggedRemotePaths,
+      moved: false,
+      playlist: playlist.slice(),
+      currentPlaylistIndex: currentPlaylistIndex,
+      selectedRemotePaths: copySelectedRemotePathMap(selectedRemotePaths)
+    };
+  }
+
+  insertIndex = targetIndex + (insertAfter ? 1 : 0);
+  nextPlaylist = remainingSongs.slice(0, insertIndex).concat(draggedSongs, remainingSongs.slice(insertIndex));
+  moved = playlistRemotePathOrder(nextPlaylist).join('\n') !== playlistRemotePathOrder(playlist).join('\n');
+
+  if (!moved) {
+    return {
+      draggedRemotePaths: draggedRemotePaths,
+      moved: false,
+      playlist: playlist.slice(),
+      currentPlaylistIndex: currentPlaylistIndex,
+      selectedRemotePaths: copySelectedRemotePathMap(selectedRemotePaths)
+    };
+  }
+
+  if (currentRemotePath) {
+    nextCurrentPlaylistIndex = -1;
+    for (var j = 0; j < nextPlaylist.length; j += 1) {
+      if (nextPlaylist[j].remote_path === currentRemotePath) {
+        nextCurrentPlaylistIndex = j;
+        break;
+      }
+    }
+  }
+
+  return {
+    draggedRemotePaths: draggedRemotePaths,
+    moved: true,
+    playlist: nextPlaylist,
+    currentPlaylistIndex: nextCurrentPlaylistIndex,
+    selectedRemotePaths: nextSelectedRemotePaths
+  };
+}
+
+export function playlistAutoScrollDeltaForBounds(clientY, listTop, listBottom) {
+  var listHeight = Math.max(0, listBottom - listTop);
+  var threshold = Math.max(24, Math.min(48, listHeight / 4));
+  var maxStep = 20;
+  var ratio;
+  if (!(listBottom > listTop) || !Number.isFinite(clientY)) return 0;
+  if (clientY < listTop + threshold) {
+    ratio = Math.min(1, (listTop + threshold - clientY) / threshold);
+    return -Math.max(4, Math.round(maxStep * ratio));
+  }
+  if (clientY > listBottom - threshold) {
+    ratio = Math.min(1, (clientY - (listBottom - threshold)) / threshold);
+    return Math.max(4, Math.round(maxStep * ratio));
+  }
+  return 0;
+}
+
 export function initPlaylist(ctx) {
   var els = ctx.els;
   var state = ctx.state;
+  var playlistDrag = {
+    active: false,
+    activeHandle: null,
+    anchorRemotePath: null,
+    draggedRemotePaths: [],
+    insertAfter: false,
+    pointerId: null,
+    autoScrollFrame: null,
+    lastClientY: 0,
+    startX: 0,
+    startY: 0,
+    suppressClickUntil: 0,
+    targetRemotePath: null
+  };
 
   function addSongsToPlaylist(songs) {
     var added = 0;
@@ -51,6 +194,14 @@ export function initPlaylist(ctx) {
 
   function playlistSelectedCount() {
     return Object.keys(state.selectedPlaylistRemotePaths).length;
+  }
+
+  function playlistDragSuppressed() {
+    return Date.now() < playlistDrag.suppressClickUntil;
+  }
+
+  function suppressPlaylistRowInteraction() {
+    playlistDrag.suppressClickUntil = Date.now() + 250;
   }
 
   function resetShuffleBag() {
@@ -127,6 +278,229 @@ export function initPlaylist(ctx) {
     state.playlistSelectionDirty = true;
     if (!ctx.layoutApi.playbackUiMayPaint()) return;
     paintPlaylistSelection();
+  }
+
+  function playlistRows() {
+    if (!els.playlistListEl) return [];
+    return Array.prototype.slice.call(els.playlistListEl.querySelectorAll('.music-playlist-entry'));
+  }
+
+  function stopPlaylistAutoScroll() {
+    if (playlistDrag.autoScrollFrame === null) return;
+    window.cancelAnimationFrame(playlistDrag.autoScrollFrame);
+    playlistDrag.autoScrollFrame = null;
+  }
+
+  function updatePlaylistDragTarget(clientY) {
+    var dropTarget = playlistDropTarget(clientY);
+    playlistDrag.targetRemotePath = dropTarget ? dropTarget.remotePath : null;
+    playlistDrag.insertAfter = dropTarget ? dropTarget.insertAfter : false;
+    updatePlaylistDragIndicators();
+  }
+
+  function playlistAutoScrollDelta(clientY) {
+    var listRect;
+    if (!els.playlistListEl) return 0;
+    listRect = els.playlistListEl.getBoundingClientRect();
+    return playlistAutoScrollDeltaForBounds(clientY, listRect.top, listRect.bottom);
+  }
+
+  function queuePlaylistAutoScroll() {
+    if (!playlistDrag.active || playlistDrag.autoScrollFrame !== null) return;
+    if (!playlistAutoScrollDelta(playlistDrag.lastClientY)) return;
+    playlistDrag.autoScrollFrame = window.requestAnimationFrame(runPlaylistAutoScroll);
+  }
+
+  function runPlaylistAutoScroll() {
+    var delta;
+    var maxScrollTop;
+    var nextScrollTop;
+    playlistDrag.autoScrollFrame = null;
+    if (!playlistDrag.active || !els.playlistListEl) return;
+    delta = playlistAutoScrollDelta(playlistDrag.lastClientY);
+    if (!delta) return;
+    maxScrollTop = Math.max(0, els.playlistListEl.scrollHeight - els.playlistListEl.clientHeight);
+    nextScrollTop = Math.max(0, Math.min(maxScrollTop, els.playlistListEl.scrollTop + delta));
+    if (nextScrollTop === els.playlistListEl.scrollTop) return;
+    els.playlistListEl.scrollTop = nextScrollTop;
+    updatePlaylistDragTarget(playlistDrag.lastClientY);
+    queuePlaylistAutoScroll();
+  }
+
+  function clearPlaylistDragIndicators() {
+    if (els.playlistListEl) {
+      els.playlistListEl.classList.remove('dragging');
+      els.playlistListEl.dataset.dropIndicatorVisible = 'false';
+      els.playlistListEl.style.removeProperty('--music-playlist-drop-indicator-y');
+    }
+    playlistRows().forEach(function (row) {
+      row.classList.remove('drag-source');
+    });
+    if (playlistDrag.activeHandle) playlistDrag.activeHandle.classList.remove('dragging');
+  }
+
+  function updatePlaylistDragIndicators() {
+    var draggedRemotePathSet = Object.create(null);
+    var dropRow = null;
+    if (!playlistDrag.active || !els.playlistListEl) {
+      clearPlaylistDragIndicators();
+      return;
+    }
+    els.playlistListEl.classList.add('dragging');
+    playlistDrag.draggedRemotePaths.forEach(function (remotePath) {
+      draggedRemotePathSet[remotePath] = true;
+    });
+    playlistRows().forEach(function (row) {
+      var rowRemotePath = row.dataset.remotePath || '';
+      var isDragged = !!draggedRemotePathSet[rowRemotePath];
+      row.classList.toggle('drag-source', isDragged);
+      if (!dropRow && playlistDrag.targetRemotePath === rowRemotePath) dropRow = row;
+    });
+    if (dropRow) {
+      els.playlistListEl.dataset.dropIndicatorVisible = 'true';
+      els.playlistListEl.style.setProperty(
+        '--music-playlist-drop-indicator-y',
+        String(dropRow.offsetTop + (playlistDrag.insertAfter ? dropRow.offsetHeight : 0)) + 'px'
+      );
+    } else {
+      els.playlistListEl.dataset.dropIndicatorVisible = 'false';
+      els.playlistListEl.style.removeProperty('--music-playlist-drop-indicator-y');
+    }
+    if (playlistDrag.activeHandle) playlistDrag.activeHandle.classList.add('dragging');
+  }
+
+  function playlistDropTarget(clientY) {
+    var rows = playlistRows();
+    var listRect;
+    var listTop;
+    var listBottom;
+    if (!els.playlistListEl || rows.length === 0) return null;
+    listRect = els.playlistListEl.getBoundingClientRect();
+    listTop = listRect.top;
+    listBottom = listRect.bottom;
+    if (clientY <= listTop) {
+      return {insertAfter: false, remotePath: rows[0].dataset.remotePath || ''};
+    }
+    if (clientY >= listBottom) {
+      return {insertAfter: true, remotePath: rows[rows.length - 1].dataset.remotePath || ''};
+    }
+    for (var i = 0; i < rows.length; i += 1) {
+      var rect = rows[i].getBoundingClientRect();
+      if (clientY < rect.top || clientY > rect.bottom) continue;
+      return {
+        insertAfter: clientY >= (rect.top + rect.bottom) / 2,
+        remotePath: rows[i].dataset.remotePath || ''
+      };
+    }
+    return null;
+  }
+
+  function resetPlaylistDragState() {
+    playlistDrag.active = false;
+    playlistDrag.activeHandle = null;
+    playlistDrag.anchorRemotePath = null;
+    playlistDrag.autoScrollFrame = null;
+    playlistDrag.draggedRemotePaths = [];
+    playlistDrag.insertAfter = false;
+    playlistDrag.lastClientY = 0;
+    playlistDrag.pointerId = null;
+    playlistDrag.startX = 0;
+    playlistDrag.startY = 0;
+    playlistDrag.targetRemotePath = null;
+  }
+
+  function applyPlaylistReorder(anchorRemotePath, targetRemotePath, insertAfter) {
+    var result = reorderPlaylistBlock(
+      state.playlist,
+      state.selectedPlaylistRemotePaths,
+      anchorRemotePath,
+      targetRemotePath,
+      insertAfter,
+      state.currentPlaylistIndex
+    );
+    if (!result.moved) return false;
+    state.playlist = result.playlist;
+    state.currentPlaylistIndex = result.currentPlaylistIndex;
+    clearObject(state.selectedPlaylistRemotePaths);
+    Object.keys(result.selectedRemotePaths).forEach(function (remotePath) {
+      state.selectedPlaylistRemotePaths[remotePath] = true;
+    });
+    state.playlistSelectionAnchor = anchorRemotePath;
+    resetShuffleBag();
+    renderPlaylist();
+    focusPlaylistRemotePath(anchorRemotePath);
+    ctx.setStatus(
+      'Moved ' + result.draggedRemotePaths.length + ' playlist song' +
+      (result.draggedRemotePaths.length === 1 ? '' : 's') + '.'
+    );
+    return true;
+  }
+
+  function finishPlaylistDrag(cancelled) {
+    var shouldSuppressInteraction = playlistDrag.active;
+    window.removeEventListener('pointermove', handlePlaylistDragMove);
+    window.removeEventListener('pointerup', handlePlaylistDragEnd);
+    window.removeEventListener('pointercancel', handlePlaylistDragCancel);
+    stopPlaylistAutoScroll();
+    clearPlaylistDragIndicators();
+    if (!cancelled && playlistDrag.active && playlistDrag.targetRemotePath) {
+      applyPlaylistReorder(playlistDrag.anchorRemotePath, playlistDrag.targetRemotePath, playlistDrag.insertAfter);
+    }
+    if (shouldSuppressInteraction) suppressPlaylistRowInteraction();
+    resetPlaylistDragState();
+  }
+
+  function handlePlaylistDragMove(ev) {
+    if (ev.pointerId !== playlistDrag.pointerId) return;
+    if (!playlistDrag.active) {
+      if (Math.abs(ev.clientX - playlistDrag.startX) < 4 && Math.abs(ev.clientY - playlistDrag.startY) < 4) return;
+      playlistDrag.active = true;
+    }
+    playlistDrag.lastClientY = ev.clientY;
+    updatePlaylistDragTarget(ev.clientY);
+    if (playlistAutoScrollDelta(ev.clientY)) queuePlaylistAutoScroll();
+    else stopPlaylistAutoScroll();
+  }
+
+  function handlePlaylistDragEnd(ev) {
+    if (ev.pointerId !== playlistDrag.pointerId) return;
+    finishPlaylistDrag(false);
+  }
+
+  function handlePlaylistDragCancel(ev) {
+    if (ev.pointerId !== playlistDrag.pointerId) return;
+    finishPlaylistDrag(true);
+  }
+
+  function startPlaylistDrag(remotePath, handleEl, ev) {
+    if (ev.button !== 0) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    hidePlaylistContextMenu();
+    if (!state.selectedPlaylistRemotePaths[remotePath]) {
+      clearObject(state.selectedPlaylistRemotePaths);
+      state.selectedPlaylistRemotePaths[remotePath] = true;
+      state.playlistSelectionAnchor = remotePath;
+      renderPlaylistSelection();
+    }
+    if (els.playlistListEl && document.activeElement !== els.playlistListEl) els.playlistListEl.focus();
+    playlistDrag.active = false;
+    playlistDrag.activeHandle = handleEl;
+    playlistDrag.anchorRemotePath = remotePath;
+    playlistDrag.draggedRemotePaths = draggedPlaylistBlockRemotePaths(
+      state.playlist,
+      state.selectedPlaylistRemotePaths,
+      remotePath
+    );
+    playlistDrag.insertAfter = false;
+    playlistDrag.lastClientY = ev.clientY;
+    playlistDrag.pointerId = ev.pointerId;
+    playlistDrag.startX = ev.clientX;
+    playlistDrag.startY = ev.clientY;
+    playlistDrag.targetRemotePath = null;
+    window.addEventListener('pointermove', handlePlaylistDragMove);
+    window.addEventListener('pointerup', handlePlaylistDragEnd);
+    window.addEventListener('pointercancel', handlePlaylistDragCancel);
   }
 
   function selectAllPlaylistSongs() {
@@ -263,6 +637,8 @@ export function initPlaylist(ctx) {
     }
     state.playlist.forEach(function (song, index) {
       var row = document.createElement('div');
+      var dragHandle;
+      var handleCell;
       row.className = 'music-playlist-row music-playlist-entry';
       row.setAttribute('role', 'row');
       row.setAttribute('aria-selected', state.selectedPlaylistRemotePaths[song.remote_path] ? 'true' : 'false');
@@ -280,13 +656,49 @@ export function initPlaylist(ctx) {
       pathCell.setAttribute('role', 'cell');
       pathCell.textContent = absolutePlaylistPath(song);
       row.appendChild(pathCell);
+      handleCell = document.createElement('div');
+      handleCell.className = 'music-playlist-handle-cell';
+      handleCell.setAttribute('role', 'cell');
+      dragHandle = document.createElement('button');
+      dragHandle.type = 'button';
+      dragHandle.className = 'music-playlist-drag-handle';
+      dragHandle.setAttribute('aria-label', 'Reorder playlist item');
+      dragHandle.title = 'Drag to reorder playlist';
+      var dragHandleIcon = document.createElement('span');
+      dragHandleIcon.className = 'music-playlist-drag-handle-icon';
+      dragHandleIcon.setAttribute('aria-hidden', 'true');
+      dragHandle.appendChild(dragHandleIcon);
+      dragHandle.addEventListener('pointerdown', function (ev) {
+        startPlaylistDrag(song.remote_path, dragHandle, ev);
+      });
+      dragHandle.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      });
+      handleCell.appendChild(dragHandle);
+      row.appendChild(handleCell);
       row.addEventListener('click', function (ev) {
+        if (playlistDragSuppressed()) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          return;
+        }
         selectPlaylistRemotePath(song.remote_path, ev);
       });
-      row.addEventListener('dblclick', function () {
+      row.addEventListener('dblclick', function (ev) {
+        if (playlistDragSuppressed()) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          return;
+        }
         ctx.playbackApi.playPlaylistRemotePath(song.remote_path);
       });
       row.addEventListener('contextmenu', function (ev) {
+        if (playlistDragSuppressed()) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          return;
+        }
         openPlaylistContextMenu(ev, song.remote_path);
       });
       els.playlistListEl.appendChild(row);
