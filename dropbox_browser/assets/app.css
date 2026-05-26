@@ -393,6 +393,7 @@ button:disabled {
   left: 0;
   max-height: calc(100vh - 80px);
   min-height: 42px;
+  overscroll-behavior: contain;
   position: fixed;
   right: 0;
   z-index: 100;
@@ -443,11 +444,14 @@ button:disabled {
 .bottom-pane-view {
   flex: 1;
   min-height: 0;
+  overflow: hidden;
+  overscroll-behavior: contain;
 }
 .bottom-pane-view.hidden {
   display: none;
 }
 #log-entries {
+  overscroll-behavior: contain;
   overflow-y: auto;
   height: 100%;
   box-sizing: border-box;

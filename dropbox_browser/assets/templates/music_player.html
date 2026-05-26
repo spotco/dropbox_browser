@@ -21,14 +21,33 @@
     <div id="music-resizer-library-playlist" class="music-pane-resizer" role="separator" aria-orientation="vertical" title="Drag to resize music panels"></div>
 
     <section id="music-playlist-pane" class="music-subpane music-playlist-pane" aria-labelledby="music-playlist-title">
-      <div class="music-subpane-header">
-        <h2 id="music-playlist-title">Active Playlist</h2>
+      <div class="music-subpane-header music-playlist-toolbar music-playlist-toolbar-primary">
+        <div class="music-playlist-toolbar-group music-playlist-toolbar-title">
+          <h2 id="music-playlist-title">Active Playlist:</h2>
+          <span id="music-active-playlist-name" class="music-active-playlist-name" data-default-name="New Playlist">New Playlist</span>
+        </div>
+        <div class="music-playlist-toolbar-group music-playlist-toolbar-actions" role="group" aria-label="Playlist import and export">
+          <button type="button" id="music-playlist-import">Import</button>
+          <button type="button" id="music-playlist-export">Export</button>
+        </div>
       </div>
-      <div id="music-playlist-future-controls" class="music-playlist-future-controls" aria-label="Future playlist controls">
-        <button type="button" disabled>Name</button>
-        <button type="button" disabled>Save</button>
-        <button type="button" disabled>Load</button>
+      <div id="music-playlist-controls" class="music-playlist-toolbar music-playlist-toolbar-secondary">
+        <div class="music-playlist-toolbar-group" role="group" aria-label="Playlist rename and load">
+          <button type="button" id="music-playlist-rename">Rename</button>
+          <button type="button" id="music-playlist-load">Load</button>
+        </div>
+        <div class="music-playlist-toolbar-group music-playlist-toolbar-save" role="group" aria-label="Playlist save">
+          <button type="button" id="music-playlist-save">Save</button>
+        </div>
       </div>
+      <input
+        type="file"
+        id="music-playlist-import-input"
+        class="music-hidden-file-input"
+        accept=".m3u8,.json,application/json"
+        multiple
+        hidden
+      >
       <div class="music-playlist-table" role="table" aria-label="Active playlist">
         <div class="music-playlist-row music-playlist-heading" role="row">
           <div role="columnheader">Filename</div>
@@ -37,6 +56,65 @@
         </div>
         <div id="music-playlist-list" class="music-playlist-list" role="rowgroup" tabindex="0">
           <div class="music-empty-state">Playlist is empty.</div>
+        </div>
+      </div>
+      <div id="music-playlist-save-toast" class="music-playlist-save-toast hidden" role="status" aria-live="polite" hidden>
+        <div id="music-playlist-save-toast-text" class="music-playlist-save-toast-text"></div>
+        <button type="button" id="music-playlist-save-toast-close" class="music-playlist-save-toast-close" aria-label="Close save notification">Close</button>
+      </div>
+      <div id="music-playlist-rename-dialog" class="music-playlist-modal hidden" role="dialog" aria-modal="true" aria-labelledby="music-playlist-rename-title" hidden>
+        <div class="music-playlist-modal-card">
+          <div class="music-playlist-modal-header">
+            <h3 id="music-playlist-rename-title">Rename Playlist</h3>
+          </div>
+          <div class="music-playlist-modal-body">
+            <label class="music-playlist-field-label" for="music-playlist-rename-input">Playlist Name</label>
+            <input type="text" id="music-playlist-rename-input" class="music-playlist-text-input" value="New Playlist" maxlength="255" autocomplete="off">
+          </div>
+          <div class="music-playlist-modal-actions">
+            <button type="button" id="music-playlist-rename-cancel">Cancel</button>
+            <button type="button" id="music-playlist-rename-confirm">OK</button>
+          </div>
+        </div>
+      </div>
+      <div id="music-playlist-overwrite-dialog" class="music-playlist-modal hidden" role="dialog" aria-modal="true" aria-labelledby="music-playlist-overwrite-title" hidden>
+        <div class="music-playlist-modal-card">
+          <div class="music-playlist-modal-header">
+            <h3 id="music-playlist-overwrite-title">Overwrite Playlist?</h3>
+          </div>
+          <div class="music-playlist-modal-body">
+            <p id="music-playlist-overwrite-message" class="music-playlist-modal-message">A saved playlist with this name already exists. Overwrite it?</p>
+          </div>
+          <div class="music-playlist-modal-actions">
+            <button type="button" id="music-playlist-overwrite-cancel">Cancel</button>
+            <button type="button" id="music-playlist-overwrite-confirm">Overwrite</button>
+          </div>
+        </div>
+      </div>
+      <div id="music-playlist-load-dialog" class="music-playlist-modal hidden" role="dialog" aria-modal="true" aria-labelledby="music-playlist-load-title" hidden>
+        <div class="music-playlist-modal-card music-playlist-load-card">
+          <div class="music-playlist-modal-header">
+            <h3 id="music-playlist-load-title">Load Playlist</h3>
+          </div>
+          <div class="music-playlist-modal-body">
+            <div class="music-playlist-load-table" role="table" aria-label="Saved playlists">
+              <div class="music-playlist-row music-playlist-heading music-playlist-load-heading" role="row">
+                <button type="button" id="music-playlist-sort-name" class="music-playlist-sort-button" data-playlist-sort-key="name" aria-pressed="true">
+                  Name
+                </button>
+                <button type="button" id="music-playlist-sort-last-modified" class="music-playlist-sort-button" data-playlist-sort-key="last_modified" aria-pressed="false">
+                  Last Modified
+                </button>
+              </div>
+              <div id="music-playlist-load-list" class="music-playlist-load-list" role="rowgroup" tabindex="0">
+                <div class="music-empty-state">No saved playlists yet.</div>
+              </div>
+            </div>
+          </div>
+          <div class="music-playlist-modal-actions">
+            <button type="button" id="music-playlist-load-cancel">Cancel</button>
+            <button type="button" id="music-playlist-load-confirm">OK</button>
+          </div>
         </div>
       </div>
     </section>

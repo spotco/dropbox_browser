@@ -2,6 +2,7 @@ import {initLayout} from './music-layout.js';
 import {initPlaylist} from './music-playlist.js';
 import {initPlayback} from './music-playback.js';
 import {initLibrary} from './music-library.js';
+import {PlaylistStore} from './music-playlist-store.js';
 
 (function () {
   var pane = document.getElementById('music-player-pane');
@@ -26,6 +27,30 @@ import {initLibrary} from './music-library.js';
       playlistListEl: document.getElementById('music-playlist-list'),
       playlistPane: document.getElementById('music-playlist-pane'),
       playlistPlaybackResizer: document.getElementById('music-resizer-playlist-playback'),
+      activePlaylistNameEl: document.getElementById('music-active-playlist-name'),
+      playlistImportButton: document.getElementById('music-playlist-import'),
+      playlistExportButton: document.getElementById('music-playlist-export'),
+      playlistRenameButton: document.getElementById('music-playlist-rename'),
+      playlistLoadButton: document.getElementById('music-playlist-load'),
+      playlistSaveButton: document.getElementById('music-playlist-save'),
+      playlistImportInput: document.getElementById('music-playlist-import-input'),
+      playlistSaveToast: document.getElementById('music-playlist-save-toast'),
+      playlistSaveToastText: document.getElementById('music-playlist-save-toast-text'),
+      playlistSaveToastCloseButton: document.getElementById('music-playlist-save-toast-close'),
+      playlistRenameDialog: document.getElementById('music-playlist-rename-dialog'),
+      playlistRenameTitleEl: document.getElementById('music-playlist-rename-title'),
+      playlistRenameInput: document.getElementById('music-playlist-rename-input'),
+      playlistRenameCancelButton: document.getElementById('music-playlist-rename-cancel'),
+      playlistRenameConfirmButton: document.getElementById('music-playlist-rename-confirm'),
+      playlistOverwriteDialog: document.getElementById('music-playlist-overwrite-dialog'),
+      playlistOverwriteMessageEl: document.getElementById('music-playlist-overwrite-message'),
+      playlistOverwriteCancelButton: document.getElementById('music-playlist-overwrite-cancel'),
+      playlistOverwriteConfirmButton: document.getElementById('music-playlist-overwrite-confirm'),
+      playlistLoadDialog: document.getElementById('music-playlist-load-dialog'),
+      playlistLoadListEl: document.getElementById('music-playlist-load-list'),
+      playlistLoadCancelButton: document.getElementById('music-playlist-load-cancel'),
+      playlistLoadConfirmButton: document.getElementById('music-playlist-load-confirm'),
+      playlistLoadSortButtons: pane.querySelectorAll('[data-playlist-sort-key]'),
       libraryMenu: document.getElementById('music-library-context-menu'),
       playlistMenu: document.getElementById('music-playlist-context-menu'),
       playbackPane: document.getElementById('music-playback-pane'),
@@ -68,11 +93,24 @@ import {initLibrary} from './music-library.js';
       librarySortDirection: 'asc',
       librarySortSettingKey: 'music-library-sort',
       contextNodeId: null,
+      playlistStore: null,
+      activePlaylist: null,
+      persistedPlaylists: [],
       playlist: [],
       playlistRemotePaths: Object.create(null),
       selectedPlaylistRemotePaths: Object.create(null),
       playlistSelectionAnchor: null,
       playlistContextRemotePath: null,
+      activePlaylistSavedName: null,
+      activePlaylistSavedSignature: '',
+      activePlaylistDirty: false,
+      playlistRenameMode: 'rename',
+      playlistLoadSortKey: 'last_modified',
+      playlistLoadSortDirection: 'desc',
+      playlistLoadSortSettingKey: 'music-playlist-load-sort',
+      selectedPersistedPlaylistName: null,
+      pendingPlaylistConfirmAction: null,
+      playlistSaveToastTimer: null,
       currentPlaylistIndex: -1,
       musicPaneWidthSettingKey: 'music-pane-widths',
       musicPaneResizerWidth: 8,
@@ -120,9 +158,17 @@ import {initLibrary} from './music-library.js';
       if (!ctx.layoutApi || !ctx.layoutApi.playbackUiMayPaint()) return;
       ctx.setStatus(ctx.state.pendingLibraryStatusText);
       ctx.state.pendingLibraryStatusText = null;
+    },
+    syncPlaylistState: function () {
+      ctx.state.activePlaylist = ctx.state.playlistStore.activePlaylist;
+      ctx.state.persistedPlaylists = ctx.state.playlistStore.persistedPlaylists;
+      ctx.state.playlist = ctx.state.activePlaylist.songs;
+      ctx.state.playlistRemotePaths = ctx.state.activePlaylist.remotePathSet;
     }
   };
 
+  ctx.state.playlistStore = new PlaylistStore({storage: Settings});
+  ctx.syncPlaylistState();
   ctx.state.loadButtonDefaultText = ctx.els.loadButton.textContent || 'Load Current Folder';
   ctx.state.libraryRoot = ctx.state.currentFolder;
   pane.setAttribute('data-player-ready', 'library');
