@@ -69,6 +69,14 @@ def match_dropbox_names_to_local_names(dropbox_names: Iterable[str], local_names
     for remote_name in remote_list:
         bucket = local_by_key.get(filename_compare_key(remote_name)) or []
         for local_name in list(bucket):
+            if local_name == remote_name and local_name in unmatched_local:
+                matches[remote_name] = local_name
+                unmatched_remote.discard(remote_name)
+                unmatched_local.discard(local_name)
+                break
+        if remote_name not in unmatched_remote:
+            continue
+        for local_name in list(bucket):
             if local_name in unmatched_local:
                 matches[remote_name] = local_name
                 unmatched_remote.discard(remote_name)
