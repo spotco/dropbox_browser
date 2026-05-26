@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+import unicodedata
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
@@ -177,6 +178,37 @@ class StreamingHttpTests(AppTestCase):
                 "--",
                 "dropbox:Albums/Live Set/clip.mp4",
             )
+            for call in rclone.calls
+        ))
+
+    def test_remote_file_uses_canonical_remote_name_for_unicode_equivalent_request_path(self) -> None:
+        remote_name = "Shikura Chiyomaru - Find the blue セルフカヴァーバージョン.mp3"
+        requested_name = unicodedata.normalize("NFD", remote_name)
+        rclone = SimulatedRclone({
+            "dropbox:music/2025_5_15_loose": [SimulatedLsjsonResponse(items=[{
+                "Name": remote_name,
+                "Path": remote_name,
+                "IsDir": False,
+                "Size": 10,
+                "ModTime": "2024-01-01T12:00:00Z",
+            }])],
+        }, cat_data={
+            "dropbox:music/2025_5_15_loose/" + remote_name: b"0123456789",
+        })
+        app = self._build_app(rclone, local_root=None, workers=1)
+
+        with TestServer(app) as server:
+            request_path = quote("music/2025_5_15_loose/" + requested_name, safe="")
+            with urlopen(server.base_url + "/file?path=" + request_path, timeout=5) as response:
+                body = response.read()
+                status = response.status
+                headers = response.headers
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(body, b"0123456789")
+        self.assertEqual(headers["Content-Length"], "10")
+        self.assertTrue(any(
+            call["args"] == ("cat", "--", "dropbox:music/2025_5_15_loose/" + remote_name)
             for call in rclone.calls
         ))
 
