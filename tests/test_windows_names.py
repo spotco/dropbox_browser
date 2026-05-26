@@ -8,7 +8,7 @@ from urllib.parse import quote
 from dropbox_browser.foldercache import FolderCacheManager
 from dropbox_browser.listingcache import ListingCacheManager
 from dropbox_browser.services import DropboxBrowser
-from dropbox_browser.windows_names import dropbox_local_name_equal
+from dropbox_browser.windows_names import dropbox_local_name_equal, match_dropbox_names_to_local_names
 
 try:
     from tests.support import (
@@ -33,6 +33,36 @@ except ImportError:
 
 
 class WindowsSafeNameMatcherTests(unittest.TestCase):
+    def test_match_dropbox_names_prefers_literal_exact_name_over_canonical_variant(self) -> None:
+        remote_name = "Daiki Ishikawa - Màtham Sanomh.mp3"
+        decomposed_local_name = "Daiki Ishikawa - Màtham Sanomh.mp3"
+        self.assertEqual(
+            match_dropbox_names_to_local_names([remote_name], [decomposed_local_name, remote_name]),
+            {remote_name: remote_name},
+        )
+
+    def test_match_dropbox_names_prefers_literal_exact_name_for_reported_canonical_duplicates(self) -> None:
+        cases = [
+            (
+                "01 晴レ晴レファンファーレ(TVアニメ「甘々と稲妻」オープニングテーマ).mp3",
+                "01 晴レ晴レファンファーレ(TVアニメ「甘々と稲妻」オープニングテーマ).mp3",
+            ),
+            (
+                "onlymp3.to -  BOFXVI Catalinésie MisomyL-x6FencPeCzA-192k-1704955417.mp3",
+                "onlymp3.to -  BOFXVI Catalinésie MisomyL-x6FencPeCzA-192k-1704955417.mp3",
+            ),
+            (
+                "2.20 Hi éReila Convallaria in the Wind.mp3",
+                "2.20 Hi éReila Convallaria in the Wind.mp3",
+            ),
+        ]
+        for remote_name, canonical_variant in cases:
+            with self.subTest(remote_name=remote_name):
+                self.assertEqual(
+                    match_dropbox_names_to_local_names([remote_name], [canonical_variant, remote_name]),
+                    {remote_name: remote_name},
+                )
+
     def test_dropbox_local_name_equal_handles_windows_invalid_char_combinations_with_unicode(self) -> None:
         remote_name = 'combo <>"\\|?*: <>:"\\|?* cafe Ωß'
         local_name = 'combo ＜＞＂＼｜？＊_ ＜＞_＂＼｜？＊ cafe Ωß'

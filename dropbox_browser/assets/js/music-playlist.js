@@ -260,23 +260,43 @@ export function initPlaylist(ctx) {
       state.playlistSaveToastTimer = null;
     }
     if (!els.playlistSaveToast) return;
+    delete els.playlistSaveToast.dataset.variant;
+    els.playlistSaveToast.setAttribute('aria-live', 'polite');
     els.playlistSaveToast.hidden = true;
     els.playlistSaveToast.classList.add('hidden');
   }
 
-  function showPlaylistSaveToast(savedPlaylist) {
-    var savedName;
-    var savedAtText;
-    if (!els.playlistSaveToast || !els.playlistSaveToastText || !savedPlaylist) return;
-    savedName = savedPlaylist.name || activePlaylistName();
-    savedAtText = formatShortDateTime(savedPlaylist.last_modified);
-    els.playlistSaveToastText.textContent = 'Saved "' + savedName + '" as of ' + savedAtText + '.';
+  function showPlaylistToastMessage(message, options) {
+    var durationMs = options && Number.isFinite(options.durationMs) ? options.durationMs : 4500;
+    var variant = options && options.variant === 'error' ? 'error' : 'info';
+    if (!els.playlistSaveToast || !els.playlistSaveToastText || !message) return;
+    els.playlistSaveToastText.textContent = message;
+    els.playlistSaveToast.dataset.variant = variant;
+    els.playlistSaveToast.setAttribute('aria-live', variant === 'error' ? 'assertive' : 'polite');
     els.playlistSaveToast.hidden = false;
     els.playlistSaveToast.classList.remove('hidden');
     if (state.playlistSaveToastTimer) window.clearTimeout(state.playlistSaveToastTimer);
     state.playlistSaveToastTimer = window.setTimeout(function () {
       hidePlaylistSaveToast();
-    }, 4500);
+    }, durationMs);
+  }
+
+  function showPlaylistSaveToast(savedPlaylist) {
+    var savedName;
+    var savedAtText;
+    if (!savedPlaylist) return;
+    savedName = savedPlaylist.name || activePlaylistName();
+    savedAtText = formatShortDateTime(savedPlaylist.last_modified);
+    showPlaylistToastMessage('Saved "' + savedName + '" as of ' + savedAtText + '.', {
+      variant: 'info'
+    });
+  }
+
+  function showPlaylistErrorToast(message) {
+    showPlaylistToastMessage(message, {
+      durationMs: 6500,
+      variant: 'error'
+    });
   }
 
   function selectedPersistedPlaylist() {
@@ -1311,6 +1331,7 @@ export function initPlaylist(ctx) {
     savePlaylist: savePlaylist,
     selectAllPlaylistSongs: selectAllPlaylistSongs,
     selectPlaylistRemotePath: selectPlaylistRemotePath,
+    showPlaylistErrorToast: showPlaylistErrorToast,
     syncActivePlaylistDirtyState: syncActivePlaylistDirtyState,
     shuffleBagIndex: shuffleBagIndex
   };

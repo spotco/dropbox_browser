@@ -358,6 +358,11 @@
   z-index: 4;
 }
 
+.music-playlist-save-toast[data-variant="error"] {
+  background: linear-gradient(180deg, rgba(118, 45, 45, 0.98) 0%, rgba(69, 24, 24, 0.98) 100%);
+  border-color: #d88f8f;
+}
+
 .music-playlist-save-toast.hidden {
   display: none;
 }

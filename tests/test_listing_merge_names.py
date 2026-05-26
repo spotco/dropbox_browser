@@ -25,6 +25,87 @@ except ImportError:
 
 
 class ListingMergeNameTests(AppTestCase):
+    def test_canonical_local_duplicates_keep_exact_remote_name_synced(self) -> None:
+        remote_name = "Daiki Ishikawa - Màtham Sanomh.mp3"
+        decomposed_local_name = "Daiki Ishikawa - Màtham Sanomh.mp3"
+        local_root = self.create_local_root({
+            f"music/{decomposed_local_name}": b"audio",
+            f"music/{remote_name}": b"audio",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:music": [SimulatedLsjsonResponse(items=[
+                remote_file_item(remote_name, local_root / "music" / remote_name),
+            ])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        entries = app.list_entries("music")
+        row_by_local_name = {entry.get("local_name"): entry for entry in entries}
+
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(row_by_local_name[remote_name]["name"], remote_name)
+        self.assertTrue(row_by_local_name[remote_name]["remote"])
+        self.assertTrue(row_by_local_name[remote_name]["local"])
+        self.assertFalse(row_by_local_name[decomposed_local_name]["remote"])
+        self.assertTrue(row_by_local_name[decomposed_local_name]["local"])
+        self.assertEqual(
+            app.file_statuses_for_entries(entries),
+            {
+                remote_name: {"diff_status": "synced"},
+                decomposed_local_name: {"diff_status": "local_only", "reason": f"Local only: {decomposed_local_name}"},
+            },
+        )
+
+    def test_reported_canonical_local_duplicates_keep_exact_remote_name_synced(self) -> None:
+        cases = [
+            (
+                "music/2025_5_15_loose",
+                "01 晴レ晴レファンファーレ(TVアニメ「甘々と稲妻」オープニングテーマ).mp3",
+                "01 晴レ晴レファンファーレ(TVアニメ「甘々と稲妻」オープニングテーマ).mp3",
+            ),
+            (
+                "music/robeats_playlist",
+                "onlymp3.to -  BOFXVI Catalinésie MisomyL-x6FencPeCzA-192k-1704955417.mp3",
+                "onlymp3.to -  BOFXVI Catalinésie MisomyL-x6FencPeCzA-192k-1704955417.mp3",
+            ),
+            (
+                "music/hoyo_8_8_2024/Sword of Convallaria Original Soundtrack [MP3]/Disc 2",
+                "2.20 Hi éReila Convallaria in the Wind.mp3",
+                "2.20 Hi éReila Convallaria in the Wind.mp3",
+            ),
+        ]
+
+        for rel_path, remote_name, canonical_variant in cases:
+            with self.subTest(remote_name=remote_name):
+                local_root = self.create_local_root({
+                    f"{rel_path}/{canonical_variant}": b"audio",
+                    f"{rel_path}/{remote_name}": b"audio",
+                })
+                remote_path = local_root.joinpath(*rel_path.split("/"), remote_name)
+                rclone = SimulatedRclone({
+                    f"dropbox:{rel_path}": [SimulatedLsjsonResponse(items=[
+                        remote_file_item(remote_name, remote_path),
+                    ])],
+                })
+                app = self._build_app(rclone, local_root=local_root, workers=1)
+
+                entries = app.list_entries(rel_path)
+                row_by_local_name = {entry.get("local_name"): entry for entry in entries}
+
+                self.assertEqual(len(entries), 2)
+                self.assertEqual(row_by_local_name[remote_name]["name"], remote_name)
+                self.assertTrue(row_by_local_name[remote_name]["remote"])
+                self.assertTrue(row_by_local_name[remote_name]["local"])
+                self.assertFalse(row_by_local_name[canonical_variant]["remote"])
+                self.assertTrue(row_by_local_name[canonical_variant]["local"])
+                self.assertEqual(
+                    app.file_statuses_for_entries(entries),
+                    {
+                        remote_name: {"diff_status": "synced"},
+                        canonical_variant: {"diff_status": "local_only", "reason": f"Local only: {canonical_variant}"},
+                    },
+                )
+
     def test_cached_navigation_uses_windows_safe_local_name_matching(self) -> None:
         class DirectListingFolderCache:
             def get_direct_listing(self, _remote_path: str) -> list[dict]:
