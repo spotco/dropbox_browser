@@ -402,6 +402,20 @@
   z-index: 260;
 }
 
+/* Playlist modal layering (inside .music-playlist-pane stacking context).
+   Load stays at base (260) as the primary picker.
+   Rename is elevated (270) because it can trigger the confirmer.
+   Overwrite/confirm is highest (280) so it always appears above load or rename
+   when multiple modals are open simultaneously (e.g. dirty-load confirmation path).
+*/
+.music-playlist-modal-rename {
+  z-index: 270;
+}
+
+.music-playlist-modal-overwrite {
+  z-index: 280;
+}
+
 .music-playlist-modal.hidden {
   display: none;
 }
