@@ -1,4 +1,4 @@
-# Known Bugs
+# Unicode Local Source `rclone copyto` Bug
 
 ## rclone `copyto` fails on some Windows local source filenames
 
@@ -75,8 +75,29 @@ exit code 0
 This isolates the problem to `rclone` handling of the local source path, not
 the browser sync route or the Dropbox remote.
 
+### Upload-only Dropbox repro script
 
-### FIX FROM CLAUDE (needs testing)
+For a controlled Dropbox upload repro under `https://www.dropbox.com/home/dropbox_browser`,
+run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\plans\unicode_copy_bug\repro_rclone_unicode_copyto.ps1
+```
+
+The script:
+
+- creates two local source files under `Temp\rclone-real-repro`
+- uploads only under `dropbox:dropbox_browser/rclone-unicode-repro/<timestamp>`
+- uploads workaround cases only under `dropbox:dropbox_browser/rclone-unicode-repro-workaround/<timestamp>`
+- never deletes anything from Dropbox
+- times out each `rclone` call instead of hanging silently
+
+The expected outcome is that the plain control upload succeeds, the filename
+containing `？` reproduces the `rclone` local-path failure before upload, and
+the workaround uploads provide comparison points.
+
+
+### Verified workaround
 Your instinct is correct — this is a real rclone bug/quirk, and it's a well-known one.
 
 **What's happening:** The filename contains `？` (U+FF1F, FULLWIDTH QUESTION MARK). On Windows, rclone's local backend encoder maps certain Unicode "fullwidth" punctuation characters — specifically the ones that are illegal in Windows filenames (`:`, `?`, `*`, `<`, `>`, `|`, `\`, `"`) — to their fullwidth Unicode equivalents as an escape mechanism. The problem is that when rclone is given a *source path* that already contains one of these fullwidth characters, it escapes it *again* with the `‛` (U+201B, SINGLE HIGH-REVERSED-9 QUOTATION MARK) prefix, mangling the path so Windows can't find it.
@@ -99,4 +120,12 @@ So `？` (fullwidth question mark) in the source path gets double-encoded into s
 
 `--local-encoding None` disables the encoding entirely and passes the raw path through, which works as long as you're copying *to* somewhere that can handle the characters.
 
-So yes — your code agent was right that it's a bug, just wrong to attribute it to your code. This lives entirely inside rclone's local backend encoder on Windows.
+This workaround was verified here against both the controlled repro file and the
+real path:
+
+```text
+F:\Dropbox\music\sdvx4\0287 - U.N.オーエンは彼女なのか？(TO-HOlic mix).mp3
+```
+
+Plain `rclone copyto` fails, while `--local-encoding "Slash,LtGt,DoubleQuote,Asterisk,Pipe,BackSlash,Ctl,RightSpace,RightPeriod,InvalidUtf8,Dot"`
+and `--local-encoding None` both succeed.
