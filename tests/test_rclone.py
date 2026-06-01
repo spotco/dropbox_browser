@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import io
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from dropbox_browser.errors import BrowserError
@@ -40,6 +42,19 @@ class TimeoutThenSuccessProcess:
         self.returncode = -9
 
 
+class RecordingSuccessProcess:
+    instances: list["RecordingSuccessProcess"] = []
+
+    def __init__(self, cmd: list[str], stdin: object | None = None, stdout: object | None = None, stderr: object | None = None) -> None:
+        self.cmd = cmd
+        self.stdin = stdin
+        self.returncode = 0
+        RecordingSuccessProcess.instances.append(self)
+
+    def communicate(self, timeout: float | None = None) -> tuple[bytes, bytes]:
+        return b"", b""
+
+
 class AlwaysTimeoutProcess:
     instances: list["AlwaysTimeoutProcess"] = []
 
@@ -62,6 +77,132 @@ class AlwaysTimeoutProcess:
 
 
 class RcloneLoggingTests(unittest.TestCase):
+    def test_copyto_local_upload_uses_rcat_with_stdin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source = Path(tmpdir) / "milet「Anytime Anywhere」×「葬送のフリーレン」SPECIAL MUSIC VIDEO／フリーレンEDテーマアニメMV.mp3"
+            source.write_bytes(b"audio")
+            RecordingSuccessProcess.instances = []
+            with (
+                patch("dropbox_browser.rclone.subprocess.Popen", side_effect=RecordingSuccessProcess),
+                patch("dropbox_browser.rclone.logstore.append", return_value=11),
+                patch("dropbox_browser.rclone.logstore.update"),
+                patch("dropbox_browser.rclone.logoutput.log_start", return_value=22),
+                patch("dropbox_browser.rclone.logoutput.log_complete"),
+            ):
+                client = RcloneClient("rclone.exe", None)
+                client.copy_file_overwrite(source, "dropbox:upload.mp3", size_bytes=5)
+
+        self.assertEqual(
+            RecordingSuccessProcess.instances[0].cmd,
+            [
+                "rclone.exe",
+                "rcat",
+                "--size",
+                "5",
+                "--",
+                "dropbox:upload.mp3",
+            ],
+        )
+        self.assertIsNotNone(RecordingSuccessProcess.instances[0].stdin)
+
+    def test_copyto_remote_source_on_windows_does_not_use_local_encoding_workaround(self) -> None:
+        RecordingSuccessProcess.instances = []
+        with (
+            patch("dropbox_browser.rclone.subprocess.Popen", side_effect=RecordingSuccessProcess),
+            patch("dropbox_browser.rclone.logstore.append", return_value=11),
+            patch("dropbox_browser.rclone.logstore.update"),
+            patch("dropbox_browser.rclone.logoutput.log_start", return_value=22),
+            patch("dropbox_browser.rclone.logoutput.log_complete"),
+        ):
+            client = RcloneClient("rclone.exe", None)
+            client.copy_file_overwrite("dropbox:track?.mp3", "F:\\Dropbox\\music\\track？.mp3")
+
+        self.assertEqual(
+            RecordingSuccessProcess.instances[0].cmd,
+            [
+                "rclone.exe",
+                "copyto",
+                "--",
+                "dropbox:track?.mp3",
+                "F:\\Dropbox\\music\\track？.mp3",
+            ],
+        )
+
+    def test_copyto_escaped_local_source_on_windows_uses_decoded_virtual_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source = Path(tmpdir) / "track‛？.mp3"
+            source.write_bytes(b"audio")
+            RecordingSuccessProcess.instances = []
+            with (
+                patch("dropbox_browser.rclone.subprocess.Popen", side_effect=RecordingSuccessProcess),
+                patch("dropbox_browser.rclone.logstore.append", return_value=11),
+                patch("dropbox_browser.rclone.logstore.update"),
+                patch("dropbox_browser.rclone.logoutput.log_start", return_value=22),
+                patch("dropbox_browser.rclone.logoutput.log_complete"),
+            ):
+                client = RcloneClient("rclone.exe", None)
+                client.copy_file_overwrite(source, "dropbox:track？.mp3", size_bytes=5)
+
+        self.assertEqual(
+            RecordingSuccessProcess.instances[0].cmd,
+            [
+                "rclone.exe",
+                "rcat",
+                "--size",
+                "5",
+                "--",
+                "dropbox:track？.mp3",
+            ],
+        )
+
+    def test_rcat_retry_rewinds_input_between_attempts(self) -> None:
+        class ReadThenTimeoutProcess:
+            instances: list["ReadThenTimeoutProcess"] = []
+
+            def __init__(self, cmd: list[str], stdin: object | None = None, stdout: object | None = None, stderr: object | None = None) -> None:
+                self.cmd = cmd
+                self.stdin = stdin
+                self.returncode = 0
+                self.killed = False
+                self.read_data = b""
+                ReadThenTimeoutProcess.instances.append(self)
+
+            def communicate(self, timeout: float | None = None) -> tuple[bytes, bytes]:
+                if hasattr(self.stdin, "read"):
+                    self.read_data = self.stdin.read()
+                if len(ReadThenTimeoutProcess.instances) == 1 and not self.killed:
+                    raise subprocess.TimeoutExpired(self.cmd, timeout)
+                return b"", b""
+
+            def kill(self) -> None:
+                self.killed = True
+                self.returncode = -9
+
+        policy = RcloneRetryPolicy(
+            max_attempts=2,
+            min_timeout=0.01,
+            timeout_per_gib=0.0,
+            max_initial_timeout=1.0,
+            retry_sleep=(0.0,),
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source = Path(tmpdir) / "ヨルシカ「晴る」×「葬送のフリーレン」SPECIAL MUSIC VIDEO／フリーレンOPテーマアニメMV.mp3"
+            source.write_bytes(b"abcdef")
+            ReadThenTimeoutProcess.instances = []
+            with (
+                patch("dropbox_browser.rclone.subprocess.Popen", side_effect=ReadThenTimeoutProcess),
+                patch("dropbox_browser.rclone.logstore.append", return_value=11),
+                patch("dropbox_browser.rclone.logstore.update"),
+                patch("dropbox_browser.rclone.logoutput.log_start", return_value=22),
+                patch("dropbox_browser.rclone.logoutput.log_complete"),
+                patch("dropbox_browser.rclone.logoutput.log_plain"),
+            ):
+                client = RcloneClient("rclone.exe", None)
+                client.write_retry_policy = policy
+                client.copy_file_overwrite(source, "dropbox:upload.mp3", size_bytes=6)
+
+        self.assertEqual(len(ReadThenTimeoutProcess.instances), 2)
+
     def test_copyto_retries_after_timeout_without_waiting_full_timeout(self) -> None:
         TimeoutThenSuccessProcess.instances = []
         policy = RcloneRetryPolicy(
@@ -81,7 +222,7 @@ class RcloneLoggingTests(unittest.TestCase):
         ):
             client = RcloneClient("rclone.exe", None)
             client.write_retry_policy = policy
-            client.copy_file_overwrite("local.txt", "dropbox:local.txt", size_bytes=1024 ** 3)
+            client.copy_file_overwrite("dropbox:local.txt", "local.txt", size_bytes=1024 ** 3)
 
         self.assertEqual(len(TimeoutThenSuccessProcess.instances), 2)
         self.assertTrue(TimeoutThenSuccessProcess.instances[0].killed)

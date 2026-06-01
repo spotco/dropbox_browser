@@ -9,10 +9,12 @@ from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+from unittest.mock import patch
 
 from dropbox_browser.errors import BrowserError
 from dropbox_browser.foldercache import DIFF_CACHE_SCHEMA_VERSION
 from dropbox_browser.listingcache import ListingCacheManager
+from dropbox_browser.rclone import RcloneClient
 from dropbox_browser.services import DropboxBrowser
 
 try:
@@ -21,6 +23,76 @@ try:
 except ImportError:
     from app_test_support import AppTestCase, PreloadedFolderCache, RecordingFolderCache
     from support import SimulatedLsjsonResponse, SimulatedRclone, TestServer, remote_dir_item, remote_file_item, wait_until
+
+
+BETTY_YOUTUBE_5_26_2026_FILENAMES = [
+    "[Alexandros] - Ash.mp3",
+    "[OST ] Song of the Welkin Moon Teaser - Moonlit Ballad of the Night (Without Voice) _ Genshin Impact.mp3",
+    "『ユイカ』「さんかくゲーム」 TVアニメ「ただいま、おじゃまされます！」ノンテロップED.mp3",
+    "【ウマ娘】UNLIMITED IMPACT (パート分け_Color Coded_Lyrics).mp3",
+    "【シナモロール】ふわふわしようよ　MV.mp3",
+    "【原神】キャラクタートレーラー　スカーク（CV_能登麻美子）「荒廃の地の嘆き」.mp3",
+    "Airi Suzuki & HOYO-MiX - 【鈴木愛理】原神スカーク イメージソング「Star Odyssey」MV.mp3",
+    "Alichey(CV_Azusa Tachibana) - You'll Be In My Heart 〜そばに〜 - You'll Be In My Heart ~Sobani~.mp3",
+    "ASH _ Alexandros _ Sword of the demon hunter opening 2 lyrics.mp3",
+    "ATARAYO - 「僕は...」.mp3",
+    "BACK-ON _ STRIKE BACK.mp3",
+    "Blind to you _ Aimer [English subtitle].mp3",
+    "CRANK UP - Ikusaburo Yamazaki [KAN_ROM_ENG] _ Twilight Out Of Focus _ Opening.mp3",
+    "Crystal Sweatdrops (Extended) · Graphia Academy Gymnasium - Honkai_ Star Rail 4.0 OST.mp3",
+    "Everlasting Snow - Miko.mp3",
+    "Fairy Tail Ending 11 - Glitter (Instrumental).mp3",
+    "Fairy tail zero ED full lyrics [Solidemo-Landscape].mp3",
+    "Had I Not Seen the Sun (Vocals_ Chevy) - Honkai Star Rail Concert 2025.mp3",
+    "Hilcrhyme - 千夜一夜 - One Thousand and One Nights (feat. Izumi Nakasone).mp3",
+    "HOYO-MiX - Star Odyssey (Instrumental).mp3",
+    "If I Can Stop One Heart From Breaking - Honkai_ Star Rail 2.0 OST.mp3",
+    "Isekai Mokushiroku Mynoghra Ending Full『More Than W』by Takuma Terashima.mp3",
+    "KALA - 『KINGSBLOOD』.mp3",
+    "Kanon Ost- Last Regrets (Full Chorus Ver.).mp3",
+    "Kitasan Black - Lost Shine (Uma Musume_ Pretty Derby Season 3 Episode 1 Ending Full).mp3",
+    "Kitasan Black (CV_ Hinaki Yano), Satono Diamond (CV_ Hina Tachibana), Satono Crown (CV_ Sayumi Suzushiro), Cheval Grand (CV_ Yuko Natsuyoshi), Sounds of Earth (CV_ MAKIKO), and Duramente (CV_ Akina) - ソシテミンナノ - Be Their Beloved.mp3",
+    "Koori no Jouheki (The Ramparts of Ice)「Opening」-『Toumei (Transparent)』by Novelbright.mp3",
+    "L.E.I. - Enter.mp3",
+    "Main Theme 【Extended Full Mix】   Our Last Crusade or the Rise of a New World OST.mp3",
+    "milet「Anytime Anywhere」×「葬送のフリーレン」SPECIAL MUSIC VIDEO／フリーレンEDテーマアニメMV.mp3",
+    "Niko Mikadono (CV.Aoi Koga) - One Road.mp3",
+    "Oguri Cap(CV.Takayanagi Tomoyo) - ∞.mp3",
+    "Our Last Crusade or the Rise of a New World - Insert Song Full『Soukyou Etranze』by Sora Amamiya.mp3",
+    "Our Last Crusade Or The Rise Of A New World Epic_Character OST - Alicelies (Alice Lou Nebulis IX).mp3",
+    "Proi Proi · Aquila Boss Theme (Album Version) - Honkai_ Star Rail 3.3 OST.mp3",
+    "Proi Proi (Instrumental) - Honkai_ Star Rail 3.3 OST.mp3",
+    "Rimu Miyake - Light of Life (from The Apothecary Diaries Season 2).mp3",
+    "Robin (Chevy) - Hope Is the Thing With Feathers _ Honkai_ Star Rail.mp3",
+    "Ryo Takahashi - Stronger (feat. Zachary Fitzgerald & Foggy-D).mp3",
+    "Satou - パーフェクトデイ - Perfect Day.mp3",
+    "Skirk Story Quest OST 5.7 - Star Odyssey Instrumental Version 【Genshin Impact EP】.mp3",
+    "Skirk_ Lament of a Ruined World (feat. SOLARIA) - Remix Cover (Genshin Impact).mp3",
+    "Snail's House - Imaginary Express.mp3",
+    "Soala - 声の軌跡 - koe no kiseki.mp3",
+    "Sumes Music - Skirk Theme Music - Lament of a Ruined World (Instrumental Cover) _ Genshin Impact.mp3",
+    "The Apothecary Diaries Season 2 Insert Song FULL - Rimu Miyake『Light Of Life』EPIC VERSION.mp3",
+    "The Ramparts of Ice (氷の城壁) Opening – Toumei_透明_Transparent [Instrumental] _ Novelbright (ノーベルブライト).mp3",
+    "The Unaware Atelier Meister ED full.mp3",
+    "tnbee - Apep Battle Theme ALL PHASES - God-Devouring Mania (tnbee mix) _ Genshin Impact.mp3",
+    "tnbee - Cyrene Theme Music EXTENDED - With You Once More (tnbee mix) _ Honkai_ Star Rail.mp3",
+    "Torches _ Aimer [English subtitle] (Anime Vinland Saga Ending_ED).mp3",
+    "TVアニメ『帝乃三姉妹は案外、チョロい。』エンディング映像｜「One Road」帝乃二琥（CV.古賀葵）.mp3",
+    "TVアニメ『貴族転生 ～恵まれた生まれから最強の力を得る～』ノンクレジットED映像│「You'll Be In My Heart 〜そばに〜」アリーチェ(CV_橘 杏咲).mp3",
+    "Umapyoi Densetsu [Mirrored].mp3",
+    "Uncontrollable - Xenoblade Chronicles X OST.mp3",
+    "Undead Unluck - Ending FULL know me... by Kairi Yagi (Lyrics).mp3",
+    "Yorushika - Algernon (アルジャーノン) (Lyrics_Kan_Rom_Eng).mp3",
+    "Yoshihisa Kato - Q.E.D..mp3",
+    "Yoshihisa Kato - お父さんの、本…！ - Oto san no Hon...!.mp3",
+    "Yoshihisa Kato - 一歩、踏み出す - Ippo fumi dasu.mp3",
+    "Yoshihisa Kato - 沈黙の魔女 - Chinmoku no Majo.mp3",
+    "Yuika - Triangle Game.mp3",
+    "Yuika - さんかくゲーム - Triangle Game.mp3",
+    "Zero Ichi 01 [HD] - Undead Unluck アンデッドアンラック Lyrics _ Queen Bee 女王蜂.mp3",
+    "ゲーム【ウマ娘 プリティーダービー】ライブ動画「UNLIMITED IMPACT」ゲームサイズVer..mp3",
+    "ヨルシカ「晴る」×「葬送のフリーレン」SPECIAL MUSIC VIDEO／フリーレンOPテーマアニメMV.mp3",
+]
 
 
 
@@ -129,6 +201,270 @@ class SyncRouteTests(AppTestCase):
         self.assertEqual(result["status"], "complete")
         self.assertEqual(rclone.cat_data["dropbox:local.txt"], b"local")
         self.assertTrue(any(call["args"][0] == "copyto" and call["target"] == "dropbox:local.txt" for call in rclone.calls))
+
+    def test_sync_unicode_local_file_routes_upload_with_rcat(self) -> None:
+        local_name = "0287 - U.N.オーエンは彼女なのか？(TO-HOlic mix).mp3"
+        local_root = self.create_local_root({
+            local_name: b"local",
+        })
+        commands: list[list[str]] = []
+
+        class RecordingProcess:
+            def __init__(self, cmd: list[str], stdin: object | None = None, stdout: object | None = None, stderr: object | None = None) -> None:
+                self.cmd = cmd
+                self.returncode = 0
+                commands.append(cmd)
+
+            def communicate(self, timeout: float | None = None) -> tuple[bytes, bytes]:
+                return b"", b""
+
+        rclone = RcloneClient("rclone.exe", None, log_commands=False)
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with (
+            patch("dropbox_browser.rclone.subprocess.Popen", side_effect=RecordingProcess),
+            TestServer(app) as server,
+        ):
+            payload = server.post_json("/sync", {
+                "path": local_name,
+                "kind": "file",
+                "direction": "local_to_dropbox",
+                "enable_write_dropbox": "1",
+            })
+            result = wait_until(
+                lambda: server.get_json("/sync-status?id=" + payload["id"])
+                if server.get_json("/sync-status?id=" + payload["id"]).get("status") != "running"
+                else None,
+                description="unicode local-to-dropbox sync completion",
+            )
+
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(
+            commands[0],
+            [
+                "rclone.exe",
+                "rcat",
+                "--size",
+                "5",
+                "--",
+                "dropbox:" + local_name,
+            ],
+        )
+
+    def test_sync_unicode_local_file_routes_upload_with_fullwidth_slash_uses_rcat(self) -> None:
+        local_name = "TVアニメ『帝乃三姉妹は案外、チョロい。』エンディング映像｜「One Road」帝乃二琥（CV.古賀葵）.mp3"
+        rel_path = "dropbox_browser/betty_youtube_5_26_2026/" + local_name
+        local_root = self.create_local_root({
+            rel_path: b"local",
+        })
+        commands: list[list[str]] = []
+
+        class RecordingProcess:
+            def __init__(self, cmd: list[str], stdin: object | None = None, stdout: object | None = None, stderr: object | None = None) -> None:
+                self.cmd = cmd
+                self.returncode = 0
+                commands.append(cmd)
+
+            def communicate(self, timeout: float | None = None) -> tuple[bytes, bytes]:
+                return b"", b""
+
+        rclone = RcloneClient("rclone.exe", None, log_commands=False)
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with (
+            patch("dropbox_browser.rclone.subprocess.Popen", side_effect=RecordingProcess),
+            TestServer(app) as server,
+        ):
+            payload = server.post_json("/sync", {
+                "path": rel_path,
+                "kind": "file",
+                "direction": "local_to_dropbox",
+                "enable_write_dropbox": "1",
+            })
+            result = wait_until(
+                lambda: server.get_json("/sync-status?id=" + payload["id"])
+                if server.get_json("/sync-status?id=" + payload["id"]).get("status") != "running"
+                else None,
+                description="fullwidth pipe local-to-dropbox sync completion",
+            )
+
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(
+            commands[0],
+            [
+                "rclone.exe",
+                "rcat",
+                "--size",
+                "5",
+                "--",
+                "dropbox:" + rel_path,
+            ],
+        )
+
+    def test_sync_rclone_escaped_local_only_file_targets_decoded_dropbox_name(self) -> None:
+        local_name = "0287 - U.N.オーエンは彼女なのか‛？(TO-HOlic mix) - Copy.mp3"
+        dropbox_name = "0287 - U.N.オーエンは彼女なのか？(TO-HOlic mix) - Copy.mp3"
+        local_root = self.create_local_root({
+            "dropbox_browser/" + local_name: b"local",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:dropbox_browser": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            payload = server.post_json("/sync", {
+                "path": "dropbox_browser/" + local_name,
+                "kind": "file",
+                "direction": "local_to_dropbox",
+                "enable_write_dropbox": "1",
+            })
+            result = wait_until(
+                lambda: server.get_json("/sync-status?id=" + payload["id"])
+                if server.get_json("/sync-status?id=" + payload["id"]).get("status") != "running"
+                else None,
+                description="escaped local-to-dropbox sync completion",
+            )
+
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(rclone.cat_data["dropbox:dropbox_browser/" + dropbox_name], b"local")
+        self.assertNotIn("dropbox:dropbox_browser/" + local_name, rclone.cat_data)
+
+    def test_sync_rclone_escaped_local_only_file_uploads_with_decoded_dropbox_target(self) -> None:
+        local_name = "0287 - U.N.オーエンは彼女なのか‛？(TO-HOlic mix) - Copy.mp3"
+        dropbox_name = "0287 - U.N.オーエンは彼女なのか？(TO-HOlic mix) - Copy.mp3"
+        local_root = self.create_local_root({
+            "dropbox_browser/" + local_name: b"local",
+        })
+        commands: list[list[str]] = []
+
+        class RecordingProcess:
+            def __init__(self, cmd: list[str], stdin: object | None = None, stdout: object | None = None, stderr: object | None = None) -> None:
+                self.cmd = cmd
+                self.returncode = 0
+                commands.append(cmd)
+
+            def communicate(self, timeout: float | None = None) -> tuple[bytes, bytes]:
+                return b"", b""
+
+        rclone = RcloneClient("rclone.exe", None, log_commands=False)
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with (
+            patch("dropbox_browser.rclone.subprocess.Popen", side_effect=RecordingProcess),
+            TestServer(app) as server,
+        ):
+            payload = server.post_json("/sync", {
+                "path": "dropbox_browser/" + dropbox_name,
+                "kind": "file",
+                "direction": "local_to_dropbox",
+                "enable_write_dropbox": "1",
+            })
+            result = wait_until(
+                lambda: server.get_json("/sync-status?id=" + payload["id"])
+                if server.get_json("/sync-status?id=" + payload["id"]).get("status") != "running"
+                else None,
+                description="escaped local-to-dropbox rclone command completion",
+            )
+
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(
+            commands[0],
+            [
+                "rclone.exe",
+                "rcat",
+                "--size",
+                "5",
+                "--",
+                "dropbox:dropbox_browser/" + dropbox_name,
+            ],
+        )
+
+    def test_sync_uploads_every_betty_youtube_file_with_rcat(self) -> None:
+        folder = "dropbox_browser/betty_youtube_5_26_2026"
+        local_root = self.create_local_root({
+            f"{folder}/{name}": b"x"
+            for name in BETTY_YOUTUBE_5_26_2026_FILENAMES
+        })
+        commands: list[list[str]] = []
+
+        class RecordingProcess:
+            def __init__(self, cmd: list[str], stdin: object | None = None, stdout: object | None = None, stderr: object | None = None) -> None:
+                self.cmd = cmd
+                self.returncode = 0
+                commands.append(cmd)
+
+            def communicate(self, timeout: float | None = None) -> tuple[bytes, bytes]:
+                return b"", b""
+
+        rclone = RcloneClient("rclone.exe", None, log_commands=False)
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with (
+            patch("dropbox_browser.rclone.subprocess.Popen", side_effect=RecordingProcess),
+            TestServer(app) as server,
+        ):
+            for name in BETTY_YOUTUBE_5_26_2026_FILENAMES:
+                payload = server.post_json("/sync", {
+                    "path": folder + "/" + name,
+                    "kind": "file",
+                    "direction": "local_to_dropbox",
+                    "enable_write_dropbox": "1",
+                })
+                result = wait_until(
+                    lambda: server.get_json("/sync-status?id=" + payload["id"])
+                    if server.get_json("/sync-status?id=" + payload["id"]).get("status") != "running"
+                    else None,
+                    description=f"betty youtube upload completion for {name}",
+                )
+                self.assertEqual(result["status"], "complete")
+
+        self.assertEqual(len(commands), len(BETTY_YOUTUBE_5_26_2026_FILENAMES))
+        self.assertEqual(
+            {tuple(cmd) for cmd in commands},
+            {
+                (
+                    "rclone.exe",
+                    "rcat",
+                    "--size",
+                    "1",
+                    "--",
+                    "dropbox:" + folder + "/" + name,
+                )
+                for name in BETTY_YOUTUBE_5_26_2026_FILENAMES
+            },
+        )
+
+    def test_batch_plan_decodes_rclone_escaped_local_only_dropbox_targets(self) -> None:
+        local_root = self.create_local_root({
+            "dropbox_browser/今日は晴れ‛？.txt": b"question",
+            "dropbox_browser/價格‛＜税込‛＞.txt": b"brackets",
+            "dropbox_browser/星‛＊月‛｜雪.txt": b"symbols",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:dropbox_browser": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        plan = app.plan_batch_sync("dropbox_browser", "local_to_dropbox_all", recursive=False)
+        targets = {item["remote_path"] for item in plan["groups"]["local_to_dropbox"]}
+
+        self.assertEqual(
+            targets,
+            {
+                "dropbox:dropbox_browser/今日は晴れ？.txt",
+                "dropbox:dropbox_browser/星＊月｜雪.txt",
+                "dropbox:dropbox_browser/價格＜税込＞.txt",
+            },
+        )
+        self.assertEqual(
+            {Path(item["local_path"]).name for item in plan["groups"]["local_to_dropbox"]},
+            {
+                "今日は晴れ‛？.txt",
+                "星‛＊月‛｜雪.txt",
+                "價格‛＜税込‛＞.txt",
+            },
+        )
 
     def test_sync_dropbox_only_file_copies_dropbox_to_local(self) -> None:
         local_root = self.create_local_root({})

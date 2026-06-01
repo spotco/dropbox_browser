@@ -5,6 +5,7 @@ from pathlib import Path
 import unicodedata
 
 WINDOWS_INVALID_FILENAME_CHARS = frozenset('<>:"\\|?*')
+RCLONE_LITERAL_ESCAPE = "\u201b"
 PRIVATE_USE_START = 0xE000
 PRIVATE_USE_END = 0xF8FF
 
@@ -12,6 +13,37 @@ PRIVATE_USE_END = 0xF8FF
 def filename_compare_key(name: str) -> str:
     """Return the exact Unicode-normalized comparison key for a name."""
     return unicodedata.normalize("NFKC", name).casefold()
+
+
+def decode_rclone_literal_escapes(name: str) -> str:
+    """Decode rclone's Windows literal marker in one filename segment.
+
+    Rclone prefixes a literal fullwidth/compatibility character with ``‛`` when
+    that character's normalized form is a Windows-invalid filename character.
+    The marker distinguishes a literal Dropbox ``？`` from rclone's encoding of
+    Dropbox ASCII ``?`` as local ``？``. Dropbox-facing names should not include
+    the marker.
+    """
+    if RCLONE_LITERAL_ESCAPE not in name:
+        return name
+    decoded: list[str] = []
+    index = 0
+    while index < len(name):
+        char = name[index]
+        if char == RCLONE_LITERAL_ESCAPE and index + 1 < len(name):
+            next_char = name[index + 1]
+            if filename_compare_key(next_char) in WINDOWS_INVALID_FILENAME_CHARS:
+                decoded.append(next_char)
+                index += 2
+                continue
+        decoded.append(char)
+        index += 1
+    return "".join(decoded)
+
+
+def decode_rclone_literal_escapes_path(rel_path: str) -> str:
+    """Decode rclone literal markers in a Dropbox-relative path."""
+    return "/".join(decode_rclone_literal_escapes(part) for part in rel_path.split("/"))
 
 
 def _is_private_use(char: str) -> bool:
@@ -42,11 +74,49 @@ def _windows_safe_match_score(dropbox_name: str, local_name: str) -> tuple[int, 
     return (underscore_colon_replacements, private_use_replacements, total_replacements)
 
 
+def _rclone_literal_escape_match_score(dropbox_name: str, local_name: str) -> tuple[int, int, int] | None:
+    """Match rclone's Windows escape marker for literal compatibility chars.
+
+    With rclone's default Windows local encoding, remote ASCII ``?`` becomes
+    local fullwidth ``？`` while remote literal fullwidth ``？`` becomes local
+    ``‛？``. The marker is only accepted when it prefixes the exact Dropbox
+    character, which avoids merging a Dropbox ASCII ``?`` with an escaped
+    fullwidth local name.
+    """
+    remote_index = 0
+    local_index = 0
+    escaped_literals = 0
+    while remote_index < len(dropbox_name) and local_index < len(local_name):
+        local_char = local_name[local_index]
+        if local_char == RCLONE_LITERAL_ESCAPE and local_index + 1 < len(local_name):
+            escaped_char = local_name[local_index + 1]
+            remote_char = dropbox_name[remote_index]
+            if (
+                remote_char == escaped_char
+                and filename_compare_key(escaped_char) in WINDOWS_INVALID_FILENAME_CHARS
+            ):
+                escaped_literals += 1
+                remote_index += 1
+                local_index += 2
+                continue
+            return None
+        if filename_compare_key(dropbox_name[remote_index]) != filename_compare_key(local_char):
+            return None
+        remote_index += 1
+        local_index += 1
+    if remote_index != len(dropbox_name) or local_index != len(local_name) or escaped_literals == 0:
+        return None
+    return (0, 0, escaped_literals)
+
+
 def dropbox_local_name_equal(dropbox_name: str, local_name: str) -> bool:
     """Return True when a Dropbox name matches a Windows-safe local variant."""
     if filename_compare_key(dropbox_name) == filename_compare_key(local_name):
         return True
-    return _windows_safe_match_score(dropbox_name, local_name) is not None
+    return (
+        _windows_safe_match_score(dropbox_name, local_name) is not None
+        or _rclone_literal_escape_match_score(dropbox_name, local_name) is not None
+    )
 
 
 def match_dropbox_names_to_local_names(dropbox_names: Iterable[str], local_names: Iterable[str]) -> dict[str, str]:
@@ -90,7 +160,10 @@ def match_dropbox_names_to_local_names(dropbox_names: Iterable[str], local_names
         for local_name in local_list:
             if local_name not in unmatched_local:
                 continue
-            score = _windows_safe_match_score(remote_name, local_name)
+            score = (
+                _windows_safe_match_score(remote_name, local_name)
+                or _rclone_literal_escape_match_score(remote_name, local_name)
+            )
             if score is not None:
                 candidates.append((score, remote_name, local_name))
     candidates.sort(key=lambda item: (item[0], filename_compare_key(item[1]), filename_compare_key(item[2])))

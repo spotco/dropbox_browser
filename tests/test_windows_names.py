@@ -8,7 +8,11 @@ from urllib.parse import quote
 from dropbox_browser.foldercache import FolderCacheManager
 from dropbox_browser.listingcache import ListingCacheManager
 from dropbox_browser.services import DropboxBrowser
-from dropbox_browser.windows_names import dropbox_local_name_equal, match_dropbox_names_to_local_names
+from dropbox_browser.windows_names import (
+    decode_rclone_literal_escapes,
+    dropbox_local_name_equal,
+    match_dropbox_names_to_local_names,
+)
 
 try:
     from tests.support import (
@@ -73,6 +77,32 @@ class WindowsSafeNameMatcherTests(unittest.TestCase):
         local_name = "Sword of Convallaria\uf022 Night Crimson OST"
         self.assertTrue(dropbox_local_name_equal(remote_name, local_name))
 
+    def test_dropbox_local_name_equal_handles_rclone_escaped_literal_fullwidth_question(self) -> None:
+        remote_name = "0287 - U.N.オーエンは彼女なのか？(TO-HOlic mix).mp3"
+        local_name = "0287 - U.N.オーエンは彼女なのか‛？(TO-HOlic mix).mp3"
+        self.assertTrue(dropbox_local_name_equal(remote_name, local_name))
+
+    def test_dropbox_ascii_question_does_not_match_rclone_escaped_fullwidth_question(self) -> None:
+        remote_name = "track?.mp3"
+        local_name = "track‛？.mp3"
+        self.assertFalse(dropbox_local_name_equal(remote_name, local_name))
+
+    def test_decode_rclone_literal_escapes_handles_common_cjk_fullwidth_punctuation(self) -> None:
+        cases = [
+            ("今日は晴れ‛？.txt", "今日は晴れ？.txt"),
+            ("價格‛＜税込‛＞.txt", "價格＜税込＞.txt"),
+            ("星‛＊月‛｜雪.txt", "星＊月｜雪.txt"),
+            ("引用‛＂龍‛＼虎‛＂.txt", "引用＂龍＼虎＂.txt"),
+            ("時間‛：予定.txt", "時間：予定.txt"),
+        ]
+        for local_name, dropbox_name in cases:
+            with self.subTest(local_name=local_name):
+                self.assertEqual(decode_rclone_literal_escapes(local_name), dropbox_name)
+                self.assertTrue(dropbox_local_name_equal(dropbox_name, local_name))
+
+    def test_decode_rclone_literal_escapes_keeps_marker_before_normal_unicode_text(self) -> None:
+        self.assertEqual(decode_rclone_literal_escapes("今日は‛晴れ.txt"), "今日は‛晴れ.txt")
+
 
 class WindowsSafeNameIntegrationTests(IsolatedPathsTestCase):
     def _build_app(self, rclone: SimulatedRclone, local_root: Path | None = None, workers: int = 2) -> DropboxBrowser:
@@ -126,3 +156,24 @@ class WindowsSafeNameIntegrationTests(IsolatedPathsTestCase):
         self.assertNotIn(f'<span class="entry-name">{html_module.escape(local_name)}</span>', table_body)
         self.assertEqual(app.local_display_path(remote_path), local_root / "music" / local_name)
         self.assertEqual(results[remote_path]["diff_status"], "synced")
+
+    def test_rclone_escaped_literal_fullwidth_question_keeps_single_row_and_actual_local_path(self) -> None:
+        remote_name = "0287 - U.N.オーエンは彼女なのか？(TO-HOlic mix) - Copy.mp3"
+        local_name = "0287 - U.N.オーエンは彼女なのか‛？(TO-HOlic mix) - Copy.mp3"
+        remote_path = f"dropbox_browser/{remote_name}"
+        local_root = self.create_local_root({
+            f"dropbox_browser/{local_name}": b"audio",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:dropbox_browser": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            page_html = server.get_text("/?path=dropbox_browser")
+
+        table_body = page_html.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+        self.assertEqual(table_body.count(f'<span class="entry-name">{html_module.escape(remote_name)}</span>'), 1)
+        self.assertNotIn(f'<span class="entry-name">{html_module.escape(local_name)}</span>', table_body)
+        self.assertEqual(app.local_display_path(remote_path), local_root / "dropbox_browser" / local_name)
+        self.assertIn("Local Only", table_body)

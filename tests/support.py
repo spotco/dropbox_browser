@@ -143,8 +143,6 @@ class SimulatedRclone:
         input_file: Any | None = None,
         cancel_token: Any | None = None,
     ) -> CompletedProcess[bytes]:
-        if input_file is not None:
-            raise AssertionError("SimulatedRclone does not support stdin input")
         if not args:
             raise AssertionError(f"Unsupported simulated rclone command: {args!r}")
         if args[0] == "lsjson":
@@ -164,6 +162,14 @@ class SimulatedRclone:
             elif source in self.cat_data:
                 destination_path.parent.mkdir(parents=True, exist_ok=True)
                 destination_path.write_bytes(self.cat_data[source])
+            return CompletedProcess(list(args), 0, b"", b"")
+        if args[0] == "rcat":
+            if input_file is None:
+                raise AssertionError("SimulatedRclone rcat requires stdin input")
+            destination = args[-1]
+            self._record_call(destination, args, cancelable=cancel_token is not None)
+            self._record_progress_snapshot()
+            self.cat_data[destination] = input_file.read()
             return CompletedProcess(list(args), 0, b"", b"")
         if args[0] == "mkdir":
             target = args[-1]
