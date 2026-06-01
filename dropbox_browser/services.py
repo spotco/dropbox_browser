@@ -18,7 +18,12 @@ from .ignored import is_ignored_name
 from .listingcache import ListingCacheManager
 from .paths import remote_target, safe_join_local
 from .rclone import RcloneClient
-from .windows_names import match_dropbox_names_to_local_names, resolve_matching_local_path
+from .windows_names import (
+    decode_rclone_literal_escapes,
+    decode_rclone_literal_escapes_path,
+    match_dropbox_names_to_local_names,
+    resolve_matching_local_path,
+)
 
 
 def diff_label(status: str | None) -> str:
@@ -141,9 +146,10 @@ class DropboxBrowser:
         for local_name, child in local_entries.items():
             if local_name in matched_local_names:
                 continue
+            display_name = decode_rclone_literal_escapes(local_name)
             stat = child.stat()
             rows.append({
-                "name": local_name,
+                "name": display_name,
                 "remote_name": None,
                 "local_name": local_name,
                 "local_path": str(child),
@@ -623,14 +629,16 @@ class DropboxBrowser:
             raise BrowserError(HTTPStatus.BAD_REQUEST, "Unsupported sync direction.")
         if direction == "dropbox_to_local":
             local_path = safe_join_local(self.local_root, rel_path)
+            remote_rel_path = rel_path
         else:
             local_path = self.local_display_path(rel_path) or safe_join_local(self.local_root, rel_path)
+            remote_rel_path = decode_rclone_literal_escapes_path(rel_path)
         return (
             direction,
             {
                 "path": rel_path,
                 "local_path": str(local_path),
-                "remote_path": remote_target(self.remote, rel_path),
+                "remote_path": remote_target(self.remote, remote_rel_path),
             },
         )
 

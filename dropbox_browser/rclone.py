@@ -82,6 +82,24 @@ class RcloneRetryPolicy:
 DEFAULT_WRITE_RETRY_POLICY = RcloneRetryPolicy()
 
 
+def _looks_like_rclone_remote(value: str) -> bool:
+    colon_index = value.find(":")
+    if colon_index <= 0:
+        return False
+    prefix = value[:colon_index]
+    if len(prefix) == 1 and prefix.isalpha():
+        return False
+    return "\\" not in prefix and "/" not in prefix
+
+
+def _is_remote_target(value: str | Path) -> bool:
+    return _looks_like_rclone_remote(str(value))
+
+
+def _is_local_upload(source: str | Path, destination: str | Path) -> bool:
+    return not _is_remote_target(source) and _is_remote_target(destination)
+
+
 class RcloneClient:
     def __init__(self, executable: str, config: str | None, log_commands: bool = True):
         self.executable = executable
@@ -207,6 +225,10 @@ class RcloneClient:
                 self._log_retry_event(
                     f"[retry attempt={attempt}/{attempts} timeout={timeout:.2f}s size={size_bytes or 0}B] {command_text}"
                 )
+            if input_file is not None:
+                seek = getattr(input_file, "seek", None)
+                if callable(seek):
+                    seek(0)
             process = subprocess.Popen(
                 cmd,
                 stdin=input_file,
@@ -349,7 +371,26 @@ class RcloneClient:
         return proc.returncode == 0
 
     def copy_file_overwrite(self, source: str | Path, destination: str | Path, size_bytes: int | None = None) -> None:
-        proc = self.run("copyto", "--", str(source), str(destination), retry_policy=self.write_retry_policy, size_bytes=size_bytes)
+        if _is_local_upload(source, destination):
+            source_path = Path(str(source))
+            upload_size = size_bytes if size_bytes is not None else source_path.stat().st_size
+            with source_path.open("rb") as input_file:
+                proc = self.run(
+                    "rcat",
+                    "--size",
+                    str(upload_size),
+                    "--",
+                    str(destination),
+                    input_file=input_file,
+                    retry_policy=self.write_retry_policy,
+                    size_bytes=upload_size,
+                )
+            if proc.returncode != 0:
+                message = proc.stderr.decode("utf-8", "replace").strip() or "File sync failed."
+                raise BrowserError(HTTPStatus.BAD_GATEWAY, message)
+            return
+        args = ["copyto", "--", str(source), str(destination)]
+        proc = self.run(*args, retry_policy=self.write_retry_policy, size_bytes=size_bytes)
         if proc.returncode != 0:
             message = proc.stderr.decode("utf-8", "replace").strip() or "File sync failed."
             raise BrowserError(HTTPStatus.BAD_GATEWAY, message)

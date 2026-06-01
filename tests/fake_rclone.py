@@ -141,6 +141,17 @@ class FakeRemoteState:
             return
         raise SystemExit(f"Unsupported fake copyto direction: {source!r} -> {destination!r}")
 
+    def rcat(self, destination: str, data: bytes) -> None:
+        if not _is_remote_target(destination):
+            raise SystemExit(f"Unsupported fake rcat destination: {destination!r}")
+        rel_path = self._clean_rel_path(destination.split(":", 1)[1])
+        self._ensure_parent_dirs(rel_path)
+        self.entries[rel_path] = {
+            "type": "file",
+            "content": data,
+            "mod_time": DEFAULT_MOD_TIME,
+        }
+
 
 def _append_call(args: list[str]) -> None:
     call_log = os.environ.get("DROPBOX_BROWSER_FAKE_RCLONE_CALL_LOG")
@@ -215,6 +226,12 @@ def main(argv: list[str] | None = None) -> int:
         source = rest[-2]
         destination = rest[-1]
         state.copyto(source, destination)
+        _save_state(state)
+        return 0
+
+    if command == "rcat":
+        destination = rest[-1]
+        state.rcat(destination, sys.stdin.buffer.read())
         _save_state(state)
         return 0
 
