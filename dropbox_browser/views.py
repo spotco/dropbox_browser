@@ -199,7 +199,7 @@ def browse_script_tags(client_render: bool) -> str:
         '<script src="/assets/js/sync.js"></script>',
     ]
     if client_render:
-        tags.append('<script src="/assets/js/browse/main.js"></script>')
+        tags.append('<script type="module" src="/assets/js/browse/main.js"></script>')
     else:
         tags.append('<script src="/assets/js/folder.js"></script>')
     return "\n  ".join(tags)
@@ -251,7 +251,10 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         next_dir = "desc" if sort_key == key and direction == "asc" else "asc"
         href = "/?" + urlencode({"path": rel_path, "sort": key, "dir": next_dir})
         indicator = " ^" if sort_key == key and direction == "asc" else " v" if sort_key == key else ""
-        return f'<a href="{href}">{label}{indicator}</a>'
+        return (
+            f'<a data-browse-sort="{key}" data-browse-sort-label="{html.escape(label, quote=True)}" '
+            f'href="{href}">{label}{indicator}</a>'
+        )
 
     table_html = Template(browse_table_html(rows_html=rows_html, tbody_attrs=tbody_attrs)).substitute(
         sort_name=sort_link("Name", "name"),

@@ -67,7 +67,11 @@ Later targets build on the same client data model:
 - Completed: Step 2 - shared browsing snapshot builder.
 - Completed: Step 3 - JSON row contract and listing endpoint.
 - Completed: Step 4 - client-side HTML shell split.
-- Current: Step 5 - organize browser JavaScript into browse modules.
+- Completed: Step 5 - browse JavaScript module scaffolding.
+- Completed: Step 6 - non-virtualized client rendering parity.
+- Completed: Step 7 - client-side sorting without reload.
+- Completed: Step 8 - URL-compatible client navigation.
+- Current: Step 9 - replace full row rendering with virtualization.
 
 ## Step 1 - Add A Disabled Client Render Mode Switch
 
@@ -216,6 +220,22 @@ Status: completed on 2026-06-02.
 
 ## Step 5 - Organize Browser JavaScript Into Browse Modules
 
+Status: completed on 2026-06-02.
+
+- Added a dedicated browse module namespace under
+  `dropbox_browser/assets/js/browse/`.
+- Introduced initial module boundaries for:
+  - `api.js` - URL/state normalization and listing endpoint builders;
+  - `state.js` - client browse state container helpers;
+  - `sort.js` - folder-first local browse row sorting helpers;
+  - `render.js` - basic loading/row-body rendering helpers;
+  - `navigation.js` - URL search parsing and link interception predicates;
+  - `folder-info.js` - `/folder-info` query construction;
+  - `main.js` - client-mode bootstrap wiring.
+- Kept `folder.js` isolated to server-rendered mode.
+- Added JS unit tests for URL construction, path normalization assumptions,
+  folder-first row sorting, and folder-info query building.
+
 - Create a dedicated browse JS namespace/module set rather than expanding
   `folder.js` into a large controller.
 - Suggested files:
@@ -239,6 +259,22 @@ Status: completed on 2026-06-02.
   filtering predicates, row-window math, and path normalization assumptions.
 
 ## Step 6 - Implement Non-Virtualized Client Rendering Parity
+
+Status: completed on 2026-06-02.
+
+- Client mode now fetches `/browse/endpoints/listing` on page load and renders
+  rows into `#browse-rows` instead of leaving the loading placeholder in place.
+- Rendered client rows preserve canonical folder/file/download URLs, status
+  classes, copy-path buttons, sync cell markup, icon URLs, and row data
+  attributes needed by existing delegated behaviors.
+- Client mode now owns `/folder-info` polling through browse-specific helpers so
+  folder metadata and direct file status updates continue to patch the rendered
+  table after first paint.
+- `refresh.js` and `sync.js` continue to work in client mode through the shared
+  shell and stable DOM contracts.
+- Added JS render tests and a Playwright client-render smoke test that verifies
+  the browser fetches the listing endpoint and displays rendered rows and file
+  links.
 
 - On page load in client mode, fetch `/browse/endpoints/listing` for the current
   URL state and render all rows normally.
@@ -265,6 +301,24 @@ Status: completed on 2026-06-02.
 
 ## Step 7 - Add Client-Side Sorting Without Reload
 
+Status: completed on 2026-06-02.
+
+- Client mode now intercepts table header sort links and updates sort state
+  locally without refetching `/browse/endpoints/listing`.
+- Local sorting reuses the loaded row snapshot and preserves folder-before-file
+  grouping through browse-specific comparator helpers.
+- Sort changes update:
+  - the rendered row order;
+  - the sort link indicators and canonical hrefs;
+  - the current body sort state data attributes;
+  - the refresh link href;
+  - the browser URL through `history.pushState()`.
+- Client folder-info polling now updates row state and re-renders when the
+  active sort key is affected by incoming date/status/size metadata changes.
+- Added JS tests for sort toggle semantics and Playwright coverage proving:
+  - client-mode sort changes update URL without an extra listing fetch;
+  - server-rendered sort links still work through normal navigation.
+
 - Convert table header sort links in client mode into enhanced controls:
   - still carry canonical `href="/?path=...&sort=...&dir=..."`;
   - intercept clicks only in client mode;
@@ -286,6 +340,26 @@ Status: completed on 2026-06-02.
   mode.
 
 ## Step 8 - Implement URL-Compatible Client Navigation
+
+Status: completed on 2026-06-02.
+
+- Browse navigation helpers distinguish canonical browse links from `/file`,
+  `/download`, `/assets`, external Dropbox links, refresh actions, and table
+  header sort controls.
+- The client browse controller uses one `loadBrowseState()` fetch-and-render path
+  for initial load, folder-link clicks, and `popstate` handling.
+- Stale listing requests are aborted through `AbortController` and ignored via a
+  monotonic request version counter.
+- Navigation updates the page shell (title, meta, breadcrumbs, refresh href,
+  topbar copy target, Dropbox link, body dataset state) and resets scroll on
+  folder changes.
+- Folder-info polling is stoppable so background updates from the previous page
+  do not leak into the DOM after navigation.
+- Initial client loads use `history.replaceState()`; folder navigation uses
+  `pushState()`; `popstate` re-fetches without adding history entries.
+- Added JS unit tests for browse-link interception and Playwright coverage for
+  deep links, click navigation, back/forward, sort restoration, and non-intercepted
+  preview links.
 
 - Intercept same-origin folder links in client mode.
 - On folder navigation:

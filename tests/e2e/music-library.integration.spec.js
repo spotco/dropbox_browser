@@ -102,6 +102,10 @@ test("music player library grows from staged background cache work", async ({ pa
   test.setTimeout(15000);
 
   const integrationMeta = await fetchJson(request, "/__integration/checkpoints");
+  const integrationBootStatus = await fetchJson(request, "/__integration/status");
+  const pollDelayMs = Number(integrationBootStatus.music_library_poll_delay_ms || 150);
+  // First Load uses poll_delay_ms=0; allow poll-interval-scale slack for Playwright + parallel e2e workers.
+  const maxInitialLoadMs = Math.max(750, pollDelayMs * 4 + 300);
   const checkpoints = integrationMeta.music_library_checkpoints;
   const gateNames = integrationMeta.integration_gates.map((gate) => gate.name);
   expect(checkpoints).toEqual({
@@ -161,7 +165,13 @@ test("music player library grows from staged background cache work", async ({ pa
   await page.getByRole("button", { name: "Load Current Folder" }).click();
   await waitForLibraryCounts(page, checkpoints.initial_partial);
   const initialElapsedMs = Date.now() - loadStartMs;
-  expect(initialElapsedMs).toBeLessThan(250);
+  expect(initialElapsedMs).toBeLessThan(maxInitialLoadMs);
+
+  const traceAfterInitial = await fetchJson(request, "/__integration/trace");
+  const firstLibraryPoll = traceAfterInitial.events.find((event) => event.event === "music_library_poll");
+  expect(firstLibraryPoll).toBeTruthy();
+  expect(String(firstLibraryPoll.client_poll_delay_ms)).toBe("0");
+  expect(firstLibraryPoll.elapsed_ms).toBeLessThan(150);
 
   const initialStatusText = await page.locator("#music-library-status").innerText();
   expect(initialStatusText).toContain("Remaining:");
