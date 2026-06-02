@@ -26,6 +26,7 @@ import threading
 from .errors import BrowserError
 from .paths import remote_target
 from .priorityqueue import PriorityQueue
+from .rclone import is_retryable_dropbox_throttle_error
 from . import syncstate
 
 if TYPE_CHECKING:
@@ -44,6 +45,7 @@ class SyncJob:
     message: str = field(compare=False)
     command: str = field(compare=False)
     parent_rel: str = field(compare=False)
+    attempt: int = field(default=1, compare=False)
 
 
 @dataclass(order=True, frozen=True)
@@ -67,6 +69,7 @@ class SyncGroup:
     success_message: str
     completed: int = 0
     running: int = 0
+    pending_retries: int = 0
     errors: list[str] = field(default_factory=list)
     touched_parents: set[str] = field(default_factory=set)
     remote_mkdirs: dict[str, RemoteMkdirState] = field(default_factory=dict)
@@ -82,9 +85,10 @@ def _job_message(kind: str, item: dict[str, str]) -> tuple[str, str]:
             f"rclone mkdir -- {remote_path}",
         )
     if kind == "local_to_dropbox":
+        size_text = str(int(item.get("size") or 0))
         return (
             f"Copying local to Dropbox: {rel_path}",
-            f"rclone copyto -- {local_path} {remote_path}",
+            f"rclone rcat --size {size_text} -- {remote_path}",
         )
     if kind == "dropbox_dir_to_local":
         return (
@@ -100,6 +104,8 @@ def _job_message(kind: str, item: dict[str, str]) -> tuple[str, str]:
 
 
 class SyncJobManager:
+    DEFAULT_THROTTLE_RETRY_DELAYS = (2.0, 5.0) + (10.0,) * 18
+
     def __init__(self, app: "DropboxBrowser", workers: int):
         self.app = app
         self._queue: PriorityQueue = PriorityQueue()
@@ -108,6 +114,8 @@ class SyncJobManager:
         self._groups: dict[str, SyncGroup] = {}
         self._shutdown = False
         self._workers: list[threading.Thread] = []
+        self._retry_timers: set[threading.Timer] = set()
+        self.throttle_retry_delays = self.DEFAULT_THROTTLE_RETRY_DELAYS
         worker_count = max(1, workers)
         self.worker_count = worker_count
         for index in range(worker_count):
@@ -126,6 +134,11 @@ class SyncJobManager:
             self._shutdown = True
         for _ in self._workers:
             self._queue.put(SyncShutdownJob())
+        with self._lock:
+            timers = list(self._retry_timers)
+            self._retry_timers.clear()
+        for timer in timers:
+            timer.cancel()
         per_thread_timeout = timeout / max(1, len(self._workers))
         for worker in self._workers:
             worker.join(timeout=per_thread_timeout)
@@ -191,17 +204,18 @@ class SyncJobManager:
             if group is None:
                 return
             group.running += 1
-            current = min(group.completed + group.running, group.total)
             syncstate.update(
                 job.op_id,
                 message=job.message,
                 command=job.command,
                 percent=int(group.completed / group.total * 100) if group.total else 100,
-                current=current,
+                current=self._current_progress(group),
                 total=group.total,
                 errors=list(group.errors),
             )
         error_message: str | None = None
+        retry_job: SyncJob | None = None
+        retry_delay = 0.0
         try:
             rclone = getattr(self.app, "rclone", None)
             context_factory = getattr(rclone, "progress_context", None)
@@ -213,7 +227,13 @@ class SyncJobManager:
             with context:
                 self._execute_job_operation(job)
         except Exception as exc:
-            if group.batch:
+            if group.batch and self._should_retry_throttled_job(job, exc):
+                retry_delay = self._retry_delay_for_attempt(job.attempt)
+                if retry_delay > 0:
+                    retry_job = self._clone_job_for_retry(job)
+                else:
+                    error_message = f"{job.item['path']}: {exc}"
+            elif group.batch:
                 error_message = f"{job.item['path']}: {exc}"
             else:
                 error_message = str(exc)
@@ -223,23 +243,38 @@ class SyncJobManager:
             if group is None:
                 return
             group.running = max(0, group.running - 1)
-            group.completed += 1
-            group.touched_parents.add(job.parent_rel)
-            if job.kind in {"local_dir_to_dropbox", "dropbox_dir_to_local"}:
-                group.touched_parents.add(job.item["path"])
-            if error_message is not None:
-                group.errors.append(error_message)
-            if group.completed >= group.total:
+            if retry_job is not None:
+                group.pending_retries += 1
+            else:
+                group.completed += 1
+                group.touched_parents.add(job.parent_rel)
+                if job.kind in {"local_dir_to_dropbox", "dropbox_dir_to_local"}:
+                    group.touched_parents.add(job.item["path"])
+                if error_message is not None:
+                    group.errors.append(error_message)
+            if self._group_is_complete(group):
                 finalize = (group, sorted(group.touched_parents, key=str.casefold))
                 self._groups.pop(job.op_id, None)
+            elif retry_job is not None:
+                syncstate.update(
+                    job.op_id,
+                    message=f"Retrying throttled Dropbox writes ({group.pending_retries} pending)",
+                    command=f"{retry_job.command} (retry {retry_job.attempt}/{self._max_throttle_attempts()} in {retry_delay:.2f}s)",
+                    percent=int(group.completed / group.total * 100),
+                    current=self._current_progress(group),
+                    total=group.total,
+                    errors=list(group.errors),
+                )
             else:
                 syncstate.update(
                     job.op_id,
                     percent=int(group.completed / group.total * 100),
-                    current=min(group.completed + group.running, group.total),
+                    current=self._current_progress(group),
                     total=group.total,
                     errors=list(group.errors),
                 )
+        if retry_job is not None:
+            self._schedule_retry(retry_job, retry_delay)
         if finalize is not None:
             group, parents = finalize
             self.app.invalidate_sync_parents(parents)
@@ -258,8 +293,67 @@ class SyncJobManager:
             if group is None:
                 op = syncstate.get(op_id) or {}
                 return f"{int(op.get('current') or 0)}/{int(op.get('total') or 0)}]"
-            current = min(group.completed + group.running, group.total)
+            current = self._current_progress(group)
             return f"{current}/{group.total}]"
+
+    def _current_progress(self, group: SyncGroup) -> int:
+        return min(group.total, group.completed + group.running + group.pending_retries)
+
+    def _group_is_complete(self, group: SyncGroup) -> bool:
+        return group.completed >= group.total and group.running == 0 and group.pending_retries == 0
+
+    def _should_retry_throttled_job(self, job: SyncJob, exc: Exception) -> bool:
+        return (
+            job.kind == "local_to_dropbox"
+            and is_retryable_dropbox_throttle_error(exc)
+            and job.attempt < self._max_throttle_attempts()
+        )
+
+    def _retry_delay_for_attempt(self, attempt: int) -> float:
+        delays = self.throttle_retry_delays or ()
+        if not delays:
+            return 0.0
+        index = min(max(0, attempt - 1), len(delays) - 1)
+        return float(delays[index])
+
+    def _max_throttle_attempts(self) -> int:
+        return max(1, len(self.throttle_retry_delays) + 1)
+
+    def _clone_job_for_retry(self, job: SyncJob) -> SyncJob:
+        with self._lock:
+            self._submit_order += 1
+            submit_order = self._submit_order
+        return SyncJob(
+            priority_rank=job.priority_rank,
+            phase_rank=job.phase_rank,
+            depth_rank=job.depth_rank,
+            submit_order=submit_order,
+            op_id=job.op_id,
+            kind=job.kind,
+            item=job.item,
+            message=job.message,
+            command=job.command,
+            parent_rel=job.parent_rel,
+            attempt=job.attempt + 1,
+        )
+
+    def _schedule_retry(self, job: SyncJob, delay: float) -> None:
+        timer = threading.Timer(delay, self._enqueue_retry_job, args=(job,))
+        timer.daemon = True
+        with self._lock:
+            if self._shutdown:
+                return
+            self._retry_timers.add(timer)
+        timer.start()
+
+    def _enqueue_retry_job(self, job: SyncJob) -> None:
+        with self._lock:
+            self._retry_timers = {timer for timer in self._retry_timers if timer.is_alive()}
+            group = self._groups.get(job.op_id)
+            if group is None or self._shutdown:
+                return
+            group.pending_retries = max(0, group.pending_retries - 1)
+        self._queue.put(job)
 
     def _execute_job_operation(self, job: SyncJob) -> None:
         if job.kind != "local_dir_to_dropbox":

@@ -80,6 +80,14 @@ class RcloneRetryPolicy:
 
 
 DEFAULT_WRITE_RETRY_POLICY = RcloneRetryPolicy()
+_RETRYABLE_DROPBOX_THROTTLE_MARKERS = (
+    "too_many_write_operations",
+    "too many write operations",
+    "too_many_requests",
+    "rate limit",
+    "too many requests",
+    "please retry",
+)
 
 
 def _looks_like_rclone_remote(value: str) -> bool:
@@ -98,6 +106,17 @@ def _is_remote_target(value: str | Path) -> bool:
 
 def _is_local_upload(source: str | Path, destination: str | Path) -> bool:
     return not _is_remote_target(source) and _is_remote_target(destination)
+
+
+def is_retryable_dropbox_throttle_message(message: str) -> bool:
+    normalized = (message or "").strip().casefold()
+    if not normalized:
+        return False
+    return any(marker in normalized for marker in _RETRYABLE_DROPBOX_THROTTLE_MARKERS)
+
+
+def is_retryable_dropbox_throttle_error(exc: BaseException) -> bool:
+    return is_retryable_dropbox_throttle_message(str(exc))
 
 
 class RcloneClient:
