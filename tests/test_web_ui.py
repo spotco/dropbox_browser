@@ -64,9 +64,29 @@ class WebUiTests(AppTestCase):
             html = server.get_text("/")
 
         self.assertIn("cached.txt", html)
+        self.assertIn('data-client-render="0"', html)
         self.assertEqual(folder_cache.notified, [("", False)])
         self.assertEqual(folder_cache.requests, ["direct:dropbox:"])
         self.assertEqual(rclone.calls, [])
+
+    def test_client_render_mode_renders_placeholder_shell_instead_of_server_rows(self) -> None:
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[
+                remote_file_item("cached.txt", self.create_local_root({"cached.txt": b"cached"}) / "cached.txt"),
+            ])],
+        })
+        app = self._build_app(rclone, local_root=None, workers=1)
+        app.client_render = True
+
+        with TestServer(app) as server:
+            html = server.get_text("/")
+
+        self.assertIn('data-client-render="1"', html)
+        self.assertIn('<tbody id="browse-rows">', html)
+        self.assertIn("Loading folder listing...", html)
+        self.assertNotIn('<span class="entry-name">cached.txt</span>', html)
+        self.assertIn('<script src="/assets/js/browse/main.js"></script>', html)
+        self.assertNotIn('<script src="/assets/js/folder.js"></script>', html)
 
     def test_page_render_defers_child_folder_metadata_requests(self) -> None:
         class RecordingChildFolderCache:
@@ -173,6 +193,7 @@ class WebUiTests(AppTestCase):
         self.assertIn('<script src="/assets/js/refresh.js"></script>', html)
         self.assertIn('<script src="/assets/js/sync.js"></script>', html)
         self.assertIn('<script src="/assets/js/folder.js"></script>', html)
+        self.assertNotIn('/assets/js/browse/main.js', html)
         self.assertNotIn("<style>", html)
         self.assertNotIn("<script>var CURRENT_FOLDER_PATH", html)
         self.assertNotIn('action="/upload', html)
@@ -807,6 +828,11 @@ class WebUiTests(AppTestCase):
                 js_body = response.read()
                 js_headers = response.headers
                 js_status = response.status
+            browse_js_request = Request(server.base_url + "/assets/js/browse/main.js", method="HEAD")
+            with urlopen(browse_js_request, timeout=5) as response:
+                browse_js_body = response.read()
+                browse_js_headers = response.headers
+                browse_js_status = response.status
 
         self.assertEqual(page_status, HTTPStatus.OK)
         self.assertEqual(page_body, b"")
@@ -832,6 +858,10 @@ class WebUiTests(AppTestCase):
         self.assertEqual(js_body, b"")
         self.assertEqual(js_headers["Content-Type"], "application/javascript; charset=utf-8")
         self.assertGreater(int(js_headers["Content-Length"]), 0)
+        self.assertEqual(browse_js_status, HTTPStatus.OK)
+        self.assertEqual(browse_js_body, b"")
+        self.assertEqual(browse_js_headers["Content-Type"], "application/javascript; charset=utf-8")
+        self.assertGreater(int(browse_js_headers["Content-Length"]), 0)
 
     def test_copy_buttons_cover_current_folder_and_local_file_paths(self) -> None:
         local_root = self.create_local_root({

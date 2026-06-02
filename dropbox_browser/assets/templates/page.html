@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/assets/css/music.css">
   <title>$page_title</title>
 </head>
-<body class="has-log-panel" data-current-folder-path="$current_folder_attr" data-current-sort-key="$current_sort_key_attr" data-current-sort-direction="$current_sort_direction_attr" data-music-library-poll-delay-ms="$music_library_poll_delay_ms_attr">
+<body class="has-log-panel" data-current-folder-path="$current_folder_attr" data-current-sort-key="$current_sort_key_attr" data-current-sort-direction="$current_sort_direction_attr" data-music-library-poll-delay-ms="$music_library_poll_delay_ms_attr" data-client-render="$client_render_attr">
   <header>
     <div>
       <h1>$page_title</h1>
@@ -22,20 +22,7 @@
       $topbar_actions
     </div>
     $msg_html
-    <table>
-      <thead>
-        <tr>
-          <th>$sort_name</th>
-          <th>$sort_type</th>
-          <th>$sort_status</th>
-          <th>$sort_size</th>
-          <th>$sort_date</th>
-          <th>View</th>
-          <th>Sync</th>
-        </tr>
-      </thead>
-      <tbody>$rows</tbody>
-    </table>
+    $browse_table_html
   </main>
   <div id="sync-popup" class="sync-popup hidden">
     <div class="sync-popup-head">
@@ -79,12 +66,6 @@
     </div>
     $music_player_html
   </div>
-  <script src="/assets/js/settings.js"></script>
-  <script src="/assets/js/bottom-pane.js"></script>
-  <script src="/assets/js/log.js"></script>
-  <script type="module" src="/assets/js/music.js"></script>
-  <script src="/assets/js/refresh.js"></script>
-  <script src="/assets/js/sync.js"></script>
-  <script src="/assets/js/folder.js"></script>
+  $browse_script_tags
 </body>
 </html>

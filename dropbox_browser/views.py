@@ -155,8 +155,64 @@ def folder_page_title(remote: str, rel_path: str) -> str:
     return f"SDB: {folder_name} ({remote_target(remote, rel_path)})"
 
 
-def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: str, direction: str, msg: str, folder_cache_map: dict | None = None, current_folder_cache: dict | None = None) -> str:
+def server_browse_rows_html(
+    app: Any,
+    rel_path: str,
+    entries: list[dict[str, Any]],
+    folder_cache_map: dict | None = None,
+    current_folder_cache: dict | None = None,
+) -> str:
     rows = "\n".join(entry_row(app, rel_path, entry, folder_cache_map or {}, current_folder_cache or {}) for entry in entries)
+    return rows or '<tr><td colspan="7" class="empty">This folder is empty.</td></tr>'
+
+
+def client_browse_rows_html() -> str:
+    return '<tr><td colspan="7" class="empty">Loading folder listing...</td></tr>'
+
+
+def browse_table_html(*, rows_html: str, tbody_attrs: str = "") -> str:
+    return (
+        "<table>\n"
+        "      <thead>\n"
+        "        <tr>\n"
+        "          <th>$sort_name</th>\n"
+        "          <th>$sort_type</th>\n"
+        "          <th>$sort_status</th>\n"
+        "          <th>$sort_size</th>\n"
+        "          <th>$sort_date</th>\n"
+        "          <th>View</th>\n"
+        "          <th>Sync</th>\n"
+        "        </tr>\n"
+        "      </thead>\n"
+        f"      <tbody{tbody_attrs}>{rows_html}</tbody>\n"
+        "    </table>"
+    )
+
+
+def browse_script_tags(client_render: bool) -> str:
+    tags = [
+        '<script src="/assets/js/settings.js"></script>',
+        '<script src="/assets/js/bottom-pane.js"></script>',
+        '<script src="/assets/js/log.js"></script>',
+        '<script type="module" src="/assets/js/music.js"></script>',
+        '<script src="/assets/js/refresh.js"></script>',
+        '<script src="/assets/js/sync.js"></script>',
+    ]
+    if client_render:
+        tags.append('<script src="/assets/js/browse/main.js"></script>')
+    else:
+        tags.append('<script src="/assets/js/folder.js"></script>')
+    return "\n  ".join(tags)
+
+
+def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: str, direction: str, msg: str, folder_cache_map: dict | None = None, current_folder_cache: dict | None = None) -> str:
+    client_render = bool(getattr(app, "client_render", False))
+    if client_render:
+        rows_html = client_browse_rows_html()
+        tbody_attrs = ' id="browse-rows"'
+    else:
+        rows_html = server_browse_rows_html(app, rel_path, entries, folder_cache_map, current_folder_cache)
+        tbody_attrs = ""
     crumbs = breadcrumbs(rel_path)
     page_title = folder_page_title(app.remote, rel_path)
     refresh_href = "/?" + urlencode({"path": rel_path, "sort": sort_key, "dir": direction, "refresh": "1"})
@@ -197,6 +253,14 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         indicator = " ^" if sort_key == key and direction == "asc" else " v" if sort_key == key else ""
         return f'<a href="{href}">{label}{indicator}</a>'
 
+    table_html = Template(browse_table_html(rows_html=rows_html, tbody_attrs=tbody_attrs)).substitute(
+        sort_name=sort_link("Name", "name"),
+        sort_type=sort_link("Type", "type"),
+        sort_status=sort_link("Status", "status"),
+        sort_size=sort_link("Size", "size"),
+        sort_date=sort_link("Date", "date"),
+    )
+
     return _render_template(
         "page.html",
         icon_base_url=ICON_BASE_URL,
@@ -209,17 +273,14 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         refresh_href=html.escape(refresh_href, quote=True),
         topbar_actions=topbar_actions,
         msg_html=msg_html,
-        sort_name=sort_link("Name", "name"),
-        sort_type=sort_link("Type", "type"),
-        sort_status=sort_link("Status", "status"),
-        sort_size=sort_link("Size", "size"),
-        sort_date=sort_link("Date", "date"),
-        rows=rows or '<tr><td colspan="7" class="empty">This folder is empty.</td></tr>',
+        browse_table_html=table_html,
         music_player_html=_render_static_template("music_player.html"),
         current_folder_attr=html.escape(rel_path, quote=True),
         current_sort_key_attr=html.escape(sort_key, quote=True),
         current_sort_direction_attr=html.escape(direction, quote=True),
         music_library_poll_delay_ms_attr=html.escape(str(music_library_poll_delay_ms), quote=True),
+        client_render_attr="1" if client_render else "0",
+        browse_script_tags=browse_script_tags(client_render),
     )
 
 

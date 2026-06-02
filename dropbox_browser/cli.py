@@ -26,6 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rclone", default=find_default_rclone())
     parser.add_argument("--rclone-config", default=find_default_config())
     parser.add_argument("--local-root", default=None)
+    parser.add_argument("--client-render", action="store_true", help="Enable the experimental client-rendered browse shell.")
     return parser.parse_args()
 
 
@@ -45,6 +46,7 @@ def main() -> int:
             "port": args.port,
             "remote": args.remote,
             "local_root": str(local_root),
+            "client_render": bool(getattr(args, "client_render", False)),
         },
     )
 
@@ -59,7 +61,14 @@ def main() -> int:
         remote=args.remote,
     )
     rclone.progress_fn = folder_cache.current_progress
-    app = DropboxBrowser(rclone, args.remote, local_root, folder_cache=folder_cache, listing_cache=listing_cache)
+    app = DropboxBrowser(
+        rclone,
+        args.remote,
+        local_root,
+        folder_cache=folder_cache,
+        listing_cache=listing_cache,
+        client_render=bool(getattr(args, "client_render", False)),
+    )
     app.sync_jobs = SyncJobManager(app, workers=int(app_config["SyncJobWorkers"]))
     server = ThreadingHTTPServer((args.host, args.port), RequestHandler)
     server.app = app  # type: ignore[attr-defined]

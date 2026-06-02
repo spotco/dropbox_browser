@@ -7,15 +7,15 @@ import posixpath
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 from . import logoutput, logstore, syncstate, workertrace
 from .errors import BrowserError
-from .formatting import display_date, human_size
+from .formatting import display_date, file_type, human_size, status_class
 from .music import MUSIC_ENDPOINT_PREFIX, handle_music_get
 from .namekeys import filename_compare_key
 from .paths import clean_rel_path, remote_target, safe_join_local
-from .services import DropboxBrowser
+from .services import DropboxBrowser, diff_label
 from .streaming import (
     RangeNotSatisfiable,
     StreamPlan,
@@ -27,7 +27,7 @@ from .streaming import (
     unsatisfiable_range_headers,
 )
 from .syncjobs import SyncJobManager
-from .views import error_html, page_html
+from .views import dropbox_home_url, folder_page_title, icon_for_entry, error_html, page_html
 
 
 ASSET_DIR = Path(__file__).resolve().parent / "assets"
@@ -52,6 +52,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             parsed = urlparse(self.path)
             if parsed.path == "/":
                 self.render_index(parsed.query)
+            elif parsed.path == "/browse/endpoints/listing":
+                self.serve_browse_listing_endpoint(parsed.query)
             elif parsed.path == "/file":
                 self.serve_file(parsed.query, inline=True)
             elif parsed.path == "/download":
@@ -117,109 +119,52 @@ class RequestHandler(BaseHTTPRequestHandler):
         rel_path = clean_rel_path(params.get("path", [""])[0])
         sort_key = params.get("sort", ["name"])[0]
         direction = params.get("dir", ["asc"])[0]
-        if sort_key not in {"name", "type", "date", "size", "status"}:
-            sort_key = "name"
-        if direction not in {"asc", "desc"}:
-            direction = "asc"
         force_refresh = params.get("refresh", [""])[0] == "1"
-
-        cache = self.app.folder_cache
         page_time = time.time()
-        current_remote = remote_target(self.app.remote, rel_path)
-        notify_started = time.perf_counter()
-        if cache:
-            cache.notify_page_load(page_time, page_key=rel_path, force=force_refresh)
-            if force_refresh:
-                cache.invalidate(current_remote)
-        notify_elapsed_ms = round((time.perf_counter() - notify_started) * 1000, 3)
-
-        list_started = time.perf_counter()
-        entries = self.app.list_entries(rel_path, force_refresh=force_refresh, page_time=page_time)
-        list_elapsed_ms = round((time.perf_counter() - list_started) * 1000, 3)
-
-        current_cache_started = time.perf_counter()
-        current_folder_cache: dict | None = None
-        if cache and self.app.local_root:
-            current_folder_cache = cache.get(current_remote)
-            live_file_statuses = self.app.file_statuses_for_entries(entries)
-            if current_folder_cache is None:
-                current_folder_cache = {"file_statuses": live_file_statuses}
-            else:
-                current_folder_cache = dict(current_folder_cache)
-                current_folder_cache["file_statuses"] = live_file_statuses
-            if current_folder_cache is None or not current_folder_cache.get("complete"):
-                cache.request(current_remote, page_time)
-        current_cache_elapsed_ms = round((time.perf_counter() - current_cache_started) * 1000, 3)
-
-        # Build folder cache map from data that is already available. Child
-        # metadata must not block first paint; /folder-info polling queues any
-        # missing child work after the page is visible.
-        folder_map_started = time.perf_counter()
-        folder_cache_map: dict = {}
-        remote_folder_count = 0
-        folder_cache_hits = 0
-        folder_cache_requests = 0
-        folder_cache_missing = 0
-        if cache:
-            for entry in entries:
-                if entry["is_dir"] and entry["remote"]:
-                    remote_folder_count += 1
-                    child = posixpath.join(rel_path, entry["name"]) if rel_path else entry["name"]
-                    full_remote = remote_target(self.app.remote, child)
-                    if force_refresh:
-                        cache.invalidate(full_remote)
-                    cached_data = cache.get(full_remote)
-                    if cached_data is not None:
-                        folder_cache_hits += 1
-                    else:
-                        folder_cache_missing += 1
-                    folder_cache_map[entry["name"]] = cached_data
-                    entry["cached_size"] = cached_data.get("size") if cached_data else None
-                    entry["cached_mtime"] = cached_data.get("newest_mtime") if cached_data else None
-        folder_map_elapsed_ms = round((time.perf_counter() - folder_map_started) * 1000, 3)
-
-        status_started = time.perf_counter()
-        for entry in entries:
-            entry["status_label"] = self.app.status_label_for_entry(entry, folder_cache_map, current_folder_cache)
-        status_elapsed_ms = round((time.perf_counter() - status_started) * 1000, 3)
-
-        sort_started = time.perf_counter()
-        entries = self.app.sort_entries(entries, sort_key, direction)
-        sort_elapsed_ms = round((time.perf_counter() - sort_started) * 1000, 3)
+        snapshot = self.app.build_browse_snapshot(
+            rel_path,
+            sort_key,
+            direction,
+            force_refresh=force_refresh,
+            page_time=page_time,
+            queue_current_folder_metadata=True,
+            load_child_folder_metadata=True,
+        )
 
         html_started = time.perf_counter()
         body = page_html(
             self.app,
-            rel_path,
-            entries,
-            sort_key,
-            direction,
+            snapshot.rel_path,
+            snapshot.entries,
+            snapshot.sort_key,
+            snapshot.direction,
             params.get("msg", [""])[0],
-            folder_cache_map or None,
-            current_folder_cache,
+            snapshot.folder_cache_map or None,
+            snapshot.current_folder_cache,
         )
         html_elapsed_ms = round((time.perf_counter() - html_started) * 1000, 3)
         workertrace.append(
             "navigation_render_complete",
-            rel_path=rel_path,
-            remote_path=current_remote,
-            force_refresh=force_refresh,
+            rel_path=snapshot.rel_path,
+            remote_path=snapshot.remote_path,
+            force_refresh=snapshot.force_refresh,
             head_only=head_only,
-            row_count=len(entries),
-            remote_folder_count=remote_folder_count,
-            folder_cache_hits=folder_cache_hits,
-            folder_cache_missing=folder_cache_missing,
-            folder_cache_requests=folder_cache_requests,
-            child_metadata_cached_hits=folder_cache_hits,
-            child_metadata_missing_count=folder_cache_missing,
-            child_metadata_requests_queued=folder_cache_requests,
-            child_metadata_requests_deferred=folder_cache_missing,
-            notify_elapsed_ms=notify_elapsed_ms,
-            list_elapsed_ms=list_elapsed_ms,
-            current_cache_elapsed_ms=current_cache_elapsed_ms,
-            folder_map_elapsed_ms=folder_map_elapsed_ms,
-            status_elapsed_ms=status_elapsed_ms,
-            sort_elapsed_ms=sort_elapsed_ms,
+            row_count=len(snapshot.entries),
+            remote_folder_count=snapshot.remote_folder_count,
+            folder_cache_hits=snapshot.folder_cache_hits,
+            folder_cache_missing=snapshot.folder_cache_missing,
+            folder_cache_requests=snapshot.folder_cache_requests,
+            child_metadata_cached_hits=snapshot.folder_cache_hits,
+            child_metadata_missing_count=snapshot.folder_cache_missing,
+            child_metadata_requests_queued=snapshot.folder_cache_requests,
+            child_metadata_requests_deferred=snapshot.folder_cache_missing,
+            listing_source=snapshot.listing_source,
+            notify_elapsed_ms=snapshot.timings_ms["notify"],
+            list_elapsed_ms=snapshot.timings_ms["list"],
+            current_cache_elapsed_ms=snapshot.timings_ms["current_cache"],
+            folder_map_elapsed_ms=snapshot.timings_ms["folder_map"],
+            status_elapsed_ms=snapshot.timings_ms["status"],
+            sort_elapsed_ms=snapshot.timings_ms["sort"],
             html_elapsed_ms=html_elapsed_ms,
             total_elapsed_ms=round((time.perf_counter() - render_started) * 1000, 3),
         )
@@ -351,6 +296,188 @@ class RequestHandler(BaseHTTPRequestHandler):
         since = int(params.get("since", ["0"])[0])
         since_upd = int(params.get("since_upd", ["0"])[0])
         body = _json.dumps(logstore.entries_since(since, since_upd)).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _browse_breadcrumb_items(self, rel_path: str) -> list[dict[str, str]]:
+        items = [{"name": "Dropbox", "path": "", "href": "/"}]
+        current = ""
+        for part in rel_path.split("/"):
+            if not part:
+                continue
+            current = posixpath.join(current, part) if current else part
+            items.append({
+                "name": part,
+                "path": current,
+                "href": "/?" + urlencode({"path": current}),
+            })
+        return items
+
+    def _serialize_browse_row(
+        self,
+        rel_path: str,
+        row: dict[str, object],
+        *,
+        current_folder_cache: dict[str, object] | None,
+    ) -> dict[str, object]:
+        name = str(row["name"])
+        child_path = posixpath.join(rel_path, name) if rel_path else name
+        is_dir = bool(row["is_dir"])
+        status = str(row.get("status_label") or ("Both" if row["remote"] and row["local"] else "Dropbox Only" if row["remote"] else "Local Only"))
+        type_label = file_type(name, is_dir)
+        icon_name = icon_for_entry(name, is_dir)
+        current_file_statuses = ((current_folder_cache or {}).get("file_statuses") or {}) if self.app.local_root else {}
+        source = "remote" if row["remote"] else "local"
+        preview_query = urlencode({"path": child_path, "source": source})
+        preview_href = None if is_dir else "/file?" + preview_query
+        download_href = None if is_dir else "/download?" + preview_query
+        folder_href = "/?" + urlencode({"path": child_path}) if is_dir else None
+        local_copy_path = None
+        if self.app.local_root and row.get("local"):
+            local_copy_path = row.get("local_path") or str(self.app.local_display_path(child_path) or safe_join_local(self.app.local_root, child_path))
+
+        if is_dir:
+            size_value = row.get("cached_size")
+            date_value = row.get("cached_mtime")
+            size_display = human_size(int(size_value)) if size_value is not None else "—"
+            date_display = display_date(date_value if isinstance(date_value, (int, float)) else None)
+            sync_directions: list[str] = []
+        else:
+            size_value = row.get("remote_size") if row.get("remote_size") is not None else row.get("local_size")
+            date_value = max(row.get("remote_mtime") or 0, row.get("local_mtime") or 0) or 0
+            size_display = human_size(int(size_value or 0))
+            date_display = display_date(float(date_value) if date_value else None)
+            if self.app.local_root and row.get("remote") and row.get("local"):
+                file_status = current_file_statuses.get(name, {})
+                status = diff_label(file_status.get("diff_status"))
+            sync_directions = []
+            if self.app.local_root:
+                if status == "Local Only":
+                    sync_directions = ["local_to_dropbox"]
+                elif status == "Dropbox Only":
+                    sync_directions = ["dropbox_to_local"]
+                elif status == "Has Diffs":
+                    sync_directions = ["local_to_dropbox", "dropbox_to_local"]
+
+        sort_date_value = (
+            row.get("cached_mtime")
+            if is_dir and row.get("cached_mtime") is not None
+            else max(row.get("remote_mtime") or 0, row.get("local_mtime") or 0)
+        ) or 0
+        sort_size_value = (
+            row.get("cached_size") or 0
+            if is_dir
+            else row.get("remote_size") or row.get("local_size") or 0
+        )
+
+        return {
+            "id": f'{"folder" if is_dir else "file"}:{child_path}',
+            "display_name": name,
+            "path": child_path,
+            "kind": "folder" if is_dir else "file",
+            "is_dir": is_dir,
+            "type_label": type_label,
+            "icon_name": icon_name,
+            "icon_href": "/assets/icons/material-icon-theme/" + quote(icon_name, safe=""),
+            "status_label": status,
+            "status_class": status_class(status),
+            "remote": bool(row["remote"]),
+            "local": bool(row["local"]),
+            "source": None if is_dir else source,
+            "size_display": size_display,
+            "date_display": date_display,
+            "sort_name": filename_compare_key(name),
+            "sort_type": type_label,
+            "sort_status": status,
+            "sort_size": int(sort_size_value),
+            "sort_date": float(sort_date_value),
+            "local_copy_path": local_copy_path,
+            "preview_href": preview_href,
+            "download_href": download_href,
+            "folder_href": folder_href,
+            "sync": {
+                "allowed": bool(self.app.local_root and not is_dir and bool(sync_directions)),
+                "directions": sync_directions,
+            },
+        }
+
+    def serve_browse_listing_endpoint(self, query: str) -> None:
+        params = parse_qs(query, keep_blank_values=True)
+        rel_path = clean_rel_path(params.get("path", [""])[0])
+        sort_key = params.get("sort", ["name"])[0]
+        direction = params.get("dir", ["asc"])[0]
+        force_refresh = params.get("refresh", [""])[0] == "1"
+        snapshot = self.app.build_browse_snapshot(
+            rel_path,
+            sort_key,
+            direction,
+            force_refresh=force_refresh,
+            page_time=time.time(),
+            queue_current_folder_metadata=True,
+            load_child_folder_metadata=True,
+        )
+        current_local_folder = None
+        local_note = "Local comparison disabled"
+        if self.app.local_root:
+            current_local_folder = str(self.app.local_display_path(snapshot.rel_path) or self.app.local_root)
+            local_note = f"Comparing with {self.app.local_root}"
+        refresh_href = "/?" + urlencode({
+            "path": snapshot.rel_path,
+            "sort": snapshot.sort_key,
+            "dir": snapshot.direction,
+            "refresh": "1",
+        })
+        next_sort_direction = {
+            key: ("desc" if snapshot.sort_key == key and snapshot.direction == "asc" else "asc")
+            for key in ("name", "type", "status", "size", "date")
+        }
+        pending_metadata_paths = [
+            posixpath.join(snapshot.rel_path, entry["name"]) if snapshot.rel_path else str(entry["name"])
+            for entry in snapshot.entries
+            if bool(entry["is_dir"]) and bool(entry["remote"]) and snapshot.folder_cache_map.get(str(entry["name"])) is None
+        ]
+        payload = {
+            "page": {
+                "title": folder_page_title(self.app.remote, snapshot.rel_path),
+                "remote": self.app.remote,
+                "path": snapshot.rel_path,
+                "local_note": local_note,
+                "current_local_folder": current_local_folder,
+                "dropbox_home_url": dropbox_home_url(snapshot.rel_path),
+                "refresh_href": refresh_href,
+            },
+            "breadcrumbs": self._browse_breadcrumb_items(snapshot.rel_path),
+            "rows": [
+                self._serialize_browse_row(
+                    snapshot.rel_path,
+                    row,
+                    current_folder_cache=snapshot.current_folder_cache,
+                )
+                for row in snapshot.entries
+            ],
+            "pending_metadata_paths": pending_metadata_paths,
+            "current_folder_info": {
+                "path": snapshot.rel_path,
+                "poll_current_file_statuses": bool(self.app.local_root),
+            },
+            "sort": {
+                "available": ["name", "type", "status", "size", "date"],
+                "current_key": snapshot.sort_key,
+                "current_direction": snapshot.direction,
+                "next_direction": next_sort_direction,
+            },
+            "listing": {
+                "source": snapshot.listing_source,
+                "force_refresh": snapshot.force_refresh,
+                "row_count": len(snapshot.entries),
+                "remote_folder_count": snapshot.remote_folder_count,
+            },
+            "timings_ms": dict(snapshot.timings_ms),
+        }
+        body = _json.dumps(payload).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -496,7 +623,12 @@ class RequestHandler(BaseHTTPRequestHandler):
             raise BrowserError(HTTPStatus.NOT_FOUND, "Not found.")
         if parts == ("app.css",) or (len(parts) == 2 and parts[0] == "css" and parts[1].endswith(".css")):
             content_type = "text/css; charset=utf-8"
-        elif len(parts) == 2 and parts[0] == "js" and parts[1].endswith(".js"):
+        elif (
+            len(parts) >= 2
+            and parts[0] == "js"
+            and parts[-1].endswith(".js")
+            and all(part not in {"", ".", ".."} for part in parts[1:])
+        ):
             content_type = "application/javascript; charset=utf-8"
         elif (
             len(parts) == 3
