@@ -36,7 +36,8 @@ function mirrorOutput(stream, prefix) {
   });
 }
 
-async function startServer() {
+async function startServer(options = {}) {
+  const clientRender = options.clientRender === true;
   const child = spawn(
     "python",
     [path.join(repoRoot, "tests", "e2e", "support", "run_server.py")],
@@ -47,6 +48,7 @@ async function startServer() {
         PYTHONUNBUFFERED: "1",
         PLAYWRIGHT_PORT: port,
         DROPBOX_BROWSER_E2E_FIXTURE: fixturePath,
+        PLAYWRIGHT_CLIENT_RENDER: clientRender ? "1" : "0",
       },
       stdio: ["ignore", "pipe", "pipe"],
     },

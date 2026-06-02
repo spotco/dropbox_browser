@@ -52,6 +52,8 @@ def main() -> int:
         "--local-root",
         str(local_root),
     ]
+    if os.environ.get("PLAYWRIGHT_CLIENT_RENDER") == "1":
+        sys.argv.append("--client-render")
     return cli.main()
 
 

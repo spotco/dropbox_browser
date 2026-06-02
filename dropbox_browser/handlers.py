@@ -322,6 +322,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         row: dict[str, object],
         *,
         current_folder_cache: dict[str, object] | None,
+        folder_cache_map: dict[str, object] | None,
     ) -> dict[str, object]:
         name = str(row["name"])
         child_path = posixpath.join(rel_path, name) if rel_path else name
@@ -340,10 +341,18 @@ class RequestHandler(BaseHTTPRequestHandler):
             local_copy_path = row.get("local_path") or str(self.app.local_display_path(child_path) or safe_join_local(self.app.local_root, child_path))
 
         if is_dir:
+            cached_folder = (folder_cache_map or {}).get(name) if row.get("remote") else None
             size_value = row.get("cached_size")
             date_value = row.get("cached_mtime")
             size_display = human_size(int(size_value)) if size_value is not None else "—"
             date_display = display_date(date_value if isinstance(date_value, (int, float)) else None)
+            count_display = ""
+            metadata_complete = False
+            if isinstance(cached_folder, dict):
+                metadata_complete = bool(cached_folder.get("complete", False))
+                file_count = cached_folder.get("file_count")
+                if file_count is not None:
+                    count_display = f"{int(file_count):,} files"
             sync_directions: list[str] = []
         else:
             size_value = row.get("remote_size") if row.get("remote_size") is not None else row.get("local_size")
@@ -361,6 +370,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                     sync_directions = ["dropbox_to_local"]
                 elif status == "Has Diffs":
                     sync_directions = ["local_to_dropbox", "dropbox_to_local"]
+            count_display = ""
+            metadata_complete = True
 
         sort_date_value = (
             row.get("cached_mtime")
@@ -388,7 +399,9 @@ class RequestHandler(BaseHTTPRequestHandler):
             "local": bool(row["local"]),
             "source": None if is_dir else source,
             "size_display": size_display,
+            "count_display": count_display,
             "date_display": date_display,
+            "metadata_complete": metadata_complete,
             "sort_name": filename_compare_key(name),
             "sort_type": type_label,
             "sort_status": status,
@@ -455,6 +468,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     snapshot.rel_path,
                     row,
                     current_folder_cache=snapshot.current_folder_cache,
+                    folder_cache_map=snapshot.folder_cache_map,
                 )
                 for row in snapshot.entries
             ],
@@ -555,6 +569,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "first_diff_path": data.get("first_diff_path"),
                     "file_statuses": file_statuses,
                     "size_display": human_size(sz) if sz is not None else "—",
+                    "size_sort_value": sz or 0,
                     "count_display": f"{fc:,} files" if fc is not None else "",
                     "date_display": display_date(data.get("newest_mtime")),
                     "date_sort_value": data.get("newest_mtime") or 0,

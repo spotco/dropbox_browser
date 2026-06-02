@@ -135,7 +135,11 @@ class DiffStatusTests(AppTestCase):
         with TestServer(app) as server:
             html = server.get_text("/?sort=status&dir=asc")
 
-        self.assertIn('<a href="/?path=&sort=status&dir=desc">Status ^</a>', html)
+        self.assertIn(
+            '<a data-browse-sort="status" data-browse-sort-label="Status" '
+            'href="/?path=&sort=status&dir=desc">Status ^</a>',
+            html,
+        )
         table_body = html.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
         status_labels = [
             row.split('<span class="status ', 1)[1].split(">", 1)[1].split("</span>", 1)[0]

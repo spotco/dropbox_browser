@@ -85,7 +85,7 @@ class WebUiTests(AppTestCase):
         self.assertIn('<tbody id="browse-rows">', html)
         self.assertIn("Loading folder listing...", html)
         self.assertNotIn('<span class="entry-name">cached.txt</span>', html)
-        self.assertIn('<script src="/assets/js/browse/main.js"></script>', html)
+        self.assertIn('<script type="module" src="/assets/js/browse/main.js"></script>', html)
         self.assertNotIn('<script src="/assets/js/folder.js"></script>', html)
 
     def test_page_render_defers_child_folder_metadata_requests(self) -> None:
