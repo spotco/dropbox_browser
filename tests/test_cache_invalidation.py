@@ -25,6 +25,322 @@ except ImportError:
 
 
 class CacheInvalidationTests(AppTestCase):
+    def test_browse_listing_endpoint_reuses_listing_cache_without_rclone_call(self) -> None:
+        rclone = SimulatedRclone()
+        listing_cache = ListingCacheManager(ttl_seconds=1800)
+        listing_cache.set("dropbox:", [
+            {
+                "Name": "cached.txt",
+                "Path": "cached.txt",
+                "IsDir": False,
+                "Size": 6,
+                "ModTime": "2024-01-01T12:00:00Z",
+            },
+        ])
+        app = DropboxBrowser(rclone, "dropbox:", None, folder_cache=None, listing_cache=listing_cache)
+
+        with TestServer(app) as server:
+            payload = server.get_json("/browse/endpoints/listing")
+
+        self.assertEqual(payload["listing"]["source"], "listing_cache")
+        self.assertEqual([row["display_name"] for row in payload["rows"]], ["cached.txt"])
+        self.assertEqual(rclone.calls, [])
+
+    def test_browse_listing_endpoint_reuses_folder_cache_direct_listing_without_rclone_call(self) -> None:
+        class DirectListingFolderCache:
+            def __init__(self) -> None:
+                self.notified: list[tuple[str | None, bool]] = []
+                self.requests: list[str] = []
+
+            def notify_page_load(self, _page_time: float, *, page_key: str | None = None, force: bool = False) -> None:
+                self.notified.append((page_key, force))
+
+            def invalidate(self, _remote_path: str) -> None:
+                return None
+
+            def get(self, _remote_path: str) -> dict | None:
+                return None
+
+            def request(self, remote_path: str, *_args, **_kwargs) -> None:
+                self.requests.append(remote_path)
+
+            def get_direct_listing(self, remote_path: str) -> list[dict]:
+                self.requests.append(f"direct:{remote_path}")
+                return [
+                    {
+                        "Name": "cached.txt",
+                        "Path": "cached.txt",
+                        "IsDir": False,
+                        "Size": 6,
+                        "ModTime": "2024-01-01T12:00:00Z",
+                    },
+                ]
+
+        rclone = SimulatedRclone()
+        listing_cache = ListingCacheManager(ttl_seconds=1800)
+        folder_cache = DirectListingFolderCache()
+        app = DropboxBrowser(rclone, "dropbox:", None, folder_cache=folder_cache, listing_cache=listing_cache)
+
+        with TestServer(app) as server:
+            payload = server.get_json("/browse/endpoints/listing")
+
+        self.assertEqual(payload["listing"]["source"], "folder_cache_direct")
+        self.assertEqual(payload["rows"][0]["display_name"], "cached.txt")
+        self.assertEqual(folder_cache.notified, [("", False)])
+        self.assertEqual(folder_cache.requests, ["direct:dropbox:"])
+        self.assertEqual(rclone.calls, [])
+
+    def test_browse_listing_endpoint_refresh_invalidates_same_caches_as_server_render(self) -> None:
+        class TrackingFolderCache:
+            def __init__(self) -> None:
+                self.invalidated: list[str] = []
+                self.notified: list[tuple[str | None, bool]] = []
+
+            def notify_page_load(self, _page_time: float, *, page_key: str | None = None, force: bool = False) -> None:
+                self.notified.append((page_key, force))
+
+            def invalidate(self, remote_path: str) -> None:
+                self.invalidated.append(remote_path)
+
+            def get(self, _remote_path: str) -> dict | None:
+                return None
+
+            def request(self, *_args, **_kwargs) -> None:
+                return None
+
+        rclone = SimulatedRclone({
+            "dropbox:music": [SimulatedLsjsonResponse(items=[remote_dir_item("album")])],
+        })
+        listing_cache = ListingCacheManager(ttl_seconds=1800)
+        listing_cache.set("dropbox:music", [{"Name": "stale.txt"}])
+        folder_cache = TrackingFolderCache()
+        app = DropboxBrowser(rclone, "dropbox:", None, folder_cache=folder_cache, listing_cache=listing_cache)
+
+        with TestServer(app) as server:
+            payload = server.get_json("/browse/endpoints/listing?path=music&refresh=1")
+
+        self.assertEqual(payload["listing"]["source"], "rclone")
+        self.assertEqual(payload["pending_metadata_paths"], ["music/album"])
+        self.assertEqual(
+            listing_cache.get("dropbox:music"),
+            [{"Name": "album", "Path": "album", "IsDir": True, "Size": 0, "ModTime": "2024-01-01T12:00:00Z"}],
+        )
+        self.assertEqual(folder_cache.notified, [("music", True)])
+        self.assertEqual(folder_cache.invalidated, ["dropbox:music", "dropbox:music/album"])
+
+    def test_browse_listing_endpoint_uses_resolved_local_path_for_windows_renamed_match(self) -> None:
+        local_root = self.create_local_root({
+            "contains？question.txt": b"local",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[{
+                "Name": "contains?question.txt",
+                "Path": "contains?question.txt",
+                "IsDir": False,
+                "Size": 5,
+                "ModTime": "2024-01-01T12:00:00Z",
+            }])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            payload = server.get_json("/browse/endpoints/listing")
+
+        row = payload["rows"][0]
+        self.assertEqual(row["display_name"], "contains?question.txt")
+        self.assertEqual(row["local_copy_path"], str(local_root / "contains？question.txt"))
+
+    def test_browse_listing_endpoint_rejects_parent_segments(self) -> None:
+        rclone = SimulatedRclone()
+        app = self._build_app(rclone, local_root=None, workers=1)
+
+        with TestServer(app) as server:
+            with self.assertRaises(HTTPError) as ctx:
+                server.get_text("/browse/endpoints/listing?path=..")
+
+        self.assertEqual(ctx.exception.code, HTTPStatus.BAD_REQUEST)
+        self.assertEqual(rclone.calls, [])
+
+    def test_browse_listing_endpoint_row_fields_match_representative_html_rows(self) -> None:
+        local_root = self.create_local_root({
+            "folder/inside.txt": b"inside",
+            "both.txt": b"both",
+            "local-only.txt": b"local",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[
+                remote_dir_item("folder"),
+                remote_file_item("both.txt", local_root / "both.txt"),
+                {
+                    "Name": "remote-only.txt",
+                    "Path": "remote-only.txt",
+                    "IsDir": False,
+                    "Size": 10,
+                    "ModTime": "2024-01-02T12:00:00Z",
+                },
+            ])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            payload = server.get_json("/browse/endpoints/listing")
+
+        self.assertEqual(payload["page"]["title"], "SDB: Dropbox (dropbox:)")
+        self.assertEqual(payload["page"]["current_local_folder"], str(local_root))
+        self.assertEqual(payload["page"]["dropbox_home_url"], "https://www.dropbox.com/home")
+        self.assertEqual(payload["breadcrumbs"], [{"name": "Dropbox", "path": "", "href": "/"}])
+        self.assertEqual(payload["sort"]["current_key"], "name")
+        self.assertEqual(payload["sort"]["current_direction"], "asc")
+        self.assertTrue(payload["current_folder_info"]["poll_current_file_statuses"])
+
+        folder_row = next(row for row in payload["rows"] if row["display_name"] == "folder")
+        self.assertEqual(folder_row["id"], "folder:folder")
+        self.assertEqual(folder_row["kind"], "folder")
+        self.assertTrue(folder_row["is_dir"])
+        self.assertEqual(folder_row["type_label"], "folder")
+        self.assertEqual(folder_row["icon_name"], "folder-base.svg")
+        self.assertEqual(folder_row["icon_href"], "/assets/icons/material-icon-theme/folder-base.svg")
+        self.assertEqual(folder_row["status_label"], "Loading")
+        self.assertEqual(folder_row["status_class"], "loading")
+        self.assertEqual(folder_row["size_display"], "—")
+        self.assertEqual(folder_row["date_display"], "")
+        self.assertEqual(folder_row["sort_name"], "folder")
+        self.assertEqual(folder_row["sort_type"], "folder")
+        self.assertEqual(folder_row["sort_status"], "Loading")
+        self.assertEqual(folder_row["sort_size"], 0)
+        self.assertIsInstance(folder_row["sort_date"], float)
+        self.assertEqual(folder_row["local_copy_path"], str(local_root / "folder"))
+        self.assertEqual(folder_row["folder_href"], "/?path=folder")
+        self.assertEqual(folder_row["sync"], {"allowed": False, "directions": []})
+        both_row = next(row for row in payload["rows"] if row["display_name"] == "both.txt")
+        self.assertEqual(both_row["icon_name"], "document.svg")
+        self.assertEqual(both_row["status_label"], "Synced")
+        self.assertEqual(both_row["status_class"], "both")
+        self.assertEqual(both_row["source"], "remote")
+        self.assertEqual(both_row["size_display"], "4 B")
+        self.assertEqual(both_row["preview_href"], "/file?path=both.txt&source=remote")
+        self.assertEqual(both_row["download_href"], "/download?path=both.txt&source=remote")
+        self.assertEqual(both_row["local_copy_path"], str(local_root / "both.txt"))
+        self.assertEqual(both_row["sync"], {"allowed": False, "directions": []})
+        remote_only_row = next(row for row in payload["rows"] if row["display_name"] == "remote-only.txt")
+        self.assertEqual(remote_only_row["status_label"], "Dropbox Only")
+        self.assertEqual(remote_only_row["sync"], {"allowed": True, "directions": ["dropbox_to_local"]})
+        local_only_row = next(row for row in payload["rows"] if row["display_name"] == "local-only.txt")
+        self.assertEqual(local_only_row["source"], "local")
+        self.assertEqual(local_only_row["status_label"], "Local Only")
+        self.assertEqual(local_only_row["preview_href"], "/file?path=local-only.txt&source=local")
+        self.assertEqual(local_only_row["download_href"], "/download?path=local-only.txt&source=local")
+        self.assertEqual(local_only_row["sync"], {"allowed": True, "directions": ["local_to_dropbox"]})
+
+    def test_build_browse_snapshot_reuses_folder_cache_direct_listing_and_sorts_rows(self) -> None:
+        class DirectListingFolderCache:
+            def __init__(self) -> None:
+                self.notified: list[tuple[str | None, bool]] = []
+                self.requests: list[str] = []
+
+            def notify_page_load(self, _page_time: float, *, page_key: str | None = None, force: bool = False) -> None:
+                self.notified.append((page_key, force))
+
+            def invalidate(self, _remote_path: str) -> None:
+                return None
+
+            def get(self, _remote_path: str) -> dict | None:
+                return None
+
+            def request(self, remote_path: str, *_args, **_kwargs) -> None:
+                self.requests.append(remote_path)
+
+            def get_direct_listing(self, remote_path: str) -> list[dict]:
+                self.requests.append(f"direct:{remote_path}")
+                return [
+                    {
+                        "Name": "b.txt",
+                        "Path": "b.txt",
+                        "IsDir": False,
+                        "Size": 2,
+                        "ModTime": "2024-01-02T12:00:00Z",
+                    },
+                    {
+                        "Name": "a.txt",
+                        "Path": "a.txt",
+                        "IsDir": False,
+                        "Size": 1,
+                        "ModTime": "2024-01-01T12:00:00Z",
+                    },
+                ]
+
+        rclone = SimulatedRclone()
+        listing_cache = ListingCacheManager(ttl_seconds=1800)
+        folder_cache = DirectListingFolderCache()
+        app = DropboxBrowser(rclone, "dropbox:", None, folder_cache=folder_cache, listing_cache=listing_cache)
+
+        snapshot = app.build_browse_snapshot("", "name", "asc", page_time=1234.5)
+
+        self.assertEqual(snapshot.listing_source, "folder_cache_direct")
+        self.assertEqual([entry["name"] for entry in snapshot.entries], ["a.txt", "b.txt"])
+        self.assertEqual(snapshot.sort_key, "name")
+        self.assertEqual(snapshot.direction, "asc")
+        self.assertEqual(snapshot.remote_path, "dropbox:")
+        self.assertEqual(folder_cache.notified, [("", False)])
+        self.assertEqual(folder_cache.requests, ["direct:dropbox:"])
+        self.assertEqual(rclone.calls, [])
+
+    def test_build_browse_snapshot_force_refresh_invalidates_current_and_child_folder_metadata(self) -> None:
+        class TrackingFolderCache:
+            def __init__(self) -> None:
+                self.invalidated: list[str] = []
+                self.notified: list[tuple[str | None, bool]] = []
+
+            def notify_page_load(self, _page_time: float, *, page_key: str | None = None, force: bool = False) -> None:
+                self.notified.append((page_key, force))
+
+            def invalidate(self, remote_path: str) -> None:
+                self.invalidated.append(remote_path)
+
+            def get(self, _remote_path: str) -> dict | None:
+                return None
+
+            def request(self, *_args, **_kwargs) -> None:
+                return None
+
+        rclone = SimulatedRclone({
+            "dropbox:music": [SimulatedLsjsonResponse(items=[remote_dir_item("album")])],
+        })
+        listing_cache = ListingCacheManager(ttl_seconds=1800)
+        folder_cache = TrackingFolderCache()
+        app = DropboxBrowser(rclone, "dropbox:", None, folder_cache=folder_cache, listing_cache=listing_cache)
+
+        snapshot = app.build_browse_snapshot("music", "name", "asc", force_refresh=True, page_time=1234.5)
+
+        self.assertEqual(snapshot.remote_folder_count, 1)
+        self.assertEqual(snapshot.folder_cache_missing, 1)
+        self.assertEqual(snapshot.folder_cache_map, {"album": None})
+        self.assertEqual(folder_cache.notified, [("music", True)])
+        self.assertEqual(folder_cache.invalidated, ["dropbox:music", "dropbox:music/album"])
+
+    def test_build_browse_snapshot_uses_resolved_local_path_for_windows_renamed_match(self) -> None:
+        local_root = self.create_local_root({
+            "contains？question.txt": b"local",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[
+                {
+                    "Name": "contains?question.txt",
+                    "Path": "contains?question.txt",
+                    "IsDir": False,
+                    "Size": 5,
+                    "ModTime": "2024-01-01T12:00:00Z",
+                },
+            ])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        snapshot = app.build_browse_snapshot("", "name", "asc")
+
+        self.assertEqual(len(snapshot.entries), 1)
+        self.assertEqual(snapshot.entries[0]["name"], "contains?question.txt")
+        self.assertEqual(snapshot.entries[0]["local_path"], str(local_root / "contains？question.txt"))
+
     def test_list_entries_uses_folder_cache_direct_listing_when_listing_cache_misses(self) -> None:
         class DirectListingFolderCache:
             def __init__(self) -> None:

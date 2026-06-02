@@ -4,6 +4,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime
 from http import HTTPStatus
+import posixpath
 import time
 import uuid
 from pathlib import Path
@@ -85,15 +86,44 @@ class StoredBatchPlan:
     plan: dict[str, Any]
 
 
+@dataclass
+class BrowseSnapshot:
+    rel_path: str
+    sort_key: str
+    direction: str
+    force_refresh: bool
+    page_time: float
+    remote_path: str
+    entries: list[dict[str, Any]]
+    folder_cache_map: dict[str, Any]
+    current_folder_cache: dict[str, Any] | None
+    listing_source: str
+    remote_folder_count: int
+    folder_cache_hits: int
+    folder_cache_missing: int
+    folder_cache_requests: int
+    timings_ms: dict[str, float]
+
+
 class DropboxBrowser:
     BATCH_PLAN_TTL_SECONDS = 15 * 60
 
-    def __init__(self, rclone: RcloneClient, remote: str, local_root: Path | None, folder_cache: Any = None, listing_cache: ListingCacheManager | None = None):
+    def __init__(
+        self,
+        rclone: RcloneClient,
+        remote: str,
+        local_root: Path | None,
+        folder_cache: Any = None,
+        listing_cache: ListingCacheManager | None = None,
+        *,
+        client_render: bool = False,
+    ):
         self.rclone = rclone
         self.remote = remote
         self.local_root = local_root.resolve() if local_root else None
         self.folder_cache = folder_cache
         self.listing_cache = listing_cache
+        self.client_render = bool(client_render)
         self.sync_jobs: Any | None = None
         self._batch_plan_lock = threading.Lock()
         self._batch_plans: dict[str, StoredBatchPlan] = {}
@@ -164,7 +194,13 @@ class DropboxBrowser:
 
         return rows
 
-    def list_entries(self, rel_path: str, force_refresh: bool = False, page_time: float | None = None) -> list[dict[str, Any]]:
+    def _list_entries_with_metadata(
+        self,
+        rel_path: str,
+        *,
+        force_refresh: bool = False,
+        page_time: float | None = None,
+    ) -> tuple[list[dict[str, Any]], str]:
         started = time.perf_counter()
         remote = remote_target(self.remote, rel_path)
         local_folder = resolve_matching_local_path(self.local_root, rel_path) if self.local_root else None
@@ -207,7 +243,121 @@ class DropboxBrowser:
             row_count=len(entries),
             elapsed_ms=round((time.perf_counter() - started) * 1000, 3),
         )
+        return entries, source
+
+    def list_entries(self, rel_path: str, force_refresh: bool = False, page_time: float | None = None) -> list[dict[str, Any]]:
+        entries, _source = self._list_entries_with_metadata(
+            rel_path,
+            force_refresh=force_refresh,
+            page_time=page_time,
+        )
         return entries
+
+    def build_browse_snapshot(
+        self,
+        rel_path: str,
+        sort_key: str,
+        direction: str,
+        *,
+        force_refresh: bool = False,
+        page_time: float | None = None,
+        queue_current_folder_metadata: bool = True,
+        load_child_folder_metadata: bool = True,
+    ) -> BrowseSnapshot:
+        canonical_sort_key = sort_key if sort_key in {"name", "type", "date", "size", "status"} else "name"
+        canonical_direction = direction if direction in {"asc", "desc"} else "asc"
+        page_time_value = time.time() if page_time is None else page_time
+        current_remote = remote_target(self.remote, rel_path)
+        cache = self.folder_cache
+
+        notify_started = time.perf_counter()
+        if cache:
+            cache.notify_page_load(page_time_value, page_key=rel_path, force=force_refresh)
+            if force_refresh:
+                cache.invalidate(current_remote)
+        notify_elapsed_ms = round((time.perf_counter() - notify_started) * 1000, 3)
+
+        list_started = time.perf_counter()
+        entries, listing_source = self._list_entries_with_metadata(
+            rel_path,
+            force_refresh=force_refresh,
+            page_time=page_time_value,
+        )
+        list_elapsed_ms = round((time.perf_counter() - list_started) * 1000, 3)
+
+        current_cache_started = time.perf_counter()
+        current_folder_cache: dict[str, Any] | None = None
+        if cache and self.local_root:
+            current_folder_cache = cache.get(current_remote)
+            live_file_statuses = self.file_statuses_for_entries(entries)
+            if current_folder_cache is None:
+                current_folder_cache = {"file_statuses": live_file_statuses}
+            else:
+                current_folder_cache = dict(current_folder_cache)
+                current_folder_cache["file_statuses"] = live_file_statuses
+            if queue_current_folder_metadata and (
+                current_folder_cache is None or not current_folder_cache.get("complete")
+            ):
+                cache.request(current_remote, page_time_value)
+        current_cache_elapsed_ms = round((time.perf_counter() - current_cache_started) * 1000, 3)
+
+        folder_map_started = time.perf_counter()
+        folder_cache_map: dict[str, Any] = {}
+        remote_folder_count = 0
+        folder_cache_hits = 0
+        folder_cache_missing = 0
+        folder_cache_requests = 0
+        if cache and load_child_folder_metadata:
+            for entry in entries:
+                if entry["is_dir"] and entry["remote"]:
+                    remote_folder_count += 1
+                    child = posixpath.join(rel_path, entry["name"]) if rel_path else entry["name"]
+                    full_remote = remote_target(self.remote, child)
+                    if force_refresh:
+                        cache.invalidate(full_remote)
+                    cached_data = cache.get(full_remote)
+                    if cached_data is not None:
+                        folder_cache_hits += 1
+                    else:
+                        folder_cache_missing += 1
+                    folder_cache_map[entry["name"]] = cached_data
+                    entry["cached_size"] = cached_data.get("size") if cached_data else None
+                    entry["cached_mtime"] = cached_data.get("newest_mtime") if cached_data else None
+        folder_map_elapsed_ms = round((time.perf_counter() - folder_map_started) * 1000, 3)
+
+        status_started = time.perf_counter()
+        for entry in entries:
+            entry["status_label"] = self.status_label_for_entry(entry, folder_cache_map, current_folder_cache)
+        status_elapsed_ms = round((time.perf_counter() - status_started) * 1000, 3)
+
+        sort_started = time.perf_counter()
+        sorted_entries = self.sort_entries(entries, canonical_sort_key, canonical_direction)
+        sort_elapsed_ms = round((time.perf_counter() - sort_started) * 1000, 3)
+
+        return BrowseSnapshot(
+            rel_path=rel_path,
+            sort_key=canonical_sort_key,
+            direction=canonical_direction,
+            force_refresh=force_refresh,
+            page_time=page_time_value,
+            remote_path=current_remote,
+            entries=sorted_entries,
+            folder_cache_map=folder_cache_map,
+            current_folder_cache=current_folder_cache,
+            listing_source=listing_source,
+            remote_folder_count=remote_folder_count,
+            folder_cache_hits=folder_cache_hits,
+            folder_cache_missing=folder_cache_missing,
+            folder_cache_requests=folder_cache_requests,
+            timings_ms={
+                "notify": notify_elapsed_ms,
+                "list": list_elapsed_ms,
+                "current_cache": current_cache_elapsed_ms,
+                "folder_map": folder_map_elapsed_ms,
+                "status": status_elapsed_ms,
+                "sort": sort_elapsed_ms,
+            },
+        )
 
     def local_display_path(self, rel_path: str) -> Path | None:
         """Return the actual local path for a displayed Dropbox-relative path.
