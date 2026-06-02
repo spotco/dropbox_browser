@@ -8,7 +8,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dropbox_browser.errors import BrowserError
-from dropbox_browser.rclone import RcloneClient, RcloneRetryPolicy
+from dropbox_browser.rclone import (
+    RcloneClient,
+    RcloneRetryPolicy,
+    is_retryable_dropbox_throttle_message,
+)
 
 
 class FakeCatProcess:
@@ -77,6 +81,14 @@ class AlwaysTimeoutProcess:
 
 
 class RcloneLoggingTests(unittest.TestCase):
+    def test_dropbox_throttle_classifier_matches_write_limit_error(self) -> None:
+        self.assertTrue(
+            is_retryable_dropbox_throttle_message(
+                "NOTICE: Failed to rcat: too_many_write_operations/..../please retry later"
+            )
+        )
+        self.assertFalse(is_retryable_dropbox_throttle_message("directory not found"))
+
     def test_copyto_local_upload_uses_rcat_with_stdin(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             source = Path(tmpdir) / "milet「Anytime Anywhere」×「葬送のフリーレン」SPECIAL MUSIC VIDEO／フリーレンEDテーマアニメMV.mp3"

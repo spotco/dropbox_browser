@@ -1,5 +1,7 @@
 # Plan: throttle-aware retry for Dropbox write limits
 
+Status: completed on 2026-06-01.
+
 ## Goal
 
 Make browser-driven `sync all local to dropbox` converge even when Dropbox
@@ -32,6 +34,59 @@ The remaining failure mode is batch concurrency:
    human retries them manually.
 
 This is now a write-throttling problem, not a filename-encoding problem.
+
+### Observed evidence from recent runs (post-80b8eca, June 2026)
+
+Full raw rclone stderr for the actual `too_many_write_operations` (and related Dropbox
+write throttle) cases has **not** been persisted in any run artifacts. Searches of
+`Temp/runs/*/`, `.dropbox-browser-temp/e2e-integration/...`, debug .err.txt files,
+and all other logs turned up zero instances of the throttle wording or accompanying
+Dropbox API response bodies.
+
+- Contrast: the older unicode local-source regressions *do* have complete
+  multi-attempt stderr captures in `Temp/rclone-real-repro/*-failure.stderr.log`
+  (the classic "Local file system at //?/... : error reading source root directory:
+  directory not found" + rclone retry spam).
+- Throttle errors only ever appeared live in the terminal (via `logoutput` + rclone's
+  own `ERROR :` / `Attempt N failed` / `NOTICE: Failed` lines) and transiently in
+  the per-batch `syncstate` error list.
+
+**Command that now produces the errors:**
+- After the unicode fix, local-to-Dropbox file uploads use
+  `rclone rcat --size <N> -- dropbox:full/rel/path` (stdin pipe) rather than
+  `copyto`. The throttle classifier and any new persistent logging should look for
+  failures on `rcat` invocations. See `RcloneClient.copy_file_overwrite` +
+  `_is_local_upload` in `dropbox_browser/rclone.py`.
+
+**Reliable indirect signals in persisted traces (use these for timing correlation
+and repro setup):**
+- Recent run directories (e.g. `1780292116` started 2026-06-01T01:35:16 and nearby
+  `17802920xx` siblings) contain `foldercache_threads.jsonl` with heavy activity of:
+  - `"event": "direct_diff_found"`
+  - `"event": "subtree_diff_marked"`
+  - `"reason": "Local only: <Artist> - <Title>.mp3"` (or similar track names)
+  - `"remote_path": "dropbox:dropbox_browser/betty_youtube_5_26_2026"`
+  - Overall folder status `"diff_status": "has_diffs"`
+- Corresponding `Cache/FolderInfo/<hash>.json` entries for the same remote path
+  record the "Local only" `first_diff_path` plus per-track statuses.
+- These come from the background folder-cache workers right before a user would
+  trigger the bulk "sync all local to dropbox" that then hits the throttle.
+  See `workertrace.py`, `foldercache*.py`, and `docs/background-workers.md`.
+- `server.json` in each run dir gives exact start timestamp, pid, `local_root`
+  (`F:\\Dropbox`), and remote for correlation.
+
+The `betty_youtube_5_26_2026` folder (and similar large artist/track drops under
+music/ or dropbox_browser/) is the canonical hot-path repro for these batch
+throttle failures in practice.
+
+**Recommendation for the implementation:**
+When adding the central throttle classifier (item 1) and the delayed-retry logic
+(items 3-4), also ensure that any classified throttle failure (and ideally all
+batch `local_to_dropbox` failures) records the *full raw rclone stderr*, the exact
+command argv, size, timestamp, and op_id. A good home is a new `sync_jobs.jsonl`
+(or `batch_errors.jsonl`) inside the per-run directory (parallel to the existing
+`foldercache_threads.jsonl`). This will give future debuggers the precise Dropbox
+wording on the next occurrence without needing a live high-concurrency repro.
 
 ## Planned implementation
 

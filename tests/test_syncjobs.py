@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import threading
 import unittest
+from http import HTTPStatus
 from pathlib import Path
 
 from dropbox_browser.foldercache import FolderCacheManager
 from dropbox_browser.listingcache import ListingCacheManager
 from dropbox_browser.services import DropboxBrowser
 from dropbox_browser.syncjobs import SyncJobManager
+from dropbox_browser.errors import BrowserError
 from dropbox_browser import syncstate
 
 try:
@@ -205,3 +207,85 @@ class SyncJobIntegrationTests(IsolatedPathsTestCase):
 
         self.assertEqual(rclone.progress_snapshots, ["1/2]", "2/2]"])
         self.assertNotIn("194/194]", rclone.progress_snapshots)
+
+    def test_sync_all_local_to_dropbox_retries_throttled_writes_until_all_synced(self) -> None:
+        local_root = self.create_local_root({
+            "first.mp3": b"first-audio",
+            "second.mp3": b"second-audio",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1, sync_workers=2)
+        app.sync_jobs.throttle_retry_delays = (0.2,)
+
+        original_copy = rclone.copy_file_overwrite
+        attempts: dict[str, int] = {}
+        failed_once: set[str] = set()
+        saw_throttle = threading.Event()
+        lock = threading.Lock()
+
+        def throttled_copy(source: str | Path, destination: str | Path, size_bytes: int | None = None) -> None:
+            destination_text = str(destination)
+            with lock:
+                attempt = attempts.get(destination_text, 0) + 1
+                attempts[destination_text] = attempt
+                if attempt == 1:
+                    failed_once.add(destination_text)
+                    if len(failed_once) == 2:
+                        saw_throttle.set()
+                    raise BrowserError(
+                        HTTPStatus.BAD_GATEWAY,
+                        "dropbox upload failed: too_many_write_operations, please retry",
+                    )
+            original_copy(source, destination, size_bytes=size_bytes)
+
+        rclone.copy_file_overwrite = throttled_copy  # type: ignore[method-assign]
+
+        with TestServer(app) as server:
+            plan_payload = server.post_json("/sync-batch-plan", {
+                "action": "local_to_dropbox_all",
+                "recursive": "0",
+                "enable_write_dropbox": "1",
+            })
+            plan_status = wait_until(
+                lambda: server.get_json("/sync-status?id=" + plan_payload["id"])
+                if server.get_json("/sync-status?id=" + plan_payload["id"]).get("status") != "running"
+                else None,
+                description="sync-all plan completion",
+            )
+            payload = server.post_json("/sync-batch", {
+                "action": "local_to_dropbox_all",
+                "recursive": "0",
+                "enable_write_dropbox": "1",
+                "plan_token": plan_status["plan_token"],
+            })
+
+            wait_until(saw_throttle.is_set, description="first throttled batch write failure")
+
+            def _retrying() -> dict[str, object] | None:
+                status = server.get_json("/sync-status?id=" + payload["id"])
+                if status.get("status") != "running":
+                    return None
+                if "Retrying throttled Dropbox writes" not in str(status.get("message") or ""):
+                    return None
+                return status
+
+            running = wait_until(_retrying, description="batch retry status")
+
+            def _done():
+                status = server.get_json("/sync-status?id=" + payload["id"])
+                return status if status.get("status") != "running" else None
+
+            result = wait_until(_done, description="sync-all completion after throttle retries")
+
+        self.assertEqual(running["status"], "running")
+        self.assertIn("rclone rcat --size", str(running["command"]))
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result.get("errors"), [])
+        self.assertEqual(attempts, {
+            "dropbox:first.mp3": 2,
+            "dropbox:second.mp3": 2,
+        })
+        self.assertEqual(rclone.cat_data["dropbox:first.mp3"], b"first-audio")
+        self.assertEqual(rclone.cat_data["dropbox:second.mp3"], b"second-audio")
