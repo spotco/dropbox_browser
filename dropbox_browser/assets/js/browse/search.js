@@ -1,8 +1,7 @@
+import {filenameCompareKey} from '../filename-compare-key.js';
+
 function normalizeFilterText(value) {
-  return String(value == null ? '' : value)
-    .normalize('NFKC')
-    .trim()
-    .toLocaleLowerCase();
+  return filenameCompareKey(String(value == null ? '' : value).trim());
 }
 
 export function normalizeBrowseFilters(filters) {
