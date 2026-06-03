@@ -232,6 +232,65 @@ class CacheInvalidationTests(AppTestCase):
         self.assertEqual(local_only_row["download_href"], "/download?path=local-only.txt&source=local")
         self.assertEqual(local_only_row["sync"], {"allowed": True, "directions": ["local_to_dropbox"]})
 
+    def test_browse_listing_endpoint_serializes_local_only_folder_metadata_as_final_values(self) -> None:
+        local_root = self.create_local_root({
+            "albums-local/track.txt": b"track",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            payload = server.get_json("/browse/endpoints/listing")
+
+        folder_row = next(row for row in payload["rows"] if row["display_name"] == "albums-local")
+        self.assertEqual(folder_row["status_label"], "Local Only")
+        self.assertEqual(folder_row["size_display"], "—")
+        self.assertEqual(folder_row["count_display"], "")
+        self.assertTrue(folder_row["date_display"])
+        self.assertTrue(folder_row["metadata_complete"])
+        self.assertEqual(folder_row["sort_date"], (local_root / "albums-local").stat().st_mtime)
+        self.assertEqual(payload["pending_metadata_paths"], [])
+
+    def test_browse_listing_endpoint_keeps_partial_folder_rows_pending_and_serializes_in_progress_values(self) -> None:
+        local_root = self.create_local_root({
+            "music/Album/track.mp3": b"track",
+            "music/Album/Disc 1/song.mp3": b"song!!",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:music": [SimulatedLsjsonResponse(items=[remote_dir_item("Album")])],
+            "dropbox:music/Album": [SimulatedLsjsonResponse(items=[
+                remote_file_item("track.mp3", local_root / "music" / "Album" / "track.mp3", mod_time="2024-01-02T12:00:00Z"),
+                remote_dir_item("Disc 1", mod_time="2024-01-01T12:00:00Z"),
+            ])],
+            "dropbox:music/Album/Disc 1": [SimulatedLsjsonResponse(
+                items=[remote_file_item("song.mp3", local_root / "music" / "Album" / "Disc 1" / "song.mp3", mod_time="2024-01-03T12:00:00Z")],
+                delay=0.25,
+            )],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=2)
+        assert app.folder_cache is not None
+
+        with TestServer(app) as server:
+            server.get_text("/?path=music")
+            wait_until(
+                lambda: (
+                    app.folder_cache.get("dropbox:music/Album")
+                    if (app.folder_cache.get("dropbox:music/Album") or {}).get("complete") is False
+                    else None
+                ),
+                description="partial album folder cache",
+            )
+            payload = server.get_json("/browse/endpoints/listing?path=music")
+
+        album_row = next(row for row in payload["rows"] if row["display_name"] == "Album")
+        self.assertEqual(album_row["size_display"], "5 B")
+        self.assertEqual(album_row["count_display"], "1 files")
+        self.assertEqual(album_row["date_display"], "2024-01-02 07:00")
+        self.assertFalse(album_row["metadata_complete"])
+        self.assertEqual(payload["pending_metadata_paths"], ["music/Album"])
+
     def test_build_browse_snapshot_reuses_folder_cache_direct_listing_and_sorts_rows(self) -> None:
         class DirectListingFolderCache:
             def __init__(self) -> None:

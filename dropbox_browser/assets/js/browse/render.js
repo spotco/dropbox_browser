@@ -59,6 +59,37 @@ function renderFolderMetadataCell(row, kind) {
   return prefix + esc(row.date_display || '');
 }
 
+function renderBrowseRow(row) {
+  var attrs = [
+    ' data-browse-row-id="' + esc(row.id) + '"',
+    ' data-row-kind="' + esc(row.kind) + '"',
+    ' data-sort-name="' + esc(row.sort_name) + '"',
+    ' data-sort-date="' + esc(row.sort_date) + '"',
+  ];
+  if (row.kind === 'folder' && row.remote) {
+    attrs.push(' data-folder-path="' + esc(row.path) + '"');
+  }
+  if (row.kind === 'file' && row.remote && row.local) {
+    attrs.push(' data-file-status-path="' + esc(row.path) + '"');
+  }
+  return '<tr' + attrs.join('') + '>' +
+    '<td>' + renderNameCell(row) + '</td>' +
+    '<td>' + esc(row.type_label) + '</td>' +
+    '<td><span class="status ' + esc(row.status_class) + '">' + esc(row.status_label) + '</span></td>' +
+    '<td class="col-size">' + renderFolderMetadataCell(row, 'size') + '</td>' +
+    '<td class="col-date">' + renderFolderMetadataCell(row, 'date') + '</td>' +
+    renderViewCell(row) +
+    renderSyncCell(row) +
+    '</tr>';
+}
+
+function renderSpacerRow(height) {
+  if (!height) return '';
+  return '<tr class="browse-virtual-spacer" aria-hidden="true">' +
+    '<td colspan="7" style="height:' + esc(height) + 'px"></td>' +
+    '</tr>';
+}
+
 export function loadingRowHtml(message) {
   return '<tr><td colspan="7" class="empty">' + esc(message || 'Loading folder listing...') + '</td></tr>';
 }
@@ -71,29 +102,19 @@ export function renderBrowseRowsBody(rows) {
   if (!rows || rows.length === 0) {
     return '<tr><td colspan="7" class="empty">This folder is empty.</td></tr>';
   }
-  return rows.map(function (row) {
-    var attrs = [
-      ' data-browse-row-id="' + esc(row.id) + '"',
-      ' data-row-kind="' + esc(row.kind) + '"',
-      ' data-sort-name="' + esc(row.sort_name) + '"',
-      ' data-sort-date="' + esc(row.sort_date) + '"',
-    ];
-    if (row.kind === 'folder' && row.remote) {
-      attrs.push(' data-folder-path="' + esc(row.path) + '"');
-    }
-    if (row.kind === 'file' && row.remote && row.local) {
-      attrs.push(' data-file-status-path="' + esc(row.path) + '"');
-    }
-    return '<tr' + attrs.join('') + '>' +
-      '<td>' + renderNameCell(row) + '</td>' +
-      '<td>' + esc(row.type_label) + '</td>' +
-      '<td><span class="status ' + esc(row.status_class) + '">' + esc(row.status_label) + '</span></td>' +
-      '<td class="col-size">' + renderFolderMetadataCell(row, 'size') + '</td>' +
-      '<td class="col-date">' + renderFolderMetadataCell(row, 'date') + '</td>' +
-      renderViewCell(row) +
-      renderSyncCell(row) +
-      '</tr>';
-  }).join('');
+  return rows.map(renderBrowseRow).join('');
+}
+
+export function renderVirtualBrowseRowsBody(rows, windowState) {
+  if (!rows || rows.length === 0) {
+    return renderBrowseRowsBody(rows);
+  }
+  var startIndex = Math.max(0, Number(windowState && windowState.startIndex) || 0);
+  var endIndex = Math.min(rows.length, Number(windowState && windowState.endIndex) || rows.length);
+  var slice = rows.slice(startIndex, endIndex);
+  return renderSpacerRow(windowState && windowState.topSpacerHeight) +
+    slice.map(renderBrowseRow).join('') +
+    renderSpacerRow(windowState && windowState.bottomSpacerHeight);
 }
 
 export function renderBreadcrumbs(items) {

@@ -69,7 +69,7 @@ test("client-render folder navigation uses history without a full page reload", 
   await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
   await expect.poll(() => listingRequestCount).toBe(1);
 
-  await page.locator('#browse-rows a[href="/?path=folder"]').click();
+  await page.getByRole("link", { name: "folder" }).click();
   await expect(page).toHaveURL(/\?path=folder/);
   await expect(page.locator("body")).toHaveAttribute("data-current-folder-path", "folder");
   await expect(page.getByText("nested.txt")).toBeVisible();
