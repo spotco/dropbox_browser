@@ -11,6 +11,7 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 from unittest.mock import patch
 
+import dropbox_browser.foldercache as foldercache_module
 from dropbox_browser.errors import BrowserError
 from dropbox_browser.foldercache import DIFF_CACHE_SCHEMA_VERSION
 from dropbox_browser.listingcache import ListingCacheManager
@@ -667,6 +668,47 @@ class FolderInfoWorkerTests(AppTestCase):
             self.assertEqual(cache.page_epoch_for("Other"), 4321.25)
         with patch("dropbox_browser.foldercache.time.time", return_value=6789.0):
             self.assertEqual(cache.page_epoch_for("Music"), 1234.5)
+
+    def test_notify_page_load_does_not_block_on_background_cache_file_write(self) -> None:
+        rclone = SimulatedRclone({
+            "dropbox:root": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, workers=1)
+        cache = app.folder_cache
+        assert cache is not None
+
+        write_started = threading.Event()
+        write_release = threading.Event()
+        original_write_json_atomic = foldercache_module.write_json_atomic
+
+        def delayed_write(path: Path, data: dict) -> None:
+            write_started.set()
+            if not write_release.wait(timeout=5):
+                raise AssertionError("Timed out waiting to release delayed cache write")
+            original_write_json_atomic(path, data)
+
+        with patch("dropbox_browser.foldercache.write_json_atomic", side_effect=delayed_write):
+            cache.request("dropbox:root", 100.0)
+            wait_until(write_started.is_set, description="background cache write to start")
+
+            started = time.perf_counter()
+            cache.notify_page_load(101.0, page_key="next-page")
+            elapsed_ms = (time.perf_counter() - started) * 1000
+
+            write_release.set()
+            wait_until(
+                lambda: (cache.get("dropbox:root") or {}).get("complete"),
+                description="root completion after delayed cache write",
+            )
+
+        self.assertLess(elapsed_ms, 100.0)
+        events = self.read_trace_events()
+        page_load_events = [
+            event for event in events
+            if event["event"] == "page_load" and event.get("page_key") == "next-page"
+        ]
+        self.assertTrue(page_load_events)
+        self.assertLess(page_load_events[-1].get("lock_wait_ms", 0.0), 100.0)
 
     def test_ensure_known_subtree_queues_missing_descendant_under_complete_root(self) -> None:
         rclone = SimulatedRclone({

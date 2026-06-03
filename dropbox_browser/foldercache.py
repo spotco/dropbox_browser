@@ -130,7 +130,7 @@ class FolderCacheManager:
         # purpose: this is breadth-first so the total queued work is discovered
         # quickly and progress counts become more accurate sooner.
         self._queue: PriorityQueue = PriorityQueue()
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
         # Maps path → best (most-recent) page_time we have queued for it.
         self._in_progress: dict[str, float] = {}
@@ -152,10 +152,11 @@ class FolderCacheManager:
         self._generation: dict[str, int] = {}
         self._abandoned: set[str] = set()
         self._progress_by_epoch: dict[float, dict[str, int]] = {}
+        self._dirty_cache_writes: dict[str, bool] = {}
         self._state = FolderAccumulationState(
             direct_done=self._direct_done,
             abandoned=self._abandoned,
-            write_cache=self._write_cache,
+            write_cache=self._mark_cache_dirty_locked,
             note_diff=self._note_diff,
             maybe_complete=self._maybe_complete,
         )
@@ -338,17 +339,45 @@ class FolderCacheManager:
                 except Exception:
                     pass
 
-    def _write_cache(self, remote_path: str, complete: bool) -> None:
-        """Flush current accumulated state to disk.  Lock must be held."""
+    def _cache_record_data_locked(self, remote_path: str, complete: bool) -> dict:
+        """Build one cache record snapshot from the current in-memory state."""
         acc = self._acc.get(remote_path, {})
-        data = build_cache_record(
+        return build_cache_record(
             remote_path,
             acc,
             complete=complete,
             local_root=str(self.local_root) if self.local_root is not None else None,
             now=time.time(),
         )
+
+    def _write_cache_record(self, remote_path: str, data: dict) -> None:
         write_json_atomic(self._cache_path(remote_path), data)
+
+    def _write_cache(self, remote_path: str, complete: bool) -> None:
+        """Flush one cache record to disk immediately."""
+        with self._lock:
+            data = self._cache_record_data_locked(remote_path, complete)
+        self._write_cache_record(remote_path, data)
+
+    def _mark_cache_dirty_locked(self, remote_path: str, complete: bool) -> None:
+        """Mark one cache record for disk flush after the lock is released."""
+        previous = self._dirty_cache_writes.get(remote_path)
+        self._dirty_cache_writes[remote_path] = bool(complete or previous)
+
+    def _flush_dirty_cache_writes(self) -> None:
+        """Write pending cache snapshots without holding the manager lock."""
+        while True:
+            with self._lock:
+                if not self._dirty_cache_writes:
+                    return
+                pending = self._dirty_cache_writes
+                self._dirty_cache_writes = {}
+                snapshots = [
+                    (remote_path, self._cache_record_data_locked(remote_path, complete))
+                    for remote_path, complete in pending.items()
+                ]
+            for remote_path, data in snapshots:
+                self._write_cache_record(remote_path, data)
 
     def prime_direct_listing(self, remote_path: str, items: list[dict], page_time: float | None = None) -> None:
         """Seed direct child metadata from a foreground listing.
@@ -378,7 +407,7 @@ class FolderCacheManager:
                 "direct_files": direct_listing.direct_files,
                 "direct_folders": direct_listing.direct_folders,
             }
-            self._write_cache(remote_path, complete=False)
+            self._mark_cache_dirty_locked(remote_path, complete=False)
             self._trace_locked(
                 "direct_listing_primed",
                 remote_path,
@@ -386,6 +415,7 @@ class FolderCacheManager:
                 direct_files=direct_listing.direct_count,
                 subfolders=len(direct_listing.subfolders),
             )
+        self._flush_dirty_cache_writes()
 
     def _trace(self, event: str, remote_path: str | None = None, **details: object) -> None:
         payload: dict[str, object] = {
@@ -511,7 +541,7 @@ class FolderCacheManager:
             pending.discard(path)
         self._abandoned.add(parent)
         if parent in self._acc:
-            self._write_cache(parent, complete=False)
+            self._mark_cache_dirty_locked(parent, complete=False)
         self._mark_abandoned(parent)
 
     def current_progress(self) -> tuple[int, int]:
@@ -768,7 +798,7 @@ class FolderCacheManager:
                     )
                     self._direct_done[remote_path] = latest_page_time
                     self._pending_children.setdefault(remote_path, set())
-                    self._write_cache(remote_path, complete=True)
+                    self._mark_cache_dirty_locked(remote_path, complete=True)
                     self._state.propagate(remote_path)
                     self._state.on_subtree_complete(remote_path)
                     self._record_completed(latest_page_time)
@@ -798,6 +828,7 @@ class FolderCacheManager:
                         self._in_progress[remote_path] = reschedule_epoch
                         self._record_dispatched(reschedule_epoch)
                         self._trace_locked("job_rescheduled", remote_path, page_epoch=reschedule_epoch)
+                self._flush_dirty_cache_writes()
                 self._queue.task_done()
                 if reschedule_epoch is not None:
                     self._queue_job(FolderJob.create(remote_path, reschedule_epoch, job.breadth_depth), "reschedule_after_cancel")
@@ -888,7 +919,7 @@ class FolderCacheManager:
                 self._note_diff(remote_path, direct_diff_reason, direct_diff_status)
 
             complete = len(subfolders) == 0
-            self._write_cache(remote_path, complete=complete)
+            self._mark_cache_dirty_locked(remote_path, complete=complete)
             self._state.propagate(remote_path)
 
             # Register and (if needed) queue each subfolder.
@@ -989,7 +1020,7 @@ class FolderCacheManager:
         self._note_diff(path, reason, diff_status)
         self._pending_children[path] = set()
         self._abandoned.add(path)
-        self._write_cache(path, complete=True)
+        self._mark_cache_dirty_locked(path, complete=True)
 
         parent = self._parent.get(path)
         if parent is not None:
@@ -1004,15 +1035,15 @@ class FolderCacheManager:
         if acc is None:
             return
         if path in self._abandoned:
-            self._write_cache(path, complete=False)
+            self._mark_cache_dirty_locked(path, complete=False)
             return
         if acc.get("diff_status") in {DIFF_HAS_DIFFS, DIFF_DROPBOX_ONLY}:
             if path in self._direct_done and not self._pending_children.get(path):
-                self._write_cache(path, complete=True)
+                self._mark_cache_dirty_locked(path, complete=True)
                 self._trace_locked("subtree_complete", path, diff_status=acc.get("diff_status"))
                 self._state.on_subtree_complete(path)
             else:
-                self._write_cache(path, complete=False)
+                self._mark_cache_dirty_locked(path, complete=False)
             return
         if self.local_root is None:
             acc["diff_status"] = DIFF_UNAVAILABLE
@@ -1021,8 +1052,8 @@ class FolderCacheManager:
             acc["diff_status"] = DIFF_SYNCED
             acc["diff_complete"] = True
         else:
-            self._write_cache(path, complete=False)
+            self._mark_cache_dirty_locked(path, complete=False)
             return
-        self._write_cache(path, complete=True)
+        self._mark_cache_dirty_locked(path, complete=True)
         self._trace_locked("subtree_complete", path, diff_status=acc.get("diff_status"))
         self._state.on_subtree_complete(path)
