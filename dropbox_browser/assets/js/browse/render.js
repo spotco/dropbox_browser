@@ -98,9 +98,13 @@ export function errorRowHtml(message) {
   return '<tr><td colspan="7" class="empty">' + esc(message || 'Could not load folder listing.') + '</td></tr>';
 }
 
+export function emptyRowHtml(message) {
+  return '<tr><td colspan="7" class="empty">' + esc(message || 'This folder is empty.') + '</td></tr>';
+}
+
 export function renderBrowseRowsBody(rows) {
   if (!rows || rows.length === 0) {
-    return '<tr><td colspan="7" class="empty">This folder is empty.</td></tr>';
+    return emptyRowHtml('This folder is empty.');
   }
   return rows.map(renderBrowseRow).join('');
 }

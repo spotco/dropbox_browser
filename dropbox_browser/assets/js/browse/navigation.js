@@ -8,6 +8,10 @@ export function readBrowseLocation(search) {
       sort: params.get('sort') || 'name',
       dir: params.get('dir') || 'asc',
       refresh: params.get('refresh') === '1',
+      q: params.get('q') || '',
+      kind: params.get('kind') || 'all',
+      status: params.get('status') || 'all',
+      type: params.get('type') || 'all',
     });
   } catch (_error) {
     return normalizeBrowseState({});

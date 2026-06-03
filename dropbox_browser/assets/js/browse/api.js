@@ -1,8 +1,19 @@
+import {normalizeBrowseFilters} from './search.js';
+
 function appendStateParams(params, state) {
   if (state.path) params.set('path', state.path);
   if (state.sort && state.sort !== 'name') params.set('sort', state.sort);
   if (state.dir && state.dir !== 'asc') params.set('dir', state.dir);
   if (state.refresh) params.set('refresh', '1');
+  return params;
+}
+
+function appendFilterParams(params, filters) {
+  var normalized = normalizeBrowseFilters(filters);
+  if (normalized.query) params.set('q', normalized.query);
+  if (normalized.kind !== 'all') params.set('kind', normalized.kind);
+  if (normalized.status !== 'all') params.set('status', normalized.status);
+  if (normalized.type !== 'all') params.set('type', normalized.type);
   return params;
 }
 
@@ -33,6 +44,12 @@ export function normalizeBrowseState(state) {
     sort: normalizeSortKey(input.sort || 'name'),
     dir: normalizeSortDirection(input.dir || 'asc'),
     refresh: input.refresh === true || input.refresh === '1',
+    filters: normalizeBrowseFilters(input.filters || {
+      query: input.q || '',
+      kind: input.kind || 'all',
+      status: input.status || 'all',
+      type: input.type || 'all',
+    }),
   };
 }
 
@@ -46,6 +63,7 @@ export function buildBrowseListingEndpoint(state) {
 export function buildBrowsePageHref(state) {
   var normalized = normalizeBrowseState(state);
   var params = appendStateParams(new URLSearchParams(), normalized);
+  appendFilterParams(params, normalized.filters);
   var query = params.toString();
   return '/?' + query;
 }

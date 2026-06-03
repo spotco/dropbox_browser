@@ -10,6 +10,7 @@ export function createBrowseState(initialState) {
     rows: [],
     pendingMetadataPaths: [],
     pollCurrentFileStatuses: false,
+    filters: normalized.filters,
     loading: false,
     error: null,
   };

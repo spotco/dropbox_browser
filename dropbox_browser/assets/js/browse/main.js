@@ -1,7 +1,8 @@
 import {buildBrowseListingEndpoint, buildBrowsePageHref} from './api.js';
 import {startFolderInfoPolling} from './folder-info.js';
 import {readBrowseHref, readBrowseLocation, shouldInterceptBrowseLink} from './navigation.js';
-import {errorRowHtml, loadingRowHtml, renderBreadcrumbs, renderBrowseRowsBody, renderVirtualBrowseRowsBody} from './render.js';
+import {emptyRowHtml, errorRowHtml, loadingRowHtml, renderBreadcrumbs, renderBrowseRowsBody, renderVirtualBrowseRowsBody} from './render.js';
+import {collectBrowseTypeOptions, filterBrowseRows, hasActiveBrowseFilters, normalizeBrowseFilters} from './search.js';
 import {applyBrowseSnapshot, createBrowseState, setBrowseError, setBrowseLoading} from './state.js';
 import {nextBrowseSortState, sortBrowseRows} from './sort.js';
 import {
@@ -46,14 +47,88 @@ function updatePageShell(payload) {
   }
 }
 
+function readSetting(key, defaultValue) {
+  if (!window.Settings || typeof window.Settings.get !== 'function') return defaultValue;
+  return window.Settings.get(key, defaultValue);
+}
+
+function writeSetting(key, value) {
+  if (!window.Settings || typeof window.Settings.set !== 'function') return;
+  window.Settings.set(key, value);
+}
+
+function browseFilterStorageKey(path) {
+  return path || '/';
+}
+
+function emptyBrowseFilters() {
+  return normalizeBrowseFilters({});
+}
+
+function defaultBrowseFilterState() {
+  return {
+    visible: false,
+    filters: emptyBrowseFilters(),
+  };
+}
+
+function normalizeStoredBrowseFilterState(value) {
+  if (!value || typeof value !== 'object') return defaultBrowseFilterState();
+  return {
+    visible: value.visible !== false,
+    filters: normalizeBrowseFilters(value.filters || {}),
+  };
+}
+
+function readPersistedBrowseFilterState(path) {
+  var entries = readSetting('browse-filters-by-path', {});
+  if (!entries || typeof entries !== 'object') return defaultBrowseFilterState();
+  var entry = entries[browseFilterStorageKey(path)];
+  if (!entry) return defaultBrowseFilterState();
+  return normalizeStoredBrowseFilterState(entry);
+}
+
+function writePersistedBrowseFilterState(path, state) {
+  var entries = readSetting('browse-filters-by-path', {});
+  var nextEntries = entries && typeof entries === 'object' ? Object.assign({}, entries) : {};
+  var key = browseFilterStorageKey(path);
+  if (!state || state.visible === false) {
+    delete nextEntries[key];
+  } else {
+    nextEntries[key] = {
+      visible: true,
+      filters: normalizeBrowseFilters(state.filters || {}),
+    };
+  }
+  writeSetting('browse-filters-by-path', nextEntries);
+}
+
+function resolveBrowseFilterState(path, filters) {
+  var normalized = normalizeBrowseFilters(filters);
+  if (hasActiveBrowseFilters(normalized)) {
+    return {
+      visible: true,
+      filters: normalized,
+    };
+  }
+  return readPersistedBrowseFilterState(path);
+}
+
+function getEffectiveBrowseFilters(state) {
+  if (!state || !state.filterBarVisible) return emptyBrowseFilters();
+  return normalizeBrowseFilters(state.filters);
+}
+
 function updateBodyDataset(state) {
   var body = document.body;
   if (!body) return;
+  var effectiveFilters = getEffectiveBrowseFilters(state);
   body.dataset.currentFolderPath = state.path;
   body.dataset.currentSortKey = state.sort;
   body.dataset.currentSortDirection = state.dir;
   body.dataset.browseEndpoint = buildBrowseListingEndpoint(state);
   body.dataset.browseRowCount = String((state.rows || []).length);
+  body.dataset.browseFilterActive = hasActiveBrowseFilters(effectiveFilters) ? '1' : '0';
 }
 
 function updateRefreshHref(state) {
@@ -63,6 +138,7 @@ function updateRefreshHref(state) {
     path: state.path,
     sort: state.sort,
     dir: state.dir,
+    filters: getEffectiveBrowseFilters(state),
     refresh: true,
   }));
 }
@@ -76,10 +152,20 @@ function updateSortControls(state) {
       path: state.path,
       sort: nextState.sort,
       dir: nextState.dir,
+      filters: getEffectiveBrowseFilters(state),
     }));
     var indicator = '';
     if (state.sort === key) indicator = state.dir === 'asc' ? ' ^' : ' v';
     link.textContent = label + indicator;
+  });
+}
+
+function currentBrowsePageHref(state) {
+  return buildBrowsePageHref({
+    path: state.path,
+    sort: state.sort,
+    dir: state.dir,
+    filters: getEffectiveBrowseFilters(state),
   });
 }
 
@@ -104,10 +190,75 @@ function setVirtualizationDataset(body, virtualState, windowState, renderCount) 
   body.dataset.browseVisibleRange = String(windowState.startIndex) + ':' + String(windowState.endIndex);
 }
 
+function getFilteredRows(state) {
+  return filterBrowseRows(state.rows, getEffectiveBrowseFilters(state));
+}
+
+function escapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function renderSelectOptions(select, values, activeValue) {
+  if (!select) return;
+  var safeActiveValue = activeValue && activeValue !== 'all' ? String(activeValue) : 'all';
+  var options = ['all'].concat(values || []);
+  if (safeActiveValue !== 'all' && options.indexOf(safeActiveValue) === -1) options.push(safeActiveValue);
+  select.innerHTML = options.map(function (value) {
+    var label = value === 'all' ? 'All' : value;
+    var selected = value === safeActiveValue ? ' selected' : '';
+    return '<option value="' + escapeHtml(value) + '"' + selected + '>' + escapeHtml(label) + '</option>';
+  }).join('');
+}
+
+function updateFilterControls(state) {
+  var bar = document.getElementById('browse-filter-bar');
+  var toggle = document.getElementById('browse-filter-toggle');
+  var query = document.getElementById('browse-filter-query');
+  var kind = document.getElementById('browse-filter-kind');
+  var status = document.getElementById('browse-filter-status');
+  var type = document.getElementById('browse-filter-type');
+  var count = document.getElementById('browse-filter-count');
+  var reset = document.getElementById('browse-filter-reset');
+  if (!bar || !toggle || !query || !kind || !status || !type || !count || !reset) return;
+  var visibleRows = getFilteredRows(state);
+  var totalRows = Array.isArray(state.rows) ? state.rows.length : 0;
+  var typeOptions = collectBrowseTypeOptions(state.rows);
+  bar.hidden = !state.filterBarVisible;
+  bar.classList.toggle('hidden', !state.filterBarVisible);
+  toggle.textContent = state.filterBarVisible ? 'Hide Filters' : 'Show Filters';
+  if (query.value !== state.filters.query) query.value = state.filters.query;
+  kind.value = state.filters.kind;
+  status.value = state.filters.status;
+  renderSelectOptions(type, typeOptions, state.filters.type);
+  count.textContent = 'Showing ' + String(visibleRows.length) + ' of ' + String(totalRows) + ' items';
+  reset.disabled = !hasActiveBrowseFilters(state.filters);
+}
+
 function renderRows(mount, state, virtualState, options) {
   var body = document.body;
-  var sortedRows = sortBrowseRows(state.rows, state.sort, state.dir);
+  var filteredRows = getFilteredRows(state);
+  var sortedRows = sortBrowseRows(filteredRows, state.sort, state.dir);
   var force = !!(options && options.force);
+  updateFilterControls(state);
+  if (sortedRows.length === 0) {
+    mount.innerHTML = emptyRowHtml(
+      Array.isArray(state.rows) && state.rows.length > 0
+        ? 'No rows match the current filters.'
+        : 'This folder is empty.',
+    );
+    virtualState.enabled = false;
+    virtualState.windowKey = 'empty:' + String(filteredRows.length) + ':' + String((state.rows || []).length);
+    setVirtualizationDataset(body, virtualState, null, 0);
+    updateBodyDataset(state);
+    updateRefreshHref(state);
+    updateSortControls(state);
+    body.dataset.browseFilteredRowCount = '0';
+    return;
+  }
   if (shouldVirtualizeRows(sortedRows.length, {threshold: virtualState.threshold})) {
     var viewport = readTableViewport(mount, virtualState.rowHeight);
     var windowState = computeVirtualWindow({
@@ -157,6 +308,7 @@ function renderRows(mount, state, virtualState, options) {
     virtualState.windowKey = 'full:' + String(sortedRows.length);
     setVirtualizationDataset(body, virtualState, null, sortedRows.length);
   }
+  body.dataset.browseFilteredRowCount = String(sortedRows.length);
   updateBodyDataset(state);
   updateRefreshHref(state);
   updateSortControls(state);
@@ -168,7 +320,12 @@ function renderSnapshot(mount, state, payload, virtualState) {
   renderRows(mount, state, virtualState, {force: true});
   return startFolderInfoPolling(state, {
     onRowsChanged: function (affectedKeys) {
-      if (!affectedKeys[state.sort]) return;
+      var filters = normalizeBrowseFilters(state.filters);
+      var filterSensitive =
+        (filters.status !== 'all' && affectedKeys.status) ||
+        (filters.type !== 'all' && affectedKeys.type) ||
+        filters.kind !== 'all';
+      if (!affectedKeys[state.sort] && !filterSensitive) return;
       renderRows(mount, state, virtualState, {force: true});
     },
   });
@@ -191,6 +348,19 @@ function initBrowse() {
   var stopFolderPolling = function () {};
   var virtualState = createVirtualState();
   var scrollFrameRequested = false;
+  var initialFilterState = resolveBrowseFilterState(state.path, state.filters);
+  state.filters = initialFilterState.filters;
+  state.filterBarVisible = initialFilterState.visible;
+
+  function notifyBrowseFolderChanged(previousPath, nextPath) {
+    if (previousPath === nextPath) return;
+    window.dispatchEvent(new CustomEvent('browse-folder-changed', {
+      detail: {
+        previousPath: previousPath,
+        path: nextPath,
+      },
+    }));
+  }
 
   function stopActiveWork() {
     if (currentController) {
@@ -207,13 +377,17 @@ function initBrowse() {
     body.dataset.browseClient = 'loading';
     setVirtualizationDataset(body, virtualState, null, 0);
     if (nextState) {
+      var filterState = resolveBrowseFilterState(nextState.path, nextState.filters || state.filters);
       state.path = nextState.path;
       state.sort = nextState.sort;
       state.dir = nextState.dir;
+      state.filters = filterState.filters;
+      state.filterBarVisible = filterState.visible;
       updateBodyDataset(state);
     } else {
       updateBodyDataset(state);
     }
+    updateFilterControls(state);
   }
 
   function loadBrowseState(nextState, options) {
@@ -222,11 +396,13 @@ function initBrowse() {
       sort: nextState.sort,
       dir: nextState.dir,
       refresh: !!nextState.refresh,
+      filters: normalizeBrowseFilters(nextState.filters || state.filters),
     };
     var historyMode = options && options.history ? options.history : 'none';
     var scrollToTop = !options || options.scroll !== false;
     var version = requestVersion + 1;
     requestVersion = version;
+    var previousPath = state.path;
     stopActiveWork();
     renderLoading(normalized);
     currentController = typeof AbortController === 'function' ? new AbortController() : null;
@@ -243,12 +419,9 @@ function initBrowse() {
         currentController = null;
         stopFolderPolling = renderSnapshot(mount, state, payload, virtualState);
         body.dataset.browseClient = 'ready';
+        notifyBrowseFolderChanged(previousPath, state.path);
         if (scrollToTop) window.scrollTo(0, 0);
-        var href = buildBrowsePageHref({
-          path: state.path,
-          sort: state.sort,
-          dir: state.dir,
-        });
+        var href = currentBrowsePageHref(state);
         if (historyMode === 'push') {
           window.history.pushState({}, '', href);
         } else if (historyMode === 'replace') {
@@ -277,7 +450,95 @@ function initBrowse() {
     });
   }
 
+  function applyFilterChange(nextFilters) {
+    state.filters = normalizeBrowseFilters(nextFilters);
+    if (hasActiveBrowseFilters(state.filters)) state.filterBarVisible = true;
+    writePersistedBrowseFilterState(state.path, {
+      visible: state.filterBarVisible,
+      filters: state.filters,
+    });
+    renderRows(mount, state, virtualState, {force: true});
+    window.history.pushState({}, '', currentBrowsePageHref(state));
+  }
+
+  function applyFilterBarVisibility(visible) {
+    state.filterBarVisible = !!visible;
+    if (!state.filterBarVisible && hasActiveBrowseFilters(state.filters)) {
+      state.filters = emptyBrowseFilters();
+      writePersistedBrowseFilterState(state.path, {visible: false});
+      renderRows(mount, state, virtualState, {force: true});
+      window.history.pushState({}, '', currentBrowsePageHref(state));
+      return;
+    }
+    if (!state.filterBarVisible) {
+      state.filters = emptyBrowseFilters();
+      writePersistedBrowseFilterState(state.path, {visible: false});
+      renderRows(mount, state, virtualState, {force: true});
+      window.history.pushState({}, '', currentBrowsePageHref(state));
+      return;
+    }
+    writePersistedBrowseFilterState(state.path, {
+      visible: true,
+      filters: state.filters,
+    });
+    updateFilterControls(state);
+  }
+
+  document.addEventListener('input', function (event) {
+    if (!event.target) return;
+    if (event.target.id === 'browse-filter-query') {
+      applyFilterChange({
+        query: event.target.value,
+        kind: state.filters.kind,
+        status: state.filters.status,
+        type: state.filters.type,
+      });
+    }
+  });
+
+  document.addEventListener('change', function (event) {
+    if (!event.target) return;
+    if (event.target.id === 'browse-filter-kind') {
+      applyFilterChange({
+        query: state.filters.query,
+        kind: event.target.value,
+        status: state.filters.status,
+        type: state.filters.type,
+      });
+      return;
+    }
+    if (event.target.id === 'browse-filter-status') {
+      applyFilterChange({
+        query: state.filters.query,
+        kind: state.filters.kind,
+        status: event.target.value,
+        type: state.filters.type,
+      });
+      return;
+    }
+    if (event.target.id === 'browse-filter-type') {
+      applyFilterChange({
+        query: state.filters.query,
+        kind: state.filters.kind,
+        status: state.filters.status,
+        type: event.target.value,
+      });
+    }
+  });
+
   document.addEventListener('click', function (event) {
+    var toggleButton = event.target && event.target.closest ? event.target.closest('#browse-filter-toggle') : null;
+    if (toggleButton) {
+      event.preventDefault();
+      applyFilterBarVisibility(!state.filterBarVisible);
+      return;
+    }
+    var resetButton = event.target && event.target.closest ? event.target.closest('#browse-filter-reset') : null;
+    if (resetButton) {
+      event.preventDefault();
+      applyFilterChange({ query: '', kind: 'all', status: 'all', type: 'all' });
+      return;
+    }
     var sortLink = event.target && event.target.closest ? event.target.closest('thead a[data-browse-sort]') : null;
     if (sortLink) {
       if (state.loading) return;
@@ -287,11 +548,7 @@ function initBrowse() {
       state.sort = nextSortState.sort;
       state.dir = nextSortState.dir;
       renderRows(mount, state, virtualState, {force: true});
-      window.history.pushState({}, '', buildBrowsePageHref({
-        path: state.path,
-        sort: state.sort,
-        dir: state.dir,
-      }));
+      window.history.pushState({}, '', currentBrowsePageHref(state));
       return;
     }
 

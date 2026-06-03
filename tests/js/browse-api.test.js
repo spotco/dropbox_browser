@@ -39,6 +39,13 @@ test("buildBrowsePageHref omits default sort and direction params", async () => 
     browseApi.buildBrowsePageHref({ path: "Music", sort: "size", dir: "desc" }),
     "/?path=Music&sort=size&dir=desc",
   );
+  assert.equal(
+    browseApi.buildBrowsePageHref({
+      path: "Music",
+      filters: { query: "mix", kind: "file", status: "Dropbox Only", type: "audio" },
+    }),
+    "/?path=Music&q=mix&kind=file&status=Dropbox+Only&type=audio",
+  );
 });
 
 test("buildFolderInfoQuery appends repeated paths and current folder", async () => {
@@ -54,11 +61,23 @@ test("readBrowseLocation normalizes path and sort state from URL search", async 
   const navigation = await importModuleFromWorkspace("dropbox_browser/assets/js/browse/navigation.js");
 
   assert.deepEqual(
-    navigation.readBrowseLocation("?path=Music%2FAlbum&sort=date&dir=desc&refresh=1"),
-    { path: "Music/Album", sort: "date", dir: "desc", refresh: true },
+    navigation.readBrowseLocation("?path=Music%2FAlbum&sort=date&dir=desc&refresh=1&q=mix&kind=file&status=Dropbox+Only&type=audio"),
+    {
+      path: "Music/Album",
+      sort: "date",
+      dir: "desc",
+      refresh: true,
+      filters: { query: "mix", kind: "file", status: "Dropbox Only", type: "audio" },
+    },
   );
   assert.deepEqual(
     navigation.readBrowseLocation("?path=..%2Fbad&sort=nope"),
-    { path: "", sort: "name", dir: "asc", refresh: false },
+    {
+      path: "",
+      sort: "name",
+      dir: "asc",
+      refresh: false,
+      filters: { query: "", kind: "all", status: "all", type: "all" },
+    },
   );
 });

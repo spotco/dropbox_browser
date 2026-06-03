@@ -1,7 +1,8 @@
-- page loading: should be client side (but maintain deep URL links)
-	re-sorting: should not be a page refresh.
-	make camera uploads folder performant
-	client-only filters for current page	
+
+- image viewer
+	preview is slow
+	thumbnail preview load
+	
 
 - anime player with switch audio/subtitles in browser
 - add file search as a tab from cache only

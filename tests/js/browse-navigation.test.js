@@ -23,6 +23,12 @@ test("readBrowseHref parses only same-origin browse URLs", async () => {
     sort: "date",
     dir: "desc",
     refresh: false,
+    filters: {
+      query: "",
+      kind: "all",
+      status: "all",
+      type: "all",
+    },
   });
   assert.equal(navigation.readBrowseHref("/file?path=music/song.mp3&source=remote"), null);
   assert.equal(navigation.readBrowseHref("https://www.dropbox.com/home/music"), null);
