@@ -348,6 +348,8 @@ function initBrowse() {
   var stopFolderPolling = function () {};
   var virtualState = createVirtualState();
   var scrollFrameRequested = false;
+  var filterUrlTimer = null;
+  var FILTER_URL_DEBOUNCE_MS = 300;
   var initialFilterState = resolveBrowseFilterState(state.path, state.filters);
   state.filters = initialFilterState.filters;
   state.filterBarVisible = initialFilterState.visible;
@@ -362,7 +364,32 @@ function initBrowse() {
     }));
   }
 
+  function cancelFilterUrlTimer() {
+    if (filterUrlTimer !== null) {
+      window.clearTimeout(filterUrlTimer);
+      filterUrlTimer = null;
+    }
+  }
+
+  function syncBrowseUrl(historyMode) {
+    var href = currentBrowsePageHref(state);
+    if (historyMode === 'push') {
+      window.history.pushState({}, '', href);
+    } else if (historyMode === 'replace') {
+      window.history.replaceState({}, '', href);
+    }
+  }
+
+  function scheduleFilterUrlReplace() {
+    cancelFilterUrlTimer();
+    filterUrlTimer = window.setTimeout(function () {
+      filterUrlTimer = null;
+      syncBrowseUrl('replace');
+    }, FILTER_URL_DEBOUNCE_MS);
+  }
+
   function stopActiveWork() {
+    cancelFilterUrlTimer();
     if (currentController) {
       currentController.abort();
       currentController = null;
@@ -450,7 +477,7 @@ function initBrowse() {
     });
   }
 
-  function applyFilterChange(nextFilters) {
+  function applyFilterChange(nextFilters, historyMode) {
     state.filters = normalizeBrowseFilters(nextFilters);
     if (hasActiveBrowseFilters(state.filters)) state.filterBarVisible = true;
     writePersistedBrowseFilterState(state.path, {
@@ -458,23 +485,32 @@ function initBrowse() {
       filters: state.filters,
     });
     renderRows(mount, state, virtualState, {force: true});
-    window.history.pushState({}, '', currentBrowsePageHref(state));
+    if (historyMode === 'push') {
+      cancelFilterUrlTimer();
+      syncBrowseUrl('push');
+    } else if (historyMode === 'replace') {
+      cancelFilterUrlTimer();
+      syncBrowseUrl('replace');
+    } else if (historyMode === 'debounced-replace') {
+      scheduleFilterUrlReplace();
+    }
   }
 
   function applyFilterBarVisibility(visible) {
+    cancelFilterUrlTimer();
     state.filterBarVisible = !!visible;
     if (!state.filterBarVisible && hasActiveBrowseFilters(state.filters)) {
       state.filters = emptyBrowseFilters();
       writePersistedBrowseFilterState(state.path, {visible: false});
       renderRows(mount, state, virtualState, {force: true});
-      window.history.pushState({}, '', currentBrowsePageHref(state));
+      syncBrowseUrl('push');
       return;
     }
     if (!state.filterBarVisible) {
       state.filters = emptyBrowseFilters();
       writePersistedBrowseFilterState(state.path, {visible: false});
       renderRows(mount, state, virtualState, {force: true});
-      window.history.pushState({}, '', currentBrowsePageHref(state));
+      syncBrowseUrl('push');
       return;
     }
     writePersistedBrowseFilterState(state.path, {
@@ -492,7 +528,7 @@ function initBrowse() {
         kind: state.filters.kind,
         status: state.filters.status,
         type: state.filters.type,
-      });
+      }, 'debounced-replace');
     }
   });
 
@@ -504,7 +540,7 @@ function initBrowse() {
         kind: event.target.value,
         status: state.filters.status,
         type: state.filters.type,
-      });
+      }, 'push');
       return;
     }
     if (event.target.id === 'browse-filter-status') {
@@ -513,7 +549,7 @@ function initBrowse() {
         kind: state.filters.kind,
         status: event.target.value,
         type: state.filters.type,
-      });
+      }, 'push');
       return;
     }
     if (event.target.id === 'browse-filter-type') {
@@ -522,7 +558,7 @@ function initBrowse() {
         kind: state.filters.kind,
         status: state.filters.status,
         type: event.target.value,
-      });
+      }, 'push');
     }
   });
 
@@ -536,7 +572,7 @@ function initBrowse() {
     var resetButton = event.target && event.target.closest ? event.target.closest('#browse-filter-reset') : null;
     if (resetButton) {
       event.preventDefault();
-      applyFilterChange({ query: '', kind: 'all', status: 'all', type: 'all' });
+      applyFilterChange({ query: '', kind: 'all', status: 'all', type: 'all' }, 'push');
       return;
     }
     var sortLink = event.target && event.target.closest ? event.target.closest('thead a[data-browse-sort]') : null;

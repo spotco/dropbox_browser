@@ -20,7 +20,8 @@ import {PlaylistStore} from './music-playlist-store.js';
       playerShell: pane.querySelector('.music-player-shell'),
       loadButton: document.getElementById('music-library-load'),
       librarySortButtons: pane.querySelectorAll('[data-library-sort-key]'),
-      statusEl: document.getElementById('music-library-status-text'),
+      statusEl: document.getElementById('music-player-status-text'),
+      statusBarEl: document.getElementById('music-player-status'),
       treeEl: document.getElementById('music-library-tree'),
       libraryPane: document.getElementById('music-library-pane'),
       libraryPlaylistResizer: document.getElementById('music-resizer-library-playlist'),
@@ -159,7 +160,14 @@ import {PlaylistStore} from './music-playlist-store.js';
     libraryApi: null,
     layoutApi: null,
     setStatus: function (text) {
+      if (!ctx.els.statusEl) return;
       ctx.els.statusEl.textContent = text;
+    },
+    setPlayerStatusBarVisible: function (visible) {
+      if (!ctx.els.statusBarEl) return;
+      ctx.els.statusBarEl.hidden = !visible;
+      ctx.els.statusBarEl.classList.toggle('hidden', !visible);
+      ctx.els.statusBarEl.classList.toggle('is-visible', visible);
     },
     setLibraryStatus: function (text) {
       ctx.state.pendingLibraryStatusText = text;
@@ -171,7 +179,7 @@ import {PlaylistStore} from './music-playlist-store.js';
       ctx.state.activePlaylist = ctx.state.playlistStore.activePlaylist;
       ctx.state.persistedPlaylists = ctx.state.playlistStore.persistedPlaylists;
       ctx.state.playlist = ctx.state.activePlaylist.songs;
-      ctx.state.playlistRemotePaths = ctx.state.activePlaylist.remotePathSet;
+      ctx.state.playlistRemotePaths = ctx.state.activePlaylist.absolutePathSet;
     }
   };
 
@@ -198,8 +206,18 @@ import {PlaylistStore} from './music-playlist-store.js';
     ctx.playlistApi.hidePlaylistLoadContextMenu();
   });
 
+  function syncPlayerStatusBarForPaneMode(mode) {
+    var musicPlayerActive = mode === 'music-player';
+    ctx.setPlayerStatusBarVisible(musicPlayerActive);
+    if (musicPlayerActive && ctx.state.pendingLibraryStatusText !== null) {
+      ctx.setStatus(ctx.state.pendingLibraryStatusText);
+      ctx.state.pendingLibraryStatusText = null;
+    }
+  }
+
   window.addEventListener('bottom-pane-mode-changed', function (ev) {
     if (!ev.detail) return;
+    syncPlayerStatusBarForPaneMode(ev.detail.mode);
     if (ev.detail.mode === 'music-player') {
       ctx.layoutApi.applyMusicPanePercents(ctx.layoutApi.readSavedMusicPanePercents(), false);
       ctx.layoutApi.flushDeferredMusicPaneUpdates();
@@ -212,6 +230,8 @@ import {PlaylistStore} from './music-playlist-store.js';
     }
     ctx.playbackApi.metadata.scheduleNowPlayingMarqueeRefresh();
   });
+
+  syncPlayerStatusBarForPaneMode(Settings.get('bottom-pane-mode', 'server-log'));
 
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden) {

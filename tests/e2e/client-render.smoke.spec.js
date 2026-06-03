@@ -157,8 +157,7 @@ test("client-render filters rows locally without refetching the listing endpoint
   await expect(page.locator("#browse-rows .entry-name")).toHaveCount(1);
   await expect(page.locator("#browse-rows .entry-name").first()).toHaveText("remote-only.txt");
   await expect(page.locator("#browse-filter-count")).toContainText("Showing 1 of 3 items");
-  await expect(page).toHaveURL(/q=remote/);
-  await page.waitForTimeout(250);
+  await expect.poll(async () => (await page.url()).includes("q=remote")).toBe(true);
   await expect.poll(() => listingRequestCount).toBe(1);
 
   await page.locator("#browse-filter-kind").selectOption("folder");
@@ -199,7 +198,7 @@ test("client-render hiding the filter bar clears active filters and restores all
   await page.locator("#browse-filter-toggle").click();
   await page.locator("#browse-filter-query").fill("remote");
   await expect(page.locator("#browse-rows .entry-name")).toHaveCount(1);
-  await expect(page).toHaveURL(/q=remote/);
+  await expect.poll(async () => (await page.url()).includes("q=remote")).toBe(true);
 
   await page.locator("#browse-filter-toggle").click();
   await expect(page.locator("#browse-filter-bar")).toBeHidden();
@@ -214,7 +213,7 @@ test("client-render restores each folder's persisted filter state on navigation 
   await page.locator("#browse-filter-toggle").click();
 
   await page.locator("#browse-filter-query").fill("folder");
-  await expect(page).toHaveURL(/q=folder/);
+  await expect.poll(async () => (await page.url()).includes("q=folder")).toBe(true);
 
   await page.getByRole("link", { name: "folder" }).click();
   await expect(page).toHaveURL(/\?path=folder/);
@@ -226,7 +225,7 @@ test("client-render restores each folder's persisted filter state on navigation 
 
   await page.locator("#browse-filter-toggle").click();
   await page.locator("#browse-filter-query").fill("nested");
-  await expect(page).toHaveURL(/\?path=folder&q=nested/);
+  await expect.poll(async () => (await page.url()).includes("path=folder") && (await page.url()).includes("q=nested")).toBe(true);
 
   await page.goBack();
   await expect(page).toHaveURL(/\?path=folder$/);
@@ -271,7 +270,7 @@ test("client-render music library load follows the current folder and resets on 
 
   await page.selectOption("#bottom-pane-mode", "music-player");
   await expect(page.locator("#music-player-pane")).toBeVisible();
-  await expect(page.locator("#music-library-status")).toContainText("Library not loaded.");
+  await expect(page.locator("#music-player-status")).toContainText("Library not loaded.");
 
   await page.getByRole("link", { name: "folder" }).click();
   await expect(page.locator("body")).toHaveAttribute("data-current-folder-path", "folder");
@@ -281,6 +280,6 @@ test("client-render music library load follows the current folder and resets on 
 
   await page.goBack();
   await expect(page.locator("body")).toHaveAttribute("data-current-folder-path", "");
-  await expect(page.locator("#music-library-status")).toContainText("Library not loaded.");
+  await expect(page.locator("#music-player-status")).toContainText("Library not loaded.");
   await expect(page.getByRole("button", { name: "Load Current Folder" })).toBeEnabled();
 });

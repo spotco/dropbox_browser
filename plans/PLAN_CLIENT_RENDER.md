@@ -74,6 +74,7 @@ Later targets build on the same client data model:
 - Completed: Step 9 - replace full row rendering with virtualization.
 - Completed: Step 10 - add direct local search and filtering.
 - Completed: Step 10.5 - promote stable filter state into the URL.
+- Completed: Step 10.5 follow-up - debounced `replaceState` for text filter URL updates.
 - Current: Step 11 - add recursive cached search.
 
 ## Step 1 - Add A Disabled Client Render Mode Switch
@@ -482,12 +483,19 @@ Status: completed on 2026-06-02.
   - `type`
 - Browse state parsing now restores filter state from the URL on first load and
   `popstate`.
-- Client-side filter changes now update browser history through canonical browse
-  URLs without triggering another listing fetch.
-- Sort links, refresh links, client folder links, and breadcrumb links now
-  preserve active filter state in client mode.
-- Added JS and Playwright coverage for reload, back/forward, and filtered
-  client navigation round-trips.
+- Client-side filter changes update the current URL without triggering another
+  listing fetch:
+  - text query input uses debounced `history.replaceState()` so typing does not
+    create one history entry per character;
+  - kind/status/type changes and Clear use `history.pushState()` as discrete
+    actions.
+- Folder navigation intentionally does **not** carry active filters in the URL;
+  each folder keeps its own default filter state in browser Settings
+  (`browse-filters-by-path`) when the filter bar was left visible.
+- Sort links and refresh links preserve active filters for the **current**
+  folder only.
+- Added JS and Playwright coverage for reload, back/forward, per-folder filter
+  persistence, and filtered client navigation round-trips.
 
 - After direct-folder filtering is stable, add URL query params for the filter
   state that is worth deep-linking.
@@ -607,6 +615,10 @@ python -m unittest discover -s tests -v
   override later only if manual A/B testing becomes painful.
 - Chosen: keep filter/search state out of the URL until sort/navigation parity
   and direct filtering are stable, then add it as an explicit follow-up step.
+- Chosen: folder navigation does not carry active filters in the URL; per-folder
+  filter defaults persist in Settings when the filter bar stays visible.
+- Chosen: text filter URL updates use debounced `replaceState`; dropdown/clear
+  filter actions use `pushState`.
 - Chosen: keep recursive cached search on a browse-specific endpoint.
 - Chosen: preserve table markup where practical, but allow a client-mode
   accessible grid/list if virtualization makes table semantics brittle.
@@ -621,6 +633,10 @@ python -m unittest discover -s tests -v
   endpoint behavior honest and easier to test.
 - Keep filter/search state out of the URL until direct filtering is stable, then
   add it in a dedicated follow-up step after sort/navigation parity.
+- Do not carry active filters across folder navigation; persist per-folder filter
+  defaults in Settings instead.
+- Debounce text-filter URL updates with `replaceState`; use `pushState` only for
+  discrete filter control changes.
 - Implement direct-listing JSON first, then client sorting/navigation, then
   virtualization. Virtualization before data-contract parity will make
   regressions harder to isolate.

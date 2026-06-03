@@ -48,6 +48,13 @@ function cloneSong(song) {
   };
 }
 
+export function playlistAbsolutePathKey(song) {
+  var copiedSong = cloneSong(song);
+  if (!copiedSong) return '';
+  var path = normalizePlaylistPath(copiedSong.stream_path || copiedSong.rel_path || '');
+  return path ? path.toLowerCase() : '';
+}
+
 function basename(remotePath) {
   var value = String(remotePath || '');
   if (!value) return '';
@@ -101,7 +108,7 @@ export class PlaylistModel {
     this.name = normalizePlaylistName(settings.name);
     this.last_modified = Number(settings.last_modified || 0);
     this.songs = [];
-    this.remotePathSet = Object.create(null);
+    this.absolutePathSet = Object.create(null);
     this.replaceSongs(settings.songs || []);
   }
 
@@ -115,16 +122,18 @@ export class PlaylistModel {
     return this.last_modified;
   }
 
-  hasRemotePath(remotePath) {
-    return !!(remotePath && this.remotePathSet[remotePath]);
+  hasAbsolutePath(song) {
+    var pathKey = playlistAbsolutePathKey(song);
+    return !!(pathKey && this.absolutePathSet[pathKey]);
   }
 
   addSongs(songs) {
     var added = 0;
     (songs || []).forEach(function (song) {
       var copiedSong = cloneSong(song);
-      if (!copiedSong || this.remotePathSet[copiedSong.remote_path]) return;
-      this.remotePathSet[copiedSong.remote_path] = true;
+      var pathKey = playlistAbsolutePathKey(copiedSong);
+      if (!copiedSong || !pathKey || this.absolutePathSet[pathKey]) return;
+      this.absolutePathSet[pathKey] = true;
       this.songs.push(copiedSong);
       added += 1;
     }, this);
@@ -148,7 +157,7 @@ export class PlaylistModel {
 
   replaceSongs(songs) {
     this.songs = [];
-    this.remotePathSet = Object.create(null);
+    this.absolutePathSet = Object.create(null);
     this.addSongs(songs || []);
     return this.songs;
   }

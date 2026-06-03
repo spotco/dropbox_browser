@@ -46,7 +46,7 @@ test("PlaylistModel serializes ordered Dropbox paths and round-trips through JSO
   assert.equal(restored.songs[0].display_name, "alpha.mp3");
 });
 
-test("PlaylistModel keeps duplicate Dropbox paths disallowed", async () => {
+test("PlaylistModel keeps duplicate absolute paths disallowed", async () => {
   const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
   const playlist = new playlistModule.PlaylistModel({
     name: "No Duplicates",
@@ -62,6 +62,48 @@ test("PlaylistModel keeps duplicate Dropbox paths disallowed", async () => {
   assert.deepEqual(
     playlist.songs.map((entry) => entry.remote_path),
     ["Music/alpha.mp3", "Music/bravo.mp3"],
+  );
+});
+
+test("PlaylistModel treats dropbox-prefixed and bare paths as the same absolute path", async () => {
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
+  const playlist = new playlistModule.PlaylistModel({
+    name: "No Duplicates",
+    songs: [{ remote_path: "music/alpha.mp3", stream_path: "music/alpha.mp3" }],
+  });
+
+  const added = playlist.addSongs([
+    {
+      remote_path: "dropbox:music/alpha.mp3",
+      stream_path: "music/alpha.mp3",
+    },
+    {
+      remote_path: "dropbox:music/bravo.mp3",
+      stream_path: "music/bravo.mp3",
+    },
+  ]);
+
+  assert.equal(added, 1);
+  assert.equal(playlist.songs.length, 2);
+  assert.deepEqual(
+    playlist.songs.map((entry) => entry.stream_path),
+    ["music/alpha.mp3", "music/bravo.mp3"],
+  );
+});
+
+test("playlistAbsolutePathKey matches the stream path shown in the playlist UI", async () => {
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
+
+  assert.equal(
+    playlistModule.playlistAbsolutePathKey({
+      remote_path: "dropbox:Music/Album/Track.mp3",
+      stream_path: "Music/Album/Track.mp3",
+    }),
+    "music/album/track.mp3",
+  );
+  assert.equal(
+    playlistModule.playlistAbsolutePathKey({ remote_path: "/Music/alpha.mp3" }),
+    "music/alpha.mp3",
   );
 });
 

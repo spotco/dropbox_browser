@@ -53,7 +53,7 @@ async function releaseGateAndWaitForCheckpoint({ request, page, gateName, checkp
 async function waitForLibraryCounts(page, checkpoint) {
   await expect
     .poll(async () => {
-      const text = await page.locator("#music-library-status").innerText();
+      const text = await page.locator("#music-player-status").innerText();
       const counts = parseLibraryStatusCounts(text);
       if (!counts) return null;
       return {
@@ -72,7 +72,7 @@ async function waitForLibraryCounts(page, checkpoint) {
 }
 
 async function currentLibraryCounts(page) {
-  const text = await page.locator("#music-library-status").innerText();
+  const text = await page.locator("#music-player-status").innerText();
   return parseLibraryStatusCounts(text);
 }
 
@@ -173,7 +173,7 @@ test("music player library grows from staged background cache work", async ({ pa
   expect(String(firstLibraryPoll.client_poll_delay_ms)).toBe("0");
   expect(firstLibraryPoll.elapsed_ms).toBeLessThan(150);
 
-  const initialStatusText = await page.locator("#music-library-status").innerText();
+  const initialStatusText = await page.locator("#music-player-status").innerText();
   expect(initialStatusText).toContain("Remaining:");
   await expect(
     page
@@ -218,7 +218,7 @@ test("music player library grows from staged background cache work", async ({ pa
   const finalCounts = await currentLibraryCounts(page);
   expect(finalCounts).not.toBeNull();
   expect(finalCounts.complete).toBe(true);
-  await expect(page.locator("#music-library-status")).toContainText("Loaded 26 songs and 9 folders.");
+  await expect(page.locator("#music-player-status")).toContainText("Loaded 26 songs and 9 folders.");
   await expect(page.getByRole("button", { name: "Load Current Folder" })).toBeEnabled();
 
   await expandFolder(page, "Disc 2");
