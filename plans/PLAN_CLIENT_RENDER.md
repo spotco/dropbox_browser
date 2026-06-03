@@ -72,7 +72,9 @@ Later targets build on the same client data model:
 - Completed: Step 7 - client-side sorting without reload.
 - Completed: Step 8 - URL-compatible client navigation.
 - Completed: Step 9 - replace full row rendering with virtualization.
-- Current: Step 10 - add direct local search and filtering.
+- Completed: Step 10 - add direct local search and filtering.
+- Completed: Step 10.5 - promote stable filter state into the URL.
+- Current: Step 11 - add recursive cached search.
 
 ## Step 1 - Add A Disabled Client Render Mode Switch
 
@@ -407,7 +409,12 @@ Status: completed on 2026-06-02.
     values from the shared JSON snapshot while metadata is still incomplete;
   - added focused regressions covering `partial -> partial` growth and
     `partial -> complete` finalization in both the listing endpoint contract and
-    server-rendered `/folder-info` polling behavior.
+    server-rendered `/folder-info` polling behavior;
+  - reduced folder-cache lock contention affecting client navigation by
+    changing worker-side cache persistence to mark records dirty under the
+    manager lock and flush JSON cache writes after releasing that lock, so
+    `notify_page_load()` page-priority updates no longer block behind
+    background cache-file writes.
 
 - After non-virtualized parity is stable, add a virtual table body for large
   result sets.
@@ -434,6 +441,21 @@ Status: completed on 2026-06-02.
 
 ## Step 10 - Add Direct Local Search And Filtering
 
+Status: completed on 2026-06-02.
+
+- Added a client-mode local filter bar for the current folder view.
+- Filtering now works entirely in the browser over the loaded row snapshot,
+  without calling a new endpoint or refetching the current listing.
+- Implemented direct-folder filters for:
+  - text/name contains;
+  - kind: file/folder;
+  - status;
+  - type.
+- Filtered results update the visible row set, empty state, visible counts, and
+  virtualization window sizing through the shared client render path.
+- Added JS tests for filter predicates and Playwright coverage proving client
+  filtering remains local and does not trigger another listing fetch.
+
 - Add a client-mode search box behind the same feature flag.
 - Start with direct-folder filtering over the loaded row snapshot.
 - Support filters that are entirely browser-local:
@@ -450,6 +472,22 @@ Status: completed on 2026-06-02.
 - Add JS tests for filter predicates and interactions with sorting.
 
 ## Step 10.5 - Promote Stable Filter State Into The URL
+
+Status: completed on 2026-06-02.
+
+- Added canonical client-mode filter query params to browse URLs:
+  - `q`
+  - `kind`
+  - `status`
+  - `type`
+- Browse state parsing now restores filter state from the URL on first load and
+  `popstate`.
+- Client-side filter changes now update browser history through canonical browse
+  URLs without triggering another listing fetch.
+- Sort links, refresh links, client folder links, and breadcrumb links now
+  preserve active filter state in client mode.
+- Added JS and Playwright coverage for reload, back/forward, and filtered
+  client navigation round-trips.
 
 - After direct-folder filtering is stable, add URL query params for the filter
   state that is worth deep-linking.
