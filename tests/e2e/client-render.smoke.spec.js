@@ -83,6 +83,37 @@ test("client-render deep link loads the requested folder", async ({ page }) => {
   await expect(page.getByText("nested.txt")).toBeVisible();
 });
 
+test("client-render refresh reloads listing in place without a full page reload", async ({ page }) => {
+  const listingUrls = [];
+  let refreshPostCount = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/browse/endpoints/listing")) {
+      listingUrls.push(request.url());
+    }
+    if (request.method() === "POST" && request.url().includes("/refresh-cache")) {
+      refreshPostCount += 1;
+    }
+  });
+
+  await page.goto("/");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await expect.poll(() => listingUrls.length).toBe(1);
+
+  await page.evaluate(() => {
+    window.__clientRenderRefreshMarker = "stay";
+  });
+
+  await page.getByRole("link", { name: /refresh/i }).click();
+  await expect(page.locator("#refresh-blocker")).toBeVisible();
+  await expect.poll(() => refreshPostCount).toBe(1);
+  await expect.poll(() => listingUrls.length).toBe(2);
+  await expect(listingUrls[1]).toContain("refresh=1");
+  await expect(page.locator("#refresh-blocker")).toBeHidden();
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await expect(page).not.toHaveURL(/(?:\?|&)refresh=1/);
+  expect(await page.evaluate(() => window.__clientRenderRefreshMarker)).toBe("stay");
+});
+
 test("client-render folder navigation uses history without a full page reload", async ({ page }) => {
   let listingRequestCount = 0;
   page.on("request", (request) => {
