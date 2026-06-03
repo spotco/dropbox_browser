@@ -71,7 +71,8 @@ Later targets build on the same client data model:
 - Completed: Step 6 - non-virtualized client rendering parity.
 - Completed: Step 7 - client-side sorting without reload.
 - Completed: Step 8 - URL-compatible client navigation.
-- Current: Step 9 - replace full row rendering with virtualization.
+- Completed: Step 9 - replace full row rendering with virtualization.
+- Current: Step 10 - add direct local search and filtering.
 
 ## Step 1 - Add A Disabled Client Render Mode Switch
 
@@ -384,6 +385,29 @@ Status: completed on 2026-06-02.
   sort-state restoration.
 
 ## Step 9 - Replace Full Row Rendering With Virtualization
+
+Status: completed on 2026-06-02.
+
+- Added `assets/js/browse/virtual-list.js` for viewport math, row-height
+  measurement, and virtualization thresholds.
+- Client browse rendering now keeps the existing full-render path for small
+  folders and switches large folders to a virtualized `<tbody>` with spacer
+  rows and overscanned visible windows.
+- Folder metadata and current-folder file-status polling now update browse row
+  state independently of mounted DOM nodes, so off-screen virtualized rows stay
+  correct and mounted rows still patch in place.
+- Added JS tests for window math and virtual row rendering.
+- Added Playwright coverage for large virtualized listings and isolated the E2E
+  cache/temp paths in `run_server.py` so fixture-specific client-render tests do
+  not bleed through shared listing caches.
+- Follow-up completed:
+  - client-render mode now keeps polling `/folder-info` for remote folders with
+    partial cached metadata, not just folders with no cached record yet;
+  - client-render rows continue to surface in-progress folder size/date/count
+    values from the shared JSON snapshot while metadata is still incomplete;
+  - added focused regressions covering `partial -> partial` growth and
+    `partial -> complete` finalization in both the listing endpoint contract and
+    server-rendered `/folder-info` polling behavior.
 
 - After non-virtualized parity is stable, add a virtual table body for large
   result sets.

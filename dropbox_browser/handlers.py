@@ -342,17 +342,24 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         if is_dir:
             cached_folder = (folder_cache_map or {}).get(name) if row.get("remote") else None
-            size_value = row.get("cached_size")
-            date_value = row.get("cached_mtime")
-            size_display = human_size(int(size_value)) if size_value is not None else "—"
-            date_display = display_date(date_value if isinstance(date_value, (int, float)) else None)
             count_display = ""
-            metadata_complete = False
-            if isinstance(cached_folder, dict):
-                metadata_complete = bool(cached_folder.get("complete", False))
-                file_count = cached_folder.get("file_count")
-                if file_count is not None:
-                    count_display = f"{int(file_count):,} files"
+            if row.get("remote"):
+                size_value = row.get("cached_size")
+                date_value = row.get("cached_mtime")
+                size_display = human_size(int(size_value)) if size_value is not None else "—"
+                date_display = display_date(date_value if isinstance(date_value, (int, float)) else None)
+                metadata_complete = False
+                if isinstance(cached_folder, dict):
+                    metadata_complete = bool(cached_folder.get("complete", False))
+                    file_count = cached_folder.get("file_count")
+                    if file_count is not None:
+                        count_display = f"{int(file_count):,} files"
+            else:
+                size_value = None
+                date_value = row.get("local_mtime")
+                size_display = "—"
+                date_display = display_date(date_value if isinstance(date_value, (int, float)) else None)
+                metadata_complete = True
             sync_directions: list[str] = []
         else:
             size_value = row.get("remote_size") if row.get("remote_size") is not None else row.get("local_size")
@@ -450,7 +457,14 @@ class RequestHandler(BaseHTTPRequestHandler):
         pending_metadata_paths = [
             posixpath.join(snapshot.rel_path, entry["name"]) if snapshot.rel_path else str(entry["name"])
             for entry in snapshot.entries
-            if bool(entry["is_dir"]) and bool(entry["remote"]) and snapshot.folder_cache_map.get(str(entry["name"])) is None
+            if (
+                bool(entry["is_dir"])
+                and bool(entry["remote"])
+                and (
+                    snapshot.folder_cache_map.get(str(entry["name"])) is None
+                    or not bool((snapshot.folder_cache_map.get(str(entry["name"])) or {}).get("complete"))
+                )
+            )
         ]
         payload = {
             "page": {

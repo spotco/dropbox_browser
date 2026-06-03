@@ -42,33 +42,25 @@ function findSyncCell(relPath) {
   return document.querySelector(selector);
 }
 
-function reorderFolderRows(currentSortKey, currentSortDirection) {
-  if (currentSortKey !== 'date') return;
-  var tbody = document.getElementById('browse-rows');
-  if (!tbody) return;
-  var rows = Array.prototype.slice.call(tbody.querySelectorAll('tr[data-row-kind="folder"]'));
-  if (rows.length < 2) return;
-  rows.sort(function (left, right) {
-    var leftDate = parseFloat(left.getAttribute('data-sort-date') || '0');
-    var rightDate = parseFloat(right.getAttribute('data-sort-date') || '0');
-    if (leftDate !== rightDate) {
-      return currentSortDirection === 'desc' ? rightDate - leftDate : leftDate - rightDate;
-    }
-    var leftName = left.getAttribute('data-sort-name') || '';
-    var rightName = right.getAttribute('data-sort-name') || '';
-    return currentSortDirection === 'desc'
-      ? rightName.localeCompare(leftName)
-      : leftName.localeCompare(rightName);
-  });
-  var firstFileRow = tbody.querySelector('tr[data-row-kind="file"]');
-  rows.forEach(function (row) {
-    tbody.insertBefore(row, firstFileRow);
-  });
+function findStateRow(rows, relPath) {
+  return (rows || []).find(function (row) { return row.path === relPath; });
+}
+
+function findMountedRow(selectorPrefix, relPath) {
+  return document.querySelector(selectorPrefix + CSS.escape(relPath) + '"]');
+}
+
+function patchMountedFileStatusRow(row, relPath, label) {
+  if (!row) return;
+  var statusCell = row.querySelector('.status');
+  var syncCell = findSyncCell(relPath);
+  applyStatusCell(statusCell, label);
+  if (syncCell && window.SyncControls) syncCell.innerHTML = window.SyncControls.renderCell(relPath, 'file', label);
 }
 
 function applyFolderResult(relPath, info, state) {
-  var stateRow = (state.rows || []).find(function (row) { return row.path === relPath; });
-  var row = document.querySelector('tr[data-folder-path="' + CSS.escape(relPath) + '"]');
+  var stateRow = findStateRow(state.rows, relPath);
+  var row = findMountedRow('tr[data-folder-path="', relPath);
   if (!row && !stateRow) return false;
   var sizeCell = row ? row.querySelector('.col-size') : null;
   var dateCell = row ? row.querySelector('.col-date') : null;
@@ -106,7 +98,6 @@ function applyFolderResult(relPath, info, state) {
     affected.date = true;
     affected.size = true;
   }
-  reorderFolderRows(state.sort, state.dir);
   return affected;
 }
 
@@ -121,23 +112,18 @@ function applyCurrentResult(info, state) {
   }
   var waiting = currentFolderPollWaiting(info);
   var affected = {};
-  document.querySelectorAll('tr[data-file-status-path]').forEach(function (row) {
-    var relPath = row.getAttribute('data-file-status-path') || '';
-    var statusCell = row.querySelector('.status');
-    var syncCell = findSyncCell(relPath);
+  (state.rows || []).forEach(function (stateRow) {
+    if (!(stateRow.kind === 'file' && stateRow.remote && stateRow.local)) return;
+    var relPath = stateRow.path || '';
     var name = relPath.split('/').pop();
     var statusInfo = info.file_statuses[name];
     if (!statusInfo) return;
     var label = labelForDiff(statusInfo.diff_status);
-    applyStatusCell(statusCell, label);
-    if (syncCell && window.SyncControls) syncCell.innerHTML = window.SyncControls.renderCell(relPath, 'file', label);
+    patchMountedFileStatusRow(findMountedRow('tr[data-file-status-path="', relPath), relPath, label);
     if (statusInfo.diff_status === 'loading') waiting = true;
-    var stateRow = (state.rows || []).find(function (item) { return item.path === relPath; });
-    if (stateRow) {
-      stateRow.status_label = label;
-      stateRow.status_class = statusClassFromLabel(label);
-      affected.status = true;
-    }
+    stateRow.status_label = label;
+    stateRow.status_class = statusClassFromLabel(label);
+    affected.status = true;
   });
   return {waiting: waiting, affected: affected};
 }

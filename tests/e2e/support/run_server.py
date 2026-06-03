@@ -14,6 +14,22 @@ def _create_repo_temp_root(repo_root: Path, prefix: str) -> Path:
     temp_root.mkdir(parents=True, exist_ok=False)
     return temp_root
 
+
+def _patch_isolated_paths(temp_root: Path) -> None:
+    from dropbox_browser import config as config_module
+    from dropbox_browser import foldercache as foldercache_module
+    from dropbox_browser import listingcache as listingcache_module
+    from dropbox_browser import workertrace as workertrace_module
+
+    folder_cache_dir = temp_root / "Cache" / "FolderInfo"
+    listing_cache_dir = temp_root / "Cache" / "ListingCache"
+    temp_dir = temp_root / "Temp"
+    config_module.TEMP_DIR = temp_dir
+    foldercache_module.CACHE_DIR = folder_cache_dir
+    listingcache_module.CACHE_DIR = listing_cache_dir
+    workertrace_module.TEMP_DIR = temp_dir
+    workertrace_module.TRACE_LOG_PATH = temp_dir / "foldercache_threads.jsonl"
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[3]
     sys.path.insert(0, str(repo_root))
@@ -27,6 +43,7 @@ def main() -> int:
     )
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
     temp_root = _create_repo_temp_root(repo_root, "run")
+    _patch_isolated_paths(temp_root)
 
     local_root = temp_root / "local"
     local_root.mkdir(parents=True, exist_ok=True)

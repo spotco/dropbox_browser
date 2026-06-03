@@ -182,6 +182,52 @@ class FolderInfoWorkerTests(AppTestCase):
         self.assertEqual(results["slow"]["diff_status"], "synced")
         self.assertTrue(results["slow"]["complete"])
 
+    def test_folder_info_returns_partial_folder_growth_and_final_completion(self) -> None:
+        local_root = self.create_local_root({
+            "music/Album/track.mp3": b"track",
+            "music/Album/Disc 1/song.mp3": b"song!!",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:music": [SimulatedLsjsonResponse(items=[remote_dir_item("Album")])],
+            "dropbox:music/Album": [SimulatedLsjsonResponse(items=[
+                remote_file_item("track.mp3", local_root / "music" / "Album" / "track.mp3", mod_time="2024-01-02T12:00:00Z"),
+                remote_dir_item("Disc 1", mod_time="2024-01-01T12:00:00Z"),
+            ])],
+            "dropbox:music/Album/Disc 1": [SimulatedLsjsonResponse(
+                items=[remote_file_item("song.mp3", local_root / "music" / "Album" / "Disc 1" / "song.mp3", mod_time="2024-01-03T12:00:00Z")],
+                delay=0.25,
+            )],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=2)
+
+        with TestServer(app) as server:
+            html = server.get_text("/?path=music")
+            self.assertIn('<span class="entry-name">Album</span>', html)
+
+            partial_results = self._wait_folder_info(
+                server,
+                paths=["music/Album"],
+                predicate=lambda data: data.get("music/Album", {}).get("status") == "partial",
+            )
+            partial = partial_results["music/Album"]
+            self.assertFalse(partial["complete"])
+            self.assertEqual(partial["size_display"], "5 B")
+            self.assertEqual(partial["count_display"], "1 files")
+            self.assertEqual(partial["date_display"], "2024-01-02 07:00")
+
+            complete_results = self._wait_folder_info(
+                server,
+                paths=["music/Album"],
+                predicate=lambda data: data.get("music/Album", {}).get("complete"),
+            )
+
+        complete = complete_results["music/Album"]
+        self.assertTrue(complete["complete"])
+        self.assertEqual(complete["diff_status"], "synced")
+        self.assertEqual(complete["size_display"], "11 B")
+        self.assertEqual(complete["count_display"], "2 files")
+        self.assertEqual(complete["date_display"], "2024-01-03 07:00")
+
     def test_folder_info_paths_support_names_with_commas(self) -> None:
         folder_name = "Paco de Lucia - Entre Dos Aguas 1981 - 320Kbps - Flamenco, Latino # DrBn"
         local_root = self.create_local_root({

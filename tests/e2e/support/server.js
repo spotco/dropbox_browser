@@ -2,7 +2,6 @@ const path = require("path");
 const { spawn } = require("node:child_process");
 
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
-const fixturePath = path.join(repoRoot, "tests", "e2e", "fixtures", "basic-library.json");
 const port = String(process.env.PLAYWRIGHT_PORT || "8010");
 const baseURL = `http://127.0.0.1:${port}`;
 
@@ -38,6 +37,8 @@ function mirrorOutput(stream, prefix) {
 
 async function startServer(options = {}) {
   const clientRender = options.clientRender === true;
+  const fixtureName = options.fixtureName || "basic-library.json";
+  const fixturePath = path.join(repoRoot, "tests", "e2e", "fixtures", fixtureName);
   const child = spawn(
     "python",
     [path.join(repoRoot, "tests", "e2e", "support", "run_server.py")],
