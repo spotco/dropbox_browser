@@ -1,8 +1,10 @@
+import {compareFilenameKeys} from '../filename-compare-key.js';
+
 function rowGroup(row) {
   return row && row.kind === 'folder' ? 0 : 1;
 }
 
-function compareText(left, right) {
+function compareDisplayLabel(left, right) {
   return String(left || '').localeCompare(String(right || ''));
 }
 
@@ -18,12 +20,14 @@ export function compareBrowseRows(left, right, sortKey, direction) {
   var primary = 0;
   if (sortKey === 'size' || sortKey === 'date') {
     primary = compareNumber(left['sort_' + sortKey], right['sort_' + sortKey]);
+  } else if (sortKey === 'name') {
+    primary = compareFilenameKeys(left.sort_name, right.sort_name);
   } else {
-    primary = compareText(left['sort_' + sortKey], right['sort_' + sortKey]);
+    primary = compareDisplayLabel(left['sort_' + sortKey], right['sort_' + sortKey]);
   }
   if (primary) return primary * factor;
 
-  var nameFallback = compareText(left.sort_name, right.sort_name);
+  var nameFallback = compareFilenameKeys(left.sort_name, right.sort_name);
   return nameFallback * factor;
 }
 

@@ -201,7 +201,7 @@ def browse_script_tags(client_render: bool) -> str:
     if client_render:
         tags.append('<script type="module" src="/assets/js/browse/main.js"></script>')
     else:
-        tags.append('<script src="/assets/js/folder.js"></script>')
+        tags.append('<script type="module" src="/assets/js/folder.js"></script>')
     return "\n  ".join(tags)
 
 

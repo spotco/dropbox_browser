@@ -1,3 +1,5 @@
+import {compareFilenameKeys, filenameCompareKey} from './filename-compare-key.js';
+
 (function () {
   var pageState = document.body ? document.body.dataset : {};
   var folderRows = {};
@@ -63,9 +65,12 @@
       if (aDate !== bDate) {
         return currentSortDirection === 'desc' ? bDate - aDate : aDate - bDate;
       }
-      var aName = a.getAttribute('data-sort-name') || '';
-      var bName = b.getAttribute('data-sort-name') || '';
-      return currentSortDirection === 'desc' ? bName.localeCompare(aName) : aName.localeCompare(bName);
+      var aLink = a.querySelector('td a');
+      var bLink = b.querySelector('td a');
+      var aKey = filenameCompareKey(aLink ? aLink.textContent : '');
+      var bKey = filenameCompareKey(bLink ? bLink.textContent : '');
+      var nameOrder = compareFilenameKeys(aKey, bKey);
+      return currentSortDirection === 'desc' ? -nameOrder : nameOrder;
     });
     var firstFileRow = tbody.querySelector('tr[data-row-kind="file"]');
     rows.forEach(function (row) {

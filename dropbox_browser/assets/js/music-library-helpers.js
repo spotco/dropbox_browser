@@ -1,16 +1,19 @@
+import {compareFilenameKeys, filenameCompareKey} from './filename-compare-key.js';
+
 export function libraryNameSortKey(name) {
-  return String(name || '').toLowerCase();
+  return filenameCompareKey(name);
 }
 
 export function compareLibraryNames(left, right) {
-  var leftKey = libraryNameSortKey(left && left.display_name);
-  var rightKey = libraryNameSortKey(right && right.display_name);
-  if (leftKey < rightKey) return -1;
-  if (leftKey > rightKey) return 1;
-  leftKey = String((left && left.display_name) || '');
-  rightKey = String((right && right.display_name) || '');
-  if (leftKey < rightKey) return -1;
-  if (leftKey > rightKey) return 1;
+  var result = compareFilenameKeys(
+    libraryNameSortKey(left && left.display_name),
+    libraryNameSortKey(right && right.display_name)
+  );
+  if (result) return result;
+  var leftName = String((left && left.display_name) || '');
+  var rightName = String((right && right.display_name) || '');
+  if (leftName < rightName) return -1;
+  if (leftName > rightName) return 1;
   return 0;
 }
 
