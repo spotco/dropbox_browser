@@ -31,6 +31,30 @@ test("client-render mode fetches and renders browse rows from the listing endpoi
   await expect(page.locator('#browse-rows a[href^="/download?"]').first()).toBeVisible();
 });
 
+test("client-render filter bar toggles from the top action row and persists", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+
+  await expect(page.locator("#browse-filter-toggle")).toHaveText("Show Filters");
+  await expect(page.locator("#browse-filter-bar")).toBeHidden();
+
+  await page.locator("#browse-filter-toggle").click();
+  await expect(page.locator("#browse-filter-toggle")).toHaveText("Hide Filters");
+  await expect(page.locator("#browse-filter-bar")).toBeVisible();
+
+  await page.reload();
+  await expect(page.locator("#browse-filter-toggle")).toHaveText("Hide Filters");
+  await expect(page.locator("#browse-filter-bar")).toBeVisible();
+
+  await page.locator("#browse-filter-toggle").click();
+  await expect(page.locator("#browse-filter-toggle")).toHaveText("Show Filters");
+  await expect(page.locator("#browse-filter-bar")).toBeHidden();
+
+  await page.reload();
+  await expect(page.locator("#browse-filter-toggle")).toHaveText("Show Filters");
+  await expect(page.locator("#browse-filter-bar")).toBeHidden();
+});
+
 test("client-render sort updates URL and rows without refetching the listing endpoint", async ({ page }) => {
   let listingRequestCount = 0;
   page.on("request", (request) => {
@@ -114,4 +138,149 @@ test("client-render leaves preview and download links on normal navigation", asy
 
   await page.locator('#browse-rows a[href^="/file?"]').first().click();
   await expect(page).toHaveURL(new RegExp(previewHref.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
+test("client-render filters rows locally without refetching the listing endpoint", async ({ page }) => {
+  let listingRequestCount = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/browse/endpoints/listing")) listingRequestCount += 1;
+  });
+
+  await page.goto("/");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await page.locator("#browse-filter-toggle").click();
+  await expect(page.locator("#browse-filter-bar")).toBeVisible();
+  await expect(page.locator("#browse-filter-count")).toContainText("Showing 3 of 3 items");
+  await expect.poll(() => listingRequestCount).toBe(1);
+
+  await page.locator("#browse-filter-query").fill("remote");
+  await expect(page.locator("#browse-rows .entry-name")).toHaveCount(1);
+  await expect(page.locator("#browse-rows .entry-name").first()).toHaveText("remote-only.txt");
+  await expect(page.locator("#browse-filter-count")).toContainText("Showing 1 of 3 items");
+  await expect(page).toHaveURL(/q=remote/);
+  await page.waitForTimeout(250);
+  await expect.poll(() => listingRequestCount).toBe(1);
+
+  await page.locator("#browse-filter-kind").selectOption("folder");
+  await expect(page.locator("#browse-rows .empty")).toContainText("No rows match the current filters.");
+  await expect(page).toHaveURL(/kind=folder/);
+
+  await page.reload();
+  await expect(page.locator("#browse-filter-query")).toHaveValue("remote");
+  await expect(page.locator("#browse-filter-kind")).toHaveValue("folder");
+  await expect(page.locator("#browse-rows .empty")).toContainText("No rows match the current filters.");
+
+  await page.locator("#browse-filter-reset").click();
+  await expect(page.locator("#browse-rows .entry-name")).toHaveCount(3);
+  await expect(page.locator("#browse-filter-count")).toContainText("Showing 3 of 3 items");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-filter-active", "0");
+  await expect(page).not.toHaveURL(/(?:\?|&)q=/);
+});
+
+test("client-render active filter deep links auto-show the filter bar and stay applied", async ({ page }) => {
+  await page.goto("/?q=folder");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await expect(page.locator("#browse-filter-bar")).toBeVisible();
+  await expect(page.locator("#browse-filter-query")).toHaveValue("folder");
+  await expect(page.locator("#browse-rows .entry-name")).toHaveCount(1);
+  await expect(page.locator("#browse-rows .entry-name").first()).toHaveText("folder");
+
+  await page.getByRole("link", { name: "folder" }).click();
+  await expect(page).toHaveURL(/\?path=folder/);
+  await expect(page.locator("#browse-filter-bar")).toBeHidden();
+  await expect(page.locator("#browse-rows .entry-name")).toHaveCount(1);
+  await expect(page.locator("#browse-rows .entry-name").first()).toHaveText("nested.txt");
+});
+
+test("client-render hiding the filter bar clears active filters and restores all rows", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+
+  await page.locator("#browse-filter-toggle").click();
+  await page.locator("#browse-filter-query").fill("remote");
+  await expect(page.locator("#browse-rows .entry-name")).toHaveCount(1);
+  await expect(page).toHaveURL(/q=remote/);
+
+  await page.locator("#browse-filter-toggle").click();
+  await expect(page.locator("#browse-filter-bar")).toBeHidden();
+  await expect(page.locator("#browse-rows .entry-name")).toHaveCount(3);
+  await expect(page.locator("body")).toHaveAttribute("data-browse-filter-active", "0");
+  await expect(page).not.toHaveURL(/(?:\?|&)q=/);
+});
+
+test("client-render restores each folder's persisted filter state on navigation and popstate", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await page.locator("#browse-filter-toggle").click();
+
+  await page.locator("#browse-filter-query").fill("folder");
+  await expect(page).toHaveURL(/q=folder/);
+
+  await page.getByRole("link", { name: "folder" }).click();
+  await expect(page).toHaveURL(/\?path=folder/);
+  await expect(page).not.toHaveURL(/(?:\?|&)q=/);
+  await expect(page.locator("#browse-filter-query")).toHaveValue("");
+  await expect(page.locator("#browse-filter-kind")).toHaveValue("all");
+  await expect(page.locator("#browse-rows .entry-name")).toHaveCount(1);
+  await expect(page.locator("#browse-rows .entry-name").first()).toHaveText("nested.txt");
+
+  await page.locator("#browse-filter-toggle").click();
+  await page.locator("#browse-filter-query").fill("nested");
+  await expect(page).toHaveURL(/\?path=folder&q=nested/);
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\?path=folder$/);
+  await expect(page.locator("#browse-filter-query")).toHaveValue("nested");
+  await expect(page.locator("#browse-filter-kind")).toHaveValue("all");
+  await expect(page.locator("#browse-rows .entry-name")).toHaveCount(1);
+  await expect(page.locator("#browse-rows .entry-name").first()).toHaveText("nested.txt");
+
+  await page.goBack();
+  await expect(page).not.toHaveURL(/path=folder/);
+  await expect(page).toHaveURL(/q=folder/);
+  await expect(page.locator("#browse-filter-query")).toHaveValue("folder");
+  await expect(page.locator("#browse-filter-kind")).toHaveValue("all");
+  await expect(page.locator("#browse-rows .entry-name")).toHaveCount(1);
+  await expect(page.locator("#browse-rows .entry-name").first()).toHaveText("folder");
+
+  await page.goForward();
+  await expect(page).toHaveURL(/\?path=folder$/);
+  await expect(page.locator("#browse-filter-query")).toHaveValue("nested");
+  await expect(page.locator("#browse-filter-kind")).toHaveValue("all");
+  await expect(page.locator("#browse-rows .entry-name")).toHaveCount(1);
+  await expect(page.locator("#browse-rows .entry-name").first()).toHaveText("nested.txt");
+});
+
+test("client-render text filter only matches names from the current folder, not parent path segments", async ({ page }) => {
+  await page.goto("/?path=folder&q=folder");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await expect(page.locator("#browse-filter-bar")).toBeVisible();
+  await expect(page.locator("#browse-filter-query")).toHaveValue("folder");
+  await expect(page.locator("#browse-rows .entry-name")).toHaveCount(0);
+  await expect(page.locator("#browse-rows .empty")).toContainText("No rows match the current filters.");
+});
+
+test("client-render music library load follows the current folder and resets on page change", async ({ page }) => {
+  const libraryRequests = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/music/endpoints/library?")) libraryRequests.push(request.url());
+  });
+
+  await page.goto("/");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+
+  await page.selectOption("#bottom-pane-mode", "music-player");
+  await expect(page.locator("#music-player-pane")).toBeVisible();
+  await expect(page.locator("#music-library-status")).toContainText("Library not loaded.");
+
+  await page.getByRole("link", { name: "folder" }).click();
+  await expect(page.locator("body")).toHaveAttribute("data-current-folder-path", "folder");
+
+  await page.getByRole("button", { name: "Load Current Folder" }).click();
+  await expect.poll(() => libraryRequests.some((url) => url.includes("/music/endpoints/library?path=folder"))).toBe(true);
+
+  await page.goBack();
+  await expect(page.locator("body")).toHaveAttribute("data-current-folder-path", "");
+  await expect(page.locator("#music-library-status")).toContainText("Library not loaded.");
+  await expect(page.getByRole("button", { name: "Load Current Folder" })).toBeEnabled();
 });

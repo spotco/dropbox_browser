@@ -205,6 +205,46 @@ def browse_script_tags(client_render: bool) -> str:
     return "\n  ".join(tags)
 
 
+def client_browse_filter_html() -> str:
+    return (
+        '<div id="browse-filter-bar" class="browse-filter-bar hidden" hidden>'
+        '<div class="browse-filter-group browse-filter-query">'
+        '<label for="browse-filter-query">Filter</label>'
+        '<input type="search" id="browse-filter-query" placeholder="Filter current folder">'
+        '</div>'
+        '<div class="browse-filter-group">'
+        '<label for="browse-filter-kind">Kind</label>'
+        '<select id="browse-filter-kind">'
+        '<option value="all">All</option>'
+        '<option value="folder">Folders</option>'
+        '<option value="file">Files</option>'
+        '</select>'
+        '</div>'
+        '<div class="browse-filter-group">'
+        '<label for="browse-filter-status">Status</label>'
+        '<select id="browse-filter-status">'
+        '<option value="all">All</option>'
+        '<option value="Synced">Synced</option>'
+        '<option value="Has Diffs">Has Diffs</option>'
+        '<option value="Dropbox Only">Dropbox Only</option>'
+        '<option value="Local Only">Local Only</option>'
+        '<option value="Loading">Loading</option>'
+        '</select>'
+        '</div>'
+        '<div class="browse-filter-group">'
+        '<label for="browse-filter-type">Type</label>'
+        '<select id="browse-filter-type">'
+        '<option value="all">All</option>'
+        '</select>'
+        '</div>'
+        '<div class="browse-filter-summary">'
+        '<span id="browse-filter-count">Showing 0 of 0 items</span>'
+        '<button type="button" id="browse-filter-reset" class="browse-filter-reset">Clear</button>'
+        '</div>'
+        '</div>'
+    )
+
+
 def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: str, direction: str, msg: str, folder_cache_map: dict | None = None, current_folder_cache: dict | None = None) -> str:
     client_render = bool(getattr(app, "client_render", False))
     if client_render:
@@ -213,6 +253,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
     else:
         rows_html = server_browse_rows_html(app, rel_path, entries, folder_cache_map, current_folder_cache)
         tbody_attrs = ""
+    browse_filter_html = client_browse_filter_html() if client_render else ""
     crumbs = breadcrumbs(rel_path)
     page_title = folder_page_title(app.remote, rel_path)
     refresh_href = "/?" + urlencode({"path": rel_path, "sort": sort_key, "dir": direction, "refresh": "1"})
@@ -235,6 +276,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
     )
     topbar_actions = (
         '<div class="topbar-actions">'
+        '<button type="button" id="browse-filter-toggle" class="browse-filter-toggle">Show Filters</button>'
         f'<button type="button" class="copy-path" data-copy-path="{html.escape(current_local_folder)}">Copy Folder Path</button>'
         f'<a class="dropbox-link" href="{html.escape(dropbox_home_url(rel_path))}" target="_blank" rel="noopener noreferrer">Go to Dropbox</a>'
         '<label class="recursive-toggle"><input type="checkbox" id="batch-recursive"> Recursive</label>'
@@ -276,6 +318,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         refresh_href=html.escape(refresh_href, quote=True),
         topbar_actions=topbar_actions,
         msg_html=msg_html,
+        browse_filter_html=browse_filter_html,
         browse_table_html=table_html,
         music_player_html=_render_static_template("music_player.html"),
         current_folder_attr=html.escape(rel_path, quote=True),

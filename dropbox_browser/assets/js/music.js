@@ -245,6 +245,14 @@ import {PlaylistStore} from './music-playlist-store.js';
     ctx.libraryApi.stopPolling();
   });
 
+  window.addEventListener('browse-folder-changed', function (ev) {
+    var detail = ev && ev.detail ? ev.detail : {};
+    var nextPath = typeof detail.path === 'string' ? detail.path : '';
+    if (nextPath === ctx.state.currentFolder) return;
+    ctx.state.currentFolder = nextPath;
+    ctx.libraryApi.resetLibraryForCurrentFolder();
+  });
+
   if (ctx.els.coverArtEl) {
     ctx.els.coverArtEl.addEventListener('click', function () {
       if (!ctx.state.currentArtObjectUrl) return;
