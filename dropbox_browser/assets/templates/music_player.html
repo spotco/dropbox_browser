@@ -1,13 +1,10 @@
 <div id="music-player-pane" class="bottom-pane-view hidden" data-pane-mode="music-player" hidden>
   <div class="music-player-shell" aria-label="Music player">
     <section id="music-library-pane" class="music-subpane music-library-pane" aria-labelledby="music-library-title">
-      <div class="music-subpane-header">
+      <div class="music-subpane-header music-library-header">
         <h2 id="music-library-title">Song Library</h2>
-        <button type="button" id="music-library-load">Load Current Folder</button>
-      </div>
-      <div id="music-library-status" class="music-library-status" role="status">
-        <span id="music-library-status-text" class="music-library-status-text">Library not loaded.</span>
-        <div class="music-library-status-actions">
+        <div class="music-library-toolbar">
+          <button type="button" id="music-library-load">Load Current Folder</button>
           <div class="music-library-sort-controls" role="group" aria-label="Song library sort">
             <button type="button" data-library-sort-key="name" aria-pressed="true">Name ↑</button>
             <button type="button" data-library-sort-key="date" aria-pressed="false">Date ↓</button>
