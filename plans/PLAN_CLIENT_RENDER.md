@@ -72,10 +72,13 @@ Later targets build on the same client data model:
 - Completed: Step 7 - client-side sorting without reload.
 - Completed: Step 8 - URL-compatible client navigation.
 - Completed: Step 9 - replace full row rendering with virtualization.
+- Not implemented (Step 9 extras): scroll-thumb preview during drag — acceptable for
+  MVP, but still a parity gap versus the Step 9 design.
 - Completed: Step 10 - add direct local search and filtering.
 - Completed: Step 10.5 - promote stable filter state into the URL.
 - Completed: Step 10.5 follow-up - debounced `replaceState` for text filter URL updates.
-- Current: Step 11 - add recursive cached search.
+- Next required: Step 9.1 - scroll-thumb drag preview under active sort/filter.
+- Deferred until Step 9.1: Step 11 - add recursive cached search.
 
 ## Step 1 - Add A Disabled Client Render Mode Switch
 
@@ -416,6 +419,11 @@ Status: completed on 2026-06-02.
     manager lock and flush JSON cache writes after releasing that lock, so
     `notify_page_load()` page-priority updates no longer block behind
     background cache-file writes.
+- Not implemented (Step 9 extras):
+  - scroll-thumb preview during drag — not present in the client UI;
+  - acceptable for MVP, but still a parity gap versus the design below;
+  - tracked as **Step 9.1**, the next required implementation step before Step
+    11.
 
 - After non-virtualized parity is stable, add a virtual table body for large
   result sets.
@@ -439,6 +447,27 @@ Status: completed on 2026-06-02.
   modify row state first and only patch DOM if the row is currently mounted.
 - Add tests for virtual window math and Playwright tests using a large fixture
   such as `Camera Uploads`.
+
+## Step 9.1 - Scroll-Thumb Drag Preview (Step 9 Extras)
+
+Status: not started — **next required step**.
+
+The core virtualization work from Step 9 is done. The scroll-thumb drag preview
+described above was deferred for MVP and is still missing.
+
+- Add a scroll thumb/drag preview that shows the row currently represented by the
+  dragged scroll position under the active sort/filter:
+  - display name;
+  - type/status;
+  - index and total;
+  - optionally date or size depending on active sort.
+- Preview must respect the active client sort order and any active direct-folder
+  filters (Step 10 / 10.5), including virtualized large folders.
+- Keep updates cheap during drag: derive the preview row from in-memory browse
+  state, not a new listing fetch.
+- Add JS tests for thumb-position → row-index mapping under sort/filter.
+- Add Playwright coverage on a large fixture (for example `Camera Uploads`) proving
+  the preview appears during scrollbar drag and tracks the correct entry name.
 
 ## Step 10 - Add Direct Local Search And Filtering
 
@@ -505,6 +534,8 @@ Status: completed on 2026-06-02.
   filter state is URL-backed.
 
 ## Step 11 - Add Recursive Cached Search
+
+Deferred until Step 9.1 (scroll-thumb drag preview) is complete.
 
 - Build recursive search only from data already local to the app:
   - folder-cache records;

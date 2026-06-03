@@ -187,6 +187,7 @@ class WebUiTests(AppTestCase):
                 server.get_text("/assets/js/sync.js"),
                 server.get_text("/assets/js/folder.js"),
             ])
+            browse_main_js = server.get_text("/assets/js/browse/main.js")
 
         self.assertIn("<th>View</th>", html)
         self.assertIn("<th>Sync</th>", html)
@@ -754,8 +755,12 @@ class WebUiTests(AppTestCase):
         self.assertIn("refresh all children", js)
         self.assertIn("fetch('/refresh-cache'", js)
         self.assertIn("recursive: recursive ? '1' : '0'", js)
+        self.assertIn("clientBrowseReloadAvailable()", js)
+        self.assertIn("DropboxBrowseClient.reloadCurrentFolder", js)
+        self.assertIn("Cache invalidated. Reloading folder listing...", js)
         self.assertIn("Cache invalidated. Reloading page", js)
         self.assertIn("window.location.reload();", js)
+        self.assertIn("reloadCurrentFolder: function", browse_main_js)
         self.assertNotIn("pollUntilReady", js)
         self.assertIn("event.key === 'Shift'", js)
         folder_row = html.split('<span class="entry-name">folder</span></a></td>', 1)[1].split("</tr>", 1)[0]

@@ -468,6 +468,21 @@ function initBrowse() {
       });
   }
 
+  window.DropboxBrowseClient = {
+    isActive: function () {
+      return !!(body && body.dataset.clientRender === '1');
+    },
+    reloadCurrentFolder: function (options) {
+      var settings = options || {};
+      var nextState = readBrowseLocation(window.location.search);
+      if (settings.refresh !== false) nextState.refresh = true;
+      return loadBrowseState(nextState, {
+        history: settings.history || 'replace',
+        scroll: settings.scroll === true,
+      });
+    },
+  };
+
   function scheduleViewportRender() {
     if (scrollFrameRequested || state.loading || !virtualState.enabled) return;
     scrollFrameRequested = true;

@@ -23,8 +23,41 @@
 
   function showBlocker(text) {
     message.textContent = text;
-    if (progress) progress.className = 'running';
+    if (progress) {
+      progress.className = 'running';
+      progress.style.width = '';
+      progress.style.background = '';
+    }
     blocker.classList.remove('hidden');
+  }
+
+  function hideBlocker() {
+    blocker.classList.add('hidden');
+    if (progress) {
+      progress.className = '';
+      progress.style.width = '';
+      progress.style.background = '';
+    }
+  }
+
+  function clientBrowseReloadAvailable() {
+    var body = document.body;
+    return !!(
+      body &&
+      body.dataset.clientRender === '1' &&
+      window.DropboxBrowseClient &&
+      typeof window.DropboxBrowseClient.reloadCurrentFolder === 'function'
+    );
+  }
+
+  function reloadBrowseListing(recursive) {
+    return window.DropboxBrowseClient.reloadCurrentFolder({
+      refresh: true,
+      history: 'replace',
+      scroll: false,
+    }).then(function (loaded) {
+      if (!loaded) throw new Error('Could not reload folder listing.');
+    });
   }
 
   document.addEventListener('keydown', function (event) {
@@ -60,8 +93,16 @@
         return r.json();
       })
       .then(function () {
+        if (clientBrowseReloadAvailable()) {
+          message.textContent = 'Cache invalidated. Reloading folder listing...';
+          return reloadBrowseListing(recursive).then(function () {
+            refreshing = false;
+            hideBlocker();
+          });
+        }
         message.textContent = 'Cache invalidated. Reloading page';
         window.location.reload();
+        return undefined;
       })
       .catch(function (err) {
         refreshing = false;
