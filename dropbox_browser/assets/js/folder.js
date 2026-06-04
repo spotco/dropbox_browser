@@ -1,6 +1,8 @@
+import {initBrowseColumnResizing} from './browse/columns.js';
 import {compareFilenameKeys, filenameCompareKey} from './filename-compare-key.js';
 
 (function () {
+  initBrowseColumnResizing({document: document, window: window});
   var pageState = document.body ? document.body.dataset : {};
   var folderRows = {};
   document.querySelectorAll('tr[data-folder-path]').forEach(function (row) {
