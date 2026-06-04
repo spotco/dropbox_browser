@@ -129,7 +129,7 @@ class DropboxBrowser:
         self._batch_plans: dict[str, StoredBatchPlan] = {}
 
     def shutdown(self) -> None:
-        for manager in (self.folder_cache, self.sync_jobs):
+        for manager in (self.rclone, self.folder_cache, self.sync_jobs):
             shutdown = getattr(manager, "shutdown", None)
             if shutdown is not None:
                 shutdown()

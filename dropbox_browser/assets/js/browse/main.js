@@ -1,5 +1,6 @@
 import {buildBrowseListingEndpoint, buildBrowsePageHref} from './api.js';
 import {startFolderInfoPolling} from './folder-info.js';
+import {initImageHoverPreview} from './image-hover-preview.js';
 import {readBrowseHref, readBrowseLocation, shouldInterceptBrowseLink} from './navigation.js';
 import {emptyRowHtml, errorRowHtml, loadingRowHtml, renderBreadcrumbs, renderBrowseRowsBody, renderVirtualBrowseRowsBody} from './render.js';
 import {collectBrowseTypeOptions, filterBrowseRows, hasActiveBrowseFilters, normalizeBrowseFilters} from './search.js';
@@ -367,6 +368,7 @@ function initBrowse() {
   if (!body || body.dataset.clientRender !== '1') return;
   var mount = document.getElementById('browse-rows');
   if (!mount) return;
+  initImageHoverPreview({document: document, window: window, root: mount});
   var scrollPreview = document.getElementById('browse-scroll-preview');
   var scrollPreviewIndex = document.getElementById('browse-scroll-preview-index');
   var scrollPreviewName = document.getElementById('browse-scroll-preview-name');

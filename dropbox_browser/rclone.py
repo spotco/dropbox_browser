@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shlex
 import threading
+import tempfile
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ import subprocess
 from typing import Any, Callable, Iterator
 
 from . import logoutput, logstore
+from .config import TEMP_DIR
 from .errors import BrowserError
 
 
@@ -132,7 +134,31 @@ class RcloneClient:
         self._lsjson_inflight_guard = threading.Lock()
         self._lsjson_inflight: dict[str, dict[str, Any]] = {}
         self._stream_log_guard = threading.Lock()
-        self._stream_logs: dict[int, tuple[list[str], int, int, float]] = {}
+        self._stream_logs: dict[int, tuple[list[str], int, int, float, Path | None]] = {}
+        self._shutdown_guard = threading.Lock()
+        self._shutdown_event = threading.Event()
+        self._active_process_guard = threading.Lock()
+        self._active_processes: set[subprocess.Popen[bytes]] = set()
+
+    def shutdown(self) -> None:
+        with self._shutdown_guard:
+            if self._shutdown_event.is_set():
+                return
+            self._shutdown_event.set()
+        with self._active_process_guard:
+            active_processes = list(self._active_processes)
+        for process in active_processes:
+            poll = getattr(process, "poll", None)
+            if callable(poll):
+                try:
+                    if poll() is not None:
+                        continue
+                except Exception:
+                    pass
+            try:
+                process.kill()
+            except OSError:
+                pass
 
     def command(self, *args: str) -> list[str]:
         cmd = [self.executable]
@@ -140,6 +166,21 @@ class RcloneClient:
             cmd += ["--config", self.config]
         cmd += list(args)
         return cmd
+
+    def _track_process(self, process: subprocess.Popen[bytes]) -> None:
+        with self._active_process_guard:
+            self._active_processes.add(process)
+            shutting_down = self._shutdown_event.is_set()
+        if shutting_down:
+            try:
+                process.kill()
+            except OSError:
+                pass
+            raise RcloneCancelled()
+
+    def _untrack_process(self, process: subprocess.Popen[bytes]) -> None:
+        with self._active_process_guard:
+            self._active_processes.discard(process)
 
     def _log_start(self, cmd: list[str]) -> tuple[int, int]:
         """Log command start to logstore and terminal. Returns (logstore_id, logoutput_id)."""
@@ -197,7 +238,7 @@ class RcloneClient:
         input_file: Any | None,
         cancel_token: RcloneCancelToken,
     ) -> subprocess.CompletedProcess[bytes]:
-        if cancel_token.cancelled:
+        if cancel_token.cancelled or self._shutdown_event.is_set():
             raise RcloneCancelled()
         process = subprocess.Popen(
             cmd,
@@ -205,6 +246,7 @@ class RcloneClient:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
+        self._track_process(process)
         if not cancel_token.attach(process):
             try:
                 process.kill()
@@ -212,12 +254,13 @@ class RcloneClient:
                 pass
         try:
             stdout, stderr = process.communicate()
-            if cancel_token.cancelled:
+            if cancel_token.cancelled or self._shutdown_event.is_set():
                 raise RcloneCancelled()
             return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
         finally:
             cancel_token.detach(process)
-            if cancel_token.cancelled and process.poll() is None:
+            self._untrack_process(process)
+            if (cancel_token.cancelled or self._shutdown_event.is_set()) and process.poll() is None:
                 try:
                     process.kill()
                 except OSError:
@@ -236,9 +279,11 @@ class RcloneClient:
         last_timeout = 0.0
         last_stderr = b""
         for attempt in range(1, attempts + 1):
+            if self._shutdown_event.is_set():
+                raise RcloneCancelled()
             sleep_seconds = policy.sleep_before_attempt(attempt)
-            if sleep_seconds > 0:
-                time.sleep(sleep_seconds)
+            if sleep_seconds > 0 and self._shutdown_event.wait(sleep_seconds):
+                raise RcloneCancelled()
             timeout = policy.timeout_for_attempt(attempt, size_bytes)
             if attempt > 1:
                 self._log_retry_event(
@@ -254,8 +299,11 @@ class RcloneClient:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
+            self._track_process(process)
             try:
                 stdout, stderr = process.communicate(timeout=timeout)
+                if self._shutdown_event.is_set():
+                    raise RcloneCancelled()
             except subprocess.TimeoutExpired:
                 last_timeout = timeout
                 try:
@@ -282,6 +330,8 @@ class RcloneClient:
                     f"elapsed {total_elapsed:.2f}s{detail}",
                     attempts,
                 )
+            finally:
+                self._untrack_process(process)
             return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr), attempt
         raise BrowserError(HTTPStatus.GATEWAY_TIMEOUT, "rclone timed out before starting.")
 
@@ -432,14 +482,46 @@ class RcloneClient:
             message = proc.stderr.decode("utf-8", "replace").strip() or "Folder sync failed."
             raise BrowserError(HTTPStatus.BAD_GATEWAY, message)
 
-    def open_cat(self, target: str, offset: int | None = None, count: int | None = None) -> subprocess.Popen[bytes]:
+    def _cat_command_for_target(
+        self,
+        target: str,
+        *,
+        offset: int | None = None,
+        count: int | None = None,
+    ) -> tuple[list[str], Path | None]:
         args = ["cat"]
+        temp_list_path: Path | None = None
+        if _is_remote_target(target):
+            remote_name, rel_path = target.split(":", 1)
+            root_target = remote_name + ":"
+            TEMP_DIR.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=TEMP_DIR,
+                prefix="rclone-cat-files-",
+                suffix=".txt",
+                delete=False,
+                newline="\n",
+            ) as handle:
+                handle.write(rel_path)
+                temp_list_path = Path(handle.name)
+            args += ["--files-from", str(temp_list_path), "--no-traverse"]
+            if offset is not None:
+                args += ["--offset", str(offset)]
+            if count is not None:
+                args += ["--count", str(count)]
+            args += ["--", root_target]
+            return self.command(*args), temp_list_path
         if offset is not None:
             args += ["--offset", str(offset)]
         if count is not None:
             args += ["--count", str(count)]
         args += ["--", target]
-        cmd = self.command(*args)
+        return self.command(*args), None
+
+    def open_cat(self, target: str, offset: int | None = None, count: int | None = None) -> subprocess.Popen[bytes]:
+        cmd, temp_list_path = self._cat_command_for_target(target, offset=offset, count=count)
         logstore_id, logoutput_id = self._log_start(cmd)
         started_at = time.monotonic()
         try:
@@ -448,10 +530,16 @@ class RcloneClient:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
+            self._track_process(process)
             with self._stream_log_guard:
-                self._stream_logs[id(process)] = (cmd, logstore_id, logoutput_id, started_at)
+                self._stream_logs[id(process)] = (cmd, logstore_id, logoutput_id, started_at, temp_list_path)
             return process
         except FileNotFoundError as exc:
+            if temp_list_path is not None:
+                try:
+                    temp_list_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
             elapsed = time.monotonic() - started_at
             self._log_complete(cmd, f"[{elapsed:.2f}s error]", elapsed, logstore_id, logoutput_id)
             raise BrowserError(HTTPStatus.INTERNAL_SERVER_ERROR, f"rclone was not found: {exc}") from exc
@@ -459,9 +547,10 @@ class RcloneClient:
     def finish_cat(self, process: subprocess.Popen[bytes], stream_error: Exception | None = None) -> None:
         with self._stream_log_guard:
             state = self._stream_logs.pop(id(process), None)
+        self._untrack_process(process)
         if state is None:
             return
-        cmd, logstore_id, logoutput_id, started_at = state
+        cmd, logstore_id, logoutput_id, started_at, temp_list_path = state
         elapsed = time.monotonic() - started_at
         stderr_text = ""
         if process.stderr is not None:
@@ -469,6 +558,11 @@ class RcloneClient:
                 stderr_text = process.stderr.read().decode("utf-8", "replace").strip()
             except Exception:
                 stderr_text = ""
+        if temp_list_path is not None:
+            try:
+                temp_list_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         if stream_error is not None:
             if isinstance(stream_error, (BrokenPipeError, ConnectionAbortedError)):
                 prefix = f"[{elapsed:.2f}s client disconnected]"

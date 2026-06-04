@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 import sys
+from typing import Callable
 from unittest.mock import Mock, patch
 
 from dropbox_browser import cli
@@ -15,10 +16,23 @@ class FakeServer:
         self.handler = handler
         self.app = None
         self.log_requests = None
+        self.daemon_threads = False
+        self.block_on_close = True
+        self.shutdown = Mock()
         self.server_close = Mock()
 
     def serve_forever(self) -> None:
         raise KeyboardInterrupt
+
+
+class FakeSignalDrivenServer(FakeServer):
+    def __init__(self, address: tuple[str, int], handler: object, on_serve_forever: Callable[[], None] | None = None) -> None:
+        super().__init__(address, handler)
+        self._on_serve_forever = on_serve_forever
+
+    def serve_forever(self) -> None:
+        if self._on_serve_forever is not None:
+            self._on_serve_forever()
 
 
 class CliArgumentTests(unittest.TestCase):
@@ -77,12 +91,84 @@ class CliShutdownTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(len(created_servers), 1)
         server = created_servers[0]
+        self.assertTrue(server.daemon_threads)
+        self.assertFalse(server.block_on_close)
         server.server_close.assert_called_once_with()
         app.shutdown.assert_called_once_with()
         configure_run.assert_called_once()
         self.assertEqual(configure_run.call_args.kwargs["metadata"]["remote"], "dropbox:")
         self.assertEqual(configure_run.call_args.kwargs["metadata"]["local_root"], str(local_root))
         self.assertFalse(configure_run.call_args.kwargs["metadata"]["client_render"])
+
+    def test_sigint_starts_app_shutdown_before_server_close(self) -> None:
+        created_servers: list[FakeSignalDrivenServer] = []
+        installed_handlers: dict[int, callable] = {}
+        steps: list[str] = []
+
+        def fake_signal(signum: int, handler: Callable[..., object]) -> object:
+            installed_handlers[signum] = handler
+            return object()
+
+        class ImmediateThread:
+            def __init__(self, target: Callable[[], None], daemon: bool = False, name: str | None = None) -> None:
+                self._target = target
+                self.daemon = daemon
+                self.name = name
+
+            def start(self) -> None:
+                self._target()
+
+        def create_server(address: tuple[str, int], handler: object) -> FakeSignalDrivenServer:
+            def on_serve_forever() -> None:
+                installed_handlers[cli.signal.SIGINT](cli.signal.SIGINT, None)
+
+            server = FakeSignalDrivenServer(address, handler, on_serve_forever=on_serve_forever)
+            server.shutdown.side_effect = lambda: steps.append("server.shutdown")
+            server.server_close.side_effect = lambda: steps.append("server.server_close")
+            created_servers.append(server)
+            return server
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_root = Path(temp_dir)
+            app = Mock()
+            app.shutdown.side_effect = lambda: steps.append("app.shutdown")
+
+            with (
+                patch.object(cli, "parse_args", return_value=Mock(host="127.0.0.1", port=8000, remote="dropbox:", rclone="rclone.exe", rclone_config=None, local_root=None, client_render=False)),
+                patch.object(
+                    cli,
+                    "load_app_config",
+                    return_value={
+                        "LogRcloneCommands": False,
+                        "ListingCacheTTLSeconds": 30,
+                        "FolderCacheTTLSeconds": 30,
+                        "FolderCacheWorkers": 1,
+                        "SyncJobWorkers": 1,
+                        "LogHttpRequests": False,
+                    },
+                ),
+                patch.object(cli, "find_dropbox_folder", return_value=local_root),
+                patch.object(cli.workertrace, "configure_server_run", return_value=local_root / "runs" / "1779341234"),
+                patch.object(cli, "RcloneClient", return_value=Mock()),
+                patch.object(cli, "ListingCacheManager", return_value=Mock()),
+                patch.object(cli, "FolderCacheManager", return_value=Mock(current_progress=Mock())),
+                patch.object(cli, "DropboxBrowser", return_value=app),
+                patch.object(cli, "SyncJobManager", return_value=Mock()),
+                patch.object(cli, "ThreadingHTTPServer", side_effect=create_server),
+                patch.object(cli.logoutput, "start"),
+                patch.object(cli.signal, "getsignal", return_value=object()),
+                patch.object(cli.signal, "signal", side_effect=fake_signal),
+                patch.object(cli.threading, "Thread", ImmediateThread),
+            ):
+                result = cli.main()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(created_servers), 1)
+        self.assertIn("app.shutdown", steps)
+        self.assertIn("server.shutdown", steps)
+        self.assertIn("server.server_close", steps)
+        self.assertLess(steps.index("app.shutdown"), steps.index("server.server_close"))
+        self.assertLess(steps.index("server.shutdown"), steps.index("server.server_close"))
 
     def test_local_root_arg_bypasses_config_lookup(self) -> None:
         created_servers: list[FakeServer] = []

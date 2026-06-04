@@ -3,13 +3,16 @@ from __future__ import annotations
 import io
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from dropbox_browser.errors import BrowserError
+from dropbox_browser import rclone as rclone_module
 from dropbox_browser.rclone import (
     RcloneClient,
+    RcloneCancelled,
     RcloneRetryPolicy,
     is_retryable_dropbox_throttle_message,
 )
@@ -23,6 +26,23 @@ class FakeCatProcess:
 
     def wait(self, timeout: float | None = None) -> int:
         return self.returncode
+
+
+class KillableCatProcess(FakeCatProcess):
+    def __init__(self, returncode: int | None = None, stderr: bytes = b"") -> None:
+        super().__init__(returncode=0 if returncode is None else returncode, stderr=stderr)
+        self.returncode = returncode
+        self.killed = False
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+
+    def wait(self, timeout: float | None = None) -> int:
+        return -9 if self.returncode is None else self.returncode
 
 
 class TimeoutThenSuccessProcess:
@@ -78,6 +98,28 @@ class AlwaysTimeoutProcess:
     def kill(self) -> None:
         self.killed = True
         self.returncode = -9
+
+
+class TimeoutAndSignalKillProcess:
+    instances: list["TimeoutAndSignalKillProcess"] = []
+    first_kill_event = threading.Event()
+
+    def __init__(self, cmd: list[str], stdin: object | None = None, stdout: object | None = None, stderr: object | None = None) -> None:
+        self.cmd = cmd
+        self.returncode = 0
+        self.killed = False
+        TimeoutAndSignalKillProcess.instances.append(self)
+
+    def communicate(self, timeout: float | None = None) -> tuple[bytes, bytes]:
+        raise subprocess.TimeoutExpired(self.cmd, timeout)
+
+    def poll(self) -> int | None:
+        return None if not self.killed else self.returncode
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+        TimeoutAndSignalKillProcess.first_kill_event.set()
 
 
 class RcloneLoggingTests(unittest.TestCase):
@@ -297,6 +339,8 @@ class RcloneLoggingTests(unittest.TestCase):
     def test_cat_stream_logs_start_and_completion(self) -> None:
         process = FakeCatProcess()
         with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.object(rclone_module, "TEMP_DIR", Path(tmpdir)),
             patch("dropbox_browser.rclone.subprocess.Popen", return_value=process),
             patch("dropbox_browser.rclone.logstore.append", return_value=11) as append_mock,
             patch("dropbox_browser.rclone.logstore.update") as update_mock,
@@ -305,8 +349,12 @@ class RcloneLoggingTests(unittest.TestCase):
         ):
             client = RcloneClient("E:\\dev\\dropbox_browser\\rclone.exe", None)
             proc = client.open_cat("dropbox:test/file.txt")
+            cmd = start_mock.call_args[0][0]
+            files_from = cmd.split("--files-from ", 1)[1].split(" --no-traverse", 1)[0].strip("'")
+            self.assertTrue(Path(files_from).exists())
             proc.wait(timeout=5)
             client.finish_cat(proc)
+            self.assertFalse(Path(files_from).exists())
 
         self.assertIs(proc, process)
         self.assertTrue(append_mock.called)
@@ -314,16 +362,20 @@ class RcloneLoggingTests(unittest.TestCase):
         self.assertTrue(start_mock.called)
         start_text = start_mock.call_args[0][0]
         self.assertTrue(start_text.startswith("[...] "))
-        self.assertIn("cat -- dropbox:test/file.txt", start_text)
+        self.assertIn("cat --files-from", start_text)
+        self.assertIn("--no-traverse -- dropbox:", start_text)
         update_text = update_mock.call_args[0][1]
         self.assertTrue(update_text.startswith("["))
-        self.assertIn("cat -- dropbox:test/file.txt", update_text)
+        self.assertIn("cat --files-from", update_text)
+        self.assertIn("--no-traverse -- dropbox:", update_text)
         self.assertIn("streamed", update_text)
         self.assertTrue(complete_mock.called)
 
     def test_cat_stream_logs_errors(self) -> None:
         process = FakeCatProcess(returncode=1, stderr=b"remote error")
         with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.object(rclone_module, "TEMP_DIR", Path(tmpdir)),
             patch("dropbox_browser.rclone.subprocess.Popen", return_value=process),
             patch("dropbox_browser.rclone.logstore.append", return_value=11),
             patch("dropbox_browser.rclone.logstore.update") as update_mock,
@@ -339,9 +391,66 @@ class RcloneLoggingTests(unittest.TestCase):
         self.assertIn("error rc=1", update_text)
         self.assertIn("remote error", update_text)
 
+    def test_shutdown_kills_active_cat_process(self) -> None:
+        process = KillableCatProcess(returncode=None)
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.object(rclone_module, "TEMP_DIR", Path(tmpdir)),
+            patch("dropbox_browser.rclone.subprocess.Popen", return_value=process),
+            patch("dropbox_browser.rclone.logstore.append", return_value=11),
+            patch("dropbox_browser.rclone.logstore.update"),
+            patch("dropbox_browser.rclone.logoutput.log_start", return_value=22),
+            patch("dropbox_browser.rclone.logoutput.log_complete"),
+        ):
+            client = RcloneClient("rclone.exe", None)
+            proc = client.open_cat("dropbox:test/file.txt")
+            client.shutdown()
+            client.finish_cat(proc)
+
+        self.assertTrue(process.killed)
+
+    def test_shutdown_interrupts_retry_waits(self) -> None:
+        TimeoutAndSignalKillProcess.instances = []
+        TimeoutAndSignalKillProcess.first_kill_event = threading.Event()
+        policy = RcloneRetryPolicy(
+            max_attempts=3,
+            min_timeout=0.01,
+            timeout_per_gib=0.0,
+            max_initial_timeout=1.0,
+            retry_sleep=(60.0,),
+        )
+        client = RcloneClient("rclone.exe", None)
+        client.write_retry_policy = policy
+        result: dict[str, BaseException] = {}
+
+        def run_mkdir() -> None:
+            try:
+                client.mkdir("dropbox:folder")
+            except BaseException as exc:
+                result["error"] = exc
+
+        with (
+            patch("dropbox_browser.rclone.subprocess.Popen", side_effect=TimeoutAndSignalKillProcess),
+            patch("dropbox_browser.rclone.logstore.append", return_value=11),
+            patch("dropbox_browser.rclone.logstore.update"),
+            patch("dropbox_browser.rclone.logoutput.log_start", return_value=22),
+            patch("dropbox_browser.rclone.logoutput.log_complete"),
+            patch("dropbox_browser.rclone.logoutput.log_plain"),
+        ):
+            thread = threading.Thread(target=run_mkdir, daemon=True)
+            thread.start()
+            self.assertTrue(TimeoutAndSignalKillProcess.first_kill_event.wait(timeout=1))
+            client.shutdown()
+            thread.join(timeout=1)
+
+        self.assertFalse(thread.is_alive())
+        self.assertIsInstance(result.get("error"), RcloneCancelled)
+
     def test_cat_stream_can_open_byte_range(self) -> None:
         process = FakeCatProcess()
         with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.object(rclone_module, "TEMP_DIR", Path(tmpdir)),
             patch("dropbox_browser.rclone.subprocess.Popen", return_value=process) as popen_mock,
             patch("dropbox_browser.rclone.logstore.append", return_value=11),
             patch("dropbox_browser.rclone.logstore.update"),
@@ -350,21 +459,44 @@ class RcloneLoggingTests(unittest.TestCase):
         ):
             client = RcloneClient("E:\\dev\\dropbox_browser\\rclone.exe", None)
             proc = client.open_cat("dropbox:test/video.mp4", offset=10, count=5)
+            self.assertIs(proc, process)
+            cmd = popen_mock.call_args[0][0]
+            self.assertEqual(cmd[0], "E:\\dev\\dropbox_browser\\rclone.exe")
+            self.assertEqual(cmd[1:7], ["cat", "--files-from", cmd[3], "--no-traverse", "--offset", "10"])
+            self.assertEqual(cmd[7:11], ["--count", "5", "--", "dropbox:"])
+            self.assertEqual(Path(cmd[3]).read_text(encoding="utf-8"), "test/video.mp4")
 
-        self.assertIs(proc, process)
-        self.assertEqual(
-            popen_mock.call_args[0][0],
-            [
-                "E:\\dev\\dropbox_browser\\rclone.exe",
-                "cat",
-                "--offset",
-                "10",
-                "--count",
-                "5",
-                "--",
-                "dropbox:test/video.mp4",
-            ],
-        )
+    def test_cat_stream_uses_files_from_and_no_traverse_for_single_remote_file(self) -> None:
+        process = FakeCatProcess()
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.object(rclone_module, "TEMP_DIR", Path(tmpdir)),
+            patch("dropbox_browser.rclone.subprocess.Popen", return_value=process) as popen_mock,
+            patch("dropbox_browser.rclone.logstore.append", return_value=11),
+            patch("dropbox_browser.rclone.logstore.update"),
+            patch("dropbox_browser.rclone.logoutput.log_start", return_value=22),
+            patch("dropbox_browser.rclone.logoutput.log_complete"),
+        ):
+            client = RcloneClient("rclone.exe", None)
+            proc = client.open_cat("dropbox:Camera Uploads/2020-08-07 13.34.35.png")
+            cmd = popen_mock.call_args[0][0]
+            files_from_path = Path(cmd[3])
+            self.assertTrue(files_from_path.exists())
+            self.assertEqual(
+                cmd,
+                [
+                    "rclone.exe",
+                    "cat",
+                    "--files-from",
+                    str(files_from_path),
+                    "--no-traverse",
+                    "--",
+                    "dropbox:",
+                ],
+            )
+            self.assertEqual(files_from_path.read_text(encoding="utf-8"), "Camera Uploads/2020-08-07 13.34.35.png")
+            client.finish_cat(proc)
+            self.assertFalse(files_from_path.exists())
 
     def test_stat_uses_lsjson_stat_flags(self) -> None:
         completed = subprocess.CompletedProcess(
