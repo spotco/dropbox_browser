@@ -63,6 +63,10 @@ Later targets build on the same client data model:
 
 ## Progress
 
+Plan status: completed on 2026-06-04. Remaining content below includes
+historical step notes and the validation checklist in Step 13, not additional
+unimplemented feature work.
+
 - Completed: Step 1 - disabled client-render mode switch.
 - Completed: Step 2 - shared browsing snapshot builder.
 - Completed: Step 3 - JSON row contract and listing endpoint.
@@ -72,13 +76,12 @@ Later targets build on the same client data model:
 - Completed: Step 7 - client-side sorting without reload.
 - Completed: Step 8 - URL-compatible client navigation.
 - Completed: Step 9 - replace full row rendering with virtualization.
-- Not implemented (Step 9 extras): scroll-thumb preview during drag — acceptable for
-  MVP, but still a parity gap versus the Step 9 design.
 - Completed: Step 10 - add direct local search and filtering.
 - Completed: Step 10.5 - promote stable filter state into the URL.
 - Completed: Step 10.5 follow-up - debounced `replaceState` for text filter URL updates.
-- Next required: Step 9.1 - scroll-thumb drag preview under active sort/filter.
-- Deferred until Step 9.1: Step 11 - add recursive cached search.
+- Completed: Step 9.1 - scroll-thumb drag preview under active sort/filter.
+- Completed: Step 11 - add recursive cached search.
+- Completed: Step 12 - observability and performance validation.
 
 ## Step 1 - Add A Disabled Client Render Mode Switch
 
@@ -419,11 +422,9 @@ Status: completed on 2026-06-02.
     manager lock and flush JSON cache writes after releasing that lock, so
     `notify_page_load()` page-priority updates no longer block behind
     background cache-file writes.
-- Not implemented (Step 9 extras):
-  - scroll-thumb preview during drag — not present in the client UI;
-  - acceptable for MVP, but still a parity gap versus the design below;
-  - tracked as **Step 9.1**, the next required implementation step before Step
-    11.
+- Step 9 extras follow-up completed in Step 9.1:
+  - scroll-thumb preview during drag is now present in the client UI;
+  - the original MVP parity gap for the Step 9 design is closed.
 
 - After non-virtualized parity is stable, add a virtual table body for large
   result sets.
@@ -450,10 +451,19 @@ Status: completed on 2026-06-02.
 
 ## Step 9.1 - Scroll-Thumb Drag Preview (Step 9 Extras)
 
-Status: not started — **next required step**.
+Status: completed on 2026-06-04.
 
-The core virtualization work from Step 9 is done. The scroll-thumb drag preview
-described above was deferred for MVP and is still missing.
+- Added client-render scroll preview state in `assets/js/browse/main.js` that:
+  - detects scrollbar-gutter pointer drags for virtualized browse listings;
+  - derives the preview row from the in-memory sorted and filtered row set;
+  - keeps the preview synchronized during scroll, filter, sort, navigation, and
+    folder-info-driven rerenders without refetching the listing endpoint;
+  - shows index/total, display name, type/status, and sort-sensitive detail text;
+  - hides the preview cleanly on pointer release, cancel, blur, or when
+    virtualization is inactive.
+- Added focused JS coverage for scroll-position to filtered/sorted row mapping.
+- Added Playwright coverage on the large `Camera Uploads` fixture proving the
+  preview appears during a scrollbar drag and tracks the filtered last entry.
 
 - Add a scroll thumb/drag preview that shows the row currently represented by the
   dragged scroll position under the active sort/filter:
@@ -535,7 +545,31 @@ Status: completed on 2026-06-02.
 
 ## Step 11 - Add Recursive Cached Search
 
-Deferred until Step 9.1 (scroll-thumb drag preview) is complete.
+Status: completed on 2026-06-04.
+
+- Added `GET /browse/endpoints/search` for recursive cached browse search under a
+  folder root.
+- The endpoint is cache-only:
+  - it traverses `folder_cache` records first;
+  - falls back to cached direct listings from `listing_cache` when available;
+  - never calls `rclone` on the request thread.
+- Recursive search reuses the existing browse merge logic per cached folder so
+  results keep local/Dropbox row semantics, canonical browse/file/download links,
+  Windows-safe local matching, and status labels.
+- Added completeness reporting for client polling:
+  - `cache_status`;
+  - `complete`;
+  - `pending`;
+  - `pending_folder_count`;
+  - `queued_folder_count`;
+  - `missing_folder_count`;
+  - `missing_listing_count`.
+- Added focused cache tests covering:
+  - full cached subtree search without `rclone`;
+  - listing-cache-only traversal without `rclone`;
+  - partial status when a known child folder is still missing cached listing
+    data;
+  - parent-path rejection through `clean_rel_path`.
 
 - Build recursive search only from data already local to the app:
   - folder-cache records;
@@ -560,6 +594,32 @@ GET /browse/endpoints/search?path=<rel-path>&recursive=1&query=<q>
   correctly reflect partial vs complete cache state.
 
 ## Step 12 - Observability And Performance Validation
+
+Status: completed on 2026-06-04.
+
+- Added dedicated workertrace events for client-mode browse API paths:
+  - `browse_listing_endpoint`
+  - `browse_search_endpoint`
+- Listing endpoint traces now include:
+  - row count;
+  - source;
+  - folder-cache hit/miss/request counts;
+  - per-phase elapsed timings aligned with `navigation_render_complete`;
+  - client-render mode flag.
+- Search endpoint traces now include:
+  - query;
+  - result count;
+  - scanned folder count;
+  - cache completion status;
+  - pending/queued/missing subtree counts;
+  - client-render mode flag;
+  - total elapsed time.
+- Slow-operation diagnostics now include the same client/cache context for both
+  browse listing and browse search endpoints.
+- Kept browser-side performance logging disabled by default to avoid noisy
+  client logs.
+- Added focused cache/trace regression tests covering both new endpoint event
+  contracts.
 
 - Add workertrace events for client-mode API requests:
   - `browse_listing_endpoint`;
