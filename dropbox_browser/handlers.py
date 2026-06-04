@@ -143,6 +143,20 @@ class RequestHandler(BaseHTTPRequestHandler):
             snapshot.current_folder_cache,
         )
         html_elapsed_ms = round((time.perf_counter() - html_started) * 1000, 3)
+        total_elapsed_ms = round((time.perf_counter() - render_started) * 1000, 3)
+        if total_elapsed_ms >= workertrace.SLOW_OPERATION_THRESHOLD_MS:
+            workertrace.record_diagnostic(
+                "slow_render_index",
+                rel_path=snapshot.rel_path,
+                remote_path=snapshot.remote_path,
+                force_refresh=snapshot.force_refresh,
+                head_only=head_only,
+                listing_source=snapshot.listing_source,
+                row_count=len(snapshot.entries),
+                timings_ms=dict(snapshot.timings_ms),
+                html_elapsed_ms=html_elapsed_ms,
+                total_elapsed_ms=total_elapsed_ms,
+            )
         workertrace.append(
             "navigation_render_complete",
             rel_path=snapshot.rel_path,
@@ -166,7 +180,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             status_elapsed_ms=snapshot.timings_ms["status"],
             sort_elapsed_ms=snapshot.timings_ms["sort"],
             html_elapsed_ms=html_elapsed_ms,
-            total_elapsed_ms=round((time.perf_counter() - render_started) * 1000, 3),
+            total_elapsed_ms=total_elapsed_ms,
         )
         self.send_html(
             HTTPStatus.OK,
@@ -425,6 +439,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         }
 
     def serve_browse_listing_endpoint(self, query: str) -> None:
+        started = time.perf_counter()
         params = parse_qs(query, keep_blank_values=True)
         rel_path = clean_rel_path(params.get("path", [""])[0])
         sort_key = params.get("sort", ["name"])[0]
@@ -505,6 +520,35 @@ class RequestHandler(BaseHTTPRequestHandler):
             },
             "timings_ms": dict(snapshot.timings_ms),
         }
+        json_elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
+        if json_elapsed_ms >= workertrace.SLOW_OPERATION_THRESHOLD_MS:
+            workertrace.record_diagnostic(
+                "slow_browse_listing_endpoint",
+                rel_path=snapshot.rel_path,
+                remote_path=snapshot.remote_path,
+                force_refresh=snapshot.force_refresh,
+                listing_source=snapshot.listing_source,
+                row_count=len(snapshot.entries),
+                remote_folder_count=snapshot.remote_folder_count,
+                timings_ms=dict(snapshot.timings_ms),
+                total_elapsed_ms=json_elapsed_ms,
+            )
+        workertrace.append(
+            "browse_listing_endpoint_complete",
+            rel_path=snapshot.rel_path,
+            remote_path=snapshot.remote_path,
+            force_refresh=snapshot.force_refresh,
+            listing_source=snapshot.listing_source,
+            row_count=len(snapshot.entries),
+            remote_folder_count=snapshot.remote_folder_count,
+            notify_elapsed_ms=snapshot.timings_ms["notify"],
+            list_elapsed_ms=snapshot.timings_ms["list"],
+            current_cache_elapsed_ms=snapshot.timings_ms["current_cache"],
+            folder_map_elapsed_ms=snapshot.timings_ms["folder_map"],
+            status_elapsed_ms=snapshot.timings_ms["status"],
+            sort_elapsed_ms=snapshot.timings_ms["sort"],
+            total_elapsed_ms=json_elapsed_ms,
+        )
         body = _json.dumps(payload).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json")

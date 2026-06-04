@@ -233,23 +233,43 @@ class FolderCacheManager:
         TTL is only enforced for *complete* entries; partial results from a
         prior run are returned as-is so the UI can show them while re-computing.
         """
+        started = time.perf_counter()
         p = self._cache_path(remote_path)
         if not p.exists():
             return None
+        result: dict | None = None
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
             invalidated_at = self._tree_invalidated_at(remote_path)
             if invalidated_at is not None and data.get("cached_at", 0) <= invalidated_at:
                 return None
             expected_local_root = str(self.local_root) if self.local_root is not None else None
-            return validate_cache_record(
+            result = validate_cache_record(
                 data,
                 expected_local_root=expected_local_root,
                 ttl_seconds=self.ttl_seconds,
                 now=time.time(),
             )
+            return result
         except Exception:
             return None
+        finally:
+            elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
+            if elapsed_ms >= workertrace.SLOW_OPERATION_THRESHOLD_MS:
+                file_size = None
+                try:
+                    file_size = p.stat().st_size
+                except OSError:
+                    file_size = None
+                workertrace.record_diagnostic(
+                    "slow_folder_cache_read",
+                    remote_path=remote_path,
+                    cache_path=str(p),
+                    elapsed_ms=elapsed_ms,
+                    hit=result is not None,
+                    complete=bool(result and result.get("complete")),
+                    file_size=file_size,
+                )
 
     def get_direct_listing(self, remote_path: str) -> list[dict] | None:
         """Return cached direct lsjson items for one folder, or None on miss."""
