@@ -36,17 +36,23 @@ class FakeSignalDrivenServer(FakeServer):
 
 
 class CliArgumentTests(unittest.TestCase):
-    def test_parse_args_client_render_defaults_to_false(self) -> None:
+    def test_parse_args_client_render_defaults_to_true(self) -> None:
         with patch.object(sys, "argv", ["dropbox_browser.py"]):
             args = cli.parse_args()
 
-        self.assertFalse(args.client_render)
+        self.assertTrue(args.client_render)
 
     def test_parse_args_client_render_flag_sets_true(self) -> None:
         with patch.object(sys, "argv", ["dropbox_browser.py", "--client-render"]):
             args = cli.parse_args()
 
         self.assertTrue(args.client_render)
+
+    def test_parse_args_no_client_render_flag_sets_false(self) -> None:
+        with patch.object(sys, "argv", ["dropbox_browser.py", "--no-client-render"]):
+            args = cli.parse_args()
+
+        self.assertFalse(args.client_render)
 
 
 class CliShutdownTests(unittest.TestCase):
@@ -63,7 +69,7 @@ class CliShutdownTests(unittest.TestCase):
             app = Mock()
 
             with (
-                patch.object(cli, "parse_args", return_value=Mock(host="127.0.0.1", port=8000, remote="dropbox:", rclone="rclone.exe", rclone_config=None, local_root=None, client_render=False)),
+                patch.object(cli, "parse_args", return_value=Mock(host="127.0.0.1", port=8000, remote="dropbox:", rclone="rclone.exe", rclone_config=None, local_root=None, client_render=True)),
                 patch.object(
                     cli,
                     "load_app_config",
@@ -98,7 +104,7 @@ class CliShutdownTests(unittest.TestCase):
         configure_run.assert_called_once()
         self.assertEqual(configure_run.call_args.kwargs["metadata"]["remote"], "dropbox:")
         self.assertEqual(configure_run.call_args.kwargs["metadata"]["local_root"], str(local_root))
-        self.assertFalse(configure_run.call_args.kwargs["metadata"]["client_render"])
+        self.assertTrue(configure_run.call_args.kwargs["metadata"]["client_render"])
 
     def test_sigint_starts_app_shutdown_before_server_close(self) -> None:
         created_servers: list[FakeSignalDrivenServer] = []
@@ -134,7 +140,7 @@ class CliShutdownTests(unittest.TestCase):
             app.shutdown.side_effect = lambda: steps.append("app.shutdown")
 
             with (
-                patch.object(cli, "parse_args", return_value=Mock(host="127.0.0.1", port=8000, remote="dropbox:", rclone="rclone.exe", rclone_config=None, local_root=None, client_render=False)),
+                patch.object(cli, "parse_args", return_value=Mock(host="127.0.0.1", port=8000, remote="dropbox:", rclone="rclone.exe", rclone_config=None, local_root=None, client_render=True)),
                 patch.object(
                     cli,
                     "load_app_config",

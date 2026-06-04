@@ -26,7 +26,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rclone", default=find_default_rclone())
     parser.add_argument("--rclone-config", default=find_default_config())
     parser.add_argument("--local-root", default=None)
-    parser.add_argument("--client-render", action="store_true", help="Enable the experimental client-rendered browse shell.")
+    parser.add_argument(
+        "--client-render",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable the client-rendered browse shell.",
+    )
     return parser.parse_args()
 
 

@@ -25,58 +25,13 @@ except ImportError:
 
 
 class WebUiTests(AppTestCase):
-    def test_page_renders_rows_from_folder_cache_direct_listing_without_rclone_call(self) -> None:
-        class DirectListingFolderCache:
-            def __init__(self) -> None:
-                self.notified: list[tuple[str | None, bool]] = []
-                self.requests: list[str] = []
-
-            def notify_page_load(self, _page_time: float, *, page_key: str | None = None, force: bool = False) -> None:
-                self.notified.append((page_key, force))
-
-            def invalidate(self, _remote_path: str) -> None:
-                return None
-
-            def get(self, _remote_path: str) -> dict | None:
-                return None
-
-            def request(self, remote_path: str, *_args, **_kwargs) -> None:
-                self.requests.append(remote_path)
-
-            def get_direct_listing(self, remote_path: str) -> list[dict]:
-                self.requests.append(f"direct:{remote_path}")
-                return [
-                    {
-                        "Name": "cached.txt",
-                        "Path": "cached.txt",
-                        "IsDir": False,
-                        "Size": 6,
-                        "ModTime": "2024-01-01T12:00:00Z",
-                    },
-                ]
-
-        rclone = SimulatedRclone()
-        listing_cache = ListingCacheManager(ttl_seconds=1800)
-        folder_cache = DirectListingFolderCache()
-        app = DropboxBrowser(rclone, "dropbox:", None, folder_cache=folder_cache, listing_cache=listing_cache)
-
-        with TestServer(app) as server:
-            html = server.get_text("/")
-
-        self.assertIn("cached.txt", html)
-        self.assertIn('data-client-render="0"', html)
-        self.assertEqual(folder_cache.notified, [("", False)])
-        self.assertEqual(folder_cache.requests, ["direct:dropbox:"])
-        self.assertEqual(rclone.calls, [])
-
-    def test_client_render_mode_renders_placeholder_shell_instead_of_server_rows(self) -> None:
+    def test_default_page_renders_client_placeholder_shell_instead_of_server_rows(self) -> None:
         rclone = SimulatedRclone({
             "dropbox:": [SimulatedLsjsonResponse(items=[
                 remote_file_item("cached.txt", self.create_local_root({"cached.txt": b"cached"}) / "cached.txt"),
             ])],
         })
         app = self._build_app(rclone, local_root=None, workers=1)
-        app.client_render = True
 
         with TestServer(app) as server:
             html = server.get_text("/")
@@ -98,7 +53,7 @@ class WebUiTests(AppTestCase):
         self.assertIn('<script type="module" src="/assets/js/browse/main.js"></script>', html)
         self.assertNotIn('<script src="/assets/js/folder.js"></script>', html)
 
-    def test_page_render_defers_child_folder_metadata_requests(self) -> None:
+    def test_initial_page_load_only_requests_current_folder_metadata(self) -> None:
         class RecordingChildFolderCache:
             def __init__(self) -> None:
                 self.requests: list[str] = []
@@ -132,8 +87,10 @@ class WebUiTests(AppTestCase):
         with TestServer(app) as server:
             html = server.get_text("/")
 
-        self.assertIn('data-folder-path="alpha"', html)
-        self.assertIn('data-folder-path="beta"', html)
+        self.assertIn('data-client-render="1"', html)
+        self.assertIn("Loading folder listing...", html)
+        self.assertNotIn('data-folder-path="alpha"', html)
+        self.assertNotIn('data-folder-path="beta"', html)
         self.assertEqual(folder_cache.requests, ["dropbox:"])
 
     def test_page_title_uses_current_folder_name_and_dropbox_path(self) -> None:
@@ -189,7 +146,6 @@ class WebUiTests(AppTestCase):
                 music_shared_js,
                 server.get_text("/assets/js/refresh.js"),
                 server.get_text("/assets/js/sync.js"),
-                server.get_text("/assets/js/folder.js"),
             ])
             browse_main_js = server.get_text("/assets/js/browse/main.js")
 
@@ -205,8 +161,8 @@ class WebUiTests(AppTestCase):
         self.assertIn('<script type="module" src="/assets/js/music.js"></script>', html)
         self.assertIn('<script src="/assets/js/refresh.js"></script>', html)
         self.assertIn('<script src="/assets/js/sync.js"></script>', html)
-        self.assertIn('<script type="module" src="/assets/js/folder.js"></script>', html)
-        self.assertNotIn('/assets/js/browse/main.js', html)
+        self.assertIn('<script type="module" src="/assets/js/browse/main.js"></script>', html)
+        self.assertNotIn('/assets/js/folder.js', html)
         self.assertNotIn("<style>", html)
         self.assertNotIn("<script>var CURRENT_FOLDER_PATH", html)
         self.assertNotIn('action="/upload', html)
@@ -216,10 +172,6 @@ class WebUiTests(AppTestCase):
         self.assertIn('id="enable-write-dropbox"', html)
         self.assertIn("Enable sync to local", html)
         self.assertIn("Enable sync to Dropbox", html)
-        self.assertIn("Copy Local -&gt; Dropbox", html)
-        self.assertIn('data-sync-direction="local_to_dropbox"', html)
-        self.assertIn('name="enable_to_local" value="0"', html)
-        self.assertIn('name="enable_write_dropbox" value="0"', html)
         self.assertIn("body.sync-to-local-enabled .sync-form[data-sync-direction=\"dropbox_to_local\"]", css)
         self.assertIn("body.sync-to-dropbox-enabled .sync-form[data-sync-direction=\"local_to_dropbox\"]", css)
         self.assertIn("Settings.get('sync-enable-to-local', false)", js)
@@ -239,8 +191,6 @@ class WebUiTests(AppTestCase):
         self.assertIn(".browse-table-shell", css)
         self.assertIn(".browse-column-resizer", css)
         self.assertIn(".browse-image-hover-preview-loading", css)
-        self.assertIn("import {initBrowseColumnResizing} from './browse/columns.js';", js)
-        self.assertIn("initBrowseColumnResizing({document: document, window: window});", js)
         self.assertIn("import {initImageHoverPreview} from './image-hover-preview.js';", browse_main_js)
         self.assertIn("import {initBrowseColumnResizing} from './columns.js';", browse_main_js)
         self.assertIn("initBrowseColumnResizing({document: document, window: window});", browse_main_js)
@@ -779,42 +729,7 @@ class WebUiTests(AppTestCase):
         self.assertIn("reloadCurrentFolder: function", browse_main_js)
         self.assertNotIn("pollUntilReady", js)
         self.assertIn("event.key === 'Shift'", js)
-        folder_row = html.split('<span class="entry-name">folder</span></a></td>', 1)[1].split("</tr>", 1)[0]
-        self.assertIn('data-sync-kind="folder"', folder_row)
-        self.assertNotIn("sync-form", folder_row)
-
-    def test_entry_rows_render_material_file_type_icons(self) -> None:
-        local_root = self.create_local_root({
-            "archive.rar": b"archive",
-            "movie.mkv": b"video",
-            "program.exe": b"exe",
-            "unknown.bin": b"bin",
-            "folder/inside.txt": b"inside",
-        })
-        rclone = SimulatedRclone({
-            "dropbox:": [SimulatedLsjsonResponse(items=[
-                remote_file_item("archive.rar", local_root / "archive.rar"),
-                remote_file_item("movie.mkv", local_root / "movie.mkv"),
-                remote_file_item("program.exe", local_root / "program.exe"),
-                remote_file_item("unknown.bin", local_root / "unknown.bin"),
-                remote_dir_item("folder"),
-            ])],
-        })
-        app = self._build_app(rclone, local_root=local_root)
-
-        with TestServer(app) as server:
-            html = server.get_text("/")
-            icon_svg = server.get_text("/assets/icons/material-icon-theme/folder-base.svg")
-            favicon_svg = server.get_text("/assets/icons/material-icon-theme/box-favicon.svg")
-
-        self.assertIn('<link rel="icon" type="image/svg+xml" href="/assets/icons/material-icon-theme/box-favicon.svg">', html)
-        self.assertIn('src="/assets/icons/material-icon-theme/folder-base.svg"', html)
-        self.assertIn('src="/assets/icons/material-icon-theme/zip.svg"', html)
-        self.assertIn('src="/assets/icons/material-icon-theme/video.svg"', html)
-        self.assertIn('src="/assets/icons/material-icon-theme/exe.svg"', html)
-        self.assertIn('src="/assets/icons/material-icon-theme/document.svg"', html)
-        self.assertIn("<svg", icon_svg)
-        self.assertIn("<svg", favicon_svg)
+        self.assertNotIn('<span class="entry-name">folder</span>', html)
 
     def test_head_requests_for_page_and_icon_return_headers_without_body(self) -> None:
         rclone = SimulatedRclone({
@@ -895,7 +810,7 @@ class WebUiTests(AppTestCase):
         self.assertEqual(browse_js_headers["Content-Type"], "application/javascript; charset=utf-8")
         self.assertGreater(int(browse_js_headers["Content-Length"]), 0)
 
-    def test_copy_buttons_cover_current_folder_and_local_file_paths(self) -> None:
+    def test_copy_button_covers_current_folder_path(self) -> None:
         local_root = self.create_local_root({
             "both.txt": b"both",
             "local.txt": b"local",
@@ -923,15 +838,11 @@ class WebUiTests(AppTestCase):
         self.assertIn(">Copy Folder Path</button>", html)
         self.assertIn('href="https://www.dropbox.com/home"', html)
         self.assertIn('target="_blank"', html)
-        self.assertIn(">Copy Filepath</button>", html)
         self.assertIn('class="copy-path"', html)
         self.assertIn(f'data-copy-path="{local_root}"', html)
-        self.assertIn(f'data-copy-path="{local_root / "both.txt"}"', html)
-        self.assertIn(f'data-copy-path="{local_root / "local.txt"}"', html)
+        self.assertNotIn(">Copy Filepath</button>", html)
         self.assertIn("navigator.clipboard.writeText(path)", sync_js)
         self.assertIn("document.execCommand('copy')", sync_js)
-        remote_row = html.split('<span class="entry-name">remote.txt</span></a></td>', 1)[1].split("</tr>", 1)[0]
-        self.assertNotIn("copy-path", remote_row)
 
     def test_go_to_dropbox_link_encodes_current_folder_path(self) -> None:
         local_root = self.create_local_root({

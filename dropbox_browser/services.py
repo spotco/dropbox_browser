@@ -135,7 +135,7 @@ class DropboxBrowser:
         folder_cache: Any = None,
         listing_cache: ListingCacheManager | None = None,
         *,
-        client_render: bool = False,
+        client_render: bool = True,
     ):
         self.rclone = rclone
         self.remote = remote
