@@ -37,6 +37,19 @@ export function computeVirtualWindow(options) {
   };
 }
 
+export function rowIndexForScrollPosition(options) {
+  var rowCount = Math.max(0, Number(options && options.rowCount) || 0);
+  if (rowCount === 0) return -1;
+  var rowHeight = Math.max(1, Number(options && options.rowHeight) || DEFAULT_VIRTUAL_ROW_HEIGHT);
+  var scrollTop = Math.max(0, Number(options && options.scrollTop) || 0);
+  var viewportHeight = Math.max(rowHeight, Number(options && options.viewportHeight) || rowHeight);
+  var totalHeight = rowCount * rowHeight;
+  var scrollableHeight = Math.max(0, totalHeight - viewportHeight);
+  if (scrollableHeight <= 0) return 0;
+  var progress = Math.min(1, scrollTop / scrollableHeight);
+  return Math.min(rowCount - 1, Math.max(0, Math.round(progress * (rowCount - 1))));
+}
+
 export function readTableViewport(tbody, rowHeight, viewportHeight) {
   if (!tbody || typeof window === 'undefined') {
     return {
