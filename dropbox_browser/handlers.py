@@ -54,6 +54,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.render_index(parsed.query)
             elif parsed.path == "/browse/endpoints/listing":
                 self.serve_browse_listing_endpoint(parsed.query)
+            elif parsed.path == "/browse/endpoints/search":
+                self.serve_browse_search_endpoint(parsed.query)
             elif parsed.path == "/file":
                 self.serve_file(parsed.query, inline=True)
             elif parsed.path == "/download":
@@ -542,9 +544,33 @@ class RequestHandler(BaseHTTPRequestHandler):
                 listing_source=snapshot.listing_source,
                 row_count=len(snapshot.entries),
                 remote_folder_count=snapshot.remote_folder_count,
+                folder_cache_hits=snapshot.folder_cache_hits,
+                folder_cache_missing=snapshot.folder_cache_missing,
+                folder_cache_requests=snapshot.folder_cache_requests,
+                client_render=bool(getattr(self.app, "client_render", False)),
                 timings_ms=dict(snapshot.timings_ms),
                 total_elapsed_ms=json_elapsed_ms,
             )
+        workertrace.append(
+            "browse_listing_endpoint",
+            rel_path=snapshot.rel_path,
+            remote_path=snapshot.remote_path,
+            force_refresh=snapshot.force_refresh,
+            listing_source=snapshot.listing_source,
+            row_count=len(snapshot.entries),
+            remote_folder_count=snapshot.remote_folder_count,
+            folder_cache_hits=snapshot.folder_cache_hits,
+            folder_cache_missing=snapshot.folder_cache_missing,
+            folder_cache_requests=snapshot.folder_cache_requests,
+            client_render=bool(getattr(self.app, "client_render", False)),
+            notify_elapsed_ms=snapshot.timings_ms["notify"],
+            list_elapsed_ms=snapshot.timings_ms["list"],
+            current_cache_elapsed_ms=snapshot.timings_ms["current_cache"],
+            folder_map_elapsed_ms=snapshot.timings_ms["folder_map"],
+            status_elapsed_ms=snapshot.timings_ms["status"],
+            sort_elapsed_ms=snapshot.timings_ms["sort"],
+            total_elapsed_ms=json_elapsed_ms,
+        )
         workertrace.append(
             "browse_listing_endpoint_complete",
             rel_path=snapshot.rel_path,
@@ -553,6 +579,10 @@ class RequestHandler(BaseHTTPRequestHandler):
             listing_source=snapshot.listing_source,
             row_count=len(snapshot.entries),
             remote_folder_count=snapshot.remote_folder_count,
+            folder_cache_hits=snapshot.folder_cache_hits,
+            folder_cache_missing=snapshot.folder_cache_missing,
+            folder_cache_requests=snapshot.folder_cache_requests,
+            client_render=bool(getattr(self.app, "client_render", False)),
             notify_elapsed_ms=snapshot.timings_ms["notify"],
             list_elapsed_ms=snapshot.timings_ms["list"],
             current_cache_elapsed_ms=snapshot.timings_ms["current_cache"],
@@ -560,6 +590,112 @@ class RequestHandler(BaseHTTPRequestHandler):
             status_elapsed_ms=snapshot.timings_ms["status"],
             sort_elapsed_ms=snapshot.timings_ms["sort"],
             total_elapsed_ms=json_elapsed_ms,
+        )
+        body = _json.dumps(payload).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def serve_browse_search_endpoint(self, query: str) -> None:
+        started = time.perf_counter()
+        params = parse_qs(query, keep_blank_values=True)
+        rel_path = clean_rel_path(params.get("path", [""])[0])
+        recursive = params.get("recursive", ["1"])[0]
+        if recursive not in {"1", "true", "True"}:
+            raise BrowserError(HTTPStatus.BAD_REQUEST, "Recursive cached search requires recursive=1.")
+        snapshot = self.app.build_cached_recursive_search(
+            rel_path,
+            params.get("query", [""])[0],
+            recursive=True,
+        )
+        root_label = posixpath.basename(snapshot.rel_path) if snapshot.rel_path else "Dropbox"
+        payload = {
+            "root": {
+                "remote_path": snapshot.remote_path,
+                "path": snapshot.rel_path,
+                "display_name": root_label,
+            },
+            "search": {
+                "query": snapshot.query,
+                "recursive": True,
+                "result_count": len(snapshot.entries),
+                "scanned_folder_count": snapshot.scanned_folder_count,
+            },
+            "status": {
+                "cache_status": snapshot.cache_status,
+                "complete": snapshot.complete,
+                "pending": snapshot.pending,
+                "pending_folder_count": snapshot.pending_folder_count,
+                "queued_folder_count": snapshot.queued_folder_count,
+                "missing_folder_count": snapshot.missing_folder_count,
+                "missing_listing_count": snapshot.missing_listing_count,
+                "message": (
+                    "Cached recursive search is complete."
+                    if snapshot.complete
+                    else "Recursive search is loading cached metadata."
+                    if snapshot.pending
+                    else "Recursive search results are partial until more cached listings arrive."
+                    if snapshot.cache_status == "partial"
+                    else "No cached recursive search data is available for this folder yet."
+                ),
+                "generated_at": snapshot.generated_at,
+            },
+            "results": [
+                dict(
+                    self._serialize_browse_row(
+                        posixpath.dirname(str(row["path"])),
+                        row,
+                        current_folder_cache=None,
+                        folder_cache_map=(
+                            {str(row["name"]): row.get("search_child_folder_cache")}
+                            if bool(row.get("is_dir"))
+                            else None
+                        ),
+                    ),
+                    relative_path=str(row.get("relative_path") or ""),
+                )
+                for row in snapshot.entries
+            ],
+        }
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
+        if elapsed_ms >= workertrace.SLOW_OPERATION_THRESHOLD_MS:
+            workertrace.record_diagnostic(
+                "slow_browse_search_endpoint",
+                rel_path=snapshot.rel_path,
+                remote_path=snapshot.remote_path,
+                recursive=True,
+                query=snapshot.query,
+                cache_status=snapshot.cache_status,
+                complete=snapshot.complete,
+                pending=snapshot.pending,
+                result_count=len(snapshot.entries),
+                scanned_folder_count=snapshot.scanned_folder_count,
+                queued_folder_count=snapshot.queued_folder_count,
+                pending_folder_count=snapshot.pending_folder_count,
+                missing_folder_count=snapshot.missing_folder_count,
+                missing_listing_count=snapshot.missing_listing_count,
+                client_render=bool(getattr(self.app, "client_render", False)),
+                total_elapsed_ms=elapsed_ms,
+            )
+        workertrace.append(
+            "browse_search_endpoint",
+            rel_path=snapshot.rel_path,
+            remote_path=snapshot.remote_path,
+            recursive=True,
+            query=snapshot.query,
+            cache_status=snapshot.cache_status,
+            complete=snapshot.complete,
+            pending=snapshot.pending,
+            result_count=len(snapshot.entries),
+            scanned_folder_count=snapshot.scanned_folder_count,
+            queued_folder_count=snapshot.queued_folder_count,
+            pending_folder_count=snapshot.pending_folder_count,
+            missing_folder_count=snapshot.missing_folder_count,
+            missing_listing_count=snapshot.missing_listing_count,
+            client_render=bool(getattr(self.app, "client_render", False)),
+            total_elapsed_ms=elapsed_ms,
         )
         body = _json.dumps(payload).encode("utf-8")
         self.send_response(HTTPStatus.OK)

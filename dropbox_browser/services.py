@@ -15,8 +15,10 @@ from contextlib import nullcontext
 from . import syncstate, workertrace
 from .errors import BrowserError
 from .formatting import file_type, parse_rclone_time
+from .foldercache_compute import parse_direct_listing
 from .ignored import is_ignored_name
 from .listingcache import ListingCacheManager
+from .namekeys import filename_compare_key
 from .paths import remote_target, safe_join_local
 from .rclone import RcloneClient
 from .windows_names import (
@@ -103,6 +105,23 @@ class BrowseSnapshot:
     folder_cache_missing: int
     folder_cache_requests: int
     timings_ms: dict[str, float]
+
+
+@dataclass
+class CachedRecursiveSearchSnapshot:
+    rel_path: str
+    remote_path: str
+    query: str
+    entries: list[dict[str, Any]]
+    cache_status: str
+    complete: bool
+    pending: bool
+    pending_folder_count: int
+    queued_folder_count: int
+    missing_folder_count: int
+    missing_listing_count: int
+    scanned_folder_count: int
+    generated_at: float
 
 
 class DropboxBrowser:
@@ -357,6 +376,158 @@ class DropboxBrowser:
                 "status": status_elapsed_ms,
                 "sort": sort_elapsed_ms,
             },
+        )
+
+    def _cached_direct_items_for_search(self, remote_path: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]] | None]:
+        folder_data: dict[str, Any] | None = None
+        if self.folder_cache is not None:
+            cached = self.folder_cache.get(remote_path)
+            if isinstance(cached, dict):
+                folder_data = cached
+                direct_items = cached.get("direct_items")
+                if isinstance(direct_items, list) and all(isinstance(item, dict) for item in direct_items):
+                    return folder_data, [dict(item) for item in direct_items]
+        if self.listing_cache is not None:
+            direct_items = self.listing_cache.get(remote_path)
+            if direct_items is not None:
+                return folder_data, [dict(item) for item in direct_items]
+        return folder_data, None
+
+    def build_cached_recursive_search(
+        self,
+        rel_path: str,
+        query: str,
+        *,
+        recursive: bool = True,
+    ) -> CachedRecursiveSearchSnapshot:
+        root_remote_path = remote_target(self.remote, rel_path)
+        normalized_query = (query or "").strip()
+        query_key = filename_compare_key(normalized_query) if normalized_query else ""
+        ensure_result: dict[str, int | float] = {
+            "queued_folder_count": 0,
+            "pending_folder_count": 0,
+            "missing_folder_count": 0,
+        }
+        if (
+            recursive
+            and self.folder_cache is not None
+            and hasattr(self.folder_cache, "page_epoch_for")
+            and hasattr(self.folder_cache, "ensure_known_subtree")
+        ):
+            page_epoch = self.folder_cache.page_epoch_for(rel_path)
+            ensure_result = self.folder_cache.ensure_known_subtree(root_remote_path, page_epoch)
+
+        results: list[dict[str, Any]] = []
+        scanned_folder_count = 0
+        missing_listing_count = 0
+        seen_remote_paths: set[str] = set()
+        queue: list[tuple[str, str]] = [(rel_path, root_remote_path)]
+        index = 0
+
+        def root_relative_path(full_path: str) -> str:
+            if not rel_path:
+                return full_path
+            prefix = rel_path.rstrip("/") + "/"
+            if full_path == rel_path:
+                return ""
+            if full_path.startswith(prefix):
+                return full_path[len(prefix):]
+            return full_path
+
+        while index < len(queue):
+            current_rel_path, current_remote_path = queue[index]
+            index += 1
+            if current_remote_path in seen_remote_paths:
+                continue
+            seen_remote_paths.add(current_remote_path)
+
+            folder_data, direct_items = self._cached_direct_items_for_search(current_remote_path)
+            if direct_items is None:
+                missing_listing_count += 1
+                continue
+
+            scanned_folder_count += 1
+            entries = self._entries_from_remote_items(current_rel_path, direct_items)
+            entries = self.sort_entries(entries, "name", "asc")
+            current_folder_cache = dict(folder_data) if folder_data is not None else {}
+            if self.local_root:
+                current_folder_cache["file_statuses"] = self.file_statuses_for_entries(entries)
+
+            folder_cache_map: dict[str, Any] = {}
+            for entry in entries:
+                if entry["is_dir"] and entry["remote"]:
+                    child_rel_path = posixpath.join(current_rel_path, entry["name"]) if current_rel_path else entry["name"]
+                    child_remote_path = remote_target(self.remote, child_rel_path)
+                    child_folder_data = self.folder_cache.get(child_remote_path) if self.folder_cache is not None else None
+                    folder_cache_map[entry["name"]] = child_folder_data
+                    entry["cached_size"] = child_folder_data.get("size") if isinstance(child_folder_data, dict) else None
+                    entry["cached_mtime"] = child_folder_data.get("newest_mtime") if isinstance(child_folder_data, dict) else None
+                entry["status_label"] = self.status_label_for_entry(
+                    entry,
+                    folder_cache_map,
+                    current_folder_cache,
+                )
+
+            listing_metadata = parse_direct_listing(direct_items, current_remote_path)
+            for entry in entries:
+                child_rel_path = posixpath.join(current_rel_path, entry["name"]) if current_rel_path else entry["name"]
+                if query_key:
+                    child_path_key = filename_compare_key(root_relative_path(child_rel_path))
+                    child_name_key = filename_compare_key(entry["name"])
+                    if query_key not in child_name_key and query_key not in child_path_key:
+                        pass
+                    else:
+                        result_row = dict(entry)
+                        result_row["path"] = child_rel_path
+                        result_row["relative_path"] = root_relative_path(child_rel_path)
+                        if entry["is_dir"]:
+                            result_row["search_child_folder_cache"] = folder_cache_map.get(entry["name"])
+                        results.append(result_row)
+                else:
+                    result_row = dict(entry)
+                    result_row["path"] = child_rel_path
+                    result_row["relative_path"] = root_relative_path(child_rel_path)
+                    if entry["is_dir"]:
+                        result_row["search_child_folder_cache"] = folder_cache_map.get(entry["name"])
+                    results.append(result_row)
+
+                if recursive and entry["is_dir"] and entry["remote"]:
+                    child_remote_path = next(
+                        (
+                            folder["remote_path"]
+                            for folder in listing_metadata.direct_folders
+                            if folder.get("name") == entry["name"]
+                        ),
+                        remote_target(self.remote, child_rel_path),
+                    )
+                    queue.append((child_rel_path, child_remote_path))
+
+        pending_folder_count = int(ensure_result.get("pending_folder_count", 0) or 0)
+        queued_folder_count = int(ensure_result.get("queued_folder_count", 0) or 0)
+        missing_folder_count = int(ensure_result.get("missing_folder_count", 0) or 0)
+        pending = pending_folder_count > 0
+        complete = pending_folder_count == 0 and missing_folder_count == 0 and missing_listing_count == 0
+        if complete:
+            cache_status = "complete"
+        elif scanned_folder_count > 0 or pending or missing_listing_count > 0:
+            cache_status = "partial"
+        else:
+            cache_status = "unavailable"
+
+        return CachedRecursiveSearchSnapshot(
+            rel_path=rel_path,
+            remote_path=root_remote_path,
+            query=normalized_query,
+            entries=results,
+            cache_status=cache_status,
+            complete=complete,
+            pending=pending,
+            pending_folder_count=pending_folder_count,
+            queued_folder_count=queued_folder_count,
+            missing_folder_count=missing_folder_count,
+            missing_listing_count=missing_listing_count,
+            scanned_folder_count=scanned_folder_count,
+            generated_at=time.time(),
         )
 
     def local_display_path(self, rel_path: str) -> Path | None:
