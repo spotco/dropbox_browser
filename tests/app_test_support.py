@@ -76,6 +76,7 @@ class AppTestCase(IsolatedPathsTestCase):
         workers: int = 2,
         sync_workers: int = 2,
         manager_cls=FolderCacheManager,
+        client_render: bool = True,
         **manager_kwargs,
     ) -> DropboxBrowser:
         listing_cache = ListingCacheManager(ttl_seconds=1800)
@@ -88,7 +89,14 @@ class AppTestCase(IsolatedPathsTestCase):
             remote="dropbox:",
             **manager_kwargs,
         )
-        app = DropboxBrowser(rclone, "dropbox:", local_root, folder_cache=folder_cache, listing_cache=listing_cache)
+        app = DropboxBrowser(
+            rclone,
+            "dropbox:",
+            local_root,
+            folder_cache=folder_cache,
+            listing_cache=listing_cache,
+            client_render=client_render,
+        )
         app.sync_jobs = SyncJobManager(app, workers=sync_workers)
         self.addCleanup(app.shutdown)
         return app
