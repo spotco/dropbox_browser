@@ -73,12 +73,26 @@ def main() -> int:
     server = ThreadingHTTPServer((args.host, args.port), RequestHandler)
     server.app = app  # type: ignore[attr-defined]
     server.log_requests = bool(app_config["LogHttpRequests"])  # type: ignore[attr-defined]
+    server.daemon_threads = True  # type: ignore[attr-defined]
+    if hasattr(server, "block_on_close"):
+        server.block_on_close = False  # type: ignore[attr-defined]
     stop_signal: int | None = None
+    shutdown_started = threading.Event()
 
     def request_shutdown(signum: int, _frame: object) -> None:
         nonlocal stop_signal
         stop_signal = signum
-        threading.Thread(target=server.shutdown, daemon=True, name="http-server-shutdown").start()
+        if shutdown_started.is_set():
+            return
+        shutdown_started.set()
+
+        def begin_shutdown() -> None:
+            try:
+                app.shutdown()
+            finally:
+                server.shutdown()
+
+        threading.Thread(target=begin_shutdown, daemon=True, name="http-server-shutdown").start()
 
     print(f"Serving {args.remote} at http://{args.host}:{args.port}/")
     print(f"Comparing with local folder: {local_root}")
@@ -100,8 +114,8 @@ def main() -> int:
             signal.signal(signal.SIGTERM, previous_sigterm)
         if stop_signal is not None:
             print(f"\nStopped by signal {stop_signal}.")
-        server.server_close()
         app.shutdown()
+        server.server_close()
     return 0
 
 

@@ -1,12 +1,14 @@
+bad ctrl+c termination behaviour
+
+plans\PLAN_CLIENT_RENDER.md
+	continue plan
 
 - image viewer
-	preview is slow
 	thumbnail preview load
-	
+
+- add file search as a tab from cache only
 
 - anime player with switch audio/subtitles in browser
-- add file search as a tab from cache only
-- add image preview with cache
 - add openmap/googlemap image location visualization (for camera uploads)
 
 - music player:
