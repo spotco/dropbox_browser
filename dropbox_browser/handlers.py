@@ -189,6 +189,18 @@ class RequestHandler(BaseHTTPRequestHandler):
         )
 
     def _resolve_remote_file(self, rel_path: str) -> tuple[str, int]:
+        remote_path = remote_target(self.app.remote, rel_path)
+        try:
+            item = self.app.rclone.stat(remote_path)
+        except BrowserError as exc:
+            if exc.status != HTTPStatus.BAD_GATEWAY:
+                raise
+        else:
+            if not item.get("IsDir"):
+                size = item.get("Size")
+                if size is not None:
+                    return rel_path, int(size)
+
         parent = posixpath.dirname(rel_path)
         name = posixpath.basename(rel_path)
         normalized_name = filename_compare_key(name)

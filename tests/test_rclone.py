@@ -365,3 +365,35 @@ class RcloneLoggingTests(unittest.TestCase):
                 "dropbox:test/video.mp4",
             ],
         )
+
+    def test_stat_uses_lsjson_stat_flags(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ["rclone"],
+            0,
+            b'{"Name":"file.txt","Path":"dir/file.txt","IsDir":false,"Size":5}',
+            b"",
+        )
+        with (
+            patch("dropbox_browser.rclone.subprocess.run", return_value=completed) as run_mock,
+            patch("dropbox_browser.rclone.logstore.append", return_value=11),
+            patch("dropbox_browser.rclone.logstore.update"),
+            patch("dropbox_browser.rclone.logoutput.log_start", return_value=22),
+            patch("dropbox_browser.rclone.logoutput.log_complete"),
+        ):
+            client = RcloneClient("rclone.exe", None)
+            item = client.stat("dropbox:dir/file.txt")
+
+        self.assertEqual(
+            run_mock.call_args[0][0],
+            [
+                "rclone.exe",
+                "lsjson",
+                "--stat",
+                "--no-modtime",
+                "--no-mimetype",
+                "--",
+                "dropbox:dir/file.txt",
+            ],
+        )
+        self.assertEqual(item["Path"], "dir/file.txt")
+        self.assertEqual(item["Size"], 5)

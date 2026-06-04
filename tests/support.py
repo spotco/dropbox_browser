@@ -148,7 +148,13 @@ class SimulatedRclone:
         if args[0] == "lsjson":
             target = args[-1]
             response = self._execute_lsjson(target, args, cancel_token)
-            stdout = b"{invalid json" if response.invalid_json else json.dumps(copy.deepcopy(response.items) or []).encode("utf-8")
+            if response.invalid_json:
+                stdout = b"{invalid json"
+            elif "--stat" in args:
+                items = copy.deepcopy(response.items) or []
+                stdout = json.dumps(items[0] if items else {}).encode("utf-8")
+            else:
+                stdout = json.dumps(copy.deepcopy(response.items) or []).encode("utf-8")
             return CompletedProcess(list(args), response.returncode, stdout, response.stderr)
         if args[0] == "copyto":
             source = args[-2]
@@ -184,6 +190,20 @@ class SimulatedRclone:
             message = response.stderr.decode("utf-8", "replace").strip() or "Could not list Dropbox folder."
             raise BrowserError(HTTPStatus.BAD_GATEWAY, message)
         return copy.deepcopy(response.items) or []
+
+    def stat(self, target: str) -> dict[str, Any]:
+        response = self._execute_lsjson(
+            target,
+            ("lsjson", "--stat", "--no-modtime", "--no-mimetype", "--", target),
+            cancel_token=None,
+        )
+        if response.returncode != 0:
+            message = response.stderr.decode("utf-8", "replace").strip() or "Could not stat Dropbox path."
+            raise BrowserError(HTTPStatus.BAD_GATEWAY, message)
+        items = copy.deepcopy(response.items) or []
+        if not items:
+            raise BrowserError(HTTPStatus.NOT_FOUND, "Remote file not found.")
+        return items[0]
 
     def exists(self, target: str) -> bool:
         return target in self.cat_data

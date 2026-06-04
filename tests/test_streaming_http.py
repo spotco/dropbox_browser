@@ -143,6 +143,12 @@ class StreamingHttpTests(AppTestCase):
 
     def test_nested_remote_file_range_lists_parent_and_streams_nested_target(self) -> None:
         rclone = SimulatedRclone({
+            "dropbox:Albums/Live Set/clip.mp4": [SimulatedLsjsonResponse(items=[{
+                "Name": "clip.mp4",
+                "Path": "clip.mp4",
+                "IsDir": False,
+                "Size": 10,
+            }])],
             "dropbox:Albums/Live Set": [SimulatedLsjsonResponse(items=[{
                 "Name": "clip.mp4",
                 "Path": "clip.mp4",
@@ -165,7 +171,7 @@ class StreamingHttpTests(AppTestCase):
         self.assertEqual(body, b"4567")
         self.assertEqual(headers["Content-Range"], "bytes 4-7/10")
         self.assertTrue(any(
-            call["args"] == ("lsjson", "--", "dropbox:Albums/Live Set")
+            call["args"] == ("lsjson", "--stat", "--no-modtime", "--no-mimetype", "--", "dropbox:Albums/Live Set/clip.mp4")
             for call in rclone.calls
         ))
         self.assertTrue(any(
@@ -185,6 +191,11 @@ class StreamingHttpTests(AppTestCase):
         remote_name = "Shikura Chiyomaru - Find the blue セルフカヴァーバージョン.mp3"
         requested_name = unicodedata.normalize("NFD", remote_name)
         rclone = SimulatedRclone({
+            "dropbox:music/2025_5_15_loose/" + requested_name: [SimulatedLsjsonResponse(
+                items=[],
+                returncode=1,
+                stderr=b"object not found",
+            )],
             "dropbox:music/2025_5_15_loose": [SimulatedLsjsonResponse(items=[{
                 "Name": remote_name,
                 "Path": remote_name,
@@ -211,6 +222,10 @@ class StreamingHttpTests(AppTestCase):
             call["args"] == ("cat", "--", "dropbox:music/2025_5_15_loose/" + remote_name)
             for call in rclone.calls
         ))
+        self.assertTrue(any(
+            call["args"] == ("lsjson", "--", "dropbox:music/2025_5_15_loose")
+            for call in rclone.calls
+        ))
 
     def test_remote_file_full_response_uses_plain_rclone_cat(self) -> None:
         rclone = self._remote_media_rclone()
@@ -227,7 +242,15 @@ class StreamingHttpTests(AppTestCase):
         self.assertEqual(headers["Content-Length"], "10")
         self.assertEqual(headers["Accept-Ranges"], "bytes")
         self.assertTrue(any(
+            call["args"] == ("lsjson", "--stat", "--no-modtime", "--no-mimetype", "--", "dropbox:movie.mp4")
+            for call in rclone.calls
+        ))
+        self.assertTrue(any(
             call["args"] == ("cat", "--", "dropbox:movie.mp4")
+            for call in rclone.calls
+        ))
+        self.assertFalse(any(
+            call["args"] == ("lsjson", "--", "dropbox:")
             for call in rclone.calls
         ))
 
@@ -291,6 +314,10 @@ class StreamingHttpTests(AppTestCase):
         self.assertEqual(headers["Content-Range"], "bytes 1-3/10")
         self.assertEqual(headers["Content-Length"], "3")
         self.assertFalse(any(call["args"][0] == "cat" for call in rclone.calls))
+        self.assertTrue(any(
+            call["args"] == ("lsjson", "--stat", "--no-modtime", "--no-mimetype", "--", "dropbox:movie.mp4")
+            for call in rclone.calls
+        ))
 
     def test_remote_file_invalid_range_returns_416_without_rclone_cat(self) -> None:
         rclone = self._remote_media_rclone()
@@ -311,6 +338,10 @@ class StreamingHttpTests(AppTestCase):
         finally:
             raised.exception.close()
         self.assertFalse(any(call["args"][0] == "cat" for call in rclone.calls))
+        self.assertTrue(any(
+            call["args"] == ("lsjson", "--stat", "--no-modtime", "--no-mimetype", "--", "dropbox:movie.mp4")
+            for call in rclone.calls
+        ))
 
     def test_download_route_supports_byte_ranges_and_attachment_disposition(self) -> None:
         rclone = self._remote_media_rclone()
@@ -342,6 +373,12 @@ class StreamingHttpTests(AppTestCase):
                 "IsDir": False,
                 "Size": 5,
                 "ModTime": "2024-01-01T12:00:00Z",
+            }])],
+            "dropbox:café mix.mp3": [SimulatedLsjsonResponse(items=[{
+                "Name": "café mix.mp3",
+                "Path": "café mix.mp3",
+                "IsDir": False,
+                "Size": 5,
             }])],
         }, cat_data={"dropbox:café mix.mp3": b"audio"})
         app = self._build_app(rclone, local_root=None, workers=1)
