@@ -123,4 +123,10 @@ class AppTestCase(IsolatedPathsTestCase):
                 "Size": 10,
                 "ModTime": "2024-01-01T12:00:00Z",
             }])],
+            "dropbox:movie.mp4": [SimulatedLsjsonResponse(items=[{
+                "Name": "movie.mp4",
+                "Path": "movie.mp4",
+                "IsDir": False,
+                "Size": 10,
+            }])],
         }, cat_data={"dropbox:movie.mp4": b"0123456789"})

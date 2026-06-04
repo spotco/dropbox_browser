@@ -385,6 +385,18 @@ class RcloneClient:
             return []
         return json.loads(proc.stdout.decode("utf-8"))
 
+    def stat(self, target: str) -> dict[str, Any]:
+        proc = self.run("lsjson", "--stat", "--no-modtime", "--no-mimetype", "--", target)
+        if proc.returncode != 0:
+            message = proc.stderr.decode("utf-8", "replace").strip() or "Could not stat Dropbox path."
+            raise BrowserError(HTTPStatus.BAD_GATEWAY, message)
+        if not proc.stdout.strip():
+            raise BrowserError(HTTPStatus.NOT_FOUND, "Remote file not found.")
+        data = json.loads(proc.stdout.decode("utf-8"))
+        if not isinstance(data, dict):
+            raise BrowserError(HTTPStatus.BAD_GATEWAY, "Could not stat Dropbox path.")
+        return data
+
     def exists(self, target: str) -> bool:
         proc = self.run("lsjson", "--", target)
         return proc.returncode == 0
