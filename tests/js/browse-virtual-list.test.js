@@ -35,3 +35,28 @@ test("shouldVirtualizeRows keeps small listings on the full-render path", async 
   assert.equal(virtualList.shouldVirtualizeRows(9, { threshold: 10 }), false);
   assert.equal(virtualList.shouldVirtualizeRows(10, { threshold: 10 }), true);
 });
+
+test("rowIndexForScrollPosition maps the scrollbar position across the full sorted result set", async () => {
+  const virtualList = await importModuleFromWorkspace("dropbox_browser/assets/js/browse/virtual-list.js");
+
+  assert.equal(virtualList.rowIndexForScrollPosition({
+    rowCount: 40,
+    rowHeight: 44,
+    viewportHeight: 420,
+    scrollTop: 0,
+  }), 0);
+
+  assert.equal(virtualList.rowIndexForScrollPosition({
+    rowCount: 40,
+    rowHeight: 44,
+    viewportHeight: 420,
+    scrollTop: (40 * 44 - 420) / 2,
+  }), 20);
+
+  assert.equal(virtualList.rowIndexForScrollPosition({
+    rowCount: 40,
+    rowHeight: 44,
+    viewportHeight: 420,
+    scrollTop: (40 * 44) - 420,
+  }), 39);
+});

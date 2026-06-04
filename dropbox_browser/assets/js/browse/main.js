@@ -12,6 +12,7 @@ import {
   computeVirtualWindow,
   measureMountedRowHeight,
   readTableViewport,
+  rowIndexForScrollPosition,
   shouldVirtualizeRows,
 } from './virtual-list.js';
 
@@ -194,6 +195,30 @@ function getFilteredRows(state) {
   return filterBrowseRows(state.rows, getEffectiveBrowseFilters(state));
 }
 
+function getSortedFilteredRows(state) {
+  return sortBrowseRows(getFilteredRows(state), state.sort, state.dir);
+}
+
+function browsePreviewMetaText(row) {
+  var kindLabel = row.kind === 'folder' ? 'Folder' : (row.type_label || 'File');
+  return kindLabel + ' - ' + (row.status_label || '');
+}
+
+function browsePreviewDetailText(row, sortKey) {
+  if (sortKey === 'size') {
+    if (row.count_display && row.size_display && row.size_display !== '—') return row.size_display + ' (' + row.count_display + ')';
+    if (row.count_display) return row.count_display;
+    if (row.size_display && row.size_display !== '—') return row.size_display;
+  }
+  if (sortKey === 'date' && row.date_display) return row.date_display;
+  if (sortKey === 'type' && row.type_label) return 'Type: ' + row.type_label;
+  if (sortKey === 'status' && row.status_label) return 'Status: ' + row.status_label;
+  if (row.kind === 'folder' && row.count_display) return row.count_display;
+  if (row.date_display) return row.date_display;
+  if (row.size_display && row.size_display !== '—') return row.size_display;
+  return '';
+}
+
 function escapeHtml(value) {
   return String(value == null ? '' : value)
     .replace(/&/g, '&amp;')
@@ -314,10 +339,11 @@ function renderRows(mount, state, virtualState, options) {
   updateSortControls(state);
 }
 
-function renderSnapshot(mount, state, payload, virtualState) {
+function renderSnapshot(mount, state, payload, virtualState, onRendered) {
   applyBrowseSnapshot(state, payload);
   updatePageShell(payload);
   renderRows(mount, state, virtualState, {force: true});
+  if (typeof onRendered === 'function') onRendered();
   return startFolderInfoPolling(state, {
     onRowsChanged: function (affectedKeys) {
       var filters = normalizeBrowseFilters(state.filters);
@@ -327,6 +353,7 @@ function renderSnapshot(mount, state, payload, virtualState) {
         filters.kind !== 'all';
       if (!affectedKeys[state.sort] && !filterSensitive) return;
       renderRows(mount, state, virtualState, {force: true});
+      if (typeof onRendered === 'function') onRendered();
     },
   });
 }
@@ -340,6 +367,11 @@ function initBrowse() {
   if (!body || body.dataset.clientRender !== '1') return;
   var mount = document.getElementById('browse-rows');
   if (!mount) return;
+  var scrollPreview = document.getElementById('browse-scroll-preview');
+  var scrollPreviewIndex = document.getElementById('browse-scroll-preview-index');
+  var scrollPreviewName = document.getElementById('browse-scroll-preview-name');
+  var scrollPreviewMeta = document.getElementById('browse-scroll-preview-meta');
+  var scrollPreviewDetail = document.getElementById('browse-scroll-preview-detail');
 
   var locationState = readBrowseLocation(window.location.search);
   var state = createBrowseState(locationState);
@@ -350,9 +382,16 @@ function initBrowse() {
   var scrollFrameRequested = false;
   var filterUrlTimer = null;
   var FILTER_URL_DEBOUNCE_MS = 300;
+  var previewHideTimer = null;
+  var previewScrollbarDragActive = false;
+  var PREVIEW_HIDE_DELAY_MS = 360;
+  var PREVIEW_DRAG_RELEASE_DELAY_MS = 140;
+  var SCROLLBAR_GUTTER_PX = 30;
   var initialFilterState = resolveBrowseFilterState(state.path, state.filters);
   state.filters = initialFilterState.filters;
   state.filterBarVisible = initialFilterState.visible;
+  body.dataset.browseScrollPreview = 'hidden';
+  body.dataset.browseScrollPreviewIndex = '';
 
   function notifyBrowseFolderChanged(previousPath, nextPath) {
     if (previousPath === nextPath) return;
@@ -369,6 +408,87 @@ function initBrowse() {
       window.clearTimeout(filterUrlTimer);
       filterUrlTimer = null;
     }
+  }
+
+  function cancelPreviewHideTimer() {
+    if (previewHideTimer !== null) {
+      window.clearTimeout(previewHideTimer);
+      previewHideTimer = null;
+    }
+  }
+
+  function hideScrollPreview() {
+    cancelPreviewHideTimer();
+    body.dataset.browseScrollPreview = 'hidden';
+    body.dataset.browseScrollPreviewIndex = '';
+    if (!scrollPreview) return;
+    scrollPreview.classList.add('hidden');
+    scrollPreview.setAttribute('aria-hidden', 'true');
+  }
+
+  function scheduleScrollPreviewHide(delay) {
+    cancelPreviewHideTimer();
+    previewHideTimer = window.setTimeout(function () {
+      previewHideTimer = null;
+      if (previewScrollbarDragActive) return;
+      hideScrollPreview();
+    }, delay);
+  }
+
+  function updateScrollPreview(options) {
+    if (!scrollPreview || state.loading || !virtualState.enabled) {
+      hideScrollPreview();
+      return;
+    }
+    var rows = getSortedFilteredRows(state);
+    if (!Array.isArray(rows) || rows.length === 0) {
+      hideScrollPreview();
+      return;
+    }
+    var viewport = readTableViewport(mount, virtualState.rowHeight);
+    var rowIndex = rowIndexForScrollPosition({
+      rowCount: rows.length,
+      rowHeight: virtualState.rowHeight,
+      scrollTop: viewport.scrollTop,
+      viewportHeight: viewport.viewportHeight,
+    });
+    if (rowIndex < 0 || rowIndex >= rows.length) {
+      hideScrollPreview();
+      return;
+    }
+    var row = rows[rowIndex];
+    var detailText = browsePreviewDetailText(row, state.sort);
+    body.dataset.browseScrollPreview = 'visible';
+    body.dataset.browseScrollPreviewIndex = String(rowIndex);
+    scrollPreviewIndex.textContent = String(rowIndex + 1) + ' / ' + String(rows.length);
+    scrollPreviewName.textContent = row.display_name || row.path || '';
+    scrollPreviewMeta.textContent = browsePreviewMetaText(row);
+    scrollPreviewDetail.textContent = detailText;
+    scrollPreviewDetail.hidden = !detailText;
+    scrollPreview.classList.remove('hidden');
+    scrollPreview.setAttribute('aria-hidden', 'false');
+    if (options && options.persistent) {
+      cancelPreviewHideTimer();
+      return;
+    }
+    scheduleScrollPreviewHide(PREVIEW_HIDE_DELAY_MS);
+  }
+
+  function renderAndRefresh(options) {
+    renderRows(mount, state, virtualState, options);
+    if (!virtualState.enabled) {
+      hideScrollPreview();
+      return;
+    }
+    if (body.dataset.browseScrollPreview === 'visible') {
+      updateScrollPreview({persistent: previewScrollbarDragActive});
+    }
+  }
+
+  function isScrollbarGesture(event) {
+    if (!event || typeof event.clientX !== 'number') return false;
+    if (event.pointerType === 'touch') return false;
+    return (window.innerWidth - event.clientX) <= SCROLLBAR_GUTTER_PX;
   }
 
   function syncBrowseUrl(historyMode) {
@@ -390,6 +510,8 @@ function initBrowse() {
 
   function stopActiveWork() {
     cancelFilterUrlTimer();
+    previewScrollbarDragActive = false;
+    hideScrollPreview();
     if (currentController) {
       currentController.abort();
       currentController = null;
@@ -403,6 +525,7 @@ function initBrowse() {
     mount.innerHTML = loadingRowHtml('Loading folder listing...');
     body.dataset.browseClient = 'loading';
     setVirtualizationDataset(body, virtualState, null, 0);
+    hideScrollPreview();
     if (nextState) {
       var filterState = resolveBrowseFilterState(nextState.path, nextState.filters || state.filters);
       state.path = nextState.path;
@@ -444,7 +567,17 @@ function initBrowse() {
       .then(function (payload) {
         if (version !== requestVersion) return false;
         currentController = null;
-        stopFolderPolling = renderSnapshot(mount, state, payload, virtualState);
+        stopFolderPolling = renderSnapshot(mount, state, payload, virtualState, function () {
+          if (!virtualState.enabled) {
+            hideScrollPreview();
+            return;
+          }
+          if (previewScrollbarDragActive || body.dataset.browseScrollPreview === 'visible') {
+            updateScrollPreview({persistent: previewScrollbarDragActive});
+            return;
+          }
+          hideScrollPreview();
+        });
         body.dataset.browseClient = 'ready';
         notifyBrowseFolderChanged(previousPath, state.path);
         if (scrollToTop) window.scrollTo(0, 0);
@@ -464,6 +597,7 @@ function initBrowse() {
         mount.innerHTML = errorRowHtml(state.error);
         body.dataset.browseClient = 'error';
         setVirtualizationDataset(body, virtualState, null, 0);
+        hideScrollPreview();
         return false;
       });
   }
@@ -489,6 +623,7 @@ function initBrowse() {
     window.requestAnimationFrame(function () {
       scrollFrameRequested = false;
       renderRows(mount, state, virtualState, {force: false});
+      updateScrollPreview({persistent: previewScrollbarDragActive});
     });
   }
 
@@ -499,7 +634,7 @@ function initBrowse() {
       visible: state.filterBarVisible,
       filters: state.filters,
     });
-    renderRows(mount, state, virtualState, {force: true});
+    renderAndRefresh({force: true});
     if (historyMode === 'push') {
       cancelFilterUrlTimer();
       syncBrowseUrl('push');
@@ -517,14 +652,14 @@ function initBrowse() {
     if (!state.filterBarVisible && hasActiveBrowseFilters(state.filters)) {
       state.filters = emptyBrowseFilters();
       writePersistedBrowseFilterState(state.path, {visible: false});
-      renderRows(mount, state, virtualState, {force: true});
+      renderAndRefresh({force: true});
       syncBrowseUrl('push');
       return;
     }
     if (!state.filterBarVisible) {
       state.filters = emptyBrowseFilters();
       writePersistedBrowseFilterState(state.path, {visible: false});
-      renderRows(mount, state, virtualState, {force: true});
+      renderAndRefresh({force: true});
       syncBrowseUrl('push');
       return;
     }
@@ -598,7 +733,7 @@ function initBrowse() {
       var nextSortState = nextBrowseSortState(state.sort, state.dir, clickedSort);
       state.sort = nextSortState.sort;
       state.dir = nextSortState.dir;
-      renderRows(mount, state, virtualState, {force: true});
+      renderAndRefresh({force: true});
       window.history.pushState({}, '', currentBrowsePageHref(state));
       return;
     }
@@ -614,6 +749,23 @@ function initBrowse() {
 
   window.addEventListener('popstate', function () {
     loadBrowseState(readBrowseLocation(window.location.search), {history: 'none', scroll: true});
+  });
+  window.addEventListener('pointerdown', function (event) {
+    previewScrollbarDragActive = isScrollbarGesture(event);
+    if (previewScrollbarDragActive) updateScrollPreview({persistent: true});
+  }, {passive: true});
+  window.addEventListener('pointerup', function () {
+    if (!previewScrollbarDragActive) return;
+    previewScrollbarDragActive = false;
+    if (body.dataset.browseScrollPreview === 'visible') scheduleScrollPreviewHide(PREVIEW_DRAG_RELEASE_DELAY_MS);
+  }, {passive: true});
+  window.addEventListener('pointercancel', function () {
+    previewScrollbarDragActive = false;
+    hideScrollPreview();
+  }, {passive: true});
+  window.addEventListener('blur', function () {
+    previewScrollbarDragActive = false;
+    hideScrollPreview();
   });
   window.addEventListener('scroll', scheduleViewportRender, {passive: true});
   window.addEventListener('resize', scheduleViewportRender);
