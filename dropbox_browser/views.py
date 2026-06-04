@@ -172,20 +172,31 @@ def client_browse_rows_html() -> str:
 
 def browse_table_html(*, rows_html: str, tbody_attrs: str = "") -> str:
     return (
-        "<table>\n"
-        "      <thead>\n"
-        "        <tr>\n"
-        "          <th>$sort_name</th>\n"
-        "          <th>$sort_type</th>\n"
-        "          <th>$sort_status</th>\n"
-        "          <th>$sort_size</th>\n"
-        "          <th>$sort_date</th>\n"
-        "          <th>View</th>\n"
-        "          <th>Sync</th>\n"
-        "        </tr>\n"
-        "      </thead>\n"
-        f"      <tbody{tbody_attrs}>{rows_html}</tbody>\n"
-        "    </table>"
+        '<div class="browse-table-shell">\n'
+        '      <table class="browse-table" data-browse-table>\n'
+        "        <colgroup>\n"
+        '          <col data-browse-column="name">\n'
+        '          <col data-browse-column="type">\n'
+        '          <col data-browse-column="status">\n'
+        '          <col data-browse-column="size">\n'
+        '          <col data-browse-column="date">\n'
+        '          <col data-browse-column="view">\n'
+        '          <col data-browse-column="sync">\n'
+        "        </colgroup>\n"
+        "        <thead>\n"
+        "          <tr>\n"
+        '            <th data-browse-column-key="name"><div class="browse-header-cell">$sort_name<button type="button" class="browse-column-resizer" data-browse-column-resizer="name" aria-label="Resize Name column" title="Drag to resize Name column"></button></div></th>\n'
+        '            <th data-browse-column-key="type"><div class="browse-header-cell">$sort_type<button type="button" class="browse-column-resizer" data-browse-column-resizer="type" aria-label="Resize Type column" title="Drag to resize Type column"></button></div></th>\n'
+        '            <th data-browse-column-key="status"><div class="browse-header-cell">$sort_status<button type="button" class="browse-column-resizer" data-browse-column-resizer="status" aria-label="Resize Status column" title="Drag to resize Status column"></button></div></th>\n'
+        '            <th data-browse-column-key="size"><div class="browse-header-cell">$sort_size<button type="button" class="browse-column-resizer" data-browse-column-resizer="size" aria-label="Resize Size column" title="Drag to resize Size column"></button></div></th>\n'
+        '            <th data-browse-column-key="date"><div class="browse-header-cell">$sort_date<button type="button" class="browse-column-resizer" data-browse-column-resizer="date" aria-label="Resize Date column" title="Drag to resize Date column"></button></div></th>\n'
+        '            <th data-browse-column-key="view"><div class="browse-header-cell"><span>View</span><button type="button" class="browse-column-resizer" data-browse-column-resizer="view" aria-label="Resize View column" title="Drag to resize View column"></button></div></th>\n'
+        '            <th data-browse-column-key="sync"><div class="browse-header-cell"><span>Sync</span></div></th>\n'
+        "          </tr>\n"
+        "        </thead>\n"
+        f"        <tbody{tbody_attrs}>{rows_html}</tbody>\n"
+        "      </table>\n"
+        "    </div>"
     )
 
 

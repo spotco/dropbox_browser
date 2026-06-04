@@ -1,4 +1,5 @@
 import {buildBrowseListingEndpoint, buildBrowsePageHref} from './api.js';
+import {initBrowseColumnResizing} from './columns.js';
 import {startFolderInfoPolling} from './folder-info.js';
 import {initImageHoverPreview} from './image-hover-preview.js';
 import {readBrowseHref, readBrowseLocation, shouldInterceptBrowseLink} from './navigation.js';
@@ -368,6 +369,7 @@ function initBrowse() {
   if (!body || body.dataset.clientRender !== '1') return;
   var mount = document.getElementById('browse-rows');
   if (!mount) return;
+  initBrowseColumnResizing({document: document, window: window});
   initImageHoverPreview({document: document, window: window, root: mount});
   var scrollPreview = document.getElementById('browse-scroll-preview');
   var scrollPreviewIndex = document.getElementById('browse-scroll-preview-index');
