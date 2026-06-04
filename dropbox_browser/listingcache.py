@@ -14,6 +14,7 @@ from pathlib import Path
 
 from .cacheio import write_json_atomic
 from .config import PROJECT_ROOT
+from . import workertrace
 
 CACHE_DIR = PROJECT_ROOT / "Cache" / "ListingCache"
 
@@ -40,9 +41,11 @@ class ListingCacheManager:
 
     def get(self, remote_path: str) -> list[dict] | None:
         """Return cached lsjson items, or None if missing or expired."""
+        started = time.perf_counter()
         p = self._cache_path(remote_path)
         if not p.exists():
             return None
+        result: list[dict] | None = None
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
             invalidated_at = self._tree_invalidated_at(remote_path)
@@ -50,9 +53,26 @@ class ListingCacheManager:
                 return None
             if time.time() - data.get("cached_at", 0) > self.ttl_seconds:
                 return None
-            return data["items"]
+            result = data["items"]
+            return result
         except Exception:
             return None
+        finally:
+            elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
+            if elapsed_ms >= workertrace.SLOW_OPERATION_THRESHOLD_MS:
+                file_size = None
+                try:
+                    file_size = p.stat().st_size
+                except OSError:
+                    file_size = None
+                workertrace.record_diagnostic(
+                    "slow_listing_cache_read",
+                    remote_path=remote_path,
+                    cache_path=str(p),
+                    elapsed_ms=elapsed_ms,
+                    hit=result is not None,
+                    file_size=file_size,
+                )
 
     def set(self, remote_path: str, items: list[dict]) -> None:
         """Write items to cache."""

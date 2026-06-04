@@ -186,6 +186,10 @@ def resolve_matching_local_path(local_root: Path, rel_path: str) -> Path:
     for part in [part for part in rel_path.split("/") if part]:
         if not current.exists() or not current.is_dir():
             return current / part
+        exact_path = current / part
+        if exact_path.exists():
+            current = exact_path
+            continue
         try:
             match_name = find_matching_local_name(part, [child.name for child in current.iterdir()])
         except OSError:

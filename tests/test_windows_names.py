@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import html as html_module
+import tempfile
 import unittest
 from pathlib import Path
 from urllib.parse import quote
+from unittest.mock import patch
 
 from dropbox_browser.foldercache import FolderCacheManager
 from dropbox_browser.listingcache import ListingCacheManager
@@ -12,6 +14,7 @@ from dropbox_browser.windows_names import (
     decode_rclone_literal_escapes,
     dropbox_local_name_equal,
     match_dropbox_names_to_local_names,
+    resolve_matching_local_path,
 )
 
 try:
@@ -102,6 +105,15 @@ class WindowsSafeNameMatcherTests(unittest.TestCase):
 
     def test_decode_rclone_literal_escapes_keeps_marker_before_normal_unicode_text(self) -> None:
         self.assertEqual(decode_rclone_literal_escapes("今日は‛晴れ.txt"), "今日は‛晴れ.txt")
+
+    def test_resolve_matching_local_path_uses_exact_existing_segment_without_scanning_siblings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_root = Path(temp_dir)
+            exact_dir = local_root / "dropbox_browser"
+            exact_dir.mkdir()
+            with patch.object(Path, "iterdir", side_effect=AssertionError("iterdir should not be called")):
+                resolved = resolve_matching_local_path(local_root, "dropbox_browser")
+            self.assertEqual(resolved, exact_dir)
 
 
 class WindowsSafeNameIntegrationTests(IsolatedPathsTestCase):

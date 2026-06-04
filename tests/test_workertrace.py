@@ -38,6 +38,47 @@ class WorkerTraceRunTests(unittest.TestCase):
             self.assertEqual(json.loads(trace_lines[0])["event"], "sample_event")
             self.assertFalse(fallback.exists())
 
+    def test_record_diagnostic_writes_to_run_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fallback = root / "foldercache_threads.jsonl"
+            with (
+                patch.object(workertrace, "TEMP_DIR", root),
+                patch.object(workertrace, "TRACE_LOG_PATH", fallback),
+                patch.object(workertrace, "_configured_trace_path", None),
+                patch.object(workertrace, "_run_dir", None),
+                patch.object(workertrace, "_run_id", None),
+            ):
+                run_dir = workertrace.configure_server_run(started_at=1779341234.9)
+                workertrace.record_diagnostic("slow_cache_read", elapsed_ms=512.5)
+
+            diagnostic_lines = (run_dir / "slow_operations.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(diagnostic_lines), 1)
+            record = json.loads(diagnostic_lines[0])
+            self.assertEqual(record["kind"], "slow_cache_read")
+            self.assertEqual(record["elapsed_ms"], 512.5)
+
+    def test_append_records_slow_trace_write_diagnostic_when_threshold_is_crossed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fallback = root / "foldercache_threads.jsonl"
+            with (
+                patch.object(workertrace, "TEMP_DIR", root),
+                patch.object(workertrace, "TRACE_LOG_PATH", fallback),
+                patch.object(workertrace, "_configured_trace_path", None),
+                patch.object(workertrace, "_run_dir", None),
+                patch.object(workertrace, "_run_id", None),
+                patch.object(workertrace, "SLOW_OPERATION_THRESHOLD_MS", 0.0),
+            ):
+                run_dir = workertrace.configure_server_run(started_at=1779341234.9)
+                workertrace.append("sample_event", value=42)
+
+            diagnostic_lines = (run_dir / "slow_operations.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(diagnostic_lines), 1)
+            record = json.loads(diagnostic_lines[0])
+            self.assertEqual(record["kind"], "slow_trace_write")
+            self.assertEqual(record["event"], "sample_event")
+
 
 if __name__ == "__main__":
     unittest.main()

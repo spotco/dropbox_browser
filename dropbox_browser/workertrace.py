@@ -11,7 +11,10 @@ from typing import Any
 from .config import TEMP_DIR
 
 TRACE_LOG_PATH = TEMP_DIR / "foldercache_threads.jsonl"
+SLOW_OPERATIONS_PATH = TEMP_DIR / "slow_operations.jsonl"
+SLOW_OPERATION_THRESHOLD_MS = 250.0
 _lock = threading.Lock()
+_diagnostic_lock = threading.Lock()
 _run_id: str | None = None
 _run_dir: Path | None = None
 _configured_trace_path: Path | None = None
@@ -54,6 +57,30 @@ def trace_path() -> Path:
     return TRACE_LOG_PATH
 
 
+def diagnostic_path() -> Path:
+    if _run_dir is not None:
+        _run_dir.mkdir(parents=True, exist_ok=True)
+        return _run_dir / SLOW_OPERATIONS_PATH.name
+    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    return SLOW_OPERATIONS_PATH
+
+
+def record_diagnostic(kind: str, **fields: Any) -> None:
+    record = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "time": round(time.time(), 6),
+        "thread": threading.current_thread().name,
+        "kind": kind,
+    }
+    record.update(fields)
+    line = json.dumps(record, ensure_ascii=True, sort_keys=True)
+    with _diagnostic_lock:
+        path = diagnostic_path()
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(line)
+            handle.write("\n")
+
+
 def append(event: str, **fields: Any) -> None:
     record = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -63,8 +90,22 @@ def append(event: str, **fields: Any) -> None:
     }
     record.update(fields)
     line = json.dumps(record, ensure_ascii=True, sort_keys=True)
+    lock_wait_started = time.perf_counter()
     with _lock:
+        lock_wait_ms = round((time.perf_counter() - lock_wait_started) * 1000, 3)
         path = trace_path()
+        write_started = time.perf_counter()
         with path.open("a", encoding="utf-8") as handle:
             handle.write(line)
             handle.write("\n")
+        write_ms = round((time.perf_counter() - write_started) * 1000, 3)
+    total_ms = round(lock_wait_ms + write_ms, 3)
+    if total_ms >= SLOW_OPERATION_THRESHOLD_MS:
+        record_diagnostic(
+            "slow_trace_write",
+            event=event,
+            lock_wait_ms=lock_wait_ms,
+            write_ms=write_ms,
+            total_ms=total_ms,
+            trace_path=str(path),
+        )
