@@ -58,9 +58,17 @@ export function readTableViewport(tbody, rowHeight, viewportHeight) {
     };
   }
   var rect = tbody.getBoundingClientRect();
+  var scrollParent = tbody.closest ? tbody.closest('main') : null;
+  var scrollOffset = window.scrollY;
   var tableTop = rect.top + window.scrollY;
-  var scrollTop = Math.max(0, window.scrollY - tableTop);
   var resolvedViewportHeight = viewportHeight || window.innerHeight || rowHeight || DEFAULT_VIRTUAL_ROW_HEIGHT;
+  if (scrollParent && scrollParent.scrollHeight > scrollParent.clientHeight) {
+    var parentRect = scrollParent.getBoundingClientRect();
+    scrollOffset = scrollParent.scrollTop;
+    tableTop = rect.top - parentRect.top + scrollParent.scrollTop;
+    resolvedViewportHeight = viewportHeight || scrollParent.clientHeight || rowHeight || DEFAULT_VIRTUAL_ROW_HEIGHT;
+  }
+  var scrollTop = Math.max(0, scrollOffset - tableTop);
   return {
     scrollTop: scrollTop,
     viewportHeight: resolvedViewportHeight,

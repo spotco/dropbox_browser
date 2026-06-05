@@ -14,7 +14,10 @@ body.browse-column-resizing {
   user-select: none;
 }
 body.has-log-panel {
-  padding-bottom: var(--log-panel-height);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
 }
 header {
   align-items: center;
@@ -39,6 +42,12 @@ main {
   max-width: none;
   padding: 24px 0;
   width: calc(100% - 32px);
+}
+body.has-log-panel main {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .topbar {
   display: flex;
@@ -162,6 +171,7 @@ button {
   padding: 8px 12px;
 }
 .browse-table-shell {
+  overflow-anchor: none;
   overflow-x: hidden;
 }
 table {
@@ -607,19 +617,17 @@ button:disabled {
 #log-panel {
   background: #1a1f2e;
   border-top: 2px solid #3a4a5e;
-  bottom: 0;
   color: #c8d0db;
   display: flex;
   flex-direction: column;
+  flex: 0 0 var(--log-panel-height);
   font-family: monospace;
   font-size: 12px;
   height: var(--log-panel-height);
-  left: 0;
   max-height: calc(100vh - 80px);
   min-height: 42px;
   overscroll-behavior: contain;
-  position: fixed;
-  right: 0;
+  position: relative;
   z-index: 100;
 }
 #log-resizer {

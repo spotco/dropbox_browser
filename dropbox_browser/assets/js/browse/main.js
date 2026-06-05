@@ -175,11 +175,18 @@ function currentBrowsePageHref(state) {
 function createVirtualState() {
   return {
     rowHeight: DEFAULT_VIRTUAL_ROW_HEIGHT,
+    rowHeightMeasured: false,
     overscan: DEFAULT_VIRTUAL_OVERSCAN,
     threshold: DEFAULT_VIRTUAL_THRESHOLD,
     enabled: false,
     windowKey: '',
   };
+}
+
+function resetVirtualMeasurement(virtualState) {
+  virtualState.rowHeight = DEFAULT_VIRTUAL_ROW_HEIGHT;
+  virtualState.rowHeightMeasured = false;
+  virtualState.windowKey = '';
 }
 
 function setVirtualizationDataset(body, virtualState, windowState, renderCount) {
@@ -305,25 +312,28 @@ function renderRows(mount, state, virtualState, options) {
     ].join(':');
     if (force || virtualState.windowKey !== nextWindowKey) {
       mount.innerHTML = renderVirtualBrowseRowsBody(sortedRows, windowState);
-      var measuredHeight = measureMountedRowHeight(mount, virtualState.rowHeight);
-      if (measuredHeight !== virtualState.rowHeight) {
-        virtualState.rowHeight = measuredHeight;
-        windowState = computeVirtualWindow({
-          rowCount: sortedRows.length,
-          rowHeight: virtualState.rowHeight,
-          scrollTop: viewport.scrollTop,
-          viewportHeight: viewport.viewportHeight,
-          overscan: virtualState.overscan,
-        });
-        nextWindowKey = [
-          sortedRows.length,
-          virtualState.rowHeight,
-          windowState.startIndex,
-          windowState.endIndex,
-          windowState.topSpacerHeight,
-          windowState.bottomSpacerHeight,
-        ].join(':');
-        mount.innerHTML = renderVirtualBrowseRowsBody(sortedRows, windowState);
+      if (!virtualState.rowHeightMeasured) {
+        var measuredHeight = measureMountedRowHeight(mount, virtualState.rowHeight);
+        virtualState.rowHeightMeasured = true;
+        if (measuredHeight !== virtualState.rowHeight) {
+          virtualState.rowHeight = measuredHeight;
+          windowState = computeVirtualWindow({
+            rowCount: sortedRows.length,
+            rowHeight: virtualState.rowHeight,
+            scrollTop: viewport.scrollTop,
+            viewportHeight: viewport.viewportHeight,
+            overscan: virtualState.overscan,
+          });
+          nextWindowKey = [
+            sortedRows.length,
+            virtualState.rowHeight,
+            windowState.startIndex,
+            windowState.endIndex,
+            windowState.topSpacerHeight,
+            windowState.bottomSpacerHeight,
+          ].join(':');
+          mount.innerHTML = renderVirtualBrowseRowsBody(sortedRows, windowState);
+        }
       }
       virtualState.windowKey = nextWindowKey;
     }
@@ -344,7 +354,8 @@ function renderRows(mount, state, virtualState, options) {
 function renderSnapshot(mount, state, payload, virtualState, onRendered) {
   applyBrowseSnapshot(state, payload);
   updatePageShell(payload);
-  renderRows(mount, state, virtualState, {force: true});
+  resetVirtualMeasurement(virtualState);
+  renderRows(mount, state, virtualState, {force: true, reason: 'snapshot'});
   if (typeof onRendered === 'function') onRendered();
   return startFolderInfoPolling(state, {
     onRowsChanged: function (affectedKeys) {
@@ -354,7 +365,7 @@ function renderSnapshot(mount, state, payload, virtualState, onRendered) {
         (filters.type !== 'all' && affectedKeys.type) ||
         filters.kind !== 'all';
       if (!affectedKeys[state.sort] && !filterSensitive) return;
-      renderRows(mount, state, virtualState, {force: true});
+      renderRows(mount, state, virtualState, {force: true, reason: 'folder-info'});
       if (typeof onRendered === 'function') onRendered();
     },
   });
@@ -376,6 +387,7 @@ function initBrowse() {
   var scrollPreviewName = document.getElementById('browse-scroll-preview-name');
   var scrollPreviewMeta = document.getElementById('browse-scroll-preview-meta');
   var scrollPreviewDetail = document.getElementById('browse-scroll-preview-detail');
+  var pageScrollEl = document.querySelector('main');
 
   var locationState = readBrowseLocation(window.location.search);
   var state = createBrowseState(locationState);
@@ -396,6 +408,14 @@ function initBrowse() {
   state.filterBarVisible = initialFilterState.visible;
   body.dataset.browseScrollPreview = 'hidden';
   body.dataset.browseScrollPreviewIndex = '';
+
+  function scrollPageToTop() {
+    if (pageScrollEl && pageScrollEl.scrollHeight > pageScrollEl.clientHeight) {
+      pageScrollEl.scrollTop = 0;
+      return;
+    }
+    window.scrollTo(0, 0);
+  }
 
   function notifyBrowseFolderChanged(previousPath, nextPath) {
     if (previousPath === nextPath) return;
@@ -479,7 +499,9 @@ function initBrowse() {
   }
 
   function renderAndRefresh(options) {
-    renderRows(mount, state, virtualState, options);
+    var nextOptions = Object.assign({reason: 'render-refresh'}, options || {});
+    if (nextOptions.force) resetVirtualMeasurement(virtualState);
+    renderRows(mount, state, virtualState, nextOptions);
     if (!virtualState.enabled) {
       hideScrollPreview();
       return;
@@ -492,6 +514,10 @@ function initBrowse() {
   function isScrollbarGesture(event) {
     if (!event || typeof event.clientX !== 'number') return false;
     if (event.pointerType === 'touch') return false;
+    if (pageScrollEl && pageScrollEl.scrollHeight > pageScrollEl.clientHeight) {
+      var rect = pageScrollEl.getBoundingClientRect();
+      return event.clientX >= rect.right - SCROLLBAR_GUTTER_PX && event.clientX <= rect.right + 2;
+    }
     return (window.innerWidth - event.clientX) <= SCROLLBAR_GUTTER_PX;
   }
 
@@ -584,7 +610,7 @@ function initBrowse() {
         });
         body.dataset.browseClient = 'ready';
         notifyBrowseFolderChanged(previousPath, state.path);
-        if (scrollToTop) window.scrollTo(0, 0);
+        if (scrollToTop) scrollPageToTop();
         var href = currentBrowsePageHref(state);
         if (historyMode === 'push') {
           window.history.pushState({}, '', href);
@@ -626,7 +652,7 @@ function initBrowse() {
     scrollFrameRequested = true;
     window.requestAnimationFrame(function () {
       scrollFrameRequested = false;
-      renderRows(mount, state, virtualState, {force: false});
+      renderRows(mount, state, virtualState, {force: false, reason: 'scroll'});
       updateScrollPreview({persistent: previewScrollbarDragActive});
     });
   }
@@ -772,6 +798,7 @@ function initBrowse() {
     hideScrollPreview();
   });
   window.addEventListener('scroll', scheduleViewportRender, {passive: true});
+  if (pageScrollEl) pageScrollEl.addEventListener('scroll', scheduleViewportRender, {passive: true});
   window.addEventListener('resize', scheduleViewportRender);
 
   loadBrowseState(state, {history: 'replace', scroll: false});
