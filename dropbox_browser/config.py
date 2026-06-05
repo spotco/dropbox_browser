@@ -12,6 +12,7 @@ TEMP_DIR = PROJECT_ROOT / "Temp"
 _APP_CONFIG_DEFAULTS: dict = {
     "DropboxFolder": "./DropboxLocal",
     "RCloneConfig": "",
+    "LocalhostOnlyAccess": True,
     "LogRcloneCommands": True,
     "LogHttpRequests": True,
     "FolderCacheWorkers": 4,

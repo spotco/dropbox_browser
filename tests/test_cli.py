@@ -99,6 +99,7 @@ class CliShutdownTests(unittest.TestCase):
         server = created_servers[0]
         self.assertTrue(server.daemon_threads)
         self.assertFalse(server.block_on_close)
+        self.assertTrue(server.localhost_only_access)
         server.server_close.assert_called_once_with()
         app.shutdown.assert_called_once_with()
         configure_run.assert_called_once()
@@ -173,6 +174,7 @@ class CliShutdownTests(unittest.TestCase):
         self.assertIn("app.shutdown", steps)
         self.assertIn("server.shutdown", steps)
         self.assertIn("server.server_close", steps)
+        self.assertTrue(created_servers[0].localhost_only_access)
         self.assertLess(steps.index("app.shutdown"), steps.index("server.server_close"))
         self.assertLess(steps.index("server.shutdown"), steps.index("server.server_close"))
 
@@ -216,5 +218,6 @@ class CliShutdownTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         find_dropbox_folder.assert_not_called()
+        self.assertTrue(created_servers[0].localhost_only_access)
         self.assertEqual(configure_run.call_args.kwargs["metadata"]["local_root"], str(local_root.resolve()))
         self.assertTrue(configure_run.call_args.kwargs["metadata"]["client_render"])

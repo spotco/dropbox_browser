@@ -255,6 +255,7 @@ th {
 .name {
   align-items: center;
   display: inline-flex;
+  max-width: 100%;
   gap: 8px;
   font-weight: 600;
   min-width: 0;
@@ -266,8 +267,12 @@ th {
 }
 .entry-name {
   display: inline-block;
+  flex: 1 1 auto;
   max-width: 100%;
-  overflow-wrap: anywhere;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .browse-table td,
 .browse-table th {

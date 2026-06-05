@@ -78,6 +78,7 @@ def main() -> int:
     server = ThreadingHTTPServer((args.host, args.port), RequestHandler)
     server.app = app  # type: ignore[attr-defined]
     server.log_requests = bool(app_config["LogHttpRequests"])  # type: ignore[attr-defined]
+    server.localhost_only_access = bool(app_config.get("LocalhostOnlyAccess", True))  # type: ignore[attr-defined]
     server.daemon_threads = True  # type: ignore[attr-defined]
     if hasattr(server, "block_on_close"):
         server.block_on_close = False  # type: ignore[attr-defined]

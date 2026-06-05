@@ -1,0 +1,18 @@
+{
+  "entries": [
+    { "path": "audio_downloads", "type": "dir", "mod_time": "2024-03-01T12:00:00Z" },
+    { "path": "audio_downloads/2015-02-04_LTHS_Speech_Team_Regional_Performance_With_Extra_Long_Descriptor_01.m4a", "type": "file", "content": "audio 1\n", "mod_time": "2024-03-01T12:01:00Z" },
+    { "path": "audio_downloads/2015-11-05_The_Nicholas_J_Fuentes_Show_Episode_01_With_Extra_Long_Descriptor_02.m4a", "type": "file", "content": "audio 2\n", "mod_time": "2024-03-01T12:02:00Z" },
+    { "path": "audio_downloads/2015-11-06_First_Taping_Of_The_NJF_Show_Time_Lapse_With_Extra_Long_Descriptor_03.m4a", "type": "file", "content": "audio 3\n", "mod_time": "2024-03-01T12:03:00Z" },
+    { "path": "audio_downloads/2015-11-16_The_Nicholas_J_Fuentes_Show_Episode_02_With_Extra_Long_Descriptor_04.m4a", "type": "file", "content": "audio 4\n", "mod_time": "2024-03-01T12:04:00Z" },
+    { "path": "audio_downloads/2015-12-08_The_Nicholas_J_Fuentes_Show_Episode_03_With_Extra_Long_Descriptor_05.m4a", "type": "file", "content": "audio 5\n", "mod_time": "2024-03-01T12:05:00Z" },
+    { "path": "audio_downloads/2016-01-28_The_Nicholas_J_Fuentes_Show_Episode_04_With_Extra_Long_Descriptor_06.m4a", "type": "file", "content": "audio 6\n", "mod_time": "2024-03-01T12:06:00Z" },
+    { "path": "audio_downloads/2016-03-31_The_Nicholas_J_Fuentes_Show_Episode_05_With_Extra_Long_Descriptor_07.m4a", "type": "file", "content": "audio 7\n", "mod_time": "2024-03-01T12:07:00Z" },
+    { "path": "audio_downloads/2016-04-06_The_Nicholas_J_Fuentes_Show_Episode_06_With_Extra_Long_Descriptor_08.m4a", "type": "file", "content": "audio 8\n", "mod_time": "2024-03-01T12:08:00Z" },
+    { "path": "audio_downloads/2016-04-26_The_Nicholas_J_Fuentes_Show_Episode_07_With_Extra_Long_Descriptor_09.m4a", "type": "file", "content": "audio 9\n", "mod_time": "2024-03-01T12:09:00Z" },
+    { "path": "audio_downloads/2016-11-06_Nick_Fuentes_Vs_Marxist_Weirdo_Debate_At_Boston_University_With_Extra_Long_Descriptor_10.m4a", "type": "file", "content": "audio 10\n", "mod_time": "2024-03-01T12:10:00Z" },
+    { "path": "audio_downloads/2016-11-18_Boston_University_Trump_Supporters_Nick_Fuentes_With_Extra_Long_Descriptor_11.m4a", "type": "file", "content": "audio 11\n", "mod_time": "2024-03-01T12:11:00Z" },
+    { "path": "audio_downloads/2017-01-20_Nick_Fuentes_HWNDU_With_Extra_Long_Descriptor_12.m4a", "type": "file", "content": "audio 12\n", "mod_time": "2024-03-01T12:12:00Z" }
+  ],
+  "local_files": []
+}

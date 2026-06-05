@@ -197,6 +197,8 @@ class WebUiTests(AppTestCase):
         self.assertIn("Enable sync to Dropbox", html)
         self.assertIn("body.sync-to-local-enabled .sync-form[data-sync-direction=\"dropbox_to_local\"]", css)
         self.assertIn("body.sync-to-dropbox-enabled .sync-form[data-sync-direction=\"local_to_dropbox\"]", css)
+        self.assertIn("text-overflow: ellipsis;", css)
+        self.assertIn("white-space: nowrap;", css)
         self.assertIn("Settings.get('sync-enable-to-local', false)", js)
         self.assertIn("Settings.get('sync-enable-write-dropbox', false)", js)
         self.assertIn("Settings.set('sync-enable-to-local', enableToLocal.checked)", js)

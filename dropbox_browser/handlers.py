@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json as _json
+import ipaddress
 import mimetypes
 from pathlib import Path
 import posixpath
@@ -47,8 +48,37 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.app.sync_jobs = SyncJobManager(self.app, workers=1)
         return self.app.sync_jobs
 
+    @property
+    def localhost_only_access(self) -> bool:
+        return bool(getattr(self.server, "localhost_only_access", True))
+
+    def _client_is_loopback(self) -> bool:
+        host = str((self.client_address or ("", 0))[0]).strip()
+        if not host:
+            return False
+        if host == "localhost":
+            return True
+        normalized = host.split("%", 1)[0]
+        try:
+            return ipaddress.ip_address(normalized).is_loopback
+        except ValueError:
+            if normalized.startswith("::ffff:"):
+                try:
+                    return ipaddress.ip_address(normalized.split(":", 3)[-1]).is_loopback
+                except ValueError:
+                    return False
+            return False
+
+    def _enforce_localhost_only_access(self) -> None:
+        if not self.localhost_only_access:
+            return
+        if self._client_is_loopback():
+            return
+        raise BrowserError(HTTPStatus.FORBIDDEN, "Only localhost clients may access this server.")
+
     def do_GET(self) -> None:
         try:
+            self._enforce_localhost_only_access()
             parsed = urlparse(self.path)
             if parsed.path == "/":
                 self.render_index(parsed.query)
@@ -79,6 +109,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def do_HEAD(self) -> None:
         try:
+            self._enforce_localhost_only_access()
             parsed = urlparse(self.path)
             if parsed.path == "/":
                 self.render_index(parsed.query, head_only=True)
@@ -97,6 +128,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         try:
+            self._enforce_localhost_only_access()
             parsed = urlparse(self.path)
             if parsed.path == "/sync":
                 self.handle_sync()

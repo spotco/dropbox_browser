@@ -25,7 +25,7 @@ function renderSyncCell(row) {
 
 function renderNameCell(row) {
   var href = row.kind === 'folder' ? row.folder_href : row.preview_href;
-  return '<a class="name" href="' + esc(href) + '">' +
+  return '<a class="name" href="' + esc(href) + '" title="' + esc(row.display_name) + '">' +
     '<img class="file-icon" src="' + esc(row.icon_href) + '" alt="" aria-hidden="true" loading="lazy">' +
     '<span class="entry-name">' + esc(row.display_name) + '</span>' +
     '</a>';
