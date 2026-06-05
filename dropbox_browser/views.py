@@ -144,7 +144,7 @@ def entry_name_link(href: str, name: str, is_dir: bool) -> str:
     icon_src = ICON_BASE_URL + quote(icon_name, safe="")
     escaped_name = html.escape(name)
     return (
-        f'<a class="name" href="{href}">'
+        f'<a class="name" href="{href}" title="{escaped_name}">'
         f'<img class="file-icon" src="{icon_src}" alt="" aria-hidden="true" loading="lazy">'
         f'<span class="entry-name">{escaped_name}</span>'
         '</a>'

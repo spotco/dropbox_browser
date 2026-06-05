@@ -245,6 +245,7 @@ class TestServer:
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), RequestHandler)
         self.server.app = self.app  # type: ignore[attr-defined]
         self.server.log_requests = False  # type: ignore[attr-defined]
+        self.server.localhost_only_access = True  # type: ignore[attr-defined]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True, name="test-http-server")
         self.thread.start()
         return self

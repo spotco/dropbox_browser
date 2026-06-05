@@ -6,6 +6,11 @@ from dropbox_browser import config as config_module
 
 
 class ConfigDefaultsTests(unittest.TestCase):
+    def test_default_localhost_only_access_is_enabled(self) -> None:
+        config = dict(config_module._APP_CONFIG_DEFAULTS)
+
+        self.assertEqual(config["LocalhostOnlyAccess"], True)
+
     def test_default_folder_cache_ttl_is_two_weeks(self) -> None:
         config = dict(config_module._APP_CONFIG_DEFAULTS)
 
