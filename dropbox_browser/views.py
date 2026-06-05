@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import os
 import posixpath
 from functools import lru_cache
 from pathlib import Path
@@ -155,6 +156,32 @@ def folder_page_title(remote: str, rel_path: str) -> str:
     return f"SDB: {folder_name} ({remote_target(remote, rel_path)})"
 
 
+def _local_root_display_parts(local_root: Path) -> tuple[str, str]:
+    parent = str(local_root.parent)
+    name = local_root.name or str(local_root)
+    if not parent or parent == ".":
+        return "", name
+    if parent.endswith(("\\", "/")):
+        return parent, name
+    return parent + os.sep, name
+
+
+def header_meta_html(app: Any, rel_path: str) -> str:
+    if not app.local_root:
+        return f'{html.escape(app.remote)} / {breadcrumbs(rel_path)}'
+    prefix, root_name = _local_root_display_parts(app.local_root)
+    prefix_text = f"{prefix} " if prefix else ""
+    links = [f'{html.escape(prefix_text)}<a href="/">{html.escape(root_name)}</a>']
+    current = ""
+    for part in rel_path.split("/"):
+        if not part:
+            continue
+        current = posixpath.join(current, part) if current else part
+        href = "/?" + urlencode({"path": current})
+        links.append(f'<a href="{href}">{html.escape(part)}</a>')
+    return r" \ ".join(links)
+
+
 def server_browse_rows_html(
     app: Any,
     rel_path: str,
@@ -273,6 +300,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         if app.local_root
         else "Local comparison disabled"
     )
+    header_meta = header_meta_html(app, rel_path)
     msg_html = f'<p class="notice">{html.escape(msg)}</p>' if msg else ""
     current_local_folder = ""
     if app.local_root:
@@ -321,9 +349,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         "page.html",
         icon_base_url=ICON_BASE_URL,
         page_title=html.escape(page_title),
-        remote=html.escape(app.remote),
-        rel_path=html.escape(rel_path),
-        local_note=local_note,
+        header_meta_html=header_meta,
         sync_toggles=sync_toggles,
         crumbs=crumbs,
         refresh_href=html.escape(refresh_href, quote=True),

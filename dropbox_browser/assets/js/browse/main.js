@@ -18,9 +18,29 @@ import {
   shouldVirtualizeRows,
 } from './virtual-list.js';
 
+function escapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function renderHeaderMetaHtml(page, breadcrumbs) {
+  if (!page || !page.local_root_name) {
+    return escapeHtml(page.remote) + ' / ' + renderBreadcrumbs(breadcrumbs || []);
+  }
+  var items = [];
+  items.push(escapeHtml((page.local_root_prefix || '') + ' ') + '<a href="/">' + escapeHtml(page.local_root_name) + '</a>');
+  (breadcrumbs || []).slice(1).forEach(function (item) {
+    items.push('<a href="' + escapeHtml(item.href) + '">' + escapeHtml(item.name) + '</a>');
+  });
+  return items.join(' \\ ');
+}
+
 function updatePageShell(payload) {
   var page = payload.page || {};
-  var heading = document.querySelector('header h1');
+  var headingLink = document.querySelector('header h1 a.site-title-link');
   var meta = document.querySelector('header .meta');
   var breadcrumbNav = document.querySelector('.breadcrumbs');
   var refreshLink = document.getElementById('refresh-cache');
@@ -28,25 +48,27 @@ function updatePageShell(payload) {
   var dropboxLink = document.querySelector('.topbar-actions .dropbox-link');
   if (page.title) {
     document.title = page.title;
-    if (heading) heading.textContent = page.title;
+    if (headingLink) headingLink.textContent = page.title;
   }
   if (meta) {
-    meta.textContent = page.remote + ' / ' + page.path + ' - ' + page.local_note;
+    meta.innerHTML = renderHeaderMetaHtml(page, payload.breadcrumbs || []);
   }
-  if (breadcrumbNav) {
-    breadcrumbNav.innerHTML = renderBreadcrumbs(payload.breadcrumbs || []);
-    if (refreshLink) {
-      refreshLink.setAttribute('href', page.refresh_href || refreshLink.getAttribute('href') || '/');
-      refreshLink.setAttribute('title', 'Refresh cached metadata for this folder');
-      breadcrumbNav.appendChild(document.createTextNode(' '));
-      breadcrumbNav.appendChild(refreshLink);
-    }
+  if (refreshLink) {
+    refreshLink.setAttribute('href', page.refresh_href || refreshLink.getAttribute('href') || '/');
+    refreshLink.setAttribute('title', 'Refresh cached metadata for this folder');
+  }
+  if (breadcrumbNav && refreshLink && refreshLink.parentElement !== breadcrumbNav) {
+    breadcrumbNav.textContent = '';
+    breadcrumbNav.appendChild(refreshLink);
   }
   if (topbarCopyButton && page.current_local_folder) {
     topbarCopyButton.setAttribute('data-copy-path', page.current_local_folder);
   }
   if (dropboxLink && page.dropbox_home_url) {
     dropboxLink.setAttribute('href', page.dropbox_home_url);
+    dropboxLink.setAttribute('target', '_blank');
+    dropboxLink.setAttribute('rel', 'noopener noreferrer');
+    dropboxLink.textContent = 'Go to Dropbox';
   }
 }
 
@@ -226,14 +248,6 @@ function browsePreviewDetailText(row, sortKey) {
   if (row.date_display) return row.date_display;
   if (row.size_display && row.size_display !== '—') return row.size_display;
   return '';
-}
-
-function escapeHtml(value) {
-  return String(value == null ? '' : value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }
 
 function renderSelectOptions(select, values, activeValue) {
