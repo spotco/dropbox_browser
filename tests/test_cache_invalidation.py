@@ -510,8 +510,13 @@ class CacheInvalidationTests(AppTestCase):
         with TestServer(app) as server:
             payload = server.get_json("/browse/endpoints/listing")
 
+        local_root_prefix = str(local_root.parent)
+        if local_root_prefix and local_root_prefix != "." and not local_root_prefix.endswith(("\\", "/")):
+            local_root_prefix += "\\"
         self.assertEqual(payload["page"]["title"], "SDB: Dropbox (dropbox:)")
         self.assertEqual(payload["page"]["current_local_folder"], str(local_root))
+        self.assertEqual(payload["page"]["local_root_prefix"], local_root_prefix)
+        self.assertEqual(payload["page"]["local_root_name"], local_root.name)
         self.assertEqual(payload["page"]["dropbox_home_url"], "https://www.dropbox.com/home")
         self.assertEqual(payload["breadcrumbs"], [{"name": "Dropbox", "path": "", "href": "/"}])
         self.assertEqual(payload["sort"]["current_key"], "name")

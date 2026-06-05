@@ -470,9 +470,19 @@ class RequestHandler(BaseHTTPRequestHandler):
         )
         current_local_folder = None
         local_note = "Local comparison disabled"
+        local_root_prefix = None
+        local_root_name = None
         if self.app.local_root:
             current_local_folder = str(self.app.local_display_path(snapshot.rel_path) or self.app.local_root)
             local_note = f"Comparing with {self.app.local_root}"
+            parent = str(self.app.local_root.parent)
+            local_root_name = self.app.local_root.name or str(self.app.local_root)
+            if not parent or parent == ".":
+                local_root_prefix = ""
+            elif parent.endswith(("\\", "/")):
+                local_root_prefix = parent
+            else:
+                local_root_prefix = parent + "\\"
         refresh_href = "/?" + urlencode({
             "path": snapshot.rel_path,
             "sort": snapshot.sort_key,
@@ -502,6 +512,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 "path": snapshot.rel_path,
                 "local_note": local_note,
                 "current_local_folder": current_local_folder,
+                "local_root_prefix": local_root_prefix,
+                "local_root_name": local_root_name,
                 "dropbox_home_url": dropbox_home_url(snapshot.rel_path),
                 "refresh_href": refresh_href,
             },

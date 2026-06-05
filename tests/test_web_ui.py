@@ -105,7 +105,30 @@ class WebUiTests(AppTestCase):
 
         escaped_title = "SDB: Album &lt;One&gt; (dropbox:Music &amp; Videos/Album &lt;One&gt;)"
         self.assertIn(f"<title>{escaped_title}</title>", html)
-        self.assertIn(f"<h1>{escaped_title}</h1>", html)
+        self.assertIn(f'<h1><a class="site-title-link" href="/">{escaped_title}</a></h1>', html)
+
+    def test_header_meta_includes_clickable_folder_breadcrumbs(self) -> None:
+        rel_path = "music/mixes"
+        local_root = self.create_local_root({
+            "music/mixes/song.mp3": b"audio",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:music/mixes": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            html = server.get_text("/?path=" + quote(rel_path))
+
+        local_root_prefix = str(local_root.parent)
+        if local_root_prefix and local_root_prefix != "." and not local_root_prefix.endswith(("\\", "/")):
+            local_root_prefix += "\\"
+        self.assertIn(
+            f'<div class="meta">{local_root_prefix} <a href="/">{local_root.name}</a> \\ <a href="/?path=music">music</a> \\ <a href="/?path=music%2Fmixes">mixes</a></div>',
+            html,
+        )
+        self.assertNotIn('<nav class="breadcrumbs"><a href="/">Dropbox</a>', html)
+        self.assertIn('<nav class="breadcrumbs"><a id="refresh-cache" class="refresh-link"', html)
 
     def test_sync_controls_render_in_separate_view_and_sync_columns(self) -> None:
         local_root = self.create_local_root({
@@ -842,7 +865,7 @@ class WebUiTests(AppTestCase):
 
         self.assertIn('<div class="topbar-actions">', html)
         self.assertIn(">Copy Folder Path</button>", html)
-        self.assertIn('href="https://www.dropbox.com/home"', html)
+        self.assertIn('<a class="dropbox-link" href="https://www.dropbox.com/home" target="_blank" rel="noopener noreferrer">Go to Dropbox</a>', html)
         self.assertIn('target="_blank"', html)
         self.assertIn('class="copy-path"', html)
         self.assertIn(f'data-copy-path="{local_root}"', html)

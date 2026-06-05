@@ -11,14 +11,14 @@
 <body class="has-log-panel" data-current-folder-path="$current_folder_attr" data-current-sort-key="$current_sort_key_attr" data-current-sort-direction="$current_sort_direction_attr" data-music-library-poll-delay-ms="$music_library_poll_delay_ms_attr" data-client-render="$client_render_attr">
   <header>
     <div>
-      <h1>$page_title</h1>
-      <div class="meta">$remote / $rel_path - $local_note</div>
+      <h1><a class="site-title-link" href="/">$page_title</a></h1>
+      <div class="meta">$header_meta_html</div>
     </div>
     $sync_toggles
   </header>
   <main>
     <div class="topbar">
-      <nav class="breadcrumbs">$crumbs <a id="refresh-cache" class="refresh-link" href="$refresh_href" title="Refresh cached metadata for this folder">&#8635; refresh</a></nav>
+      <nav class="breadcrumbs"><a id="refresh-cache" class="refresh-link" href="$refresh_href" title="Refresh cached metadata for this folder">&#8635; refresh</a></nav>
       $topbar_actions
     </div>
     $msg_html

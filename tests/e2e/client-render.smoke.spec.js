@@ -18,6 +18,11 @@ test.afterAll(async () => {
 });
 
 test("client-render mode fetches and renders browse rows from the listing endpoint", async ({ page }) => {
+  const pageErrors = [];
+  page.on("pageerror", (error) => {
+    pageErrors.push(String(error));
+  });
+
   await page.goto("/");
 
   await expect(page).toHaveTitle(/SDB: Dropbox/);
@@ -29,6 +34,7 @@ test("client-render mode fetches and renders browse rows from the listing endpoi
   await expect(page.locator("#browse-rows .entry-name").first()).toBeVisible();
   await expect(page.locator('#browse-rows a[href^="/file?"]').first()).toBeVisible();
   await expect(page.locator('#browse-rows a[href^="/download?"]').first()).toBeVisible();
+  expect(pageErrors).toEqual([]);
 });
 
 test("client-render filter bar toggles from the top action row and persists", async ({ page }) => {
