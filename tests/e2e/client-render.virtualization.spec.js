@@ -6,6 +6,17 @@ test.use({ baseURL: virtualBaseURL, viewport: { width: 1280, height: 420 } });
 
 const { startServer, stopServer } = require("./support/server");
 
+async function scrollBrowseToBottom(page) {
+  await page.evaluate(() => {
+    const main = document.querySelector("main");
+    if (main && main.scrollHeight > main.clientHeight) {
+      main.scrollTop = main.scrollHeight;
+      return;
+    }
+    window.scrollTo(0, document.body.scrollHeight);
+  });
+}
+
 let server = null;
 
 test.beforeAll(async () => {
@@ -31,7 +42,7 @@ test("client-render virtualizes large browse listings and updates the visible wi
   expect(initialRenderCount).toBeLessThan(40);
   await expect(page.getByText("2024-03-01 0001.jpg")).toBeVisible();
 
-  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await scrollBrowseToBottom(page);
 
   await expect.poll(async () => await page.locator("body").getAttribute("data-browse-visible-range")).not.toBe(initialRange);
   await expect(page.locator('tr[data-browse-row-id] .entry-name', { hasText: "2024-03-01 0040.jpg" })).toBeVisible();
@@ -55,10 +66,10 @@ test("client-render shows a scrollbar drag preview for the active filtered order
     clientY: 180,
     pointerType: "mouse",
   });
-  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await scrollBrowseToBottom(page);
 
   await expect(page.locator("body")).toHaveAttribute("data-browse-scroll-preview", "visible");
-  await expect(page.locator("#browse-scroll-preview-index")).toHaveText("11 / 11");
+  await expect.poll(async () => await page.locator("#browse-scroll-preview-index").textContent()).toBe("11 / 11");
   await expect(page.locator("#browse-scroll-preview-name")).toHaveText("2024-03-01 0039.jpg");
 
   await page.locator("body").dispatchEvent("pointerup", {

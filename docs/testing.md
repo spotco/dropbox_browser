@@ -21,6 +21,7 @@ Common groups:
 - `cache` - listing/folder cache invalidation.
 - `names` - Windows-safe name matching and listing merge.
 - `rclone` - rclone adapter behavior.
+- `thumbnails` - thumbnail config, cache, `/thumbnail` route, and listing fields.
 
 Run one or more groups:
 
@@ -43,6 +44,15 @@ python -m unittest discover -s tests -v
 
 Use the full suite before checkin/commit, before handoff of broad cross-module
 changes, or when a shared helper used by multiple groups changes.
+
+## Client-Rendered Browse Assumption
+
+The suite treats client-rendered browse as the only maintained UI mode.
+`--no-client-render` remains a CLI flag, but it is not regression-tested.
+
+When a test needs browse row data, call
+`GET /browse/endpoints/listing` instead of parsing `GET /` table HTML. Shared
+helper: `browse_listing()` in `tests/app_test_support.py`.
 
 ## JavaScript and Browser Tests
 

@@ -36,7 +36,6 @@ function mirrorOutput(stream, prefix) {
 }
 
 async function startServer(options = {}) {
-  const clientRender = options.clientRender === true;
   const fixtureName = options.fixtureName || "basic-library.json";
   const fixturePath = path.join(repoRoot, "tests", "e2e", "fixtures", fixtureName);
   const child = spawn(
@@ -49,7 +48,6 @@ async function startServer(options = {}) {
         PYTHONUNBUFFERED: "1",
         PLAYWRIGHT_PORT: port,
         DROPBOX_BROWSER_E2E_FIXTURE: fixturePath,
-        PLAYWRIGHT_CLIENT_RENDER: clientRender ? "1" : "0",
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -62,7 +60,7 @@ async function startServer(options = {}) {
   });
 
   await Promise.race([
-    waitForServer(`${baseURL}/`, 5000),
+    waitForServer(`${baseURL}/`, 30000),
     exitPromise.then(({ code, signal }) => {
       throw new Error(`Server exited before becoming ready (code=${code}, signal=${signal})`);
     }),

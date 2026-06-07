@@ -42,11 +42,12 @@ class FolderInfoWorkerTests(AppTestCase):
         app = self._build_app(rclone, local_root=local_root)
 
         with TestServer(app) as server:
-            html = server.get_text("/")
-            self.assertIn("shared.txt", html)
-            self.assertIn('<span class="entry-name">sub</span>', html)
-            self.assertIn('/assets/icons/material-icon-theme/folder-base.svg', html)
-            self.assertIn("Loading", html)
+            listing = self._browse_listing(server)
+            row_names = {row["display_name"] for row in listing["rows"]}
+            self.assertIn("shared.txt", row_names)
+            sub_row = next(row for row in listing["rows"] if row["display_name"] == "sub")
+            self.assertEqual(sub_row["icon_href"], "/assets/icons/material-icon-theme/folder-base.svg")
+            self.assertEqual(sub_row["status_label"], "Loading")
 
             results = self._wait_folder_info(
                 server,
@@ -139,18 +140,13 @@ class FolderInfoWorkerTests(AppTestCase):
         app = self._build_app(rclone, manager_cls=PreloadedFolderCache)
 
         with TestServer(app) as server:
-            html = server.get_text("/?sort=date&dir=desc")
+            listing = self._browse_listing(server, sort="date", direction="desc")
 
-        table_body = html.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
-        names = [
-            row.split('<span class="entry-name">', 1)[1].split("</span>", 1)[0]
-            for row in table_body.split("<tr")
-            if 'data-row-kind="folder"' in row
-        ]
-        self.assertEqual(names, ["newer", "older"])
-        self.assertIn('data-sort-date="1735689600.0"', table_body)
-        self.assertIn('data-sort-date="1704067200.0"', table_body)
-        self.assertIn("spinner", table_body)
+        folder_rows = [row for row in listing["rows"] if row["kind"] == "folder"]
+        self.assertEqual([row["display_name"] for row in folder_rows], ["newer", "older"])
+        self.assertEqual(folder_rows[0]["sort_date"], 1735689600.0)
+        self.assertEqual(folder_rows[1]["sort_date"], 1704067200.0)
+        self.assertTrue(all(not row["metadata_complete"] for row in folder_rows))
 
     def test_slow_background_folder_reports_calculating_then_completes(self) -> None:
         local_root = self.create_local_root({
@@ -202,8 +198,8 @@ class FolderInfoWorkerTests(AppTestCase):
         app = self._build_app(rclone, local_root=local_root, workers=2)
 
         with TestServer(app) as server:
-            html = server.get_text("/?path=music")
-            self.assertIn('<span class="entry-name">Album</span>', html)
+            listing = self._browse_listing(server, path="music")
+            self.assertIn("Album", {row["display_name"] for row in listing["rows"]})
 
             partial_results = self._wait_folder_info(
                 server,
@@ -255,7 +251,7 @@ class FolderInfoWorkerTests(AppTestCase):
         app = self._build_app(rclone, local_root=local_root, workers=1)
 
         with TestServer(app) as server:
-            html = server.get_text("/?path=music")
+            listing = self._browse_listing(server, path="music")
             results = self._wait_folder_info(
                 server,
                 paths=[folder_name, "Other Album"],
@@ -265,7 +261,7 @@ class FolderInfoWorkerTests(AppTestCase):
                 ),
             )
 
-        self.assertIn(folder_name, html)
+        self.assertIn(folder_name, {row["display_name"] for row in listing["rows"]})
         self.assertTrue(results[folder_name]["complete"])
         self.assertIn(results[folder_name]["diff_status"], {"synced", "has_diffs"})
         self.assertTrue(results["Other Album"]["complete"])

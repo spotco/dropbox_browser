@@ -8,7 +8,13 @@ import time
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from .config import find_default_config, find_default_rclone, find_dropbox_folder, load_app_config
+from .config import (
+    find_default_config,
+    find_default_rclone,
+    find_dropbox_folder,
+    load_app_config,
+    load_thumbnail_config,
+)
 from .foldercache import FolderCacheManager
 from .handlers import RequestHandler
 from . import logoutput, workertrace
@@ -39,6 +45,7 @@ def main() -> int:
     args = parse_args()
     started_at = time.time()
     app_config = load_app_config()
+    thumbnail_config = load_thumbnail_config(app_config)
     local_root = Path(args.local_root).resolve() if args.local_root else find_dropbox_folder(app_config)
     if local_root.exists() and not local_root.is_dir():
         print(f"DropboxFolder is not a directory: {local_root}", file=sys.stderr)
@@ -52,6 +59,9 @@ def main() -> int:
             "remote": args.remote,
             "local_root": str(local_root),
             "client_render": bool(getattr(args, "client_render", False)),
+            "thumbnail_enabled": thumbnail_config.enabled,
+            "thumbnail_size": thumbnail_config.size,
+            "thumbnail_magick_path": str(thumbnail_config.magick_exe) if thumbnail_config.magick_exe else None,
         },
     )
 
@@ -73,6 +83,7 @@ def main() -> int:
         folder_cache=folder_cache,
         listing_cache=listing_cache,
         client_render=bool(getattr(args, "client_render", False)),
+        thumbnail_config=thumbnail_config,
     )
     app.sync_jobs = SyncJobManager(app, workers=int(app_config["SyncJobWorkers"]))
     server = ThreadingHTTPServer((args.host, args.port), RequestHandler)
@@ -102,6 +113,17 @@ def main() -> int:
 
     print(f"Serving {args.remote} at http://{args.host}:{args.port}/")
     print(f"Comparing with local folder: {local_root}")
+    if thumbnail_config.enabled:
+        print(
+            "Thumbnails enabled: "
+            f"{thumbnail_config.magick_exe} "
+            f"(size={thumbnail_config.size}px timeout={thumbnail_config.timeout_seconds:g}s "
+            f"max_input={thumbnail_config.max_input_bytes} bytes)"
+        )
+    elif thumbnail_config.configured_enabled:
+        print("Thumbnails disabled: vendored ImageMagick not found at ImageMagick\\magick.exe")
+    else:
+        print("Thumbnails disabled by config.")
     print(f"Trace log: {trace_run_dir / 'foldercache_threads.jsonl'}")
     logoutput.start()
     previous_sigint = signal.getsignal(signal.SIGINT)

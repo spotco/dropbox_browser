@@ -562,6 +562,117 @@ class CacheInvalidationTests(AppTestCase):
         self.assertEqual(local_only_row["download_href"], "/download?path=local-only.txt&source=local")
         self.assertEqual(local_only_row["sync"], {"allowed": True, "directions": ["local_to_dropbox"]})
 
+    def test_browse_listing_endpoint_exposes_thumbnail_fields_for_images_only(self) -> None:
+        local_root = self.create_local_root({
+            "cover.png": b"local-cover-different-size",
+            "notes.txt": b"notes",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[
+                {
+                    "Name": "cover.png",
+                    "Path": "cover.png",
+                    "IsDir": False,
+                    "Size": 5,
+                    "ModTime": "2024-01-02T12:00:00Z",
+                },
+                {
+                    "Name": "notes.txt",
+                    "Path": "notes.txt",
+                    "IsDir": False,
+                    "Size": 5,
+                    "ModTime": "2024-01-02T12:01:00Z",
+                },
+            ])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            payload = server.get_json("/browse/endpoints/listing")
+
+        image_row = next(row for row in payload["rows"] if row["display_name"] == "cover.png")
+        self.assertTrue(image_row["thumbnailable"])
+        self.assertEqual(image_row["thumbnail_source"], "local")
+        self.assertEqual(image_row["thumbnail_href"], "/thumbnail?path=cover.png&source=local")
+        self.assertEqual(image_row["icon_href"], "/assets/icons/material-icon-theme/image.svg")
+        self.assertEqual(image_row["preview_href"], "/file?path=cover.png&source=remote")
+        self.assertEqual(image_row["download_href"], "/download?path=cover.png&source=remote")
+        self.assertEqual(image_row["status_label"], "Has Diffs")
+
+        text_row = next(row for row in payload["rows"] if row["display_name"] == "notes.txt")
+        self.assertFalse(text_row["thumbnailable"])
+        self.assertIsNone(text_row["thumbnail_source"])
+        self.assertIsNone(text_row["thumbnail_href"])
+        self.assertEqual(text_row["icon_href"], "/assets/icons/material-icon-theme/document.svg")
+
+    def test_browse_search_endpoint_exposes_thumbnail_fields_for_image_results_only(self) -> None:
+        class SearchFolderCache:
+            def __init__(self, records: dict[str, dict]) -> None:
+                self.records = records
+
+            def get(self, remote_path: str) -> dict | None:
+                return self.records.get(remote_path)
+
+            def status(self, remote_path: str) -> str:
+                data = self.records.get(remote_path)
+                if data is None:
+                    return "pending"
+                return "complete" if data.get("complete") else "partial"
+
+            def page_epoch_for(self, _page_key: str) -> float:
+                return 1234.5
+
+            def ensure_known_subtree(self, _remote_path: str, page_epoch: float) -> dict[str, int | float]:
+                return {
+                    "page_epoch": page_epoch,
+                    "queued_folder_count": 0,
+                    "pending_folder_count": 0,
+                    "missing_folder_count": 0,
+                }
+
+        local_root = self.create_local_root({
+            "Photos/cover.png": b"local-cover-different-size",
+        })
+        folder_cache = SearchFolderCache({
+            "dropbox:Photos": {
+                "complete": True,
+                "direct_items": [
+                    {"Name": "cover.png", "Path": "cover.png", "IsDir": False, "Size": 5, "ModTime": "2024-01-02T12:00:00Z"},
+                    {"Name": "notes.txt", "Path": "notes.txt", "IsDir": False, "Size": 5, "ModTime": "2024-01-02T12:01:00Z"},
+                ],
+                "direct_files": [
+                    {"name": "cover.png", "path": "cover.png", "remote_path": "dropbox:Photos/cover.png", "size": 5, "mtime": 1704196800.0},
+                    {"name": "notes.txt", "path": "notes.txt", "remote_path": "dropbox:Photos/notes.txt", "size": 5, "mtime": 1704196860.0},
+                ],
+                "direct_folders": [],
+            },
+        })
+        app = DropboxBrowser(
+            SimulatedRclone(),
+            "dropbox:",
+            local_root,
+            folder_cache=folder_cache,
+            listing_cache=ListingCacheManager(ttl_seconds=1800),
+        )
+
+        with TestServer(app) as server:
+            image_payload = server.get_json("/browse/endpoints/search?path=Photos&recursive=1&query=cover")
+            text_payload = server.get_json("/browse/endpoints/search?path=Photos&recursive=1&query=notes")
+
+        image_row = image_payload["results"][0]
+        self.assertTrue(image_row["thumbnailable"])
+        self.assertEqual(image_row["thumbnail_source"], "local")
+        self.assertEqual(image_row["thumbnail_href"], "/thumbnail?path=Photos%2Fcover.png&source=local")
+        self.assertEqual(image_row["icon_href"], "/assets/icons/material-icon-theme/image.svg")
+        self.assertEqual(image_row["preview_href"], "/file?path=Photos%2Fcover.png&source=remote")
+        self.assertEqual(image_row["status_label"], "Has Diffs")
+
+        text_row = text_payload["results"][0]
+        self.assertFalse(text_row["thumbnailable"])
+        self.assertIsNone(text_row["thumbnail_source"])
+        self.assertIsNone(text_row["thumbnail_href"])
+        self.assertEqual(text_row["icon_href"], "/assets/icons/material-icon-theme/document.svg")
+
     def test_browse_listing_endpoint_serializes_local_only_folder_metadata_as_final_values(self) -> None:
         local_root = self.create_local_root({
             "albums-local/track.txt": b"track",

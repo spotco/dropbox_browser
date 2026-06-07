@@ -47,7 +47,7 @@ class DiffStatusTests(AppTestCase):
         app = self._build_app(rclone, local_root=local_root)
 
         with TestServer(app) as server:
-            html = server.get_text("/?path=music")
+            listing = self._browse_listing(server, path="music")
             results = self._wait_folder_info(
                 server,
                 current="music",
@@ -55,12 +55,13 @@ class DiffStatusTests(AppTestCase):
             )
             info = results["music"]
 
-        self.assertIn("song.mp3", html)
-        self.assertNotIn(".DS_Store", html)
-        self.assertNotIn("Thumbs.db", html)
-        self.assertNotIn("desktop.ini", html)
-        self.assertNotIn("ehthumbs.db", html)
-        self.assertNotIn("._song.mp3", html)
+        row_names = {row["display_name"] for row in listing["rows"]}
+        self.assertIn("song.mp3", row_names)
+        self.assertNotIn(".DS_Store", row_names)
+        self.assertNotIn("Thumbs.db", row_names)
+        self.assertNotIn("desktop.ini", row_names)
+        self.assertNotIn("ehthumbs.db", row_names)
+        self.assertNotIn("._song.mp3", row_names)
         self.assertEqual(info.get("file_statuses", {}).get("song.mp3", {}).get("diff_status"), "synced")
         self.assertNotIn(".DS_Store", info.get("file_statuses", {}))
         self.assertNotIn("Thumbs.db", info.get("file_statuses", {}))
@@ -133,19 +134,12 @@ class DiffStatusTests(AppTestCase):
         app = self._build_app(rclone, local_root=local_root, workers=1)
 
         with TestServer(app) as server:
-            html = server.get_text("/?sort=status&dir=asc")
+            listing = self._browse_listing(server, sort="status", direction="asc")
 
-        self.assertIn(
-            '<a data-browse-sort="status" data-browse-sort-label="Status" '
-            'href="/?path=&sort=status&dir=desc">Status ^</a>',
-            html,
-        )
-        table_body = html.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
-        status_labels = [
-            row.split('<span class="status ', 1)[1].split(">", 1)[1].split("</span>", 1)[0]
-            for row in table_body.split("<tr")
-            if '<span class="status ' in row
-        ]
+        self.assertEqual(listing["sort"]["current_key"], "status")
+        self.assertEqual(listing["sort"]["current_direction"], "asc")
+        self.assertEqual(listing["sort"]["next_direction"]["status"], "desc")
+        status_labels = [row["status_label"] for row in listing["rows"]]
         self.assertEqual(status_labels, ["Dropbox Only", "Has Diffs", "Local Only", "Synced"])
 
     def test_local_file_size_change_overrides_stale_synced_folder_cache(self) -> None:
@@ -160,7 +154,7 @@ class DiffStatusTests(AppTestCase):
         app = self._build_app(rclone, local_root=local_root, workers=1)
 
         with TestServer(app) as server:
-            server.get_text("/?path=dropbox_browser_test")
+            self._browse_listing(server, path="dropbox_browser_test")
             results = self._wait_folder_info(
                 server,
                 current="dropbox_browser_test",
@@ -172,11 +166,12 @@ class DiffStatusTests(AppTestCase):
             )
 
             (local_root / "dropbox_browser_test" / "audio_urls.txt").write_bytes(b"changed local urls")
-            html = server.get_text("/?path=dropbox_browser_test")
+            listing = self._browse_listing(server, path="dropbox_browser_test")
             info = server.get_json("/folder-info?current=dropbox_browser_test")["results"]["dropbox_browser_test"]
 
-        self.assertIn('data-file-status-path="dropbox_browser_test/audio_urls.txt"', html)
-        self.assertIn("Has Diffs", html)
+        audio_row = next(row for row in listing["rows"] if row["display_name"] == "audio_urls.txt")
+        self.assertEqual(audio_row["path"], "dropbox_browser_test/audio_urls.txt")
+        self.assertEqual(audio_row["status_label"], "Has Diffs")
         self.assertEqual(info["file_statuses"]["audio_urls.txt"]["diff_status"], "has_diffs")
 
     def test_size_only_sync_queues_no_hash_jobs(self) -> None:

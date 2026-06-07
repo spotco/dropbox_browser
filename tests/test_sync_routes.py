@@ -1091,11 +1091,11 @@ class SyncRouteTests(AppTestCase):
                 else None,
                 description="recursive local-to-dropbox sync completion",
             )
-            html = server.get_text("/")
+            listing = self._browse_listing(server)
 
         self.assertEqual(result["status"], "complete")
-        folder_row = html.split('<span class="entry-name">local-folder</span></a></td>', 1)[1].split("</tr>", 1)[0]
-        self.assertNotIn("Local Only", folder_row)
+        folder_row = next(row for row in listing["rows"] if row["display_name"] == "local-folder")
+        self.assertNotEqual(folder_row["status_label"], "Local Only")
         self.assertGreaterEqual(sum(1 for call in rclone.calls if call["target"] == "dropbox:"), 2)
 
     def test_batch_sync_continues_after_file_error_and_reports_it(self) -> None:

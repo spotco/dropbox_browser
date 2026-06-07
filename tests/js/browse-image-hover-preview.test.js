@@ -29,6 +29,33 @@ test("isPreviewableImageHref accepts browser-previewable image file links", asyn
   );
 });
 
+test("readLoadedThumbnailSrc returns loaded row thumbnail src only when state is loaded", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/browse/image-hover-preview.js");
+  const thumbnailHref = "/thumbnail?path=Camera+Uploads%2Fcover.jpg&source=remote";
+  const iconHref = "/assets/icons/material-icon-theme/image.svg";
+
+  function makeLink(state, src) {
+    return {
+      querySelector: function (selector) {
+        if (selector !== ".file-icon[data-thumbnail-href]") return null;
+        return {
+          getAttribute: function (name) {
+            if (name === "data-thumbnail-href") return thumbnailHref;
+            if (name === "data-thumbnail-state") return state;
+            if (name === "src") return src;
+            return "";
+          },
+        };
+      },
+    };
+  }
+
+  assert.equal(mod.readLoadedThumbnailSrc(makeLink("loaded", thumbnailHref)), thumbnailHref);
+  assert.equal(mod.readLoadedThumbnailSrc(makeLink("loading", thumbnailHref)), "");
+  assert.equal(mod.readLoadedThumbnailSrc(makeLink("loaded", iconHref)), "");
+  assert.equal(mod.readLoadedThumbnailSrc(null), "");
+});
+
 test("computeHoverPreviewPosition centers on the pointer and clamps into the viewport", async () => {
   const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/browse/image-hover-preview.js");
 
