@@ -25,8 +25,19 @@ function renderSyncCell(row) {
 
 function renderNameCell(row) {
   var href = row.kind === 'folder' ? row.folder_href : row.preview_href;
+  var iconClasses = 'file-icon';
+  var thumbnailAttrs = '';
+  if (row.thumbnailable && row.thumbnail_href) {
+    iconClasses += ' file-icon-thumbnail';
+    thumbnailAttrs =
+      ' data-thumbnail-href="' + esc(row.thumbnail_href) + '"' +
+      ' data-thumbnail-source="' + esc(row.thumbnail_source || '') + '"' +
+      ' data-thumbnail-state="idle"';
+  }
   return '<a class="name" href="' + esc(href) + '" title="' + esc(row.display_name) + '">' +
-    '<img class="file-icon" src="' + esc(row.icon_href) + '" alt="" aria-hidden="true" loading="lazy">' +
+    '<span class="file-icon-slot">' +
+    '<img class="' + esc(iconClasses) + '" src="' + esc(row.icon_href) + '"' + thumbnailAttrs + ' alt="" aria-hidden="true" loading="lazy">' +
+    '</span>' +
     '<span class="entry-name">' + esc(row.display_name) + '</span>' +
     '</a>';
 }
@@ -73,7 +84,7 @@ function renderBrowseRow(row) {
     attrs.push(' data-file-status-path="' + esc(row.path) + '"');
   }
   return '<tr' + attrs.join('') + '>' +
-    '<td>' + renderNameCell(row) + '</td>' +
+    '<td class="col-name">' + renderNameCell(row) + '</td>' +
     '<td>' + esc(row.type_label) + '</td>' +
     '<td><span class="status ' + esc(row.status_class) + '">' + esc(row.status_label) + '</span></td>' +
     '<td class="col-size">' + renderFolderMetadataCell(row, 'size') + '</td>' +

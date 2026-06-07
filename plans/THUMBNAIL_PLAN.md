@@ -75,145 +75,145 @@ Thumbnails should:
 
 ### Phase 1 - Tool And Cache Configuration
 
-- [ ] Add a generated `ThumbnailCache/` directory path in
+- [x] Add a generated `ThumbnailCache/` directory path in
       `dropbox_browser/config.py`.
-- [ ] Add `ThumbnailCache/` to `.gitignore` if it is not already ignored by an
+- [x] Add `ThumbnailCache/` to `.gitignore` if it is not already ignored by an
       existing generated-state rule.
-- [ ] Vendor ImageMagick in an `ImageMagick/` folder in this repository.
-- [ ] Discover the executable at `ImageMagick/magick.exe`.
-- [ ] Add config defaults for thumbnail behavior:
+- [x] Vendor ImageMagick in an `ImageMagick/` folder in this repository.
+- [x] Discover the executable at `ImageMagick/magick.exe`.
+- [x] Add config defaults for thumbnail behavior:
       `ThumbnailEnabled`, `ThumbnailSize`,
       `ThumbnailMaxInputBytes`, and `ThumbnailTimeoutSeconds`.
-- [ ] Add `ThumbnailSize` to `config.json` with a default value of `64`.
-- [ ] Add discovery logic for the vendored ImageMagick executable.
-- [ ] Add a startup-visible disabled state when ImageMagick is missing, rather
+- [x] Add `ThumbnailSize` to `config.json` with a default value of `64`.
+- [x] Add discovery logic for the vendored ImageMagick executable.
+- [x] Add a startup-visible disabled state when ImageMagick is missing, rather
       than failing normal browsing.
 
 ### Phase 2 - Shared Image Type Rules
 
-- [ ] Add a Python-side helper for thumbnailable image extensions.
-- [ ] Keep the Python extension list aligned with
+- [x] Add a Python-side helper for thumbnailable image extensions.
+- [x] Keep the Python extension list aligned with
       `dropbox_browser/assets/js/browse/image-hover-preview.js`.
-- [ ] Include SVG in the thumbnailable set.
-- [ ] Exclude folders and unsupported file extensions before any rclone/local
+- [x] Include SVG in the thumbnailable set.
+- [x] Exclude folders and unsupported file extensions before any rclone/local
       file access.
-- [ ] Add focused unit tests for thumbnailable extension detection.
+- [x] Add focused unit tests for thumbnailable extension detection.
 
 ### Phase 3 - Thumbnail Cache Keys
 
-- [ ] Define a stable cache key from:
+- [x] Define a stable cache key from:
       source, normalized relative path, file size, modified time, thumbnail
       size, output format, and thumbnailer version.
-- [ ] Use different cache entries for local and remote sources.
-- [ ] Prefer local source for rows that have diffs and both sources exist.
-- [ ] Use the actual Windows-resolved local path when local filenames differ
+- [x] Use different cache entries for local and remote sources.
+- [x] Prefer local source for rows that have diffs and both sources exist.
+- [x] Use the actual Windows-resolved local path when local filenames differ
       from Dropbox display names.
-- [ ] Store thumbnails below `ThumbnailCache/` using sharded hash paths so large
+- [x] Store thumbnails below `ThumbnailCache/` using sharded hash paths so large
       libraries do not create one huge directory.
-- [ ] Add tests proving changed size or modified time produces a new cache key.
+- [x] Add tests proving changed size or modified time produces a new cache key.
 - [ ] Do not expire cache entries by age.
 
 ### Phase 4 - Backend Thumbnail Service
 
-- [ ] Add a thumbnail service module, for example
+- [x] Add a thumbnail service module, for example
       `dropbox_browser/thumbnails.py`.
-- [ ] Resolve local thumbnail sources through existing local-safe path helpers.
-- [ ] Resolve remote thumbnail sources through existing remote path normalization
+- [x] Resolve local thumbnail sources through existing local-safe path helpers.
+- [x] Resolve remote thumbnail sources through existing remote path normalization
       and `remote_target()` semantics.
-- [ ] For remote files, stream/download the original image to a temporary file
+- [x] For remote files, stream/download the original image to a temporary file
       under `Temp/` for ImageMagick processing.
-- [ ] For local files, pass the resolved local file path directly when safe, or
+- [x] For local files, pass the resolved local file path directly when safe, or
       copy to a temp file if needed for consistent cleanup and subprocess
       behavior.
-- [ ] Run ImageMagick with an argument-list command that implements
+- [x] Run ImageMagick with an argument-list command that implements
       first-frame selection, auto-orient, contain resize, centered square
       extent, transparent background, and PNG output.
-- [ ] Enforce max input size before processing when size metadata is available.
-- [ ] Enforce subprocess timeout and clean up temp files on success or failure.
-- [ ] Write generated thumbnails to a temp output path, then atomically move into
+- [x] Enforce max input size before processing when size metadata is available.
+- [x] Enforce subprocess timeout and clean up temp files on success or failure.
+- [x] Write generated thumbnails to a temp output path, then atomically move into
       `ThumbnailCache/`.
-- [ ] Coalesce concurrent requests for the same cache key so only one
+- [x] Coalesce concurrent requests for the same cache key so only one
       ImageMagick process generates it.
-- [ ] Return a clear miss/failure signal without breaking the browse page if a
+- [x] Return a clear miss/failure signal without breaking the browse page if a
       thumbnail cannot be generated.
 
 ### Phase 5 - HTTP Endpoint
 
-- [ ] Add `GET /thumbnail?path=<rel-path>&source=<remote|local>`.
-- [ ] Add `HEAD /thumbnail?...` if useful for cache validation or tests.
-- [ ] Reject unsupported extensions with `404` or `415`.
-- [ ] Reject unsafe paths with the existing `BrowserError` path handling.
-- [ ] Serve cached thumbnails with `Content-Type: image/png`.
-- [ ] Send cache-friendly headers for successful thumbnails.
-- [ ] Avoid serving arbitrary files from `ThumbnailCache/`; only serve cache
+- [x] Add `GET /thumbnail?path=<rel-path>&source=<remote|local>`.
+- [x] Add `HEAD /thumbnail?...` if useful for cache validation or tests.
+- [x] Reject unsupported extensions with `404` or `415`.
+- [x] Reject unsafe paths with the existing `BrowserError` path handling.
+- [x] Serve cached thumbnails with `Content-Type: image/png`.
+- [x] Send cache-friendly headers for successful thumbnails.
+- [x] Avoid serving arbitrary files from `ThumbnailCache/`; only serve cache
       entries resolved from validated request parameters.
-- [ ] Add route tests for local source, remote source, unsupported extension,
+- [x] Add route tests for local source, remote source, unsupported extension,
       path traversal rejection, cache hit behavior, and generation failure.
 
 ### Phase 6 - Browse Row Data Contract
 
-- [ ] Add thumbnail metadata to serialized browse rows:
+- [x] Add thumbnail metadata to serialized browse rows:
       `thumbnailable`, `thumbnail_href`, and optionally `thumbnail_source`.
-- [ ] Keep `icon_href` as the fallback icon for every row.
-- [ ] For rows with both local and remote copies:
+- [x] Keep `icon_href` as the fallback icon for every row.
+- [x] For rows with both local and remote copies:
       use local thumbnail source when status is `Has Diffs`;
       otherwise use the same source chosen for preview/download unless a better
       rule is decided.
-- [ ] Do not include thumbnail bytes or cache status in the listing payload.
-- [ ] Add endpoint tests proving image rows expose thumbnail fields and
+- [x] Do not include thumbnail bytes or cache status in the listing payload.
+- [x] Add endpoint tests proving image rows expose thumbnail fields and
       non-image rows do not.
 
 ### Phase 7 - Client Thumbnail Loader
 
-- [ ] Add a browse JS module, for example
+- [x] Add a browse JS module, for example
       `dropbox_browser/assets/js/browse/thumbnails.js`.
-- [ ] Use `IntersectionObserver` to request thumbnails only for mounted visible
+- [x] Use `IntersectionObserver` to request thumbnails only for mounted visible
       image rows.
-- [ ] Integrate with the existing virtual row rerender path so scrolled-away rows
+- [x] Integrate with the existing virtual row rerender path so scrolled-away rows
       are not requested after they leave the mounted window.
-- [ ] Limit concurrent thumbnail image loads in the browser.
-- [ ] Track already attempted thumbnail URLs for the current page state to avoid
+- [x] Limit concurrent thumbnail image loads in the browser.
+- [x] Track already attempted thumbnail URLs for the current page state to avoid
       repeated failed requests during small scroll movements.
-- [ ] Swap the `.file-icon` `src` only after the thumbnail image has loaded.
-- [ ] Leave the default filetype icon in place on errors, unsupported files, or
+- [x] Swap the `.file-icon` `src` only after the thumbnail image has loaded.
+- [x] Leave the default filetype icon in place on errors, unsupported files, or
       aborted requests.
-- [ ] Clean up observers/listeners when navigating between folders.
-- [ ] Add JS tests for visibility gating, concurrency, fallback behavior, and
+- [x] Clean up observers/listeners when navigating between folders.
+- [x] Add JS tests for visibility gating, concurrency, fallback behavior, and
       row rerender cleanup.
 
 ### Phase 8 - Styling
 
-- [ ] Add a thumbnail-specific class or data attribute while preserving
+- [x] Add a thumbnail-specific class or data attribute while preserving
       `.file-icon` sizing.
-- [ ] Ensure thumbnail images use the same `18px` by `18px` footprint as current
+- [x] Ensure thumbnail images use the same `18px` by `18px` footprint as current
       icons.
-- [ ] Ensure thumbnails do not change row height in both server-rendered and
+- [x] Ensure thumbnails do not change row height in both server-rendered and
       client-rendered browse modes.
-- [ ] Use a subtle background/border if transparent PNG/SVG thumbnails become
+- [x] Use a subtle background/border if transparent PNG/SVG thumbnails become
       visually ambiguous against the page background.
-- [ ] Add or update UI contract tests for row markup where practical.
+- [x] Add or update UI contract tests for row markup where practical.
 
 ### Phase 9 - Observability And Failure Handling
 
-- [ ] Add lightweight trace events for thumbnail generation:
+- [x] Add lightweight trace events for thumbnail generation:
       cache hit, cache miss, generation success, generation failure, timeout,
       unsupported format, oversized input, and ImageMagick missing.
-- [ ] Avoid logging sensitive full local paths unless existing app diagnostics
+- [x] Avoid logging sensitive full local paths unless existing app diagnostics
       already do so for the same source.
-- [ ] Include elapsed time and output size in generation traces.
-- [ ] Add a visible-but-non-disruptive debug/status path only if failures are
-      hard to diagnose from traces.
+- [x] Include elapsed time and output size in generation traces.
+- [x] Do not add a separate debug/status path yet; current traces are sufficient
+      for thumbnail failures.
 
 ### Phase 10 - Validation
 
-- [ ] Run compile checks:
+- [x] Run compile checks:
       `python -m py_compile dropbox_browser.py`
-- [ ] Run compileall:
+- [x] Run compileall:
       `python -m compileall -q dropbox_browser.py dropbox_browser`
-- [ ] Run focused backend tests:
+- [x] Run focused backend tests:
       `python -m tests.run web names -v`
-- [ ] Run focused JS tests for browse rendering and thumbnails.
-- [ ] Run the full unittest suite before checkin:
+- [x] Run focused JS tests for browse rendering and thumbnails.
+- [x] Run the full unittest suite before checkin:
       `python -m unittest discover -s tests -v`
 - [ ] Manually verify a folder with many local images.
 - [ ] Manually verify a folder with many remote-only Dropbox images.

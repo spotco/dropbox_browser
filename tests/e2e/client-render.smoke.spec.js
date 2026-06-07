@@ -75,8 +75,7 @@ test("client-render sort updates URL and rows without refetching the listing end
 
   await expect(page.locator("body")).toHaveAttribute("data-current-sort-key", "date");
   await expect(page.locator("body")).toHaveAttribute("data-current-sort-direction", "asc");
-  await expect(page).toHaveURL(/\/\?sort=date$/);
-  await page.waitForTimeout(250);
+  await expect.poll(async () => await page.url()).toMatch(/\/\?sort=date$/);
   await expect.poll(() => listingRequestCount).toBe(1);
 });
 
@@ -253,8 +252,8 @@ test("client-render restores each folder's persisted filter state on navigation 
   await expect.poll(async () => (await page.url()).includes("q=folder")).toBe(true);
 
   await page.getByRole("link", { name: "folder" }).click();
-  await expect(page).toHaveURL(/\?path=folder/);
-  await expect(page).not.toHaveURL(/(?:\?|&)q=/);
+  await expect.poll(async () => await page.url()).toMatch(/\?path=folder/);
+  await expect.poll(async () => await page.url()).not.toMatch(/(?:\?|&)q=/);
   await expect(page.locator("#browse-filter-query")).toHaveValue("");
   await expect(page.locator("#browse-filter-kind")).toHaveValue("all");
   await expect(page.locator("#browse-rows .entry-name")).toHaveCount(1);
@@ -265,23 +264,23 @@ test("client-render restores each folder's persisted filter state on navigation 
   await expect.poll(async () => (await page.url()).includes("path=folder") && (await page.url()).includes("q=nested")).toBe(true);
 
   await page.goBack();
-  await expect(page).toHaveURL(/\?path=folder$/);
-  await expect(page.locator("#browse-filter-query")).toHaveValue("nested");
+  await expect.poll(async () => await page.url()).toMatch(/\?path=folder$/);
+  await expect.poll(async () => await page.locator("#browse-filter-query").inputValue()).toBe("nested");
   await expect(page.locator("#browse-filter-kind")).toHaveValue("all");
   await expect(page.locator("#browse-rows .entry-name")).toHaveCount(1);
   await expect(page.locator("#browse-rows .entry-name").first()).toHaveText("nested.txt");
 
   await page.goBack();
-  await expect(page).not.toHaveURL(/path=folder/);
-  await expect(page).toHaveURL(/q=folder/);
-  await expect(page.locator("#browse-filter-query")).toHaveValue("folder");
+  await expect.poll(async () => await page.url()).not.toMatch(/path=folder/);
+  await expect.poll(async () => await page.url()).toMatch(/q=folder/);
+  await expect.poll(async () => await page.locator("#browse-filter-query").inputValue()).toBe("folder");
   await expect(page.locator("#browse-filter-kind")).toHaveValue("all");
   await expect(page.locator("#browse-rows .entry-name")).toHaveCount(1);
   await expect(page.locator("#browse-rows .entry-name").first()).toHaveText("folder");
 
   await page.goForward();
-  await expect(page).toHaveURL(/\?path=folder$/);
-  await expect(page.locator("#browse-filter-query")).toHaveValue("nested");
+  await expect.poll(async () => await page.url()).toMatch(/\?path=folder$/);
+  await expect.poll(async () => await page.locator("#browse-filter-query").inputValue()).toBe("nested");
   await expect(page.locator("#browse-filter-kind")).toHaveValue("all");
   await expect(page.locator("#browse-rows .entry-name")).toHaveCount(1);
   await expect(page.locator("#browse-rows .entry-name").first()).toHaveText("nested.txt");

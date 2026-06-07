@@ -1,15 +1,40 @@
-bad ctrl+c termination behaviour
+Thumbnail feature (plans/THUMBNAIL_PLAN.md) — committed 2026-06-06
 
-plans\PLAN_CLIENT_RENDER.md
-	continue plan
+Shipped in this checkin:
+- Backend: thumbnails.py service, /thumbnail route, listing thumbnail_href fields, ThumbnailCache config.
+- Client: browse/thumbnails.js lazy loader (client-render only), CSS icon slot, virtual-scroll remount via loadedUrls.
+- Vendored ImageMagick/ (~238 MB) for magick.exe on Windows.
+- Tests: tests/test_thumbnails.py, tests/js/browse-thumbnails.test.js, thumbnails test group in tests/run.py.
+- Suite maintenance: client-render-only browse tests via GET /browse/endpoints/listing; E2E startup/scroll/history fixes.
+- Validation run: 266 unittest OK, npm run test:js OK, 18 Playwright E2E OK.
+
+Fixed since pre-commit review:
+- Virtual-scroll remount: loadedUrls + applyLoadedToMountedTargets (no longer blocked by attemptedUrls).
+- HEAD /thumbnail: Content-Length from stat(), no full-body read before head_only return.
+- Filter history inside folders: first text filter uses pushState so Back restores per-folder persisted filters.
+
+Still open (post-checkin):
+- Server-side ImageMagick concurrency cap (only per-key inflight coalescing today).
+- --no-client-render rows have no thumbnail attributes.
+- Disabled thumbnails still emit thumbnail_href (404 noise until folder change).
+- Oversize guard is metadata-only when size_bytes is missing.
+- No If-None-Match / 304 for /thumbnail; Cache-Control max-age=60.
+- Phase 10 manual checks: large local/remote image folders, SVG, wide-folder scroll request bounds.
+- No Playwright coverage for thumbnail loading yet.
+- Open question: ThumbnailMaxInputBytes default (64 MB).
+
+---
+
+- anime player with switch audio/subtitles in browser
+
+plans\SPEC_RECURSIVE_FILE_SEARCH.md
 
 - image viewer
 	thumbnail preview load
 
-- add file search as a tab from cache only
-
-- anime player with switch audio/subtitles in browser
 - add openmap/googlemap image location visualization (for camera uploads)
 
 - music player:
 	intensity graph of song (if window focused)
+	
+Analyze the next step of the plans\PLAN_CLIENT_RENDER.md, and implement it. Afterwards, tell me what I can test and what the next step is.

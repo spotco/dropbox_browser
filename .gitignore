@@ -6,6 +6,7 @@ config_local.json
 .dropbox-browser-temp/
 Temp/
 Cache/
+ThumbnailCache/
 DropboxLocal/
 .vscode/
 node_modules/

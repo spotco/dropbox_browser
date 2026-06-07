@@ -33,6 +33,7 @@ GROUPS: dict[str, list[str]] = {
     "names": ["tests.test_listing_merge_names", "tests.test_windows_names"],
     "windows-names": ["tests.test_listing_merge_names", "tests.test_windows_names"],
     "rclone": ["tests.test_rclone"],
+    "thumbnails": ["tests.test_thumbnails"],
 }
 
 

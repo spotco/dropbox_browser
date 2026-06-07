@@ -13,6 +13,7 @@ from typing import Any
 from contextlib import nullcontext
 
 from . import syncstate, workertrace
+from .config import ThumbnailConfig
 from .errors import BrowserError
 from .formatting import file_type, parse_rclone_time
 from .foldercache_compute import parse_direct_listing
@@ -21,6 +22,7 @@ from .listingcache import ListingCacheManager
 from .namekeys import filename_compare_key
 from .paths import remote_target, safe_join_local
 from .rclone import RcloneClient
+from .thumbnails import ThumbnailService
 from .windows_names import (
     decode_rclone_literal_escapes,
     decode_rclone_literal_escapes_path,
@@ -136,6 +138,7 @@ class DropboxBrowser:
         listing_cache: ListingCacheManager | None = None,
         *,
         client_render: bool = True,
+        thumbnail_config: ThumbnailConfig | None = None,
     ):
         self.rclone = rclone
         self.remote = remote
@@ -143,9 +146,24 @@ class DropboxBrowser:
         self.folder_cache = folder_cache
         self.listing_cache = listing_cache
         self.client_render = bool(client_render)
+        self.thumbnail_config = thumbnail_config
+        self._thumbnail_service: ThumbnailService | None = None
         self.sync_jobs: Any | None = None
         self._batch_plan_lock = threading.Lock()
         self._batch_plans: dict[str, StoredBatchPlan] = {}
+
+    @property
+    def thumbnail_service(self) -> ThumbnailService | None:
+        if self.thumbnail_config is None:
+            return None
+        if self._thumbnail_service is None:
+            self._thumbnail_service = ThumbnailService(
+                self.rclone,
+                self.remote,
+                self.local_root,
+                self.thumbnail_config,
+            )
+        return self._thumbnail_service
 
     def shutdown(self) -> None:
         for manager in (self.rclone, self.folder_cache, self.sync_jobs):

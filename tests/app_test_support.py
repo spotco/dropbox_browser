@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
+from dropbox_browser.config import ThumbnailConfig
 from dropbox_browser.foldercache import FolderCacheManager
 from dropbox_browser.listingcache import ListingCacheManager
 from dropbox_browser.services import DropboxBrowser
@@ -68,7 +69,24 @@ class RecordingFolderCache:
         self.requests.append(remote_path)
 
 
+def browse_listing(
+    server,
+    *,
+    path: str = "",
+    sort: str = "name",
+    direction: str = "asc",
+    refresh: bool = False,
+) -> dict:
+    params = {"path": path, "sort": sort, "dir": direction}
+    if refresh:
+        params["refresh"] = "1"
+    return server.get_json("/browse/endpoints/listing?" + urlencode(params))
+
+
 class AppTestCase(IsolatedPathsTestCase):
+    def _browse_listing(self, server, **kwargs) -> dict:
+        return browse_listing(server, **kwargs)
+
     def _build_app(
         self,
         rclone: SimulatedRclone,
@@ -77,6 +95,7 @@ class AppTestCase(IsolatedPathsTestCase):
         sync_workers: int = 2,
         manager_cls=FolderCacheManager,
         client_render: bool = True,
+        thumbnail_config: ThumbnailConfig | None = None,
         **manager_kwargs,
     ) -> DropboxBrowser:
         listing_cache = ListingCacheManager(ttl_seconds=1800)
@@ -96,6 +115,7 @@ class AppTestCase(IsolatedPathsTestCase):
             folder_cache=folder_cache,
             listing_cache=listing_cache,
             client_render=client_render,
+            thumbnail_config=thumbnail_config,
         )
         app.sync_jobs = SyncJobManager(app, workers=sync_workers)
         self.addCleanup(app.shutdown)

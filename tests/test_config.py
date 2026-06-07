@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from dropbox_browser import config as config_module
 
@@ -20,6 +23,59 @@ class ConfigDefaultsTests(unittest.TestCase):
         config = config_module._read_config_file(config_module.PROJECT_ROOT / "config.json")
 
         self.assertEqual(config["FolderCacheTTLSeconds"], 14 * 24 * 60 * 60)
+
+    def test_thumbnail_defaults_are_present(self) -> None:
+        config = dict(config_module._APP_CONFIG_DEFAULTS)
+
+        self.assertTrue(config["ThumbnailEnabled"])
+        self.assertEqual(config["ThumbnailSize"], 64)
+        self.assertEqual(config["ThumbnailMaxInputBytes"], 64 * 1024 * 1024)
+        self.assertEqual(config["ThumbnailTimeoutSeconds"], 15)
+
+    def test_packaged_config_thumbnail_size_defaults_to_64(self) -> None:
+        config = config_module._read_config_file(config_module.PROJECT_ROOT / "config.json")
+
+        self.assertEqual(config["ThumbnailSize"], 64)
+
+
+class ThumbnailConfigTests(unittest.TestCase):
+    def test_find_vendored_magick_returns_none_when_missing(self) -> None:
+        with patch.object(config_module, "VENDORED_MAGICK_EXE", Path("Z:/missing/ImageMagick/magick.exe")):
+            self.assertIsNone(config_module.find_vendored_magick())
+
+    def test_find_vendored_magick_returns_path_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            magick_exe = Path(temp_dir) / "ImageMagick" / "magick.exe"
+            magick_exe.parent.mkdir(parents=True, exist_ok=True)
+            magick_exe.write_bytes(b"")
+            with patch.object(config_module, "VENDORED_MAGICK_EXE", magick_exe):
+                self.assertEqual(config_module.find_vendored_magick(), magick_exe)
+
+    def test_load_thumbnail_config_disables_when_magick_missing(self) -> None:
+        app_config = {
+            "ThumbnailEnabled": True,
+            "ThumbnailSize": 80,
+            "ThumbnailMaxInputBytes": 1234,
+            "ThumbnailTimeoutSeconds": 9,
+        }
+        with patch.object(config_module, "find_vendored_magick", return_value=None):
+            thumbnail_config = config_module.load_thumbnail_config(app_config)
+
+        self.assertFalse(thumbnail_config.enabled)
+        self.assertTrue(thumbnail_config.configured_enabled)
+        self.assertEqual(thumbnail_config.size, 80)
+        self.assertEqual(thumbnail_config.max_input_bytes, 1234)
+        self.assertEqual(thumbnail_config.timeout_seconds, 9)
+
+    def test_load_thumbnail_config_respects_explicit_disable(self) -> None:
+        app_config = {"ThumbnailEnabled": False}
+        fake_magick = config_module.PROJECT_ROOT / "ImageMagick" / "magick.exe"
+        with patch.object(config_module, "find_vendored_magick", return_value=fake_magick):
+            thumbnail_config = config_module.load_thumbnail_config(app_config)
+
+        self.assertFalse(thumbnail_config.enabled)
+        self.assertFalse(thumbnail_config.configured_enabled)
+        self.assertEqual(thumbnail_config.magick_exe, fake_magick)
 
 
 if __name__ == "__main__":

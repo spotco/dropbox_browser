@@ -1,3 +1,4 @@
+// Keep this extension set aligned with dropbox_browser/thumbnails.py.
 const PREVIEWABLE_IMAGE_EXTENSIONS = new Set([
   ".apng",
   ".avif",
@@ -42,6 +43,17 @@ export function isPreviewableImageHref(href, baseHref) {
   return PREVIEWABLE_IMAGE_EXTENSIONS.has(fileExtensionForHref(href, baseHref));
 }
 
+export function readLoadedThumbnailSrc(link) {
+  if (!link || typeof link.querySelector !== "function") return "";
+  const icon = link.querySelector(".file-icon[data-thumbnail-href]");
+  if (!icon || typeof icon.getAttribute !== "function") return "";
+  const thumbnailHref = icon.getAttribute("data-thumbnail-href") || "";
+  if (!thumbnailHref) return "";
+  if (icon.getAttribute("data-thumbnail-state") !== "loaded") return "";
+  const src = icon.getAttribute("src") || "";
+  return src === thumbnailHref ? src : "";
+}
+
 export function computeHoverPreviewPosition(pointer, previewSize, viewportSize, marginPx) {
   const safeMargin = Number.isFinite(marginPx) ? marginPx : DEFAULT_MARGIN_PX;
   const width = Math.max(0, Number(previewSize && previewSize.width) || 0);
@@ -63,28 +75,26 @@ export function computeHoverPreviewPosition(pointer, previewSize, viewportSize, 
 
 function ensurePreviewElements(doc) {
   let root = doc.getElementById("browse-image-hover-preview");
-  if (root) {
-    return {
-      root: root,
-      loading: root.querySelector(".browse-image-hover-preview-loading"),
-      image: root.querySelector(".browse-image-hover-preview-image"),
-      caption: root.querySelector(".browse-image-hover-preview-caption"),
-    };
+  if (!root) {
+    root = doc.createElement("div");
+    root.id = "browse-image-hover-preview";
+    root.className = "browse-image-hover-preview hidden";
+    root.setAttribute("aria-hidden", "true");
+    root.innerHTML =
+      '<img class="browse-image-hover-preview-thumbnail" alt="" aria-hidden="true">' +
+      '<div class="browse-image-hover-preview-shade"></div>' +
+      '<div class="browse-image-hover-preview-loading">' +
+        '<span class="spinner"></span>' +
+        '<span>Loading preview…</span>' +
+      "</div>" +
+      '<img class="browse-image-hover-preview-image" alt="">' +
+      '<div class="browse-image-hover-preview-caption"></div>';
+    doc.body.appendChild(root);
   }
-  root = doc.createElement("div");
-  root.id = "browse-image-hover-preview";
-  root.className = "browse-image-hover-preview hidden";
-  root.setAttribute("aria-hidden", "true");
-  root.innerHTML =
-    '<div class="browse-image-hover-preview-loading">' +
-      '<span class="spinner"></span>' +
-      '<span>Loading preview…</span>' +
-    "</div>" +
-    '<img class="browse-image-hover-preview-image" alt="">' +
-    '<div class="browse-image-hover-preview-caption"></div>';
-  doc.body.appendChild(root);
   return {
     root: root,
+    thumbnail: root.querySelector(".browse-image-hover-preview-thumbnail"),
+    shade: root.querySelector(".browse-image-hover-preview-shade"),
     loading: root.querySelector(".browse-image-hover-preview-loading"),
     image: root.querySelector(".browse-image-hover-preview-image"),
     caption: root.querySelector(".browse-image-hover-preview-caption"),
@@ -120,12 +130,25 @@ export function initImageHoverPreview(options) {
     elements.root.style.top = String(Math.round(position.top)) + "px";
   }
 
+  function setLoadingThumbnail(link) {
+    const thumbnailSrc = readLoadedThumbnailSrc(link);
+    if (thumbnailSrc && elements.thumbnail) {
+      elements.thumbnail.setAttribute("src", thumbnailSrc);
+      elements.root.dataset.hasThumbnail = "1";
+      return;
+    }
+    if (elements.thumbnail) elements.thumbnail.removeAttribute("src");
+    elements.root.dataset.hasThumbnail = "0";
+  }
+
   function hidePreview() {
     state.activeLink = null;
     state.requestToken += 1;
     elements.root.classList.add("hidden");
     elements.root.dataset.state = "hidden";
+    elements.root.dataset.hasThumbnail = "0";
     elements.root.setAttribute("aria-hidden", "true");
+    if (elements.thumbnail) elements.thumbnail.removeAttribute("src");
     elements.image.removeAttribute("src");
     elements.caption.textContent = "";
   }
@@ -134,6 +157,7 @@ export function initImageHoverPreview(options) {
     elements.root.classList.remove("hidden");
     elements.root.dataset.state = "loading";
     elements.root.setAttribute("aria-hidden", "false");
+    setLoadingThumbnail(link);
     elements.caption.textContent = link.textContent || "";
     updatePosition();
   }

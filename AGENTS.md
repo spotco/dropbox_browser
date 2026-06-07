@@ -80,6 +80,19 @@ Load only the doc that matches the work:
   matcher. Do not reconstruct impossible Windows paths from Dropbox display
   names.
 
+## Browse UI Mode
+
+Client-rendered browse is the supported and tested UI mode. `--client-render`
+is the CLI default.
+
+- Do not maintain or add regression coverage for `--no-client-render` /
+  server-rendered browse rows.
+- Tests that need row fields, sort order, status labels, or copy-path data
+  should use `GET /browse/endpoints/listing` (see `browse_listing()` in
+  `tests/app_test_support.py`), not `GET /` HTML row markup.
+- Server-rendered page HTML is still tested only for shell contracts such as
+  scripts, placeholders, and topbar chrome.
+
 ## Development Workflow
 
 Useful checks:
@@ -136,8 +149,12 @@ the smallest fix, rerun that test, then run the relevant group. See
 ## Git Notes
 
 - Remote: `https://github.com/spotco/dropbox_browser`
-- Current working branch may be `master`; verify with `git branch --show-current`
-  before pushing.
+- For requests to publish or push changes to GitHub, default to pushing
+  `master` unless the human explicitly requests a different branch strategy.
+- Before pushing, verify the current branch with `git branch --show-current`.
+- If the needed commit is not on `master`, move only the requested commit(s) to
+  `master` first, without pulling unrelated uncommitted changes into the push.
+- Use the approval-gated push tool call for network pushes.
 - `rclone.exe` is tracked and large. Do not rewrite history or remove it unless
   asked.
 - Git may warn about `C:\Users\mooto/.config/git/ignore`; this has not blocked

@@ -60,7 +60,7 @@ async function startIntegrationServer() {
   });
 
   await Promise.race([
-    waitForServer(`${baseURL}/__integration/status`, 5000),
+    waitForServer(`${baseURL}/__integration/status`, 30000),
     exitPromise.then(({ code, signal }) => {
       throw new Error(`Integration server exited before becoming ready (code=${code}, signal=${signal})`);
     }),

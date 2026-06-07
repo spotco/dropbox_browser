@@ -145,7 +145,9 @@ def entry_name_link(href: str, name: str, is_dir: bool) -> str:
     escaped_name = html.escape(name)
     return (
         f'<a class="name" href="{href}" title="{escaped_name}">'
+        f'<span class="file-icon-slot">'
         f'<img class="file-icon" src="{icon_src}" alt="" aria-hidden="true" loading="lazy">'
+        f'</span>'
         f'<span class="entry-name">{escaped_name}</span>'
         '</a>'
     )
@@ -501,7 +503,7 @@ def entry_row(app: Any, rel_path: str, row: dict[str, Any], folder_cache_map: di
         sync_td = _sync_cell(child_path, "file", status, sync_enabled)
 
     return f"""<tr{row_attrs}>
-  <td>{name_html}</td>
+  <td class="col-name">{name_html}</td>
   <td>{html.escape(type_text)}</td>
   <td><span class="status {status_class(status)}">{status}</span></td>
   {size_td}

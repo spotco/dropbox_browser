@@ -7,5 +7,6 @@
   "FolderCacheWorkers": 8,
   "SyncJobWorkers": 8,
   "FolderCacheTTLSeconds": 1209600,
-  "ListingCacheTTLSeconds": 1800
+  "ListingCacheTTLSeconds": 1800,
+  "ThumbnailSize": 64
 }

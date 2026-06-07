@@ -155,7 +155,7 @@ class ListingMergeNameTests(AppTestCase):
         app = self._build_app(rclone, local_root=local_root, workers=1)
 
         with TestServer(app) as server:
-            html = server.get_text("/?path=music")
+            listing = self._browse_listing(server, path="music")
             results = self._wait_folder_info(
                 server,
                 current="music",
@@ -163,14 +163,12 @@ class ListingMergeNameTests(AppTestCase):
             )
             info = results["music"]
 
-        table_body = html.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
-        self.assertIn(remote_name, html)
-        self.assertEqual(table_body.count("<tr"), 1)
-        self.assertIn("Synced", table_body)
-        self.assertNotIn("Dropbox Only", table_body)
-        self.assertNotIn("Local Only", table_body)
-        self.assertIn(f'data-copy-path="{local_root / "music" / local_name}"', html)
-        self.assertNotIn(f'data-copy-path="{local_root / "music" / remote_name}"', html)
+        self.assertEqual(len(listing["rows"]), 1)
+        row = listing["rows"][0]
+        self.assertEqual(row["display_name"], remote_name)
+        self.assertEqual(row["status_label"], "Synced")
+        self.assertEqual(row["local_copy_path"], str(local_root / "music" / local_name))
+        self.assertNotEqual(row["local_copy_path"], str(local_root / "music" / remote_name))
         self.assertEqual(info["file_statuses"], {remote_name: {"diff_status": "synced"}})
 
     def test_copy_filepath_uses_actual_local_unicode_replacement_name(self) -> None:
@@ -187,12 +185,12 @@ class ListingMergeNameTests(AppTestCase):
         app = self._build_app(rclone, local_root=local_root, workers=1)
 
         with TestServer(app) as server:
-            html = server.get_text("/?path=music")
+            listing = self._browse_listing(server, path="music")
 
-        self.assertIn(remote_name, html)
-        self.assertIn(">Copy Filepath</button>", html)
-        self.assertIn(f'data-copy-path="{local_root / "music" / local_name}"', html)
-        self.assertNotIn(f'data-copy-path="{local_root / "music" / remote_name}"', html)
+        row = listing["rows"][0]
+        self.assertEqual(row["display_name"], remote_name)
+        self.assertEqual(row["local_copy_path"], str(local_root / "music" / local_name))
+        self.assertNotEqual(row["local_copy_path"], str(local_root / "music" / remote_name))
 
     def test_windows_safe_unicode_replacement_names_do_not_create_folder_cache_diffs(self) -> None:
         remote_name = "Sak Noel - Loca People (What the f*ck).mp3"

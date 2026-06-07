@@ -284,6 +284,12 @@ class TestServer:
         with urlopen(request, timeout=5) as response:
             return json.loads(response.read().decode("utf-8"))
 
+    def head(self, path: str, *, timeout: float = 5.0) -> tuple[int, dict[str, str], bytes]:
+        request = Request(self.base_url + path, method="HEAD")
+        with urlopen(request, timeout=timeout) as response:
+            headers = {key.lower(): value for key, value in response.headers.items()}
+            return response.status, headers, response.read()
+
 
 class IsolatedPathsTestCase(unittest.TestCase):
     def setUp(self) -> None:

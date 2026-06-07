@@ -55,6 +55,9 @@ test("renderBrowseRowsBody renders canonical folder and file row markup", async 
       count_display: "",
       date_display: "2024-01-02 07:00",
       metadata_complete: true,
+      thumbnailable: true,
+      thumbnail_source: "remote",
+      thumbnail_href: "/thumbnail?path=remote-only.txt&source=remote",
       sort_name: "remote-only.txt",
       sort_date: 1704196800,
       local_copy_path: null,
@@ -69,6 +72,11 @@ test("renderBrowseRowsBody renders canonical folder and file row markup", async 
   assert.match(html, /href="\/\?path=folder" title="folder"/);
   assert.match(html, /href="\/file\?path=remote-only\.txt&amp;source=remote"/);
   assert.match(html, /href="\/download\?path=remote-only\.txt&amp;source=remote"/);
+  assert.match(html, /class="col-name"/);
+  assert.match(html, /class="file-icon-slot"/);
+  assert.match(html, /class="file-icon file-icon-thumbnail"/);
+  assert.match(html, /data-thumbnail-href="\/thumbnail\?path=remote-only\.txt&amp;source=remote"/);
+  assert.match(html, /data-thumbnail-state="idle"/);
   assert.match(html, /Copy Folder Path/);
   assert.match(html, /calculating…/);
 });

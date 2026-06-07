@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import html as html_module
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,6 +17,7 @@ from dropbox_browser.windows_names import (
 )
 
 try:
+    from tests.app_test_support import browse_listing
     from tests.support import (
         IsolatedPathsTestCase,
         SimulatedLsjsonResponse,
@@ -28,6 +28,7 @@ try:
         wait_until,
     )
 except ImportError:
+    from app_test_support import browse_listing
     from support import (
         IsolatedPathsTestCase,
         SimulatedLsjsonResponse,
@@ -127,7 +128,14 @@ class WindowsSafeNameIntegrationTests(IsolatedPathsTestCase):
             local_root=local_root,
             remote="dropbox:",
         )
-        app = DropboxBrowser(rclone, "dropbox:", local_root, folder_cache=folder_cache, listing_cache=listing_cache)
+        app = DropboxBrowser(
+            rclone,
+            "dropbox:",
+            local_root,
+            folder_cache=folder_cache,
+            listing_cache=listing_cache,
+            client_render=True,
+        )
         self.addCleanup(app.shutdown)
         return app
 
@@ -161,11 +169,12 @@ class WindowsSafeNameIntegrationTests(IsolatedPathsTestCase):
         app = self._build_app(rclone, local_root=local_root, workers=1)
 
         with TestServer(app) as server:
-            page_html = server.get_text("/?path=music")
             results = self._wait_folder_info(server, current="music", path=remote_path)
-        table_body = page_html.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
-        self.assertEqual(table_body.count(f'<span class="entry-name">{html_module.escape(remote_name)}</span>'), 1)
-        self.assertNotIn(f'<span class="entry-name">{html_module.escape(local_name)}</span>', table_body)
+            listing = browse_listing(server, path="music")
+        folder_rows = [row for row in listing["rows"] if row["display_name"] == remote_name]
+        self.assertEqual(len(folder_rows), 1)
+        self.assertNotIn(local_name, {row["display_name"] for row in listing["rows"]})
+        self.assertEqual(folder_rows[0]["status_label"], "Synced")
         self.assertEqual(app.local_display_path(remote_path), local_root / "music" / local_name)
         self.assertEqual(results[remote_path]["diff_status"], "synced")
 
@@ -182,10 +191,10 @@ class WindowsSafeNameIntegrationTests(IsolatedPathsTestCase):
         app = self._build_app(rclone, local_root=local_root, workers=1)
 
         with TestServer(app) as server:
-            page_html = server.get_text("/?path=dropbox_browser")
+            listing = browse_listing(server, path="dropbox_browser")
 
-        table_body = page_html.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
-        self.assertEqual(table_body.count(f'<span class="entry-name">{html_module.escape(remote_name)}</span>'), 1)
-        self.assertNotIn(f'<span class="entry-name">{html_module.escape(local_name)}</span>', table_body)
+        file_rows = [row for row in listing["rows"] if row["display_name"] == remote_name]
+        self.assertEqual(len(file_rows), 1)
+        self.assertNotIn(local_name, {row["display_name"] for row in listing["rows"]})
+        self.assertEqual(file_rows[0]["status_label"], "Local Only")
         self.assertEqual(app.local_display_path(remote_path), local_root / "dropbox_browser" / local_name)
-        self.assertIn("Local Only", table_body)

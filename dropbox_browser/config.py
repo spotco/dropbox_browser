@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEMP_DIR = PROJECT_ROOT / "Temp"
+THUMBNAIL_CACHE_DIR = PROJECT_ROOT / "ThumbnailCache"
+VENDORED_MAGICK_EXE = PROJECT_ROOT / "ImageMagick" / "magick.exe"
 
 _APP_CONFIG_DEFAULTS: dict = {
     "DropboxFolder": "./DropboxLocal",
@@ -19,7 +22,22 @@ _APP_CONFIG_DEFAULTS: dict = {
     "SyncJobWorkers": 4,
     "FolderCacheTTLSeconds": 14 * 24 * 60 * 60,
     "ListingCacheTTLSeconds": 1800,
+    "ThumbnailEnabled": True,
+    "ThumbnailSize": 64,
+    "ThumbnailMaxInputBytes": 64 * 1024 * 1024,
+    "ThumbnailTimeoutSeconds": 15,
 }
+
+
+@dataclass(frozen=True)
+class ThumbnailConfig:
+    enabled: bool
+    configured_enabled: bool
+    cache_dir: Path
+    magick_exe: Path | None
+    size: int
+    max_input_bytes: int
+    timeout_seconds: float
 
 
 def _read_config_file(path: Path) -> dict:
@@ -72,3 +90,28 @@ def find_dropbox_folder(app_config: dict | None = None) -> Path:
     if not expanded.is_absolute():
         expanded = PROJECT_ROOT / expanded
     return expanded.resolve()
+
+
+def find_vendored_magick() -> Path | None:
+    if VENDORED_MAGICK_EXE.exists():
+        return VENDORED_MAGICK_EXE
+    return None
+
+
+def load_thumbnail_config(app_config: dict | None = None) -> ThumbnailConfig:
+    config = app_config if app_config is not None else load_app_config()
+    configured_enabled = bool(config.get("ThumbnailEnabled", _APP_CONFIG_DEFAULTS["ThumbnailEnabled"]))
+    magick_exe = find_vendored_magick()
+    return ThumbnailConfig(
+        enabled=bool(configured_enabled and magick_exe is not None),
+        configured_enabled=configured_enabled,
+        cache_dir=THUMBNAIL_CACHE_DIR,
+        magick_exe=magick_exe,
+        size=int(config.get("ThumbnailSize", _APP_CONFIG_DEFAULTS["ThumbnailSize"])),
+        max_input_bytes=int(
+            config.get("ThumbnailMaxInputBytes", _APP_CONFIG_DEFAULTS["ThumbnailMaxInputBytes"])
+        ),
+        timeout_seconds=float(
+            config.get("ThumbnailTimeoutSeconds", _APP_CONFIG_DEFAULTS["ThumbnailTimeoutSeconds"])
+        ),
+    )

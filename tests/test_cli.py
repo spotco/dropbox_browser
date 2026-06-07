@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import io
+import sys
 import tempfile
 import unittest
 from pathlib import Path
-import sys
 from typing import Callable
 from unittest.mock import Mock, patch
 
 from dropbox_browser import cli
+from dropbox_browser.config import ThumbnailConfig
 
 
 class FakeServer:
@@ -56,6 +58,17 @@ class CliArgumentTests(unittest.TestCase):
 
 
 class CliShutdownTests(unittest.TestCase):
+    def _thumbnail_config(self, *, enabled: bool = False, configured_enabled: bool = True) -> ThumbnailConfig:
+        return ThumbnailConfig(
+            enabled=enabled,
+            configured_enabled=configured_enabled,
+            cache_dir=Path("ThumbnailCache"),
+            magick_exe=None,
+            size=64,
+            max_input_bytes=64 * 1024 * 1024,
+            timeout_seconds=15,
+        )
+
     def test_keyboard_interrupt_closes_server_and_shuts_down_app(self) -> None:
         created_servers: list[FakeServer] = []
 
@@ -69,7 +82,19 @@ class CliShutdownTests(unittest.TestCase):
             app = Mock()
 
             with (
-                patch.object(cli, "parse_args", return_value=Mock(host="127.0.0.1", port=8000, remote="dropbox:", rclone="rclone.exe", rclone_config=None, local_root=None, client_render=True)),
+                patch.object(
+                    cli,
+                    "parse_args",
+                    return_value=Mock(
+                        host="127.0.0.1",
+                        port=8000,
+                        remote="dropbox:",
+                        rclone="rclone.exe",
+                        rclone_config=None,
+                        local_root=None,
+                        client_render=True,
+                    ),
+                ),
                 patch.object(
                     cli,
                     "load_app_config",
@@ -82,6 +107,7 @@ class CliShutdownTests(unittest.TestCase):
                         "LogHttpRequests": False,
                     },
                 ),
+                patch.object(cli, "load_thumbnail_config", return_value=self._thumbnail_config()),
                 patch.object(cli, "find_dropbox_folder", return_value=local_root),
                 patch.object(cli.workertrace, "configure_server_run", return_value=local_root / "runs" / "1779341234") as configure_run,
                 patch.object(cli, "RcloneClient", return_value=Mock()),
@@ -106,6 +132,9 @@ class CliShutdownTests(unittest.TestCase):
         self.assertEqual(configure_run.call_args.kwargs["metadata"]["remote"], "dropbox:")
         self.assertEqual(configure_run.call_args.kwargs["metadata"]["local_root"], str(local_root))
         self.assertTrue(configure_run.call_args.kwargs["metadata"]["client_render"])
+        self.assertFalse(configure_run.call_args.kwargs["metadata"]["thumbnail_enabled"])
+        self.assertEqual(configure_run.call_args.kwargs["metadata"]["thumbnail_size"], 64)
+        self.assertIsNone(configure_run.call_args.kwargs["metadata"]["thumbnail_magick_path"])
 
     def test_sigint_starts_app_shutdown_before_server_close(self) -> None:
         created_servers: list[FakeSignalDrivenServer] = []
@@ -141,7 +170,19 @@ class CliShutdownTests(unittest.TestCase):
             app.shutdown.side_effect = lambda: steps.append("app.shutdown")
 
             with (
-                patch.object(cli, "parse_args", return_value=Mock(host="127.0.0.1", port=8000, remote="dropbox:", rclone="rclone.exe", rclone_config=None, local_root=None, client_render=True)),
+                patch.object(
+                    cli,
+                    "parse_args",
+                    return_value=Mock(
+                        host="127.0.0.1",
+                        port=8000,
+                        remote="dropbox:",
+                        rclone="rclone.exe",
+                        rclone_config=None,
+                        local_root=None,
+                        client_render=True,
+                    ),
+                ),
                 patch.object(
                     cli,
                     "load_app_config",
@@ -154,6 +195,7 @@ class CliShutdownTests(unittest.TestCase):
                         "LogHttpRequests": False,
                     },
                 ),
+                patch.object(cli, "load_thumbnail_config", return_value=self._thumbnail_config()),
                 patch.object(cli, "find_dropbox_folder", return_value=local_root),
                 patch.object(cli.workertrace, "configure_server_run", return_value=local_root / "runs" / "1779341234"),
                 patch.object(cli, "RcloneClient", return_value=Mock()),
@@ -191,7 +233,19 @@ class CliShutdownTests(unittest.TestCase):
             app = Mock()
 
             with (
-                patch.object(cli, "parse_args", return_value=Mock(host="127.0.0.1", port=8000, remote="dropbox:", rclone="rclone.exe", rclone_config=None, local_root=str(local_root), client_render=True)),
+                patch.object(
+                    cli,
+                    "parse_args",
+                    return_value=Mock(
+                        host="127.0.0.1",
+                        port=8000,
+                        remote="dropbox:",
+                        rclone="rclone.exe",
+                        rclone_config=None,
+                        local_root=str(local_root),
+                        client_render=True,
+                    ),
+                ),
                 patch.object(
                     cli,
                     "load_app_config",
@@ -204,6 +258,7 @@ class CliShutdownTests(unittest.TestCase):
                         "LogHttpRequests": False,
                     },
                 ),
+                patch.object(cli, "load_thumbnail_config", return_value=self._thumbnail_config()),
                 patch.object(cli, "find_dropbox_folder") as find_dropbox_folder,
                 patch.object(cli.workertrace, "configure_server_run", return_value=local_root / "runs" / "1779341234") as configure_run,
                 patch.object(cli, "RcloneClient", return_value=Mock()),
@@ -221,3 +276,63 @@ class CliShutdownTests(unittest.TestCase):
         self.assertTrue(created_servers[0].localhost_only_access)
         self.assertEqual(configure_run.call_args.kwargs["metadata"]["local_root"], str(local_root.resolve()))
         self.assertTrue(configure_run.call_args.kwargs["metadata"]["client_render"])
+
+    def test_main_prints_visible_thumbnail_disabled_message_when_magick_missing(self) -> None:
+        created_servers: list[FakeServer] = []
+
+        def create_server(address: tuple[str, int], handler: object) -> FakeServer:
+            server = FakeServer(address, handler)
+            created_servers.append(server)
+            return server
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_root = Path(temp_dir)
+            stdout = io.StringIO()
+
+            with (
+                patch.object(
+                    cli,
+                    "parse_args",
+                    return_value=Mock(
+                        host="127.0.0.1",
+                        port=8000,
+                        remote="dropbox:",
+                        rclone="rclone.exe",
+                        rclone_config=None,
+                        local_root=None,
+                        client_render=True,
+                    ),
+                ),
+                patch.object(
+                    cli,
+                    "load_app_config",
+                    return_value={
+                        "LogRcloneCommands": False,
+                        "ListingCacheTTLSeconds": 30,
+                        "FolderCacheTTLSeconds": 30,
+                        "FolderCacheWorkers": 1,
+                        "SyncJobWorkers": 1,
+                        "LogHttpRequests": False,
+                    },
+                ),
+                patch.object(cli, "load_thumbnail_config", return_value=self._thumbnail_config()),
+                patch.object(cli, "find_dropbox_folder", return_value=local_root),
+                patch.object(cli.workertrace, "configure_server_run", return_value=local_root / "runs" / "1779341234"),
+                patch.object(cli, "RcloneClient", return_value=Mock()),
+                patch.object(cli, "ListingCacheManager", return_value=Mock()),
+                patch.object(cli, "FolderCacheManager", return_value=Mock(current_progress=Mock())),
+                patch.object(cli, "DropboxBrowser", return_value=Mock()),
+                patch.object(cli, "SyncJobManager", return_value=Mock()),
+                patch.object(cli, "ThreadingHTTPServer", side_effect=create_server),
+                patch.object(cli.logoutput, "start"),
+                patch.object(sys, "stdout", stdout),
+            ):
+                result = cli.main()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(created_servers), 1)
+        self.assertIn("Thumbnails disabled: vendored ImageMagick not found", stdout.getvalue())
+
+
+if __name__ == "__main__":
+    unittest.main()

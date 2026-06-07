@@ -28,6 +28,7 @@ from .streaming import (
     unsatisfiable_range_headers,
 )
 from .syncjobs import SyncJobManager
+from .thumbnails import ThumbnailResult, is_thumbnailable_image, thumbnail_source_for_row
 from .views import dropbox_home_url, folder_page_title, icon_for_entry, error_html, page_html
 
 
@@ -90,6 +91,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.serve_file(parsed.query, inline=True)
             elif parsed.path == "/download":
                 self.serve_file(parsed.query, inline=False)
+            elif parsed.path == "/thumbnail":
+                self.serve_thumbnail(parsed.query)
             elif parsed.path == "/logs":
                 self.serve_logs(parsed.query)
             elif parsed.path == "/sync-status":
@@ -117,6 +120,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.serve_file(parsed.query, inline=True, head_only=True)
             elif parsed.path == "/download":
                 self.serve_file(parsed.query, inline=False, head_only=True)
+            elif parsed.path == "/thumbnail":
+                self.serve_thumbnail(parsed.query, head_only=True)
             elif parsed.path.startswith(ASSET_ROUTE_PREFIX):
                 self.serve_asset(parsed.path, head_only=True)
             else:
@@ -351,6 +356,38 @@ class RequestHandler(BaseHTTPRequestHandler):
             if wait_error is not None:
                 raise wait_error
 
+    def serve_thumbnail(self, query: str, head_only: bool = False) -> None:
+        params = parse_qs(query, keep_blank_values=True)
+        rel_path = clean_rel_path(params.get("path", [""])[0])
+        source = params.get("source", ["remote"])[0]
+        service = self.app.thumbnail_service
+        if service is None:
+            raise BrowserError(HTTPStatus.NOT_FOUND, "Thumbnail service is unavailable.")
+        descriptor = service.descriptor_for_path(rel_path, source)
+        result = service.ensure_thumbnail(descriptor)
+        self._send_thumbnail_result(result, head_only=head_only)
+
+    def _send_thumbnail_result(self, result: ThumbnailResult, *, head_only: bool = False) -> None:
+        if result.ok:
+            assert result.path is not None
+            body_size = result.path.stat().st_size
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Cache-Control", "private, max-age=60")
+            if result.descriptor is not None:
+                self.send_header("ETag", f'"{result.descriptor.cache_key}"')
+            self.send_header("Content-Length", str(body_size))
+            self.end_headers()
+            if head_only:
+                return
+            self.wfile.write(result.path.read_bytes())
+            return
+        if result.status == "unsupported":
+            raise BrowserError(HTTPStatus.NOT_FOUND, "Thumbnail is not available for this file type.")
+        if result.status in {"disabled", "failed", "timeout", "oversized"}:
+            raise BrowserError(HTTPStatus.NOT_FOUND, result.error_message or "Thumbnail is unavailable.")
+        raise BrowserError(HTTPStatus.NOT_FOUND, "Thumbnail was not found.")
+
     def serve_logs(self, query: str) -> None:
         params = parse_qs(query)
         since = int(params.get("since", ["0"])[0])
@@ -396,6 +433,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         preview_href = None if is_dir else "/file?" + preview_query
         download_href = None if is_dir else "/download?" + preview_query
         folder_href = "/?" + urlencode({"path": child_path}) if is_dir else None
+        thumbnailable = is_thumbnailable_image(name, is_dir)
         local_copy_path = None
         if self.app.local_root and row.get("local"):
             local_copy_path = row.get("local_path") or str(self.app.local_display_path(child_path) or safe_join_local(self.app.local_root, child_path))
@@ -426,7 +464,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             date_value = max(row.get("remote_mtime") or 0, row.get("local_mtime") or 0) or 0
             size_display = human_size(int(size_value or 0))
             date_display = display_date(float(date_value) if date_value else None)
-            if self.app.local_root and row.get("remote") and row.get("local"):
+            if self.app.local_root and row.get("remote") and row.get("local") and name in current_file_statuses:
                 file_status = current_file_statuses.get(name, {})
                 status = diff_label(file_status.get("diff_status"))
             sync_directions = []
@@ -439,6 +477,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                     sync_directions = ["local_to_dropbox", "dropbox_to_local"]
             count_display = ""
             metadata_complete = True
+
+        thumbnail_source = thumbnail_source_for_row(row, status_label=status) if thumbnailable else None
+        thumbnail_href = None
+        if thumbnail_source is not None:
+            thumbnail_href = "/thumbnail?" + urlencode({"path": child_path, "source": thumbnail_source})
 
         sort_date_value = (
             row.get("cached_mtime")
@@ -460,6 +503,9 @@ class RequestHandler(BaseHTTPRequestHandler):
             "type_label": type_label,
             "icon_name": icon_name,
             "icon_href": "/assets/icons/material-icon-theme/" + quote(icon_name, safe=""),
+            "thumbnailable": thumbnailable,
+            "thumbnail_source": thumbnail_source,
+            "thumbnail_href": thumbnail_href,
             "status_label": status,
             "status_class": status_class(status),
             "remote": bool(row["remote"]),

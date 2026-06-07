@@ -7,6 +7,7 @@ import {emptyRowHtml, errorRowHtml, loadingRowHtml, renderBreadcrumbs, renderBro
 import {collectBrowseTypeOptions, filterBrowseRows, hasActiveBrowseFilters, normalizeBrowseFilters} from './search.js';
 import {applyBrowseSnapshot, createBrowseState, setBrowseError, setBrowseLoading} from './state.js';
 import {nextBrowseSortState, sortBrowseRows} from './sort.js';
+import {initBrowseThumbnails} from './thumbnails.js';
 import {
   DEFAULT_VIRTUAL_OVERSCAN,
   DEFAULT_VIRTUAL_ROW_HEIGHT,
@@ -396,6 +397,7 @@ function initBrowse() {
   if (!mount) return;
   initBrowseColumnResizing({document: document, window: window});
   initImageHoverPreview({document: document, window: window, root: mount});
+  var thumbnailLoader = initBrowseThumbnails({document: document, window: window, root: mount});
   var scrollPreview = document.getElementById('browse-scroll-preview');
   var scrollPreviewIndex = document.getElementById('browse-scroll-preview-index');
   var scrollPreviewName = document.getElementById('browse-scroll-preview-name');
@@ -516,6 +518,7 @@ function initBrowse() {
     var nextOptions = Object.assign({reason: 'render-refresh'}, options || {});
     if (nextOptions.force) resetVirtualMeasurement(virtualState);
     renderRows(mount, state, virtualState, nextOptions);
+    thumbnailLoader.refresh();
     if (!virtualState.enabled) {
       hideScrollPreview();
       return;
@@ -548,7 +551,14 @@ function initBrowse() {
     cancelFilterUrlTimer();
     filterUrlTimer = window.setTimeout(function () {
       filterUrlTimer = null;
-      syncBrowseUrl('replace');
+      var currentParams = new URL(window.location.href).searchParams;
+      var nextFilters = getEffectiveBrowseFilters(state);
+      var nextQuery = typeof nextFilters.query === 'string' ? nextFilters.query.trim() : '';
+      var historyMode = 'replace';
+      if (state.path && nextQuery && !currentParams.has('q')) {
+        historyMode = 'push';
+      }
+      syncBrowseUrl(historyMode);
     }, FILTER_URL_DEBOUNCE_MS);
   }
 
@@ -567,6 +577,7 @@ function initBrowse() {
   function renderLoading(nextState) {
     setBrowseLoading(state, true);
     mount.innerHTML = loadingRowHtml('Loading folder listing...');
+    thumbnailLoader.refresh();
     body.dataset.browseClient = 'loading';
     setVirtualizationDataset(body, virtualState, null, 0);
     hideScrollPreview();
@@ -612,6 +623,7 @@ function initBrowse() {
         if (version !== requestVersion) return false;
         currentController = null;
         stopFolderPolling = renderSnapshot(mount, state, payload, virtualState, function () {
+          thumbnailLoader.refresh();
           if (!virtualState.enabled) {
             hideScrollPreview();
             return;
@@ -639,6 +651,7 @@ function initBrowse() {
         currentController = null;
         setBrowseError(state, error && error.message ? error.message : 'Could not load folder listing.');
         mount.innerHTML = errorRowHtml(state.error);
+        thumbnailLoader.refresh();
         body.dataset.browseClient = 'error';
         setVirtualizationDataset(body, virtualState, null, 0);
         hideScrollPreview();
@@ -667,6 +680,7 @@ function initBrowse() {
     window.requestAnimationFrame(function () {
       scrollFrameRequested = false;
       renderRows(mount, state, virtualState, {force: false, reason: 'scroll'});
+      thumbnailLoader.refresh();
       updateScrollPreview({persistent: previewScrollbarDragActive});
     });
   }
