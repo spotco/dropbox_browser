@@ -1,0 +1,65 @@
+<div id="file-search-pane" class="bottom-pane-view hidden" data-pane-mode="file-search" hidden>
+  <div class="file-search-shell" aria-label="File search">
+    <div class="file-search-header">
+      <div class="file-search-root-group">
+        <span class="file-search-eyebrow">Search Root</span>
+        <span id="file-search-root-path" class="file-search-root-path">Current folder</span>
+      </div>
+      <div id="file-search-status" class="file-search-status" role="status" aria-live="polite">
+        Open this pane to search cached files under the current folder.
+      </div>
+      <div id="file-search-result-count" class="file-search-result-count">0 results</div>
+    </div>
+    <div class="file-search-controls">
+      <label class="file-search-field file-search-query-field" for="file-search-query">
+        <span>Search</span>
+        <input type="search" id="file-search-query" placeholder="Search filenames and paths" autocomplete="off">
+      </label>
+      <label class="file-search-field file-search-type-field" for="file-search-type">
+        <span>Type</span>
+        <select id="file-search-type">
+          <option value="all">All</option>
+          <option value="images">Images</option>
+          <option value="audio">Audio</option>
+          <option value="video">Video</option>
+          <option value="documents">Documents</option>
+          <option value="archives">Archives</option>
+          <option value="code">Code</option>
+          <option value="other">Other</option>
+        </select>
+      </label>
+      <label class="file-search-field file-search-preset-field" for="file-search-date-preset">
+        <span>Date</span>
+        <select id="file-search-date-preset">
+          <option value="any">Any time</option>
+          <option value="this-year">This year</option>
+          <option value="last-year">Last year</option>
+          <option value="last-30-days">Last 30 days</option>
+          <option value="custom">Custom</option>
+        </select>
+      </label>
+      <label class="file-search-field file-search-date-field" for="file-search-date-from">
+        <span>From</span>
+        <input type="date" id="file-search-date-from">
+      </label>
+      <label class="file-search-field file-search-date-field" for="file-search-date-to">
+        <span>To</span>
+        <input type="date" id="file-search-date-to">
+      </label>
+      <button type="button" id="file-search-submit" class="file-search-submit">Search</button>
+      <button type="button" id="file-search-clear" class="file-search-clear">Clear</button>
+    </div>
+    <div class="file-search-results-shell">
+      <div class="file-search-results-header" aria-hidden="true">
+        <span>Name</span>
+        <span>Path</span>
+        <span>Status</span>
+      </div>
+      <div id="file-search-results" class="file-search-results" role="list" aria-label="Recursive file search results">
+        <div id="file-search-empty" class="file-search-empty">
+          Type a query to search cached descendants of this folder.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

@@ -46,6 +46,10 @@ test("buildBrowsePageHref omits default sort and direction params", async () => 
     }),
     "/?path=Music&q=mix&kind=file&status=Dropbox+Only&type=audio",
   );
+  assert.equal(
+    browseApi.buildBrowsePageHref({ path: "Music/Album", reveal: "Music/Album/Track.m4a" }),
+    "/?path=Music%2FAlbum&reveal=Music%2FAlbum%2FTrack.m4a",
+  );
 });
 
 test("buildFolderInfoQuery appends repeated paths and current folder", async () => {
@@ -64,6 +68,7 @@ test("readBrowseLocation normalizes path and sort state from URL search", async 
     navigation.readBrowseLocation("?path=Music%2FAlbum&sort=date&dir=desc&refresh=1&q=mix&kind=file&status=Dropbox+Only&type=audio"),
     {
       path: "Music/Album",
+      reveal: "",
       sort: "date",
       dir: "desc",
       refresh: true,
@@ -71,9 +76,21 @@ test("readBrowseLocation normalizes path and sort state from URL search", async 
     },
   );
   assert.deepEqual(
+    navigation.readBrowseLocation("?path=Music%2FAlbum&reveal=Music%2FAlbum%2FTrack.m4a"),
+    {
+      path: "Music/Album",
+      reveal: "Music/Album/Track.m4a",
+      sort: "name",
+      dir: "asc",
+      refresh: false,
+      filters: { query: "", kind: "all", status: "all", type: "all" },
+    },
+  );
+  assert.deepEqual(
     navigation.readBrowseLocation("?path=..%2Fbad&sort=nope"),
     {
       path: "",
+      reveal: "",
       sort: "name",
       dir: "asc",
       refresh: false,

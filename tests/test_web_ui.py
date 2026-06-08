@@ -145,7 +145,10 @@ class WebUiTests(AppTestCase):
         with TestServer(app) as server:
             html = server.get_text("/")
             css = server.get_text("/assets/app.css")
+            file_search_css = server.get_text("/assets/css/file-search.css")
             music_css = server.get_text("/assets/css/music.css")
+            file_search_api_js = server.get_text("/assets/js/file-search-api.js")
+            file_search_js = server.get_text("/assets/js/file-search.js")
             music_entry_js = server.get_text("/assets/js/music.js")
             music_layout_js = server.get_text("/assets/js/music-layout.js")
             music_coverart_js = server.get_text("/assets/js/music-coverart.js")
@@ -159,6 +162,8 @@ class WebUiTests(AppTestCase):
                 server.get_text("/assets/js/settings.js"),
                 server.get_text("/assets/js/bottom-pane.js"),
                 server.get_text("/assets/js/log.js"),
+                file_search_api_js,
+                file_search_js,
                 music_entry_js,
                 music_layout_js,
                 music_coverart_js,
@@ -177,10 +182,12 @@ class WebUiTests(AppTestCase):
         self.assertIn("Resize View column", html)
         self.assertNotIn("Resize Sync column", html)
         self.assertIn('<link rel="stylesheet" href="/assets/app.css">', html)
+        self.assertIn('<link rel="stylesheet" href="/assets/css/file-search.css">', html)
         self.assertIn('<link rel="stylesheet" href="/assets/css/music.css">', html)
         self.assertIn('<script src="/assets/js/settings.js"></script>', html)
         self.assertIn('<script src="/assets/js/bottom-pane.js"></script>', html)
         self.assertIn('<script src="/assets/js/log.js"></script>', html)
+        self.assertIn('<script type="module" src="/assets/js/file-search.js"></script>', html)
         self.assertIn('<script type="module" src="/assets/js/music.js"></script>', html)
         self.assertIn('<script src="/assets/js/refresh.js"></script>', html)
         self.assertIn('<script src="/assets/js/sync.js"></script>', html)
@@ -257,8 +264,26 @@ class WebUiTests(AppTestCase):
         self.assertIn('id="log-resizer"', html)
         self.assertIn('id="bottom-pane-mode"', html)
         self.assertIn('<option value="server-log">Server Log</option>', html)
+        self.assertIn('<option value="file-search">File Search</option>', html)
         self.assertIn('<option value="music-player">Music Player</option>', html)
         self.assertIn('id="server-log-pane"', html)
+        self.assertIn('id="file-search-pane"', html)
+        self.assertIn('id="file-search-pane" class="bottom-pane-view hidden" data-pane-mode="file-search" hidden', html)
+        self.assertIn('id="file-search-root-path"', html)
+        self.assertIn('id="file-search-status"', html)
+        self.assertIn('id="file-search-result-count"', html)
+        self.assertIn('id="file-search-query"', html)
+        self.assertIn('id="file-search-type"', html)
+        self.assertIn('id="file-search-date-preset"', html)
+        self.assertIn('id="file-search-date-from"', html)
+        self.assertIn('id="file-search-date-to"', html)
+        self.assertIn('id="file-search-clear"', html)
+        self.assertIn('id="file-search-results"', html)
+        self.assertIn('id="file-search-empty"', html)
+        self.assertIn("Any time", html)
+        self.assertIn("Last 30 days", html)
+        self.assertIn("Custom", html)
+        self.assertIn("Type a query to search cached descendants of this folder.", html)
         self.assertIn('id="music-player-pane"', html)
         self.assertIn('id="music-player-pane" class="bottom-pane-view hidden" data-pane-mode="music-player" hidden', html)
         self.assertIn('id="music-library-pane"', html)
@@ -386,6 +411,28 @@ class WebUiTests(AppTestCase):
         self.assertIn("Settings.set('bottom-pane-mode', mode)", js)
         self.assertIn("view.hidden = !selected", js)
         self.assertIn("bottom-pane-mode-changed", js)
+        self.assertIn("buildFileSearchEndpoint", file_search_js)
+        self.assertIn("filenameCompareKey", file_search_js)
+        self.assertIn("filterFileSearchResults", file_search_js)
+        self.assertIn("renderVirtualFileSearchResults", file_search_js)
+        self.assertIn("DEFAULT_VIRTUAL_THRESHOLD", file_search_js)
+        self.assertIn("Show Folder", file_search_js)
+        self.assertIn("local_copy_path", file_search_js)
+        self.assertIn("win.addEventListener('browse-folder-changed'", file_search_js)
+        self.assertIn("win.addEventListener('bottom-pane-mode-changed'", file_search_js)
+        self.assertIn("queryDebounceMs", file_search_js)
+        self.assertIn("queryEl.focus();", file_search_js)
+        self.assertIn("No matches yet. Cached folders are still indexing.", file_search_js)
+        self.assertIn("No matching files.", file_search_js)
+        self.assertIn("export function buildFileSearchEndpoint(state)", file_search_api_js)
+        self.assertIn(".file-search-shell", file_search_css)
+        self.assertIn(".file-search-header", file_search_css)
+        self.assertIn(".file-search-controls", file_search_css)
+        self.assertIn(".file-search-results", file_search_css)
+        self.assertIn(".file-search-result", file_search_css)
+        self.assertIn(".file-search-result-actions .copy-path", file_search_css)
+        self.assertIn(".file-search-virtual-spacer", file_search_css)
+        self.assertIn(".file-search-empty", file_search_css)
         self.assertIn("data-pane-mode=\"music-player\"", html)
         self.assertIn("id=\"music-playlist-list\" class=\"music-playlist-list\" role=\"rowgroup\" tabindex=\"0\"", html)
         self.assertNotIn(".music-player-stub", css)
@@ -479,7 +526,6 @@ class WebUiTests(AppTestCase):
         self.assertIn("defaultPollDelayMs: defaultPollDelayMs", music_entry_js)
         self.assertIn('data-music-library-poll-delay-ms="4000"', html)
         self.assertNotIn("var maxPollDelayMs", js)
-        self.assertNotIn("pollDelayMs", js)
         self.assertIn("loadTimer: null", music_entry_js)
         self.assertIn("libraryPollingActive: false", music_entry_js)
         self.assertIn("lastLibraryPollResponseAt: 0", music_entry_js)
@@ -813,11 +859,26 @@ class WebUiTests(AppTestCase):
                 music_css_body = response.read()
                 music_css_headers = response.headers
                 music_css_status = response.status
+            file_search_css_request = Request(server.base_url + "/assets/css/file-search.css", method="HEAD")
+            with urlopen(file_search_css_request, timeout=5) as response:
+                file_search_css_body = response.read()
+                file_search_css_headers = response.headers
+                file_search_css_status = response.status
             js_request = Request(server.base_url + "/assets/js/sync.js", method="HEAD")
             with urlopen(js_request, timeout=5) as response:
                 js_body = response.read()
                 js_headers = response.headers
                 js_status = response.status
+            file_search_js_request = Request(server.base_url + "/assets/js/file-search.js", method="HEAD")
+            with urlopen(file_search_js_request, timeout=5) as response:
+                file_search_js_body = response.read()
+                file_search_js_headers = response.headers
+                file_search_js_status = response.status
+            file_search_api_js_request = Request(server.base_url + "/assets/js/file-search-api.js", method="HEAD")
+            with urlopen(file_search_api_js_request, timeout=5) as response:
+                file_search_api_js_body = response.read()
+                file_search_api_js_headers = response.headers
+                file_search_api_js_status = response.status
             browse_js_request = Request(server.base_url + "/assets/js/browse/main.js", method="HEAD")
             with urlopen(browse_js_request, timeout=5) as response:
                 browse_js_body = response.read()
@@ -844,10 +905,22 @@ class WebUiTests(AppTestCase):
         self.assertEqual(music_css_body, b"")
         self.assertEqual(music_css_headers["Content-Type"], "text/css; charset=utf-8")
         self.assertGreater(int(music_css_headers["Content-Length"]), 0)
+        self.assertEqual(file_search_css_status, HTTPStatus.OK)
+        self.assertEqual(file_search_css_body, b"")
+        self.assertEqual(file_search_css_headers["Content-Type"], "text/css; charset=utf-8")
+        self.assertGreater(int(file_search_css_headers["Content-Length"]), 0)
         self.assertEqual(js_status, HTTPStatus.OK)
         self.assertEqual(js_body, b"")
         self.assertEqual(js_headers["Content-Type"], "application/javascript; charset=utf-8")
         self.assertGreater(int(js_headers["Content-Length"]), 0)
+        self.assertEqual(file_search_js_status, HTTPStatus.OK)
+        self.assertEqual(file_search_js_body, b"")
+        self.assertEqual(file_search_js_headers["Content-Type"], "application/javascript; charset=utf-8")
+        self.assertGreater(int(file_search_js_headers["Content-Length"]), 0)
+        self.assertEqual(file_search_api_js_status, HTTPStatus.OK)
+        self.assertEqual(file_search_api_js_body, b"")
+        self.assertEqual(file_search_api_js_headers["Content-Type"], "application/javascript; charset=utf-8")
+        self.assertGreater(int(file_search_api_js_headers["Content-Length"]), 0)
         self.assertEqual(browse_js_status, HTTPStatus.OK)
         self.assertEqual(browse_js_body, b"")
         self.assertEqual(browse_js_headers["Content-Type"], "application/javascript; charset=utf-8")

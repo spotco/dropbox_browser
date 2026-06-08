@@ -73,6 +73,7 @@ function renderFolderMetadataCell(row, kind) {
 function renderBrowseRow(row) {
   var attrs = [
     ' data-browse-row-id="' + esc(row.id) + '"',
+    ' data-row-path="' + esc(row.path) + '"',
     ' data-row-kind="' + esc(row.kind) + '"',
     ' data-sort-name="' + esc(row.sort_name) + '"',
     ' data-sort-date="' + esc(row.sort_date) + '"',

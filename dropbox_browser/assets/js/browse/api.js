@@ -2,6 +2,7 @@ import {normalizeBrowseFilters} from './search.js';
 
 function appendStateParams(params, state) {
   if (state.path) params.set('path', state.path);
+  if (state.reveal) params.set('reveal', state.reveal);
   if (state.sort && state.sort !== 'name') params.set('sort', state.sort);
   if (state.dir && state.dir !== 'asc') params.set('dir', state.dir);
   if (state.refresh) params.set('refresh', '1');
@@ -41,6 +42,7 @@ export function normalizeBrowseState(state) {
   var input = state || {};
   return {
     path: normalizeBrowsePath(input.path || ''),
+    reveal: normalizeBrowsePath(input.reveal || ''),
     sort: normalizeSortKey(input.sort || 'name'),
     dir: normalizeSortDirection(input.dir || 'asc'),
     refresh: input.refresh === true || input.refresh === '1',

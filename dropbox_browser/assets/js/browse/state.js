@@ -4,6 +4,7 @@ export function createBrowseState(initialState) {
   var normalized = normalizeBrowseState(initialState);
   return {
     path: normalized.path,
+    reveal: normalized.reveal,
     sort: normalized.sort,
     dir: normalized.dir,
     refresh: normalized.refresh,
