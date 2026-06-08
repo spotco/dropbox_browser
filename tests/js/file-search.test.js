@@ -20,6 +20,7 @@ class FakeElement {
     this.scrollTop = options && options.scrollTop ? options.scrollTop : 0;
     this.attributes = new Map();
     this.listeners = new Map();
+    this.blurCount = 0;
   }
 
   setAttribute(name, value) {
@@ -45,6 +46,10 @@ class FakeElement {
   focus() {}
 
   select() {}
+
+  blur() {
+    this.blurCount += 1;
+  }
 
   querySelector(selector) {
     if (selector === '.file-search-result[data-file-search-result-id]' && this.innerHTML.indexOf('data-file-search-result-id=') >= 0) {
@@ -103,7 +108,7 @@ function buildFakeDom(options) {
   const dateFrom = new FakeElement("file-search-date-from", {value: options.dateFrom || ""});
   const dateTo = new FakeElement("file-search-date-to", {value: options.dateTo || ""});
   const submit = new FakeElement("file-search-submit", {textContent: options.submitText || "Search"});
-  const clear = new FakeElement("file-search-clear");
+  const reset = new FakeElement("file-search-reset");
   const results = new FakeElement("file-search-results", {clientHeight: options.resultsClientHeight || 220, scrollTop: options.resultsScrollTop || 0});
   const mode = new FakeElement("bottom-pane-mode", {value: options.mode || "server-log"});
   const elements = new Map([
@@ -117,7 +122,7 @@ function buildFakeDom(options) {
     [dateFrom.id, dateFrom],
     [dateTo.id, dateTo],
     [submit.id, submit],
-    [clear.id, clear],
+    [reset.id, reset],
     [results.id, results],
     [mode.id, mode],
   ]);
@@ -163,7 +168,11 @@ test("renderFileSearchResults renders result rows and file actions", async () =>
   assert.match(html, /Preview/);
   assert.match(html, /Download/);
   assert.match(html, /Show Folder/);
+  assert.match(html, /Go to Dropbox/);
   assert.match(html, /href="\/\?path=Music%2FAlbum"/);
+  assert.match(html, /href="https:\/\/www\.dropbox\.com\/home\/Music\/Album\/Track\.m4a"/);
+  assert.match(html, /target="_blank"/);
+  assert.match(html, /rel="noopener noreferrer"/);
   assert.match(html, /class="copy-path"/);
   assert.match(html, /data-copy-path="C:\/Dropbox\/Music\/Album\/Track\.m4a"/);
   assert.match(html, /status remote/);
@@ -187,6 +196,7 @@ test("renderFileSearchResults renders folders with open action", async () => {
 
   assert.match(html, /Open/);
   assert.match(html, /href="\/\?path=Music%2FKnown"/);
+  assert.match(html, /href="https:\/\/www\.dropbox\.com\/home\/Music\/Known"/);
 });
 
 test("defaultBrowseHrefForRow sends files to their containing folder with a reveal target", async () => {
@@ -202,6 +212,13 @@ test("containingFolderHrefForRow resolves parent browse targets", async () => {
   assert.equal(mod.containingFolderHrefForRow({path: "Music/Album/Track.m4a"}), "/?path=Music%2FAlbum");
   assert.equal(mod.parentFolderPathForRow({path: "cover.png"}), "");
   assert.equal(mod.containingFolderHrefForRow({path: "cover.png"}), "/");
+});
+
+test("dropboxHomeHrefForRow preserves folder separators and encodes segments", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/file-search.js");
+  assert.equal(mod.dropboxHomeHrefForRow({path: "THE DUMP/Garcello & Slynk/Garcello"}), "https://www.dropbox.com/home/THE%20DUMP/Garcello%20%26%20Slynk/Garcello");
+  assert.equal(mod.dropboxHomeHrefForRow({path: "Plus+Folder"}), "https://www.dropbox.com/home/Plus%2BFolder");
+  assert.equal(mod.dropboxHomeHrefForRow({path: ""}), "https://www.dropbox.com/home");
 });
 
 test("renderVirtualFileSearchResults renders spacer blocks around the visible slice", async () => {
@@ -474,6 +491,46 @@ test("initFileSearch changing criteria after a run resets to press-search state 
   assert.deepEqual(requests, ["/browse/endpoints/search?path=Music&recursive=1&query=track"]);
   assert.match(dom.elements.get("file-search-results").innerHTML, /Press Search to run with the current filters/);
   assert.equal(dom.elements.get("file-search-submit").textContent, "Search");
+});
+
+test("initFileSearch Enter in the query blurs the field and starts searching", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/file-search.js");
+  const dom = buildFakeDom({
+    mode: "file-search",
+    query: "track",
+    typeGroup: "audio",
+    currentFolderPath: "Music",
+  });
+  const requests = [];
+  mod.initFileSearch({
+    document: dom.document,
+    window: dom.window,
+    fetchImpl(url) {
+      requests.push(url);
+      return Promise.resolve({
+        ok: true,
+        json() {
+          return Promise.resolve({
+            root: {path: "Music"},
+            status: {message: "Cached recursive search is complete.", complete: true, pending: false, missing_listing_count: 0, cache_status: "complete"},
+            results: [],
+          });
+        },
+      });
+    },
+  });
+
+  const query = dom.elements.get("file-search-query");
+  query.dispatchEvent({
+    type: "keydown",
+    key: "Enter",
+    preventDefault() {},
+  });
+
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(query.blurCount, 1);
+  assert.deepEqual(requests, ["/browse/endpoints/search?path=Music&recursive=1&query=track"]);
 });
 
 test("initFileSearch stops polling when the pane is hidden", async () => {
