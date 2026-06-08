@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from http import HTTPStatus
 import posixpath
+import re
 import time
 import uuid
 from pathlib import Path
@@ -39,6 +40,20 @@ def diff_label(status: str | None) -> str:
         "local_only": "Local Only",
         "loading": "Loading",
     }.get(status or "", "Loading")
+
+
+_SEARCH_SEPARATOR_RE = re.compile(r"[_./\\\-\s]+")
+
+
+def normalize_search_text(value: str) -> str:
+    return " ".join(
+        part for part in _SEARCH_SEPARATOR_RE.split(filename_compare_key(value or "")) if part
+    )
+
+
+def tokenize_search_text(value: str) -> list[str]:
+    normalized = normalize_search_text(value)
+    return normalized.split(" ") if normalized else []
 
 
 @dataclass
@@ -420,7 +435,7 @@ class DropboxBrowser:
     ) -> CachedRecursiveSearchSnapshot:
         root_remote_path = remote_target(self.remote, rel_path)
         normalized_query = (query or "").strip()
-        query_key = filename_compare_key(normalized_query) if normalized_query else ""
+        query_tokens = tokenize_search_text(normalized_query)
         ensure_result: dict[str, int | float] = {
             "queued_folder_count": 0,
             "pending_folder_count": 0,
@@ -489,15 +504,16 @@ class DropboxBrowser:
             listing_metadata = parse_direct_listing(direct_items, current_remote_path)
             for entry in entries:
                 child_rel_path = posixpath.join(current_rel_path, entry["name"]) if current_rel_path else entry["name"]
-                if query_key:
-                    child_path_key = filename_compare_key(root_relative_path(child_rel_path))
-                    child_name_key = filename_compare_key(entry["name"])
-                    if query_key not in child_name_key and query_key not in child_path_key:
+                if query_tokens:
+                    child_relative_path = root_relative_path(child_rel_path)
+                    child_path_key = normalize_search_text(child_relative_path)
+                    child_name_key = normalize_search_text(str(entry["name"]))
+                    if not all(token in child_name_key or token in child_path_key for token in query_tokens):
                         pass
                     else:
                         result_row = dict(entry)
                         result_row["path"] = child_rel_path
-                        result_row["relative_path"] = root_relative_path(child_rel_path)
+                        result_row["relative_path"] = child_relative_path
                         if entry["is_dir"]:
                             result_row["search_child_folder_cache"] = folder_cache_map.get(entry["name"])
                         results.append(result_row)

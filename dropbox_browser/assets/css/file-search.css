@@ -106,13 +106,13 @@
 .file-search-field select:focus-visible,
 .file-search-field input[type="date"]:focus-visible,
 .file-search-submit:focus-visible,
-.file-search-clear:focus-visible {
+.file-search-reset:focus-visible {
   outline: 2px solid #78aee0;
   outline-offset: 2px;
 }
 
 .file-search-submit,
-.file-search-clear {
+.file-search-reset {
   background: #243142;
   border: 1px solid #3a4a5e;
   border-radius: 6px;
@@ -121,10 +121,16 @@
   padding: 8px 12px;
 }
 
+.file-search-reset:hover {
+  background: #2c3b4f;
+}
+
 .file-search-submit {
   background: #2d5f87;
   border-color: #4377a1;
   font-weight: 600;
+  grid-column: 1 / -1;
+  width: 100%;
 }
 
 .file-search-submit:hover {
@@ -138,10 +144,6 @@
 
 .file-search-submit[data-search-state="active"]:hover {
   background: #855247;
-}
-
-.file-search-clear:hover {
-  background: #2c3b4f;
 }
 
 .file-search-results-shell {
@@ -284,8 +286,8 @@
   }
 
   .file-search-submit,
-  .file-search-clear {
-    align-self: flex-start;
+  .file-search-reset {
+    align-self: stretch;
   }
 
   .file-search-results-header {

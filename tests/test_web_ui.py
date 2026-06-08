@@ -277,7 +277,7 @@ class WebUiTests(AppTestCase):
         self.assertIn('id="file-search-date-preset"', html)
         self.assertIn('id="file-search-date-from"', html)
         self.assertIn('id="file-search-date-to"', html)
-        self.assertIn('id="file-search-clear"', html)
+        self.assertIn('id="file-search-reset"', html)
         self.assertIn('id="file-search-results"', html)
         self.assertIn('id="file-search-empty"', html)
         self.assertIn("Any time", html)

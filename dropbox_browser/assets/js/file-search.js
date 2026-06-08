@@ -205,6 +205,15 @@ export function containingFolderHrefForRow(row) {
   return parentPath ? '/?path=' + encodeURIComponent(parentPath) : '/';
 }
 
+export function dropboxHomeHrefForRow(row) {
+  var path = String((row && row.path) || '');
+  var encoded = path
+    .split('/')
+    .map(function (segment) { return encodeURIComponent(segment); })
+    .join('/');
+  return 'https://www.dropbox.com/home' + (encoded ? '/' + encoded : '');
+}
+
 function appendRevealParam(href, revealPath) {
   if (!revealPath) return href;
   return href + (href.indexOf('?') >= 0 ? '&' : '?') + 'reveal=' + encodeURIComponent(revealPath);
@@ -225,6 +234,7 @@ function renderFileSearchResult(row) {
   }
   if (row.path) {
     actions.push('<a href="' + esc(containingFolderHrefForRow(row)) + '">Show Folder</a>');
+    actions.push('<a href="' + esc(dropboxHomeHrefForRow(row)) + '" target="_blank" rel="noopener noreferrer">Go to Dropbox</a>');
   }
   if (row.local_copy_path) {
     actions.push(
@@ -316,10 +326,10 @@ export function initFileSearch(options) {
   var dateFromEl = doc.getElementById('file-search-date-from');
   var dateToEl = doc.getElementById('file-search-date-to');
   var submitButton = doc.getElementById('file-search-submit');
-  var clearButton = doc.getElementById('file-search-clear');
+  var resetButton = doc.getElementById('file-search-reset');
   var resultsEl = doc.getElementById('file-search-results');
 
-  if (!pane || !rootPathEl || !statusEl || !resultCountEl || !queryEl || !typeEl || !presetEl || !dateFromEl || !dateToEl || !submitButton || !clearButton || !resultsEl) return null;
+  if (!pane || !rootPathEl || !statusEl || !resultCountEl || !queryEl || !typeEl || !presetEl || !dateFromEl || !dateToEl || !submitButton || !resetButton || !resultsEl) return null;
 
   function logFileSearchDebug(message, extra) {
     if (!win.console || typeof win.console.log !== 'function') return;
@@ -633,6 +643,12 @@ export function initFileSearch(options) {
     if (!options.isPolling) {
       renderSnapshot();
     }
+    logFileSearchDebug('fetch search snapshot', {
+      path: state.searchRootPath,
+      query: serverQuery,
+      isPolling: !!options.isPolling,
+      isActive: isActive(),
+    });
     return fetchImpl(
       buildFileSearchEndpoint({path: state.searchRootPath, query: serverQuery, recursive: true}),
       currentController ? {signal: currentController.signal} : undefined,
@@ -701,6 +717,13 @@ export function initFileSearch(options) {
 
   function startSearchRun() {
     applyCriteria();
+    logFileSearchDebug('start search requested', {
+      query: state.criteria.query,
+      typeGroup: state.criteria.typeGroup,
+      datePreset: state.criteria.datePreset,
+      currentFolderPath: currentFolderPath(),
+      isActive: isActive(),
+    });
     if (!hasActiveFileSearchCriteria(state.criteria)) {
       resetSnapshot();
       showIdle();
@@ -716,7 +739,7 @@ export function initFileSearch(options) {
     return loadSnapshot();
   }
 
-  clearButton.addEventListener('click', function () {
+  resetButton.addEventListener('click', function () {
     queryEl.value = '';
     typeEl.value = 'all';
     presetEl.value = 'any';
@@ -757,6 +780,12 @@ export function initFileSearch(options) {
     startSearchRun();
   });
 
+  queryEl.addEventListener('keydown', function (event) {
+    if (!event || event.key !== 'Enter') return;
+    if (typeof event.preventDefault === 'function') event.preventDefault();
+    if (typeof queryEl.blur === 'function') queryEl.blur();
+    if (!state.searchActive) startSearchRun();
+  });
   queryEl.addEventListener('input', applyFiltersNow);
   typeEl.addEventListener('change', applyFiltersNow);
   presetEl.addEventListener('change', function () {

@@ -2,151 +2,194 @@
 
 ## Goal
 
-Add a recursive file search pane to the existing bottom pane. It should help the
-user find files under the current Dropbox folder using cached recursive metadata
-while folder-cache workers are still running.
+Provide a recursive file search pane in the existing bottom pane. It should let
+the user search cached descendants of the current Dropbox folder without running
+foreground recursive `rclone` work on the request thread.
 
-The search pane should be useful before the cache is complete: results should
-populate incrementally as background cache threads discover more folders and
-files.
+The shipped feature is cache-backed and can surface partial results while
+folder-cache background work is still filling in descendant listings.
 
-Example target workflow:
+## Current State
 
-- The user is browsing `Photos`.
-- They open the bottom pane and switch to `File Search`.
-- They search for files with a fuzzy name match for `fantasy`.
-- They narrow to images.
-- They restrict dates to 2020 through 2021.
-- Results continue to appear as cached descendants under `Photos` finish loading.
+This feature is implemented and wired into the main app shell.
+
+Implemented pieces:
+
+- Bottom pane mode:
+  - `file-search`
+- Shared shell assets:
+  - `dropbox_browser/assets/templates/file_search.html`
+  - `dropbox_browser/assets/css/file-search.css`
+  - `dropbox_browser/assets/js/file-search-api.js`
+  - `dropbox_browser/assets/js/file-search.js`
+- Backend endpoint:
+  - `GET /browse/endpoints/search?path=<rel-path>&recursive=1&query=<q>`
+- Coverage:
+  - Python endpoint and shell tests
+  - JavaScript behavior tests for filtering, polling, empty states, keyboard
+    submission, and virtualization
+
+Implemented UI behavior:
+
+- Search root is the current browse folder when `Search` is pressed.
+- The pane does not auto-run on open.
+- The current root is captured for a search run, then reused until the next run
+  or reset.
+- Query, type, and date filters are local pane controls.
+- `Search` starts the request and becomes `Stop Search` while polling is active.
+- `Reset` clears all filters and returns the pane to its default idle state.
+- Pressing `Enter` in the query box blurs the input and starts search.
+- Results are virtualized for large result sets.
+
+Implemented result actions:
+
+- Preview
+- Download
+- Show Folder
+- Go to Dropbox
+- Copy Filepath / Copy Folder Path when a local path is available
+
+Implemented search semantics:
+
+- Recursive, cache-only endpoint
+- Text matching against filename and relative path
+- Case-insensitive and Unicode-normalized token matching
+- Separator-tolerant tokenization for `_`, `-`, `.`, `/`, and `\`
+- Client-side type-group filtering
+- Client-side date preset and date range filtering
+
+Implemented status behavior:
+
+- Idle prompt before the first run
+- Loading state while a run is fetching
+- Partial-cache polling while `pending` or `missing_listing_count` remains
+- Distinct empty states for incomplete vs complete cached results
+- Polling stops when the pane is hidden or a request is superseded
 
 ## Non-Goals
 
 - Do not run synchronous recursive Dropbox scans from the request thread.
 - Do not add upload, delete, or overwrite behavior.
-- Do not make recursive search depend on client-render mode. The bottom pane is
-  shared shell UI and should work with server-rendered and client-rendered
-  browsing.
-- Do not search file contents. This is filename, path, type, metadata, and status
-  search only.
+- Do not search file contents.
 - Do not expose unsafe local filesystem paths when local comparison is disabled.
+- Do not put file-search state into the main browse URL.
 
-## Existing Foundation
+## Existing Backend Contract
 
-- Bottom pane mode switching already lives in:
-  - `dropbox_browser/assets/templates/page.html`
-  - `dropbox_browser/assets/js/bottom-pane.js`
-  - `dropbox_browser/assets/js/log.js`
-  - `dropbox_browser/assets/js/music.js`
-- Current bottom pane modes:
-  - `server-log`
-  - `music-player`
-- Recursive folder metadata is owned by `FolderCacheManager`.
-- Cached records include direct child files and folders:
-  - `direct_items`
-  - `direct_files`
-  - `direct_folders`
-  - `complete`
-  - recursive size/date/count fields
-- A backend endpoint now exists:
+The shipped UI uses this endpoint:
 
 ```text
 GET /browse/endpoints/search?path=<rel-path>&recursive=1&query=<q>
 ```
 
-The endpoint is cache-only and reports completion state. The UI should build on
-that contract instead of calling `rclone` or adding a second recursive walker.
+The endpoint is cache-only and returns:
+
+- `root`
+- `search`
+- `status`
+- `results`
+
+Current important status fields:
+
+- `cache_status`
+- `complete`
+- `pending`
+- `pending_folder_count`
+- `queued_folder_count`
+- `missing_folder_count`
+- `missing_listing_count`
+- `message`
+- `generated_at`
+
+The endpoint also emits trace events:
+
+- `browse_search_endpoint`
+- `slow_browse_search_endpoint`
 
 ## Product Shape
 
-Add a third bottom pane mode:
-
-```html
-<option value="file-search">File Search</option>
-```
-
-The pane should be a compact work surface, not a full-page search product. It
-should be optimized for repeated searching while browsing folders.
-
-Recommended layout:
+Current pane layout:
 
 - Header row:
-  - root selector/status: current folder path
-  - refresh/poll status text
+  - current captured search root
+  - status text
   - result count
-- Query row:
-  - filename/path fuzzy text input
-  - file type selector
-  - date range controls
-  - clear button
-- Result region:
-  - virtualized list or table for large result sets
-  - preview/download/open-folder actions
-  - status and cache completeness indicators
+- Control row:
+  - query
+  - type group
+  - date preset
+  - from date
+  - to date
+  - `Reset`
+  - full-width `Search` / `Stop Search`
+- Results region:
+  - virtualized list
+  - filename, path, type, status, size, date
+  - result actions
 
-## Core Features
+This is intentionally a bottom-pane work surface, not a dedicated full-page
+search experience.
 
-### Search Scope
+## Search Scope
 
-Default scope should be the current browse folder. When the user navigates to a
-different folder, the search pane should update its root to that folder unless
-the user has pinned a search root.
+Current behavior:
 
-Recommended controls:
+- Scope is always the current browse folder at the moment `Search` is pressed.
+- The pane shows the current browse folder as the root when idle.
+- After a run starts, the captured root stays fixed until the user starts a new
+  search or resets the pane.
 
-- `Current Folder` mode: follows browse navigation.
-- `Pinned Folder` mode: keeps the selected root while the user browses elsewhere.
-- `Use Current Folder` button: resets the pinned root to the current browse path.
+Not implemented:
 
-Decision: start with current-folder scope only for the first UI milestone, then
-add pinning if switching folders while searching becomes disruptive.
+- pinned root mode
+- follow/pin toggle
+- explicit `Use Current Folder` button
 
-### Incremental Cache Updates
+## Incremental Cache Updates
 
-The pane must poll while results are incomplete.
+Current behavior:
 
-Behavior:
+- The client fetches the cached recursive snapshot only when `Search` is pressed
+  or `Enter` is pressed in the query field.
+- If the returned status is incomplete, the pane polls again on a timer.
+- Polling continues only while:
+  - the pane is visible
+  - the captured search is still active
+  - the endpoint reports incomplete cached state
+- Polling stops when:
+  - the endpoint becomes complete
+  - the pane is hidden
+  - the user stops search
+  - a newer request supersedes the active request
 
-- On pane activation, request cached recursive results for the current root.
-- If `status.complete` is false, keep polling.
-- Polling should continue while:
-  - `status.pending` is true;
-  - `status.missing_listing_count` is nonzero;
-  - the pane is visible and the same root/query/filter set is active.
-- Polling should stop when:
-  - results are complete;
-  - the pane is hidden;
-  - the user navigates away and the root changes;
-  - a newer request supersedes the active request.
+Current user-facing status copy includes:
 
-The status line should distinguish:
+- `Press Search to capture the current folder and search cached descendants.`
+- `Loading cached search results...`
+- `Search complete.`
+- `No matches yet. Cached folders are still indexing.`
+- `No matching files.`
 
-- `Searching cached files...`
-- `Still indexing cached folders...`
-- `Search complete`
-- `No cached data for this folder yet`
+## Text Matching
 
-### Text Matching
+Current implementation uses token matching, not ranked relevance.
 
-The main search box should match:
+Matching behavior:
 
-- filename;
-- relative path under the search root;
-- extension without requiring a leading dot.
+- case-insensitive
+- Unicode NFKC normalization with `casefold()`
+- separator-tolerant normalization
+- token-based matching against:
+  - filename
+  - relative path under the search root
+  - extension text
 
-Matching should be forgiving:
+The backend uses the query as a coarse recursive cache filter. The client then
+applies its own local filter pass against the returned snapshot.
 
-- case-insensitive;
-- Unicode-normalized in the same spirit as `filename_compare_key`;
-- token-based, so `fantasy castle` can match a filename/path containing both
-  words in any order;
-- tolerant of separators such as `_`, `-`, `.`, and spaces.
+## File Type Filtering
 
-Decision: implement simple token matching first. Add ranked fuzzy scoring only
-after the basic UX is proven.
-
-### File Type Filtering
-
-Support broad type groups first:
+Current type groups:
 
 - `All`
 - `Images`
@@ -157,290 +200,234 @@ Support broad type groups first:
 - `Code`
 - `Other`
 
-The backend rows already expose `type_label`; the client can map extensions and
-type labels into these groups. The endpoint can later add an explicit
-`type_group` if client mapping starts duplicating Python logic too much.
+The client derives these groups from file extension and `type_label`.
 
-Image filtering should include common browser and camera formats:
+## Date Filtering
 
-- `.jpg`
-- `.jpeg`
-- `.png`
-- `.gif`
-- `.webp`
-- `.bmp`
-- `.tif`
-- `.tiff`
-- `.heic`
-- `.avif`
+Current controls:
 
-### Date Filtering
+- `Any time`
+- `This year`
+- `Last year`
+- `Last 30 days`
+- `Custom`
+- `From`
+- `To`
 
-Support date ranges based on the best available file timestamp.
+Current implementation:
 
-Initial controls:
+- filtering is client-side
+- date presets populate local date inputs
+- custom mode enables manual date inputs
+- inclusive local-date boundaries are used in the client filter logic
 
-- `From` date input.
-- `To` date input.
-- Quick presets:
-  - `Any time`
-  - `This year`
-  - `Last year`
-  - `Last 30 days`
-  - `Custom`
+## Result Rows
 
-For the example query, the user should be able to set:
+Each current row shows:
 
-```text
-From: 2020-01-01
-To: 2021-12-31
-Type: Images
-Query: fantasy
-```
+- icon
+- filename
+- relative path
+- type
+- status
+- size
+- modified date
 
-Open decision: use inclusive local-date boundaries in the UI, converted to epoch
-ranges in the client. This matches user expectations better than UTC-midnight
-semantics.
+Current actions:
 
-### Result Rows
+- folders:
+  - `Open`
+  - `Show Folder`
+  - `Go to Dropbox`
+  - `Copy Folder Path` when available
+- files:
+  - `Preview`
+  - `Download`
+  - `Show Folder`
+  - `Go to Dropbox`
+  - `Copy Filepath` when available
 
-Each result should show:
+`Show Folder` navigates the main browser to the containing folder. For files, it
+uses a `reveal` parameter in the browse link.
 
-- icon;
-- filename;
-- relative path under the search root;
-- type;
-- status;
-- size;
-- modified date;
-- source availability: Dropbox, local, or both;
-- actions:
-  - preview/open;
-  - download;
-  - show containing folder;
-  - copy path when available.
+## Sorting
 
-`Show containing folder` should navigate the main browser to the parent folder
-and optionally highlight the file if the listing UI supports highlighting later.
+The current search pane does not expose user-selectable sorting controls.
 
-### Sorting
+Current behavior:
 
-Default sort should be relevance, then date descending.
+- the backend walks cached folders breadth-first from the selected root
+- each folder's direct entries are name-sorted before result rows are built
+- the client filters the returned snapshot but does not apply an additional
+  visible sort mode
 
-Available sorts:
+Anything in the old plan about `relevance`, `name`, `status`, `date`, or `path`
+sort controls is not implemented and should not be treated as current behavior.
 
-- relevance;
-- name;
-- type;
-- status;
-- size;
-- date;
-- path.
+## Empty And Partial States
 
-Decision: if the first version uses token matching without scoring, `relevance`
-can be a stable grouping:
+Current distinct states:
 
-- filename matches before path-only matches;
-- exact token-prefix matches before substring matches;
-- date descending as a tie-breaker.
+- Idle with no active filters and no prior run:
+  - prompt to press `Search`
+- Active/inactive filters after a previous run changed:
+  - prompt to press `Search` again with current filters
+- Incomplete cached results with no matches yet:
+  - `No matches yet. Cached folders are still indexing.`
+- Complete cached results with no matches:
+  - `No matching files.`
+- No cached rows available:
+  - endpoint `message` or generic no-results messaging
 
-### Empty And Partial States
-
-The pane needs separate states for different empty outcomes:
-
-- No query entered: show recent cached files or a neutral empty state.
-- Query has no matches but cache is still incomplete: show `No matches yet`.
-- Query has no matches and cache is complete: show `No matching files`.
-- No cache record exists for the root: show that indexing has started or that the
-  user should browse/refresh the folder to seed metadata.
-
-Decision: for the first UI milestone, show no results until the user types a
-query or chooses a type/date filter. A later enhancement can show recent files.
-
-## Backend Contract
-
-Use the existing endpoint as the initial backend contract:
-
-```text
-GET /browse/endpoints/search?path=<rel-path>&recursive=1&query=<q>
-```
-
-The first UI version should call this existing endpoint directly. It likely
-needs these additions later:
-
-- `type_group=<group>` or `type=<type-label>` for server-side coarse filtering
-  if result sets become large.
-- `date_from=<YYYY-MM-DD>` and `date_to=<YYYY-MM-DD>` if client-side filtering
-  over returned cached rows becomes too expensive.
-- `limit=<n>` and `cursor=<token>` if cached result sets can be very large.
-- `poll_seq` and `poll_delay_ms` fields mirroring the music-library endpoint for
-  traceability.
-
-Decision: keep filtering client-side for the first pane version. Add server-side
-filters only when performance validation shows a real need.
+Current behavior does not show recent files before the first search.
 
 ## Client State
 
-Recommended state fields:
+Current effective client state includes:
 
-- `rootPath`
-- `followsCurrentFolder`
-- `query`
-- `typeGroup`
-- `dateFrom`
-- `dateTo`
-- `sortKey`
-- `sortDirection`
-- `results`
-- `status`
-- `loading`
-- `polling`
-- `requestVersion`
-- `abortController`
+- captured search root
+- active search flag
+- raw endpoint results
+- endpoint status snapshot
+- current filter criteria:
+  - query
+  - type group
+  - date preset
+  - date from
+  - date to
+- request version / cancellation state
+- polling timer state
+- virtualization state
 
-Persist in browser settings:
+Not currently implemented:
 
-- last selected type group;
-- last date preset;
-- sort key/direction;
-- whether the pane follows the current folder.
+- persisted search settings
+- persisted follow-root behavior
+- persisted sort settings
 
-Do not persist arbitrary query text by default. Search text can expose personal
-intent and is usually cheap to retype.
+## Performance Characteristics
 
-## URL Decisions
+Current implementation is correct functionally, but root-level searches are slow
+because time-to-first-result equals full-tree scan time.
 
-Do not put recursive search state into the main browse URL initially. The search
-pane is secondary bottom-pane state, while the URL should continue to represent
-the current folder listing.
+Observed current behavior from the live trace:
 
-Possible future behavior:
+- Searching `uncontrollable` from Dropbox root on June 7, 2026 took about
+  `6341.94 ms`.
+- The endpoint scanned `6929` cached folders before returning the first
+  response.
+- Similar root searches in the same run also took about `6.2-6.35 s`, which
+  shows the latency is dominated by full cached-tree traversal and row
+  hydration, not by the specific query text.
 
-- Add a copyable search permalink only if users need to share/reopen searches.
-- Store it in hash/query parameters with a distinct namespace such as
-  `search_q`, `search_type`, `search_from`, `search_to`.
+Current root-search cost drivers:
 
-## Performance Decisions
+- scanning every cached folder under the root
+- rebuilding browse-style entry rows for all scanned folders
+- local path matching and file status work during row hydration
+- child folder cache lookups for status labels
 
-Expected first version:
-
-- Fetch cached recursive results as JSON.
-- Filter and sort in the browser.
-- Virtualize the result list once result count crosses the existing browse
-  virtualization threshold.
-- Abort stale requests when the user changes query/filter/root quickly.
-- Debounce text input before fetching.
-
-Recommended debounce:
-
-- 200-300 ms for text input.
-- Immediate fetch for type/date/sort changes.
-
-If result payloads become too large:
-
-- add server-side coarse filters;
-- add result limits and paging;
-- consider a folder-cache-derived search index.
-
-## Accessibility And Keyboard Behavior
-
-Expected keyboard support:
-
-- Focus search input when the file-search pane opens.
-- `Enter` moves focus to results when results exist.
-- Arrow keys move through result rows when the result list is focused.
-- `Escape` clears the query if the search input is focused.
-- Actions remain real buttons or links with accessible labels.
-
-The result list should use table or grid semantics consistent with the existing
-browse table patterns.
-
-## Implementation Plan
-
-### Step 1 - Pane Shell
-
-- Add `file-search` option to the bottom-pane selector.
-- Add `file_search.html` template or inline pane markup in the page shell.
-- Add `assets/css/file-search.css` or a clearly scoped section in `app.css`.
-- Add `assets/js/file-search.js`.
-- Load the script in the shared shell.
-
-### Step 2 - Endpoint Client
-
-- Add a small client API helper around the existing
-  `/browse/endpoints/search`.
-- Fetch on pane activation.
-- Read current browse root from `body.dataset.currentFolderPath`.
-- Abort stale requests.
-- Render status and simple result rows.
-
-### Step 3 - Automatic Polling
-
-- Poll while the endpoint reports incomplete cache state.
-- Stop polling when the pane is hidden.
-- Restart polling on folder navigation when following current folder.
-- Listen for the existing `browse-folder-changed` event in client-render mode.
-- For server-rendered navigation, initialize from the new page body dataset.
-
-### Step 4 - Filters
-
-- Add query, type group, and date range controls.
-- Apply filters locally against the current result snapshot.
-- Debounce text updates.
-- Show partial-vs-complete empty states.
-
-### Step 5 - Result Actions
-
-- Add preview/download links.
-- Add show-containing-folder navigation.
-- Add copy path where available.
-- Preserve existing safe path and source semantics.
-
-### Step 6 - Large Result Handling
-
-- Add virtualization for large result sets.
-- Add tests for filtering and sort order.
-- Add Playwright coverage with a large fixture.
+This feature currently optimizes for complete snapshot correctness, not
+time-to-first-result.
 
 ## Testing
 
+Current test coverage includes:
+
 Python tests:
 
-- endpoint remains cache-only and does not call `rclone`;
-- partial and complete statuses are correct;
-- path traversal is rejected;
-- date/type fields are present and stable enough for the client filters.
+- cache-only search endpoint behavior
+- trace coverage for search endpoint
+- partial and complete cache status behavior
+- path traversal rejection
+- image-only thumbnail fields in search results
 
 JavaScript tests:
 
-- query token matching;
-- type group matching;
-- date range matching;
-- polling stop/start rules;
-- stale request abort/ignore behavior;
-- sort behavior.
+- query token matching
+- type group matching
+- date range matching
+- empty states
+- polling lifecycle
+- stop-search behavior
+- Enter key starts search
+- virtualization rendering
+- browse-link and Dropbox-link result actions
 
-E2E tests:
+Shell/UI tests:
 
-- switch bottom pane to `File Search`;
-- search current folder recursively;
-- verify results update as folder-cache workers complete;
-- filter by image type and date range;
-- open preview/download from a result;
-- navigate to containing folder from a result.
+- page shell includes pane markup and assets
+- HEAD handling for search assets
+
+Not currently implemented:
+
+- browser E2E coverage dedicated to file search
 
 ## Open Decisions
 
-- Should recursive search show only files, or files and folders?
-  Recommended: files only for the pane's primary purpose, with folders only as
-  path context.
-- Should the initial result set show recent files before a query?
-  Recommended: no for v1; require a query or filter to avoid noisy large lists.
-- Should type/date filters be sent to the server?
-  Recommended: client-side first, server-side later if payload size demands it.
-- Should searches follow folder navigation by default?
-  Recommended: yes, with pinned root added later if needed.
-- Should result state live in the URL?
-  Recommended: no for v1; keep the browse URL focused on folder navigation.
-- Should fuzzy matching include typo tolerance?
-  Recommended: not initially. Token matching is predictable and cheaper.
+- Should result rows remain files and folders, or become files-only?
+  Current behavior includes both. No change is planned yet.
+- Should the pane eventually support server-side coarse filters or paging?
+  Likely yes for performance, but not yet implemented.
+- Should file search become incremental or session-based instead of one full
+  snapshot per request?
+  This is now the main performance follow-up for root search.
+
+## Next Steps
+
+Goal: reduce time-to-first-result for root searches from Dropbox root without
+breaking the current cache-only and safe-path behavior.
+
+### Step 1 - Fast Candidate Pass
+
+- Split recursive search into two phases:
+  - cheap candidate matching over cached `direct_items`
+  - row hydration only for matched results
+- Avoid rebuilding browse-style entry rows for folders that produce no matches.
+- Keep text matching based on normalized filename and relative path tokens.
+
+Expected outcome:
+
+- substantially lower first-response time for selective root queries
+- same visible result shape for matched rows
+
+### Step 2 - First-Page Limit
+
+- Add a server-side `limit=<n>` path for search results.
+- Stop scanning once enough matches are found for the first page or first batch.
+- Keep endpoint status fields rich enough for the client to know whether more
+  cached scanning remains.
+
+Expected outcome:
+
+- root searches can return the first visible batch without paying the cost of a
+  complete full-tree scan up front
+
+### Step 3 - Incremental Search Session
+
+- Convert root recursive search from a single full snapshot request into an
+  incremental background search session.
+- Return the first batch as soon as matches are found.
+- Continue scanning and append more results through polling until complete.
+- Reuse existing search-pane polling patterns where possible.
+
+Expected outcome:
+
+- improved time-to-first-result
+- improved perceived responsiveness for root search
+- preserved complete-result behavior after background search settles
+
+### Step 4 - Validate And Instrument
+
+- Add trace fields that distinguish:
+  - candidate-scan time
+  - row-hydration time
+  - first-batch result count
+  - total scanned folders before first response
+- Add regression tests for root-search latency-oriented behavior:
+  - first batch returns before full scan completion
+  - limit handling
+  - incremental polling and final completion
+
+This work should be treated as the next phase of the existing recursive file
+search feature rather than a separate search product.
