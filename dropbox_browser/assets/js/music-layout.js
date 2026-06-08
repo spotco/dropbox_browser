@@ -156,6 +156,7 @@ export function initLayout(ctx) {
   function stopPlaylistColumnResize() {
     if (!activePlaylistColumnDrag) return;
     activePlaylistColumnDrag.handle.classList.remove('dragging');
+    if (document.body) document.body.classList.remove('music-playlist-column-resizing');
     window.removeEventListener('pointermove', activePlaylistColumnDrag.move);
     window.removeEventListener('pointerup', activePlaylistColumnDrag.end);
     window.removeEventListener('pointercancel', activePlaylistColumnDrag.end);
@@ -180,6 +181,7 @@ export function initLayout(ctx) {
       } catch (_error) {}
     }
     handle.classList.add('dragging');
+    if (document.body) document.body.classList.add('music-playlist-column-resizing');
     activePlaylistColumnDrag = {
       handle: handle,
       move: function (moveEv) {
