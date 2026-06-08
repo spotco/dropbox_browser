@@ -791,6 +791,8 @@ export function initPlaylist(ctx) {
 
   function resetShuffleBag() {
     state.shuffleBag = [];
+    state.shuffleSequence = [];
+    state.shuffleCursor = -1;
   }
 
   function shuffleBagIndex() {

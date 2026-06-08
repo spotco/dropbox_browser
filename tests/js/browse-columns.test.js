@@ -167,3 +167,22 @@ test("writeBrowseColumnWidths preserves the provided widths without refitting ot
   assert.equal(typeCol.style.width, "50px");
   assert.equal(statusCol.style.width, "70px");
 });
+
+test("fitColumnWidthsToTotal supports custom column sets and minimum widths", async () => {
+  global.window = {};
+
+  const columns = await importModuleFromWorkspace("dropbox_browser/assets/js/browse/columns.js");
+  const keys = ["filename", "path", "reorder"];
+  const minWidths = {filename: 120, path: 150, reorder: 56};
+  const widths = columns.fitColumnWidthsToTotal(
+    keys,
+    {filename: 220, path: 340, reorder: 56},
+    500,
+    minWidths,
+  );
+
+  assert.equal(widths.filename + widths.path + widths.reorder, 500);
+  assert.ok(widths.filename >= 120);
+  assert.ok(widths.path >= 150);
+  assert.ok(widths.reorder >= 56);
+});

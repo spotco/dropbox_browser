@@ -1,6 +1,22 @@
+import {fitColumnWidthsToTotal, normalizeStoredColumnWidths, resizeColumnPair} from './browse/columns.js';
+
 export function initLayout(ctx) {
   var els = ctx.els;
   var state = ctx.state;
+  var PLAYLIST_COLUMN_KEYS = ['filename', 'path', 'reorder'];
+  var PLAYLIST_COLUMN_MIN_WIDTHS = {
+    filename: 120,
+    path: 150,
+    reorder: 56
+  };
+  var PLAYLIST_COLUMN_GAP_PX = 16;
+  var PLAYLIST_COLUMN_HORIZONTAL_PADDING_PX = 16;
+  var playlistColumnWidths = normalizeStoredColumnWidths(
+    state.defaultPlaylistColumnWidths,
+    PLAYLIST_COLUMN_KEYS,
+    PLAYLIST_COLUMN_MIN_WIDTHS
+  );
+  var activePlaylistColumnDrag = null;
 
   function isVisible() {
     return !ctx.pane.hidden && !ctx.pane.classList.contains('hidden');
@@ -100,6 +116,92 @@ export function initLayout(ctx) {
     ];
   }
 
+  function playlistColumnAvailableWidth() {
+    var tableWidth;
+    if (!els.playlistTableEl) return 0;
+    tableWidth = Math.round(els.playlistTableEl.getBoundingClientRect().width);
+    return Math.max(0, tableWidth - PLAYLIST_COLUMN_GAP_PX - PLAYLIST_COLUMN_HORIZONTAL_PADDING_PX);
+  }
+
+  function applyPlaylistColumnWidths(widths, persist) {
+    var normalized = fitColumnWidthsToTotal(
+      PLAYLIST_COLUMN_KEYS,
+      widths,
+      playlistColumnAvailableWidth(),
+      PLAYLIST_COLUMN_MIN_WIDTHS
+    );
+    var totalWidth = PLAYLIST_COLUMN_KEYS.reduce(function (sum, key) {
+      return sum + normalized[key];
+    }, 0);
+    playlistColumnWidths = normalized;
+    if (els.playlistTableEl) {
+      els.playlistTableEl.style.setProperty(
+        '--music-playlist-grid-columns',
+        normalized.filename + 'px ' + normalized.path + 'px ' + normalized.reorder + 'px'
+      );
+      els.playlistTableEl.style.setProperty(
+        '--music-playlist-grid-min-width',
+        String(totalWidth + PLAYLIST_COLUMN_GAP_PX + PLAYLIST_COLUMN_HORIZONTAL_PADDING_PX) + 'px'
+      );
+    }
+    if (persist !== false) Settings.set(state.playlistColumnWidthSettingKey, normalized);
+    return Object.assign({}, normalized);
+  }
+
+  function refreshPlaylistColumnWidths(persist) {
+    if (!els.playlistTableEl) return {};
+    return applyPlaylistColumnWidths(playlistColumnWidths, persist);
+  }
+
+  function stopPlaylistColumnResize() {
+    if (!activePlaylistColumnDrag) return;
+    activePlaylistColumnDrag.handle.classList.remove('dragging');
+    window.removeEventListener('pointermove', activePlaylistColumnDrag.move);
+    window.removeEventListener('pointerup', activePlaylistColumnDrag.end);
+    window.removeEventListener('pointercancel', activePlaylistColumnDrag.end);
+    Settings.set(state.playlistColumnWidthSettingKey, playlistColumnWidths);
+    activePlaylistColumnDrag = null;
+  }
+
+  function startPlaylistColumnResize(leftKey, ev) {
+    var columnIndex = PLAYLIST_COLUMN_KEYS.indexOf(leftKey);
+    var rightKey = columnIndex >= 0 ? PLAYLIST_COLUMN_KEYS[columnIndex + 1] : '';
+    var handle = ev.currentTarget;
+    var startX = ev.clientX;
+    var startWidths;
+    if (!leftKey || !rightKey || !handle) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    startWidths = Object.assign({}, playlistColumnWidths);
+    stopPlaylistColumnResize();
+    if (typeof handle.setPointerCapture === 'function' && ev.pointerId !== undefined) {
+      try {
+        handle.setPointerCapture(ev.pointerId);
+      } catch (_error) {}
+    }
+    handle.classList.add('dragging');
+    activePlaylistColumnDrag = {
+      handle: handle,
+      move: function (moveEv) {
+        playlistColumnWidths = resizeColumnPair(
+          startWidths,
+          leftKey,
+          rightKey,
+          moveEv.clientX - startX,
+          PLAYLIST_COLUMN_KEYS,
+          PLAYLIST_COLUMN_MIN_WIDTHS
+        );
+        applyPlaylistColumnWidths(playlistColumnWidths, false);
+      },
+      end: function () {
+        stopPlaylistColumnResize();
+      }
+    };
+    window.addEventListener('pointermove', activePlaylistColumnDrag.move);
+    window.addEventListener('pointerup', activePlaylistColumnDrag.end);
+    window.addEventListener('pointercancel', activePlaylistColumnDrag.end);
+  }
+
   function startMusicPaneResize(resizerIndex, ev) {
     if (!musicPaneResizeEnabled()) return;
     ev.preventDefault();
@@ -185,6 +287,7 @@ export function initLayout(ctx) {
   ctx.layoutApi = {
     adjustedMusicPanePixels: adjustedMusicPanePixels,
     applyMusicPanePercents: applyMusicPanePercents,
+    applyPlaylistColumnWidths: applyPlaylistColumnWidths,
     clearPlaybackUiPaintTimer: clearPlaybackUiPaintTimer,
     currentMusicPanePixels: currentMusicPanePixels,
     flushDeferredMusicPaneUpdates: flushDeferredMusicPaneUpdates,
@@ -193,6 +296,7 @@ export function initLayout(ctx) {
     normalizeMusicPanePercents: normalizeMusicPanePercents,
     persistMusicPanePercents: persistMusicPanePercents,
     playbackUiMayPaint: playbackUiMayPaint,
+    refreshPlaylistColumnWidths: refreshPlaylistColumnWidths,
     readSavedMusicPanePercents: readSavedMusicPanePercents,
     resumeLibraryUpdates: resumeLibraryUpdates,
     schedulePlaybackDisplayPaint: schedulePlaybackDisplayPaint,
@@ -209,4 +313,21 @@ export function initLayout(ctx) {
       startMusicPaneResize(1, ev);
     });
   }
+  Array.prototype.forEach.call(
+    document.querySelectorAll('.music-playlist-column-resizer[data-music-playlist-column-resizer]'),
+    function (handle) {
+      handle.addEventListener('pointerdown', function (ev) {
+        startPlaylistColumnResize(handle.getAttribute('data-music-playlist-column-resizer') || '', ev);
+      });
+    }
+  );
+  playlistColumnWidths = normalizeStoredColumnWidths(
+    Settings.get(state.playlistColumnWidthSettingKey, state.defaultPlaylistColumnWidths),
+    PLAYLIST_COLUMN_KEYS,
+    PLAYLIST_COLUMN_MIN_WIDTHS
+  );
+  applyPlaylistColumnWidths(playlistColumnWidths, false);
+  window.addEventListener('resize', function () {
+    refreshPlaylistColumnWidths(false);
+  });
 }

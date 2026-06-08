@@ -96,7 +96,9 @@ function createPlaybackContext(audio, songs, toastMessages, statusMessages) {
     playlist: songs.slice(),
     scrubberDragging: false,
     shuffleBag: [],
+    shuffleCursor: -1,
     shuffleEnabled: false,
+    shuffleSequence: [],
   };
   return {
     pane: {dataset: {}},
@@ -261,6 +263,71 @@ test("initPlayback resets the retry counter after the current song finally loads
     assert.match(statusMessages.at(-1), /Retrying "music\/alpha\.mp3" \(1\/3\)\.\.\./);
   }
   finally {
+    global.Settings = originalSettings;
+    global.window = originalWindow;
+  }
+});
+
+test("initPlayback keeps a stable shuffle order when moving next and previous", async () => {
+  const playbackModule = await importPlaybackModuleFromWorkspace();
+  const audio = createFakeAudio();
+  const toastMessages = [];
+  const statusMessages = [];
+  const ctx = createPlaybackContext(
+    audio,
+    [
+      song("music/alpha.mp3"),
+      song("music/bravo.mp3"),
+      song("music/charlie.mp3"),
+      song("music/delta.mp3"),
+    ],
+    toastMessages,
+    statusMessages,
+  );
+  const originalMathRandom = Math.random;
+  const originalSettings = global.Settings;
+  const originalWindow = global.window;
+
+  ctx.state.shuffleEnabled = true;
+  Math.random = () => 0;
+  global.Settings = {
+    get(_key, fallback) {
+      return fallback;
+    },
+    set() {},
+  };
+  global.window = {
+    clearTimeout() {},
+    setTimeout() {
+      return 1;
+    },
+  };
+
+  try {
+    playbackModule.initPlayback(ctx);
+    ctx.playbackApi.playPlaylistIndex(0);
+    ctx.playbackApi.playNextSong();
+    const firstNextIndex = ctx.state.currentPlaylistIndex;
+    assert.notEqual(firstNextIndex, 0);
+
+    ctx.playbackApi.playNextSong();
+    const secondNextIndex = ctx.state.currentPlaylistIndex;
+    assert.notEqual(secondNextIndex, firstNextIndex);
+
+    ctx.playbackApi.playPreviousSong();
+    assert.equal(ctx.state.currentPlaylistIndex, firstNextIndex);
+
+    ctx.playbackApi.playPreviousSong();
+    assert.equal(ctx.state.currentPlaylistIndex, 0);
+
+    ctx.playbackApi.playNextSong();
+    assert.equal(ctx.state.currentPlaylistIndex, firstNextIndex);
+
+    ctx.playbackApi.playNextSong();
+    assert.equal(ctx.state.currentPlaylistIndex, secondNextIndex);
+  }
+  finally {
+    Math.random = originalMathRandom;
     global.Settings = originalSettings;
     global.window = originalWindow;
   }

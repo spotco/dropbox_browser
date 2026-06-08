@@ -21,6 +21,7 @@ function pythonFilenameCompareKey(value) {
   const result = spawnSync("python", ["-c", script, value], {
     cwd: repoRoot,
     encoding: "utf8",
+    env: {...process.env, PYTHONIOENCODING: "utf-8"},
   });
   assert.equal(result.status, 0, result.stderr || "python filename_compare_key failed");
   return result.stdout;
