@@ -26,6 +26,7 @@ import {PlaylistStore} from './music-playlist-store.js';
       libraryPane: document.getElementById('music-library-pane'),
       libraryPlaylistResizer: document.getElementById('music-resizer-library-playlist'),
       playlistListEl: document.getElementById('music-playlist-list'),
+      playlistTableEl: document.getElementById('music-playlist-table'),
       playlistPane: document.getElementById('music-playlist-pane'),
       playlistPlaybackResizer: document.getElementById('music-resizer-playlist-playback'),
       activePlaylistNameEl: document.getElementById('music-active-playlist-name'),
@@ -117,6 +118,8 @@ import {PlaylistStore} from './music-playlist-store.js';
       playlistSaveToastTimer: null,
       currentPlaylistIndex: -1,
       musicPaneWidthSettingKey: 'music-pane-widths',
+      playlistColumnWidthSettingKey: 'music-playlist-column-widths',
+      defaultPlaylistColumnWidths: {filename: 220, path: 340, reorder: 56},
       musicPaneResizerWidth: 8,
       defaultMusicPanePercents: [35, 38.333333, 26.666667],
       minMusicPaneWidthsPx: [190, 210, 220],
@@ -124,6 +127,8 @@ import {PlaylistStore} from './music-playlist-store.js';
       shuffleEnabled: false,
       loopPlaylist: false,
       shuffleBag: [],
+      shuffleSequence: [],
+      shuffleCursor: -1,
       scrubberDragging: false,
       defaultVolume: 1,
       metadataRequestId: 0,
@@ -220,6 +225,7 @@ import {PlaylistStore} from './music-playlist-store.js';
     syncPlayerStatusBarForPaneMode(ev.detail.mode);
     if (ev.detail.mode === 'music-player') {
       ctx.layoutApi.applyMusicPanePercents(ctx.layoutApi.readSavedMusicPanePercents(), false);
+      ctx.layoutApi.refreshPlaylistColumnWidths(false);
       ctx.layoutApi.flushDeferredMusicPaneUpdates();
       ctx.layoutApi.resumeLibraryUpdates();
       ctx.playbackApi.repaintPlaybackDisplay();
@@ -282,6 +288,7 @@ import {PlaylistStore} from './music-playlist-store.js';
 
   ctx.libraryApi.resetLibraryForCurrentFolder();
   ctx.layoutApi.applyMusicPanePercents(ctx.layoutApi.readSavedMusicPanePercents(), false);
+  ctx.layoutApi.refreshPlaylistColumnWidths(false);
   ctx.playbackApi.resetProgressDisplay();
   ctx.playbackApi.metadata.showUnknownMetadata();
   ctx.playbackApi.restoreVolume();

@@ -45,11 +45,17 @@
         multiple
         hidden
       >
-      <div class="music-playlist-table" role="table" aria-label="Active playlist">
+      <div id="music-playlist-table" class="music-playlist-table" role="table" aria-label="Active playlist">
         <div class="music-playlist-row music-playlist-heading" role="row">
-          <div role="columnheader">Filename</div>
-          <div role="columnheader">Absolute Path</div>
-          <div class="music-playlist-reorder-heading" role="columnheader">Reorder</div>
+          <div class="music-playlist-column-heading" role="columnheader">
+            <span>Filename</span>
+            <button type="button" class="music-playlist-column-resizer" data-music-playlist-column-resizer="filename" aria-label="Resize filename column"></button>
+          </div>
+          <div class="music-playlist-column-heading" role="columnheader">
+            <span>Absolute Path</span>
+            <button type="button" class="music-playlist-column-resizer" data-music-playlist-column-resizer="path" aria-label="Resize absolute path column"></button>
+          </div>
+          <div class="music-playlist-column-heading music-playlist-reorder-heading" role="columnheader"><span>Reorder</span></div>
         </div>
         <div id="music-playlist-list" class="music-playlist-list" role="rowgroup" tabindex="0">
           <div class="music-empty-state">Playlist is empty.</div>

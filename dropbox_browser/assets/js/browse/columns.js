@@ -13,6 +13,16 @@ export var BROWSE_COLUMN_MIN_WIDTHS = {
   sync: DEFAULT_COLUMN_MIN_WIDTH,
 };
 
+function normalizedColumnKeys(keys) {
+  return Array.isArray(keys) && keys.length ? keys.slice() : BROWSE_COLUMN_KEYS.slice();
+}
+
+function minWidthsForConfig(columnMinWidths) {
+  return columnMinWidths && typeof columnMinWidths === 'object'
+    ? columnMinWidths
+    : BROWSE_COLUMN_MIN_WIDTHS;
+}
+
 function readSetting(key, defaultValue) {
   if (!window.Settings || typeof window.Settings.get !== 'function') return defaultValue;
   return window.Settings.get(key, defaultValue);
@@ -23,56 +33,59 @@ function writeSetting(key, value) {
   window.Settings.set(key, value);
 }
 
-export function clampColumnWidth(key, value) {
-  var minWidth = BROWSE_COLUMN_MIN_WIDTHS[key] || DEFAULT_COLUMN_MIN_WIDTH;
+export function clampColumnWidth(key, value, columnMinWidths) {
+  var minWidth = minWidthsForConfig(columnMinWidths)[key] || DEFAULT_COLUMN_MIN_WIDTH;
   var parsed = Number(value);
   if (!isFinite(parsed)) return minWidth;
   return Math.max(minWidth, Math.round(parsed));
 }
 
-export function normalizeStoredColumnWidths(value) {
+export function normalizeStoredColumnWidths(value, columnKeys, columnMinWidths) {
+  var keys = normalizedColumnKeys(columnKeys);
   if (!value || typeof value !== 'object') return {};
   var normalized = {};
-  BROWSE_COLUMN_KEYS.forEach(function (key) {
+  keys.forEach(function (key) {
     if (!Object.prototype.hasOwnProperty.call(value, key)) return;
     var parsed = Number(value[key]);
     if (!isFinite(parsed) || parsed <= 0) return;
-    normalized[key] = clampColumnWidth(key, parsed);
+    normalized[key] = clampColumnWidth(key, parsed, columnMinWidths);
   });
   return normalized;
 }
 
-function minimumTotalWidth(keys) {
+function minimumTotalWidth(keys, columnMinWidths) {
+  var minWidths = minWidthsForConfig(columnMinWidths);
   return keys.reduce(function (sum, key) {
-    return sum + (BROWSE_COLUMN_MIN_WIDTHS[key] || DEFAULT_COLUMN_MIN_WIDTH);
+    return sum + (minWidths[key] || DEFAULT_COLUMN_MIN_WIDTH);
   }, 0);
 }
 
-function distributeExtraWidth(keys, extraWidth) {
+function distributeExtraWidth(keys, extraWidth, columnMinWidths) {
+  var minWidths = minWidthsForConfig(columnMinWidths);
   var base = Math.floor(extraWidth / keys.length);
   var remainder = extraWidth - (base * keys.length);
   var widths = {};
   keys.forEach(function (key, index) {
-    widths[key] = (BROWSE_COLUMN_MIN_WIDTHS[key] || DEFAULT_COLUMN_MIN_WIDTH) + base + (index < remainder ? 1 : 0);
+    widths[key] = (minWidths[key] || DEFAULT_COLUMN_MIN_WIDTH) + base + (index < remainder ? 1 : 0);
   });
   return widths;
 }
 
-export function fitColumnWidthsToTotal(keys, widths, totalWidth) {
-  var columnKeys = Array.isArray(keys) && keys.length ? keys.slice() : BROWSE_COLUMN_KEYS.slice();
-  var total = Math.max(Math.round(Number(totalWidth) || 0), minimumTotalWidth(columnKeys));
-  var normalizedInput = normalizeStoredColumnWidths(widths);
+export function fitColumnWidthsToTotal(keys, widths, totalWidth, columnMinWidths) {
+  var columnKeys = normalizedColumnKeys(keys);
+  var total = Math.max(Math.round(Number(totalWidth) || 0), minimumTotalWidth(columnKeys, columnMinWidths));
+  var normalizedInput = normalizeStoredColumnWidths(widths, columnKeys, columnMinWidths);
   var allPresent = columnKeys.every(function (key) {
     return typeof normalizedInput[key] === 'number';
   });
   if (!allPresent) {
-    return distributeExtraWidth(columnKeys, total - minimumTotalWidth(columnKeys));
+    return distributeExtraWidth(columnKeys, total - minimumTotalWidth(columnKeys, columnMinWidths), columnMinWidths);
   }
   var rawTotal = columnKeys.reduce(function (sum, key) {
     return sum + normalizedInput[key];
   }, 0);
   if (rawTotal <= 0) {
-    return distributeExtraWidth(columnKeys, total - minimumTotalWidth(columnKeys));
+    return distributeExtraWidth(columnKeys, total - minimumTotalWidth(columnKeys, columnMinWidths), columnMinWidths);
   }
   var scaled = {};
   var assigned = 0;
@@ -80,7 +93,7 @@ export function fitColumnWidthsToTotal(keys, widths, totalWidth) {
     var target = index === columnKeys.length - 1
       ? total - assigned
       : Math.round((normalizedInput[key] / rawTotal) * total);
-    scaled[key] = clampColumnWidth(key, target);
+    scaled[key] = clampColumnWidth(key, target, columnMinWidths);
     assigned += scaled[key];
   });
   var delta = total - columnKeys.reduce(function (sum, key) {
@@ -89,7 +102,7 @@ export function fitColumnWidthsToTotal(keys, widths, totalWidth) {
   if (delta !== 0) {
     var adjustableKeys = delta > 0 ? columnKeys.slice() : columnKeys.slice().reverse();
     adjustableKeys.some(function (key) {
-      var minWidth = BROWSE_COLUMN_MIN_WIDTHS[key] || DEFAULT_COLUMN_MIN_WIDTH;
+      var minWidth = minWidthsForConfig(columnMinWidths)[key] || DEFAULT_COLUMN_MIN_WIDTH;
       if (delta < 0 && scaled[key] + delta < minWidth) {
         var reduction = scaled[key] - minWidth;
         if (reduction <= 0) return false;
@@ -105,13 +118,14 @@ export function fitColumnWidthsToTotal(keys, widths, totalWidth) {
   return scaled;
 }
 
-export function resizeColumnPair(widths, leftKey, rightKey, delta) {
-  var normalized = normalizeStoredColumnWidths(widths);
+export function resizeColumnPair(widths, leftKey, rightKey, delta, columnKeys, columnMinWidths) {
+  var normalized = normalizeStoredColumnWidths(widths, columnKeys, columnMinWidths);
   var leftWidth = normalized[leftKey];
   var rightWidth = normalized[rightKey];
   if (!leftWidth || !rightWidth) return normalized;
-  var leftMin = BROWSE_COLUMN_MIN_WIDTHS[leftKey] || DEFAULT_COLUMN_MIN_WIDTH;
-  var rightMin = BROWSE_COLUMN_MIN_WIDTHS[rightKey] || DEFAULT_COLUMN_MIN_WIDTH;
+  var minWidths = minWidthsForConfig(columnMinWidths);
+  var leftMin = minWidths[leftKey] || DEFAULT_COLUMN_MIN_WIDTH;
+  var rightMin = minWidths[rightKey] || DEFAULT_COLUMN_MIN_WIDTH;
   var pairTotal = leftWidth + rightWidth;
   var nextLeft = Math.min(Math.max(leftWidth + Math.round(Number(delta) || 0), leftMin), pairTotal - rightMin);
   var nextRight = pairTotal - nextLeft;
