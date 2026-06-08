@@ -650,10 +650,12 @@
   align-items: center;
   display: flex;
   min-width: 0;
+  padding-right: 8px;
   position: relative;
 }
 
 .music-playlist-column-heading > span {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -672,44 +674,59 @@
   overflow: visible;
 }
 
-.music-playlist-column-resizer {
-  align-self: stretch;
+#music-player-pane .music-playlist-column-resizer {
+  appearance: none;
   background: transparent;
   border: 0;
   border-radius: 0;
+  bottom: 0;
+  box-shadow: none;
   cursor: col-resize;
-  margin: -5px -8px -5px 8px;
-  min-height: 100%;
-  min-width: 12px;
+  font-size: 0;
+  line-height: 0;
+  margin: 0;
+  min-height: 0;
   padding: 0;
-  position: relative;
+  position: absolute;
+  right: 0;
+  top: 0;
   touch-action: none;
+  width: 14px;
+  z-index: 2;
 }
 
-.music-playlist-column-resizer::before {
-  background: #5f90b7;
+#music-player-pane .music-playlist-column-resizer::before {
+  background: #8fb4d4;
+  box-shadow: 0 0 0 1px rgba(10, 18, 30, 0.35);
   border-radius: 999px;
   content: "";
-  height: calc(100% - 10px);
-  left: 50%;
-  opacity: 0.35;
+  bottom: 4px;
+  opacity: 0.78;
   position: absolute;
-  top: 5px;
-  transform: translateX(-50%);
+  right: 0;
+  top: 4px;
   width: 2px;
 }
 
-.music-playlist-column-resizer:hover,
-.music-playlist-column-resizer:focus-visible,
-.music-playlist-column-resizer.dragging {
-  background: rgba(120, 174, 224, 0.08);
+#music-player-pane .music-playlist-column-resizer:hover,
+#music-player-pane .music-playlist-column-resizer:focus-visible,
+#music-player-pane .music-playlist-column-resizer.dragging {
+  background: transparent;
   border: 0;
+  box-shadow: none;
+  outline: 0;
 }
 
-.music-playlist-column-resizer:hover::before,
-.music-playlist-column-resizer:focus-visible::before,
-.music-playlist-column-resizer.dragging::before {
-  opacity: 0.85;
+#music-player-pane .music-playlist-column-resizer:hover::before,
+#music-player-pane .music-playlist-column-resizer:focus-visible::before,
+#music-player-pane .music-playlist-column-resizer.dragging::before {
+  background: #78aee0;
+  opacity: 1;
+}
+
+body.music-playlist-column-resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .music-playlist-drag-handle {
