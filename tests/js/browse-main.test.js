@@ -38,3 +38,16 @@ test("browse main module loads without throwing when startup is inactive", async
     await importModuleFromWorkspace("dropbox_browser/assets/js/browse/main.js");
   });
 });
+
+test("browse state carries reveal through state creation", async () => {
+  const stateModule = await importModuleFromWorkspace("dropbox_browser/assets/js/browse/state.js");
+  const state = stateModule.createBrowseState({
+    path: "music/album",
+    reveal: "music/album/track.mp3",
+    sort: "name",
+    dir: "asc",
+  });
+
+  assert.equal(state.path, "music/album");
+  assert.equal(state.reveal, "music/album/track.mp3");
+});

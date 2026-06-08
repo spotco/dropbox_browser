@@ -20,8 +20,22 @@ test("readBrowseHref parses only same-origin browse URLs", async () => {
 
   assert.deepEqual(navigation.readBrowseHref("/?path=music&sort=date&dir=desc"), {
     path: "music",
+    reveal: "",
     sort: "date",
     dir: "desc",
+    refresh: false,
+    filters: {
+      query: "",
+      kind: "all",
+      status: "all",
+      type: "all",
+    },
+  });
+  assert.deepEqual(navigation.readBrowseHref("/?path=music&reveal=music%2Fsong.mp3"), {
+    path: "music",
+    reveal: "music/song.mp3",
+    sort: "name",
+    dir: "asc",
     refresh: false,
     filters: {
       query: "",

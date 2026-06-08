@@ -68,6 +68,8 @@ test("renderBrowseRowsBody renders canonical folder and file row markup", async 
   ]);
 
   assert.match(html, /data-folder-path="folder"/);
+  assert.match(html, /data-row-path="folder"/);
+  assert.match(html, /data-row-path="remote-only\.txt"/);
   assert.match(html, /data-sync-path="remote-only\.txt"/);
   assert.match(html, /href="\/\?path=folder" title="folder"/);
   assert.match(html, /href="\/file\?path=remote-only\.txt&amp;source=remote"/);

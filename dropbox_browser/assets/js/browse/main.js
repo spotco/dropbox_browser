@@ -189,6 +189,7 @@ function updateSortControls(state) {
 function currentBrowsePageHref(state) {
   return buildBrowsePageHref({
     path: state.path,
+    reveal: state.reveal,
     sort: state.sort,
     dir: state.dir,
     filters: getEffectiveBrowseFilters(state),
@@ -412,6 +413,8 @@ function initBrowse() {
   var stopFolderPolling = function () {};
   var virtualState = createVirtualState();
   var scrollFrameRequested = false;
+  var revealFrameRequested = false;
+  var revealAttemptCount = 0;
   var filterUrlTimer = null;
   var FILTER_URL_DEBOUNCE_MS = 300;
   var previewHideTimer = null;
@@ -424,6 +427,13 @@ function initBrowse() {
   state.filterBarVisible = initialFilterState.visible;
   body.dataset.browseScrollPreview = 'hidden';
   body.dataset.browseScrollPreviewIndex = '';
+
+  function logRevealDebug(level, message, extra) {
+    var consoleLevel = level === 'debug' ? 'log' : level;
+    if (!window.console || typeof window.console[consoleLevel] !== 'function') return;
+    var details = extra || {};
+    window.console[consoleLevel]('[browse-reveal] ' + message, details);
+  }
 
   function scrollPageToTop() {
     if (pageScrollEl && pageScrollEl.scrollHeight > pageScrollEl.clientHeight) {
@@ -519,6 +529,7 @@ function initBrowse() {
     if (nextOptions.force) resetVirtualMeasurement(virtualState);
     renderRows(mount, state, virtualState, nextOptions);
     thumbnailLoader.refresh();
+    if (state.reveal) scheduleRevealAttempt();
     if (!virtualState.enabled) {
       hideScrollPreview();
       return;
@@ -526,6 +537,145 @@ function initBrowse() {
     if (body.dataset.browseScrollPreview === 'visible') {
       updateScrollPreview({persistent: previewScrollbarDragActive});
     }
+  }
+
+  function consumeRevealTarget() {
+    if (!state.reveal) return;
+    logRevealDebug('debug', 'consume reveal target', {
+      path: state.path,
+      reveal: state.reveal,
+      attempts: revealAttemptCount,
+    });
+    revealAttemptCount = 0;
+    revealFrameRequested = false;
+    state.reveal = '';
+    window.history.replaceState({}, '', currentBrowsePageHref(state));
+  }
+
+  function findMountedRowByPath(relPath) {
+    if (!mount || typeof mount.querySelectorAll !== 'function' || !relPath) return null;
+    var rows = mount.querySelectorAll('tr[data-row-path]');
+    for (var index = 0; index < rows.length; index += 1) {
+      var row = rows[index];
+      if (!row) continue;
+      var rowPath = row.dataset && typeof row.dataset.rowPath === 'string'
+        ? row.dataset.rowPath
+        : row.getAttribute('data-row-path');
+      if (rowPath === relPath) return row;
+    }
+    return null;
+  }
+
+  function setBrowseScrollTop(value) {
+    var nextValue = Math.max(0, Number(value) || 0);
+    logRevealDebug('debug', 'set scroll top', {
+      nextValue: nextValue,
+      usingMainScroller: !!(pageScrollEl && pageScrollEl.scrollHeight > pageScrollEl.clientHeight),
+      mainScrollTop: pageScrollEl ? pageScrollEl.scrollTop : null,
+      windowScrollY: typeof window.scrollY === 'number' ? window.scrollY : null,
+    });
+    if (pageScrollEl && pageScrollEl.scrollHeight > pageScrollEl.clientHeight) {
+      pageScrollEl.scrollTop = nextValue;
+      return;
+    }
+    window.scrollTo(0, nextValue);
+  }
+
+  function scrollVirtualRowIntoViewport(rowIndex) {
+    var tableRect = mount.getBoundingClientRect();
+    var targetOffset = rowIndex * virtualState.rowHeight;
+    logRevealDebug('debug', 'scroll virtual row into viewport', {
+      rowIndex: rowIndex,
+      rowHeight: virtualState.rowHeight,
+      targetOffset: targetOffset,
+      tableRectTop: tableRect.top,
+      tableRectHeight: tableRect.height,
+      mainClientHeight: pageScrollEl ? pageScrollEl.clientHeight : null,
+      mainScrollHeight: pageScrollEl ? pageScrollEl.scrollHeight : null,
+      mainScrollTop: pageScrollEl ? pageScrollEl.scrollTop : null,
+      windowInnerHeight: window.innerHeight || null,
+      windowScrollY: typeof window.scrollY === 'number' ? window.scrollY : null,
+    });
+    if (pageScrollEl && pageScrollEl.scrollHeight > pageScrollEl.clientHeight) {
+      var parentRect = pageScrollEl.getBoundingClientRect();
+      var tableTop = tableRect.top - parentRect.top + pageScrollEl.scrollTop;
+      var centeredTop = tableTop + targetOffset - Math.max(0, (pageScrollEl.clientHeight - virtualState.rowHeight) / 2);
+      setBrowseScrollTop(centeredTop);
+      return;
+    }
+    var windowHeight = window.innerHeight || virtualState.rowHeight;
+    var absoluteTableTop = tableRect.top + window.scrollY;
+    var targetTop = absoluteTableTop + targetOffset - Math.max(0, (windowHeight - virtualState.rowHeight) / 2);
+    setBrowseScrollTop(targetTop);
+  }
+
+  function attemptRevealBrowsePath(relPath) {
+    if (!relPath) return true;
+    var rows = getSortedFilteredRows(state);
+    var rowIndex = rows.findIndex(function (row) {
+      return row && row.path === relPath;
+    });
+    logRevealDebug('debug', 'attempt reveal browse path', {
+      browsePath: state.path,
+      reveal: relPath,
+      rowIndex: rowIndex,
+      rowCount: rows.length,
+      virtualEnabled: virtualState.enabled,
+      virtualWindowKey: virtualState.windowKey,
+      filteredRowCount: body.dataset.browseFilteredRowCount || null,
+      renderCount: body.dataset.browseRenderCount || null,
+      visibleRange: body.dataset.browseVisibleRange || null,
+      currentUrl: window.location.href,
+    });
+    if (rowIndex < 0) {
+      logRevealDebug('warn', 'reveal target row not found in loaded rows', {
+        browsePath: state.path,
+        reveal: relPath,
+        rowCount: rows.length,
+      });
+      consumeRevealTarget();
+      return true;
+    }
+    var mountedRow = findMountedRowByPath(relPath);
+    logRevealDebug('debug', 'mounted row lookup', {
+      reveal: relPath,
+      mounted: !!mountedRow,
+    });
+    if (mountedRow && typeof mountedRow.scrollIntoView === 'function') {
+      logRevealDebug('debug', 'scroll mounted row into view', {
+        reveal: relPath,
+      });
+      mountedRow.scrollIntoView({block: 'nearest'});
+      consumeRevealTarget();
+      return true;
+    }
+    if (virtualState.enabled) {
+      scrollVirtualRowIntoViewport(rowIndex);
+      renderAndRefresh({force: false});
+      return false;
+    }
+    return false;
+  }
+
+  function scheduleRevealAttempt() {
+    if (!state.reveal || revealFrameRequested) return;
+    logRevealDebug('debug', 'schedule reveal attempt', {
+      reveal: state.reveal,
+      attemptCount: revealAttemptCount,
+      currentUrl: window.location.href,
+    });
+    revealFrameRequested = true;
+    window.requestAnimationFrame(function () {
+      revealFrameRequested = false;
+      if (!state.reveal) return;
+      revealAttemptCount += 1;
+      if (attemptRevealBrowsePath(state.reveal)) return;
+      if (revealAttemptCount < 8) {
+        scheduleRevealAttempt();
+        return;
+      }
+      consumeRevealTarget();
+    });
   }
 
   function isScrollbarGesture(event) {
@@ -584,6 +734,7 @@ function initBrowse() {
     if (nextState) {
       var filterState = resolveBrowseFilterState(nextState.path, nextState.filters || state.filters);
       state.path = nextState.path;
+      state.reveal = nextState.reveal || '';
       state.sort = nextState.sort;
       state.dir = nextState.dir;
       state.filters = filterState.filters;
@@ -598,6 +749,7 @@ function initBrowse() {
   function loadBrowseState(nextState, options) {
     var normalized = {
       path: nextState.path,
+      reveal: nextState.reveal || '',
       sort: nextState.sort,
       dir: nextState.dir,
       refresh: !!nextState.refresh,
@@ -606,6 +758,13 @@ function initBrowse() {
     var historyMode = options && options.history ? options.history : 'none';
     var scrollToTop = !options || options.scroll !== false;
     var version = requestVersion + 1;
+    logRevealDebug('debug', 'load browse state', {
+      nextPath: normalized.path,
+      nextReveal: normalized.reveal || '',
+      historyMode: historyMode,
+      scrollToTop: scrollToTop,
+      currentUrl: window.location.href,
+    });
     requestVersion = version;
     var previousPath = state.path;
     stopActiveWork();
@@ -624,6 +783,7 @@ function initBrowse() {
         currentController = null;
         stopFolderPolling = renderSnapshot(mount, state, payload, virtualState, function () {
           thumbnailLoader.refresh();
+          if (state.reveal) scheduleRevealAttempt();
           if (!virtualState.enabled) {
             hideScrollPreview();
             return;
@@ -636,7 +796,8 @@ function initBrowse() {
         });
         body.dataset.browseClient = 'ready';
         notifyBrowseFolderChanged(previousPath, state.path);
-        if (scrollToTop) scrollPageToTop();
+        if (state.reveal) scheduleRevealAttempt();
+        else if (scrollToTop) scrollPageToTop();
         var href = currentBrowsePageHref(state);
         if (historyMode === 'push') {
           window.history.pushState({}, '', href);
