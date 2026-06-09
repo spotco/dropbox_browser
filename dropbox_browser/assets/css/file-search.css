@@ -102,6 +102,19 @@
   color: #73859a;
 }
 
+#file-search-date-from:disabled,
+#file-search-date-to:disabled {
+  background: #0d131c;
+  border-color: #2a3544;
+  color: #5a6b7d;
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
+.file-search-date-field:has(input:disabled) span {
+  color: #5a6b7d;
+}
+
 #file-search-query:focus-visible,
 .file-search-field select:focus-visible,
 .file-search-field input[type="date"]:focus-visible,

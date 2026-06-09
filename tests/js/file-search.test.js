@@ -304,6 +304,36 @@ test("shouldPollFileSearchStatus follows partial cache status rules", async () =
   assert.equal(mod.shouldPollFileSearchStatus({complete: false, pending: false, missing_listing_count: 0}), false);
 });
 
+test("initFileSearch disables date inputs unless the preset is custom", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/file-search.js");
+  const dom = buildFakeDom({datePreset: "any"});
+  mod.initFileSearch({
+    document: dom.document,
+    window: dom.window,
+    fetchImpl() {
+      return Promise.resolve({ok: true, json() { return Promise.resolve({}); }});
+    },
+  });
+
+  const preset = dom.elements.get("file-search-date-preset");
+  const dateFrom = dom.elements.get("file-search-date-from");
+  const dateTo = dom.elements.get("file-search-date-to");
+  assert.equal(dateFrom.disabled, true);
+  assert.equal(dateTo.disabled, true);
+
+  preset.value = "this-year";
+  preset.dispatchEvent({type: "change"});
+  assert.equal(dateFrom.disabled, true);
+  assert.equal(dateTo.disabled, true);
+  assert.match(dateFrom.value, /^\d{4}-01-01$/);
+  assert.match(dateTo.value, /^\d{4}-12-31$/);
+
+  preset.value = "custom";
+  preset.dispatchEvent({type: "change"});
+  assert.equal(dateFrom.disabled, false);
+  assert.equal(dateTo.disabled, false);
+});
+
 test("initFileSearch starts searching only after Search is pressed and uses the current folder as root", async () => {
   const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/file-search.js");
   const dom = buildFakeDom({
