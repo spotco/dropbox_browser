@@ -179,7 +179,7 @@ button {
 }
 .browse-table-shell {
   overflow-anchor: none;
-  overflow-x: auto;
+  overflow-x: hidden;
 }
 table {
   width: 100%;
@@ -191,6 +191,9 @@ table {
   min-width: 1040px;
   table-layout: fixed;
   width: 100%;
+}
+.browse-table tbody tr {
+  height: 48px;
 }
 th, td {
   border-bottom: 1px solid #e7ebef;
@@ -264,7 +267,7 @@ th {
   max-width: 100%;
   gap: 8px;
   font-weight: 600;
-  min-height: 44px;
+  min-height: 48px;
   min-width: 0;
 }
 .file-icon-slot {
@@ -311,12 +314,20 @@ th {
 .browse-table th {
   overflow: hidden;
   line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .status {
   border-radius: 999px;
+  box-sizing: border-box;
   display: inline-block;
   font-size: 12px;
+  max-width: 100%;
+  overflow: hidden;
   padding: 3px 8px;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  white-space: nowrap;
 }
 .status.both {
   background: #e7f5ec;
@@ -415,6 +426,25 @@ button:disabled {
 }
 .browse-scroll-preview.hidden {
   display: none;
+}
+.browse-horizontal-scrollbar {
+  background: #f7f7f4;
+  bottom: 0;
+  box-sizing: border-box;
+  height: 18px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  position: fixed;
+  z-index: 90;
+}
+body.has-log-panel .browse-horizontal-scrollbar {
+  bottom: var(--log-panel-height);
+}
+.browse-horizontal-scrollbar.hidden {
+  display: none;
+}
+.browse-horizontal-scrollbar-spacer {
+  height: 1px;
 }
 .browse-image-hover-preview {
   align-items: center;

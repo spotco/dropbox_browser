@@ -31,8 +31,13 @@ test("client-render keeps virtualized browse rows single-line for long filenames
   expect(firstBox).not.toBeNull();
   expect(secondBox).not.toBeNull();
   expect(thirdBox).not.toBeNull();
+  expect(Math.round(firstBox.height)).toBe(49);
   expect(firstBox.height).toBe(secondBox.height);
   expect(secondBox.height).toBe(thirdBox.height);
+
+  for (const selector of [".status", ".col-size", ".col-date"]) {
+    await expect(rows.nth(0).locator(selector)).toHaveCSS("white-space", "nowrap");
+  }
 
   const firstLink = rows.nth(0).locator("a.name");
   await expect(firstLink).toHaveAttribute(
