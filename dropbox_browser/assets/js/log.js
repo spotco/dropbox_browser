@@ -5,6 +5,7 @@
   var grip = document.getElementById('log-grip');
   var defaultHeight = 240;
   var minHeight = 42;
+  var currentHeight = defaultHeight;
 
   function scrollLogToBottom() {
     entries.scrollTop = entries.scrollHeight;
@@ -22,6 +23,7 @@
 
   function applyHeight(height) {
     var clamped = clampHeight(height);
+    currentHeight = clamped;
     document.documentElement.style.setProperty('--log-panel-height', clamped + 'px');
     Settings.set('log-height', clamped);
     return clamped;
@@ -36,9 +38,8 @@
   }
 
   function ensureMusicPaneHeight() {
-    var current = panel.getBoundingClientRect().height;
     var target = clampHeight(musicMinHeight());
-    if (current < target) applyHeight(target);
+    if (currentHeight < target) applyHeight(target);
   }
 
   applyHeight(Settings.get('log-height', defaultHeight));
@@ -46,7 +47,7 @@
   function startResize(ev) {
     ev.preventDefault();
     var startY = ev.clientY;
-    var startHeight = panel.getBoundingClientRect().height;
+    var startHeight = currentHeight;
     resizer.classList.add('dragging');
 
     function move(moveEv) {
@@ -68,7 +69,7 @@
 
   resizer.addEventListener('pointerdown', startResize);
   grip.addEventListener('pointerdown', startResize);
-  window.addEventListener('resize', function () { applyHeight(panel.getBoundingClientRect().height); });
+  window.addEventListener('resize', function () { applyHeight(currentHeight); });
   window.addEventListener('bottom-pane-mode-changed', function (ev) {
     if (!ev.detail) return;
     if (ev.detail.mode === 'music-player') ensureMusicPaneHeight();

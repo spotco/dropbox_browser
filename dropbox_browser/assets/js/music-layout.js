@@ -118,7 +118,12 @@ export function initLayout(ctx) {
 
   function playlistColumnAvailableWidth() {
     var tableWidth;
+    var listWidth;
     if (!els.playlistTableEl) return 0;
+    listWidth = els.playlistListEl ? Math.round(els.playlistListEl.clientWidth) : 0;
+    if (listWidth > 0) {
+      return Math.max(0, listWidth - PLAYLIST_COLUMN_GAP_PX - PLAYLIST_COLUMN_HORIZONTAL_PADDING_PX);
+    }
     tableWidth = Math.round(els.playlistTableEl.getBoundingClientRect().width);
     return Math.max(0, tableWidth - PLAYLIST_COLUMN_GAP_PX - PLAYLIST_COLUMN_HORIZONTAL_PADDING_PX);
   }
