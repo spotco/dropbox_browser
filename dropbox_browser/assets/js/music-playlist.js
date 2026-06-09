@@ -174,6 +174,17 @@ export function normalizePlaylistLoadSort(savedSort) {
   };
 }
 
+export function normalizePlaylistLoadFilter(filterText) {
+  return String(filterText || '').trim();
+}
+
+export function playlistMatchesLoadFilter(playlist, filterText) {
+  var normalizedFilter = normalizePlaylistLoadFilter(filterText).toLocaleLowerCase();
+  var playlistName = playlist && playlist.name ? playlist.name : '';
+  if (!normalizedFilter) return true;
+  return String(playlistName).toLocaleLowerCase().indexOf(normalizedFilter) !== -1;
+}
+
 export function initPlaylist(ctx) {
   var els = ctx.els;
   var state = ctx.state;
@@ -331,6 +342,26 @@ export function initPlaylist(ctx) {
     state.playlistLoadSortDirection = restored.direction;
   }
 
+  function persistPlaylistLoadFilter() {
+    Settings.set(state.playlistLoadFilterSettingKey, normalizePlaylistLoadFilter(state.playlistLoadFilterText));
+  }
+
+  function restorePlaylistLoadFilter() {
+    state.playlistLoadFilterText = normalizePlaylistLoadFilter(
+      Settings.get(state.playlistLoadFilterSettingKey, state.playlistLoadFilterText)
+    );
+    if (els.playlistLoadFilterInput) els.playlistLoadFilterInput.value = state.playlistLoadFilterText;
+  }
+
+  function filteredPlaylistLoadItems() {
+    return state.playlistStore.listPersistedPlaylists(
+      state.playlistLoadSortKey,
+      state.playlistLoadSortDirection
+    ).filter(function (playlist) {
+      return playlistMatchesLoadFilter(playlist, state.playlistLoadFilterText);
+    });
+  }
+
   function updatePlaylistLoadSortButtons() {
     if (!els.playlistLoadSortButtons) return;
     Array.prototype.forEach.call(els.playlistLoadSortButtons, function (button) {
@@ -342,14 +373,21 @@ export function initPlaylist(ctx) {
   }
 
   function renderPlaylistLoadList() {
+    var visiblePlaylists;
+    var visiblePlaylistNames;
     if (!els.playlistLoadListEl) return;
     updatePlaylistLoadSortButtons();
+    if (els.playlistLoadFilterInput && els.playlistLoadFilterInput.value !== state.playlistLoadFilterText) {
+      els.playlistLoadFilterInput.value = state.playlistLoadFilterText;
+    }
     els.playlistLoadListEl.textContent = '';
+    visiblePlaylists = filteredPlaylistLoadItems();
+    visiblePlaylistNames = visiblePlaylists.map(function (playlist) { return playlist.name; });
     if (!selectedPersistedPlaylist()) {
       state.selectedPersistedPlaylistName = preferredPlaylistLoadSelection(
         activePlaylistName(),
         state.activePlaylistSavedName,
-        state.persistedPlaylists.map(function (playlist) { return playlist.name; })
+        visiblePlaylistNames
       );
     }
     if (!state.persistedPlaylists.length) {
@@ -360,10 +398,27 @@ export function initPlaylist(ctx) {
       if (els.playlistLoadConfirmButton) els.playlistLoadConfirmButton.disabled = true;
       return;
     }
-    state.playlistStore.listPersistedPlaylists(state.playlistLoadSortKey, state.playlistLoadSortDirection).forEach(function (playlist) {
+    if (visiblePlaylistNames.indexOf(state.selectedPersistedPlaylistName) === -1) {
+      state.selectedPersistedPlaylistName = preferredPlaylistLoadSelection(
+        activePlaylistName(),
+        state.activePlaylistSavedName,
+        visiblePlaylistNames
+      );
+    }
+    if (!visiblePlaylists.length) {
+      var noMatches = document.createElement('div');
+      noMatches.className = 'music-empty-state';
+      noMatches.textContent = 'No playlists match your search.';
+      els.playlistLoadListEl.appendChild(noMatches);
+      if (els.playlistLoadConfirmButton) els.playlistLoadConfirmButton.disabled = true;
+      return;
+    }
+    visiblePlaylists.forEach(function (playlist) {
       var row = document.createElement('div');
       var nameCell = document.createElement('div');
       var modifiedCell = document.createElement('div');
+      var songCountCell = document.createElement('div');
+      var songCount = Array.isArray(playlist.songs) ? playlist.songs.length : 0;
       var isSelected = state.selectedPersistedPlaylistName === playlist.name;
       row.className = 'music-playlist-row music-playlist-entry music-playlist-load-entry';
       row.setAttribute('role', 'row');
@@ -374,8 +429,12 @@ export function initPlaylist(ctx) {
       nameCell.textContent = playlist.name;
       modifiedCell.setAttribute('role', 'cell');
       modifiedCell.textContent = formatShortDateTime(playlist.last_modified);
+      songCountCell.className = 'music-playlist-load-song-count';
+      songCountCell.setAttribute('role', 'cell');
+      songCountCell.textContent = String(songCount) + ' song' + (songCount === 1 ? '' : 's');
       row.appendChild(nameCell);
       row.appendChild(modifiedCell);
+      row.appendChild(songCountCell);
       row.addEventListener('click', function () {
         state.selectedPersistedPlaylistName = playlist.name;
         renderPlaylistLoadList();
@@ -394,13 +453,19 @@ export function initPlaylist(ctx) {
   }
 
   function openLoadDialog() {
+    var visiblePlaylistNames = filteredPlaylistLoadItems().map(function (playlist) { return playlist.name; });
     state.selectedPersistedPlaylistName = preferredPlaylistLoadSelection(
       activePlaylistName(),
       state.activePlaylistSavedName,
-      state.persistedPlaylists.map(function (playlist) { return playlist.name; })
+      visiblePlaylistNames
     );
     renderPlaylistLoadList();
     setPlaylistModalVisible(els.playlistLoadDialog, true);
+    if (els.playlistLoadFilterInput && typeof els.playlistLoadFilterInput.focus === 'function') {
+      window.setTimeout(function () {
+        els.playlistLoadFilterInput.focus();
+      }, 0);
+    }
   }
 
   function openRenameDialog(mode) {
@@ -1339,6 +1404,7 @@ export function initPlaylist(ctx) {
   };
 
   restorePlaylistLoadSort();
+  restorePlaylistLoadFilter();
   state.activePlaylistSavedSignature = activePlaylistSignature();
   syncActivePlaylistDirtyState();
   if (els.activePlaylistNameEl) updateActivePlaylistName();
@@ -1416,6 +1482,23 @@ export function initPlaylist(ctx) {
   if (els.playlistLoadNewButton) {
     els.playlistLoadNewButton.addEventListener('click', function () {
       confirmLoadNewPlaylist();
+    });
+  }
+  if (els.playlistLoadFilterInput) {
+    els.playlistLoadFilterInput.addEventListener('input', function () {
+      state.playlistLoadFilterText = normalizePlaylistLoadFilter(els.playlistLoadFilterInput.value);
+      persistPlaylistLoadFilter();
+      renderPlaylistLoadList();
+    });
+    els.playlistLoadFilterInput.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        confirmLoadPlaylist();
+      }
+      if (ev.key === 'Escape') {
+        ev.preventDefault();
+        closeLoadDialog();
+      }
     });
   }
   if (els.playlistLoadSortButtons) {
