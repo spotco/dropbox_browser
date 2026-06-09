@@ -179,7 +179,7 @@ button {
 }
 .browse-table-shell {
   overflow-anchor: none;
-  overflow-x: hidden;
+  overflow-x: auto;
 }
 table {
   width: 100%;
@@ -188,6 +188,7 @@ table {
   border: 1px solid #d8dde3;
 }
 .browse-table {
+  min-width: 1040px;
   table-layout: fixed;
   width: 100%;
 }
@@ -697,6 +698,7 @@ button:disabled {
 #log-panel {
   background: #1a1f2e;
   border-top: 2px solid #3a4a5e;
+  box-sizing: border-box;
   color: #c8d0db;
   display: flex;
   flex-direction: column;
