@@ -1,6 +1,7 @@
 import {buildBrowseListingEndpoint, buildBrowsePageHref} from './api.js';
 import {initBrowseColumnResizing} from './columns.js';
 import {startFolderInfoPolling} from './folder-info.js';
+import {initBrowseHorizontalScrollbar} from './horizontal-scrollbar.js';
 import {initImageHoverPreview} from './image-hover-preview.js';
 import {readBrowseHref, readBrowseLocation, shouldInterceptBrowseLink} from './navigation.js';
 import {emptyRowHtml, errorRowHtml, loadingRowHtml, renderBreadcrumbs, renderBrowseRowsBody, renderVirtualBrowseRowsBody} from './render.js';
@@ -399,6 +400,12 @@ function initBrowse() {
   initBrowseColumnResizing({document: document, window: window});
   initImageHoverPreview({document: document, window: window, root: mount});
   var thumbnailLoader = initBrowseThumbnails({document: document, window: window, root: mount});
+  var horizontalScrollbar = initBrowseHorizontalScrollbar({
+    document: document,
+    window: window,
+    shell: document.querySelector('.browse-table-shell'),
+    scrollContainer: document.querySelector('main'),
+  });
   var scrollPreview = document.getElementById('browse-scroll-preview');
   var scrollPreviewIndex = document.getElementById('browse-scroll-preview-index');
   var scrollPreviewName = document.getElementById('browse-scroll-preview-name');
@@ -529,6 +536,7 @@ function initBrowse() {
     if (nextOptions.force) resetVirtualMeasurement(virtualState);
     renderRows(mount, state, virtualState, nextOptions);
     thumbnailLoader.refresh();
+    horizontalScrollbar.refresh();
     if (state.reveal) scheduleRevealAttempt();
     if (!virtualState.enabled) {
       hideScrollPreview();
@@ -728,6 +736,7 @@ function initBrowse() {
     setBrowseLoading(state, true);
     mount.innerHTML = loadingRowHtml('Loading folder listing...');
     thumbnailLoader.refresh();
+    horizontalScrollbar.refresh();
     body.dataset.browseClient = 'loading';
     setVirtualizationDataset(body, virtualState, null, 0);
     hideScrollPreview();
@@ -783,6 +792,7 @@ function initBrowse() {
         currentController = null;
         stopFolderPolling = renderSnapshot(mount, state, payload, virtualState, function () {
           thumbnailLoader.refresh();
+          horizontalScrollbar.refresh();
           if (state.reveal) scheduleRevealAttempt();
           if (!virtualState.enabled) {
             hideScrollPreview();
@@ -813,6 +823,7 @@ function initBrowse() {
         setBrowseError(state, error && error.message ? error.message : 'Could not load folder listing.');
         mount.innerHTML = errorRowHtml(state.error);
         thumbnailLoader.refresh();
+        horizontalScrollbar.refresh();
         body.dataset.browseClient = 'error';
         setVirtualizationDataset(body, virtualState, null, 0);
         hideScrollPreview();
@@ -842,6 +853,7 @@ function initBrowse() {
       scrollFrameRequested = false;
       renderRows(mount, state, virtualState, {force: false, reason: 'scroll'});
       thumbnailLoader.refresh();
+      horizontalScrollbar.refresh();
       updateScrollPreview({persistent: previewScrollbarDragActive});
     });
   }
