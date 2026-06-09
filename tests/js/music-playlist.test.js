@@ -169,3 +169,13 @@ test("normalizePlaylistLoadSort defaults the load dialog to newest first and acc
     { key: "last_modified", direction: "asc" },
   );
 });
+
+test("playlistMatchesLoadFilter matches playlist names case-insensitively and empty filters match all", async () => {
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist.js");
+
+  assert.equal(playlistModule.normalizePlaylistLoadFilter("  Road  "), "Road");
+  assert.equal(playlistModule.playlistMatchesLoadFilter({ name: "Road Trip" }, ""), true);
+  assert.equal(playlistModule.playlistMatchesLoadFilter({ name: "Road Trip" }, "road"), true);
+  assert.equal(playlistModule.playlistMatchesLoadFilter({ name: "Road Trip" }, "TRIP"), true);
+  assert.equal(playlistModule.playlistMatchesLoadFilter({ name: "Road Trip" }, "focus"), false);
+});

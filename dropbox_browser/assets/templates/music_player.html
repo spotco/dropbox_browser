@@ -100,6 +100,17 @@
             <h3 id="music-playlist-load-title">Load Playlist</h3>
           </div>
           <div class="music-playlist-modal-body">
+            <div class="music-playlist-load-filter">
+              <label class="music-playlist-field-label" for="music-playlist-load-filter-input">Search Playlists</label>
+              <input
+                type="search"
+                id="music-playlist-load-filter-input"
+                class="music-playlist-text-input music-playlist-search-input"
+                placeholder="Search playlists"
+                autocomplete="off"
+                spellcheck="false"
+              >
+            </div>
             <div class="music-playlist-load-table" role="table" aria-label="Saved playlists">
               <div class="music-playlist-row music-playlist-heading music-playlist-load-heading" role="row">
                 <button type="button" id="music-playlist-sort-name" class="music-playlist-sort-button" data-playlist-sort-key="name" aria-pressed="true">
