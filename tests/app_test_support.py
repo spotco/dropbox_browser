@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
-from dropbox_browser.config import ThumbnailConfig
+from dropbox_browser.config import ThumbnailConfig, VideoToolsConfig
 from dropbox_browser.foldercache import FolderCacheManager
 from dropbox_browser.listingcache import ListingCacheManager
 from dropbox_browser.services import DropboxBrowser
@@ -96,6 +96,7 @@ class AppTestCase(IsolatedPathsTestCase):
         manager_cls=FolderCacheManager,
         client_render: bool = True,
         thumbnail_config: ThumbnailConfig | None = None,
+        video_tools_config: VideoToolsConfig | None = None,
         **manager_kwargs,
     ) -> DropboxBrowser:
         listing_cache = ListingCacheManager(ttl_seconds=1800)
@@ -116,6 +117,7 @@ class AppTestCase(IsolatedPathsTestCase):
             listing_cache=listing_cache,
             client_render=client_render,
             thumbnail_config=thumbnail_config,
+            video_tools_config=video_tools_config,
         )
         app.sync_jobs = SyncJobManager(app, workers=sync_workers)
         self.addCleanup(app.shutdown)

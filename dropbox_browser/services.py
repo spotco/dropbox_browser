@@ -14,7 +14,7 @@ from typing import Any
 from contextlib import nullcontext
 
 from . import syncstate, workertrace
-from .config import ThumbnailConfig
+from .config import ThumbnailConfig, VideoToolsConfig
 from .errors import BrowserError
 from .formatting import file_type, parse_rclone_time
 from .foldercache_compute import parse_direct_listing
@@ -154,6 +154,7 @@ class DropboxBrowser:
         *,
         client_render: bool = True,
         thumbnail_config: ThumbnailConfig | None = None,
+        video_tools_config: VideoToolsConfig | None = None,
     ):
         self.rclone = rclone
         self.remote = remote
@@ -162,7 +163,9 @@ class DropboxBrowser:
         self.listing_cache = listing_cache
         self.client_render = bool(client_render)
         self.thumbnail_config = thumbnail_config
+        self.video_tools_config = video_tools_config
         self._thumbnail_service: ThumbnailService | None = None
+        self._video_session_manager: Any | None = None
         self.sync_jobs: Any | None = None
         self._batch_plan_lock = threading.Lock()
         self._batch_plans: dict[str, StoredBatchPlan] = {}
@@ -181,7 +184,7 @@ class DropboxBrowser:
         return self._thumbnail_service
 
     def shutdown(self) -> None:
-        for manager in (self.rclone, self.folder_cache, self.sync_jobs):
+        for manager in (self.rclone, self.folder_cache, self.sync_jobs, self._video_session_manager):
             shutdown = getattr(manager, "shutdown", None)
             if shutdown is not None:
                 shutdown()

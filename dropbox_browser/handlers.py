@@ -29,6 +29,13 @@ from .streaming import (
 )
 from .syncjobs import SyncJobManager
 from .thumbnails import ThumbnailResult, is_thumbnailable_image, thumbnail_source_for_row
+from .video import (
+    VIDEO_ENDPOINT_PREFIX,
+    extract_remote_subtitles_to_webvtt,
+    handle_video_get,
+    probe_remote_media,
+    video_session_manager,
+)
 from .views import dropbox_home_url, folder_page_title, icon_for_entry, error_html, page_html
 
 
@@ -101,6 +108,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.serve_folder_info(parsed.query)
             elif parsed.path.startswith(MUSIC_ENDPOINT_PREFIX):
                 self.serve_music_endpoint(parsed.path, parsed.query)
+            elif parsed.path.startswith(VIDEO_ENDPOINT_PREFIX):
+                self.serve_video_endpoint(parsed.path, parsed.query)
             elif parsed.path.startswith(ASSET_ROUTE_PREFIX):
                 self.serve_asset(parsed.path)
             else:
@@ -145,6 +154,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.handle_local_only_delete_bat()
             elif parsed.path == "/refresh-cache":
                 self.handle_refresh_cache()
+            elif parsed.path.startswith(VIDEO_ENDPOINT_PREFIX):
+                self.serve_video_endpoint_post(parsed.path)
             else:
                 raise BrowserError(HTTPStatus.NOT_FOUND, "Not found.")
         except BrowserError as exc:
@@ -918,6 +929,104 @@ class RequestHandler(BaseHTTPRequestHandler):
                 client_poll_refresh=params.get("poll_refresh", [""])[0],
                 elapsed_ms=round((time.perf_counter() - started) * 1000, 3),
             )
+        body = _json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def serve_video_endpoint(self, path: str, query: str) -> None:
+        endpoint = path.removeprefix(VIDEO_ENDPOINT_PREFIX)
+        if endpoint == "probe":
+            params = parse_qs(query, keep_blank_values=True)
+            source = params.get("source", ["remote"])[0]
+            if source != "remote":
+                raise BrowserError(HTTPStatus.BAD_REQUEST, "Only remote video probe is supported.")
+            rel_path = clean_rel_path(params.get("path", [""])[0])
+            resolved_rel_path, _file_size = self._resolve_remote_file(rel_path)
+            port = int(self.server.server_address[1])  # type: ignore[attr-defined]
+            base_url = f"http://127.0.0.1:{port}"
+            payload = probe_remote_media(self.app, rel_path=resolved_rel_path, base_url=base_url)
+            status = HTTPStatus.OK
+        elif endpoint == "subtitles":
+            params = parse_qs(query, keep_blank_values=True)
+            source = params.get("source", ["remote"])[0]
+            if source != "remote":
+                raise BrowserError(HTTPStatus.BAD_REQUEST, "Only remote subtitle extraction is supported.")
+            rel_path = clean_rel_path(params.get("path", [""])[0])
+            resolved_rel_path, _file_size = self._resolve_remote_file(rel_path)
+            track_raw = params.get("track", [""])[0].strip()
+            if not track_raw:
+                raise BrowserError(HTTPStatus.BAD_REQUEST, "Subtitle track is required.")
+            try:
+                subtitle_stream_index = int(track_raw)
+            except ValueError as exc:
+                raise BrowserError(HTTPStatus.BAD_REQUEST, "Subtitle track must be an integer stream index.") from exc
+            port = int(self.server.server_address[1])  # type: ignore[attr-defined]
+            base_url = f"http://127.0.0.1:{port}"
+            body, language = extract_remote_subtitles_to_webvtt(
+                self.app,
+                rel_path=resolved_rel_path,
+                subtitle_stream_index=subtitle_stream_index,
+                base_url=base_url,
+            )
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/vtt; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            if language:
+                self.send_header("Content-Language", language)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        elif endpoint == "session/file":
+            params = parse_qs(query, keep_blank_values=True)
+            session_id = params.get("id", [""])[0]
+            name = params.get("name", [""])[0]
+            asset_path, content_type = video_session_manager(self.app).session_asset(session_id, name)
+            body = asset_path.read_bytes()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        else:
+            status, payload = handle_video_get(self.app, path, query)
+        body = _json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def serve_video_endpoint_post(self, path: str) -> None:
+        endpoint = path.removeprefix(VIDEO_ENDPOINT_PREFIX)
+        params = self._read_form()
+        if endpoint == "session":
+            source = params.get("source", ["remote"])[0]
+            if source != "remote":
+                raise BrowserError(HTTPStatus.BAD_REQUEST, "Only remote video compatibility playback is supported.")
+            rel_path = clean_rel_path(params.get("path", [""])[0])
+            resolved_rel_path, _file_size = self._resolve_remote_file(rel_path)
+            audio_stream_index_raw = params.get("audio_stream_index", [""])[0].strip()
+            audio_stream_index = int(audio_stream_index_raw) if audio_stream_index_raw else None
+            port = int(self.server.server_address[1])  # type: ignore[attr-defined]
+            base_url = f"http://127.0.0.1:{port}"
+            payload = video_session_manager(self.app).create_session(
+                rel_path=resolved_rel_path,
+                base_url=base_url,
+                audio_stream_index=audio_stream_index,
+            )
+            status = HTTPStatus.OK
+        elif endpoint == "session/stop":
+            session_id = params.get("id", [""])[0].strip() or None
+            payload = video_session_manager(self.app).stop_active_session(session_id)
+            status = HTTPStatus.OK
+        else:
+            raise BrowserError(HTTPStatus.NOT_FOUND, "Video endpoint not found.")
         body = _json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")

@@ -11,10 +11,14 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEMP_DIR = PROJECT_ROOT / "Temp"
 THUMBNAIL_CACHE_DIR = PROJECT_ROOT / "ThumbnailCache"
 VENDORED_MAGICK_EXE = PROJECT_ROOT / "ImageMagick" / "magick.exe"
+VENDORED_FFMPEG_EXE = PROJECT_ROOT / "FFmpeg" / "bin" / "ffmpeg.exe"
+VENDORED_FFPROBE_EXE = PROJECT_ROOT / "FFmpeg" / "bin" / "ffprobe.exe"
 
 _APP_CONFIG_DEFAULTS: dict = {
     "DropboxFolder": "./DropboxLocal",
     "RCloneConfig": "",
+    "FFMpegPath": "",
+    "FFProbePath": "",
     "LocalhostOnlyAccess": True,
     "LogRcloneCommands": True,
     "LogHttpRequests": True,
@@ -38,6 +42,24 @@ class ThumbnailConfig:
     size: int
     max_input_bytes: int
     timeout_seconds: float
+
+
+@dataclass(frozen=True)
+class VideoToolsConfig:
+    ffmpeg_exe: Path | None
+    ffprobe_exe: Path | None
+
+    @property
+    def ffmpeg_available(self) -> bool:
+        return self.ffmpeg_exe is not None
+
+    @property
+    def ffprobe_available(self) -> bool:
+        return self.ffprobe_exe is not None
+
+    @property
+    def compatibility_available(self) -> bool:
+        return self.ffmpeg_available and self.ffprobe_available
 
 
 def _read_config_file(path: Path) -> dict:
@@ -96,6 +118,70 @@ def find_vendored_magick() -> Path | None:
     if VENDORED_MAGICK_EXE.exists():
         return VENDORED_MAGICK_EXE
     return None
+
+
+def find_vendored_ffmpeg() -> Path | None:
+    if VENDORED_FFMPEG_EXE.exists():
+        return VENDORED_FFMPEG_EXE
+    return None
+
+
+def find_vendored_ffprobe() -> Path | None:
+    if VENDORED_FFPROBE_EXE.exists():
+        return VENDORED_FFPROBE_EXE
+    return None
+
+
+def _resolve_configured_tool_path(value: object) -> Path | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    return Path(os.path.expandvars(text)).expanduser().resolve()
+
+
+def _adjacent_tool_path(path: Path | None, sibling_name: str) -> Path | None:
+    if path is None:
+        return None
+    candidate = path.with_name(sibling_name)
+    if candidate.exists():
+        return candidate
+    return None
+
+
+def _discover_tool(tool_name: str, *, configured_path: Path | None, vendored_path: Path | None) -> Path | None:
+    if vendored_path is not None:
+        return vendored_path
+    if configured_path is not None and configured_path.exists():
+        return configured_path
+    if configured_path is not None:
+        adjacent = _adjacent_tool_path(configured_path, tool_name)
+        if adjacent is not None:
+            return adjacent
+    found = shutil.which(tool_name)
+    if found:
+        return Path(found).resolve()
+    return None
+
+
+def load_video_tools_config(app_config: dict | None = None) -> VideoToolsConfig:
+    config = app_config if app_config is not None else load_app_config()
+    configured_ffmpeg = _resolve_configured_tool_path(config.get("FFMpegPath"))
+    configured_ffprobe = _resolve_configured_tool_path(config.get("FFProbePath"))
+    ffmpeg_name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+    ffprobe_name = "ffprobe.exe" if os.name == "nt" else "ffprobe"
+    if configured_ffmpeg is not None and configured_ffprobe is None:
+        configured_ffprobe = _adjacent_tool_path(configured_ffmpeg, ffprobe_name)
+    if configured_ffprobe is not None and configured_ffmpeg is None:
+        configured_ffmpeg = _adjacent_tool_path(configured_ffprobe, ffmpeg_name)
+    vendored_ffmpeg = find_vendored_ffmpeg()
+    vendored_ffprobe = find_vendored_ffprobe()
+    ffmpeg_exe = _discover_tool("ffmpeg", configured_path=configured_ffmpeg, vendored_path=vendored_ffmpeg)
+    ffprobe_exe = _discover_tool("ffprobe", configured_path=configured_ffprobe, vendored_path=vendored_ffprobe)
+    if ffmpeg_exe is None:
+        ffmpeg_exe = _adjacent_tool_path(ffprobe_exe, ffmpeg_name)
+    if ffprobe_exe is None:
+        ffprobe_exe = _adjacent_tool_path(ffmpeg_exe, ffprobe_name)
+    return VideoToolsConfig(ffmpeg_exe=ffmpeg_exe, ffprobe_exe=ffprobe_exe)
 
 
 def load_thumbnail_config(app_config: dict | None = None) -> ThumbnailConfig:

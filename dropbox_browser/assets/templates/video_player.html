@@ -1,0 +1,73 @@
+<div id="video-player-pane" class="bottom-pane-view hidden" data-pane-mode="video-player" hidden>
+  <div class="video-player-shell" aria-label="Video player">
+    <section id="video-library-pane" class="video-subpane video-library-pane" aria-labelledby="video-library-title">
+      <div class="video-subpane-header">
+        <div class="video-subpane-heading">
+          <h2 id="video-library-title">Current Folder Videos</h2>
+          <div id="video-library-path" class="video-subpane-meta" title="Current folder">/</div>
+        </div>
+        <div class="video-toolbar" role="group" aria-label="Video library actions">
+          <button type="button" id="video-library-up">Up</button>
+          <button type="button" id="video-library-add-selected">Add Selected</button>
+        </div>
+      </div>
+      <div id="video-library-list" class="video-library-list" role="list" tabindex="0">
+        <div class="video-empty-state">Open the Video Player to browse folders and remote video files.</div>
+      </div>
+    </section>
+    <section id="video-queue-pane" class="video-subpane video-queue-pane" aria-labelledby="video-queue-title">
+      <div class="video-subpane-header">
+        <div class="video-subpane-heading">
+          <h2 id="video-queue-title">Queue</h2>
+          <div class="video-subpane-meta">In-memory only</div>
+        </div>
+        <div class="video-toolbar" role="group" aria-label="Queue actions">
+          <button type="button" id="video-queue-play">Play</button>
+          <button type="button" id="video-queue-remove">Remove</button>
+          <button type="button" id="video-queue-up">Up</button>
+          <button type="button" id="video-queue-down">Down</button>
+          <button type="button" id="video-queue-clear">Clear</button>
+        </div>
+      </div>
+      <div id="video-queue-list" class="video-queue-list" role="list" tabindex="0">
+        <div class="video-empty-state">Queue is empty.</div>
+      </div>
+    </section>
+    <section id="video-playback-pane" class="video-subpane video-playback-pane" aria-labelledby="video-playback-title">
+      <div class="video-subpane-header">
+        <div class="video-subpane-heading">
+          <h2 id="video-playback-title">Playback</h2>
+          <div id="video-player-status" class="video-subpane-meta">Native or compatibility playback status will appear here.</div>
+        </div>
+      </div>
+      <div class="video-playback-controls">
+        <label class="video-control-field" for="video-audio-track">
+          <span class="video-control-label">Audio Track</span>
+          <select id="video-audio-track" disabled>
+            <option value="">No video selected</option>
+          </select>
+        </label>
+        <label class="video-control-field" for="video-subtitle-track">
+          <span class="video-control-label">Subtitles</span>
+          <select id="video-subtitle-track" disabled>
+            <option value="">No video selected</option>
+          </select>
+        </label>
+      </div>
+      <div class="video-playback-surface">
+        <video id="video-player-media" class="video-player-media hidden" controls preload="metadata" hidden></video>
+        <div id="video-playback-placeholder" class="video-playback-placeholder">
+          <div id="video-current-title" class="video-current-title">No video selected</div>
+          <div id="video-current-meta" class="video-current-meta">Track controls, subtitles, and fullscreen land in later phases.</div>
+        </div>
+      </div>
+      <div class="video-progress-group">
+        <input type="range" id="video-progress-slider" class="video-progress-slider" min="0" max="0" value="0" step="0.1" aria-label="Playback position" disabled>
+        <div class="video-time-row" aria-label="Playback time">
+          <span id="video-elapsed-time" class="video-time-label">00:00:00</span>
+          <span id="video-total-time" class="video-time-label">00:00:00</span>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>

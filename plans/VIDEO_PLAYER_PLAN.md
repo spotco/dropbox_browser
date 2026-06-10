@@ -62,128 +62,128 @@ playback and track control are proven.
 
 ### Phase 1 - ffmpeg Discovery And Configuration
 
-- [ ] Add config support for optional `ffmpeg` and `ffprobe` paths.
-- [ ] Bundle ffmpeg like the existing bundled ImageMagick tooling.
-- [ ] Discover bundled `ffmpeg` and `ffprobe` first, then configured paths,
+- [x] Add config support for optional `ffmpeg` and `ffprobe` paths.
+- [x] Bundle ffmpeg like the existing bundled ImageMagick tooling.
+- [x] Discover bundled `ffmpeg` and `ffprobe` first, then configured paths,
       adjacent binaries, and `PATH`.
-- [ ] Add a small adapter module, probably `dropbox_browser/video.py` or
+- [x] Add a small adapter module, probably `dropbox_browser/video.py` or
       `dropbox_browser/ffmpeg.py`, for probe and compatibility playback command
       construction.
-- [ ] Expose a `/video/endpoints/status` endpoint reporting whether `ffmpeg`
+- [x] Expose a `/video/endpoints/status` endpoint reporting whether `ffmpeg`
       and `ffprobe` are available.
-- [ ] Keep app startup working when ffmpeg is missing; the Video Player should
+- [x] Keep app startup working when ffmpeg is missing; the Video Player should
       show native/limited support instead of crashing.
-- [ ] Add tests for ffmpeg discovery, missing-binary status, and explicit config
+- [x] Add tests for ffmpeg discovery, missing-binary status, and explicit config
       paths.
 
 ### Phase 2 - Video Metadata Probe Endpoint
 
-- [ ] Add `/video/endpoints/probe?path=...&source=remote`.
-- [ ] Validate paths with `clean_rel_path`; reject parent segments.
-- [ ] Resolve remote paths using existing remote path normalization and
+- [x] Add `/video/endpoints/probe?path=...&source=remote`.
+- [x] Validate paths with `clean_rel_path`; reject parent segments.
+- [x] Resolve remote paths using existing remote path normalization and
       Windows-safe matching behavior where applicable.
-- [ ] Run `ffprobe` against the remote `/file` URL or an rclone-backed ffmpeg
+- [x] Run `ffprobe` against the remote `/file` URL or an rclone-backed ffmpeg
       input strategy.
-- [ ] Return structured stream metadata:
+- [x] Return structured stream metadata:
       video streams, audio streams, subtitle streams, language, title, codec,
       default flags, forced flags, and duration when available.
-- [ ] Mark a recommended default audio track and subtitle-off default.
-- [ ] Add tests with fake ffprobe JSON for dual-audio MKV metadata and subtitle
+- [x] Mark a recommended default audio track and subtitle-off default.
+- [x] Add tests with fake ffprobe JSON for dual-audio MKV metadata and subtitle
       metadata.
 
 ### Phase 3 - Current Folder Video List
 
-- [ ] Add `/video/endpoints/library?path=...` for video files and child folders
+- [x] Add `/video/endpoints/library?path=...` for video files and child folders
       under the current folder.
-- [ ] Support child-folder navigation inside the left video panel, similar to
+- [x] Support child-folder navigation inside the left video panel, similar to
       the music player library.
-- [ ] Avoid expensive Dropbox recursion during normal video-player load; fetch
+- [x] Avoid expensive Dropbox recursion during normal video-player load; fetch
       direct folder listings as the user navigates the left panel.
-- [ ] Include common video extensions:
+- [x] Include common video extensions:
       `.mkv`, `.mp4`, `.m4v`, `.webm`, `.mov`, `.avi`, `.ts`, `.m2ts`, `.wmv`.
-- [ ] Return file name, remote stream path, size, modified time, extension,
+- [x] Return file name, remote stream path, size, modified time, extension,
       preview URL, and whether compatibility playback is expected.
-- [ ] Keep listing behavior cache-friendly and avoid expensive Dropbox recursion.
-- [ ] Add tests for current-folder video filtering and stable filename sorting.
+- [x] Keep listing behavior cache-friendly and avoid expensive Dropbox recursion.
+- [x] Add tests for current-folder video filtering and stable filename sorting.
 
 ### Phase 4 - Bottom Pane Shell
 
-- [ ] Add `Video Player` to `#bottom-pane-mode`.
-- [ ] Add `video_player.html` template with three panels:
+- [x] Add `Video Player` to `#bottom-pane-mode`.
+- [x] Add `video_player.html` template with three panels:
       current-folder videos, queue, playback.
-- [ ] Add `video.css` and `video.js` assets.
-- [ ] Register the new CSS and JS in `views.py`.
-- [ ] Keep the existing server log, file search, and music player modes
+- [x] Add `video.css` and `video.js` assets.
+- [x] Register the new CSS and JS in `views.py`.
+- [x] Keep the existing server log, file search, and music player modes
       unchanged.
-- [ ] Ensure pane mode persistence through existing `Settings` behavior.
-- [ ] Add web tests for the new pane option, template shell, and asset serving.
+- [x] Ensure pane mode persistence through existing `Settings` behavior.
+- [x] Add web tests for the new pane option, template shell, and asset serving.
 
 ### Phase 5 - In-Memory Queue
 
-- [ ] Render current-folder videos in the left panel.
-- [ ] Support adding one or more selected videos to the middle queue.
-- [ ] Support queue play, remove, clear, and reorder enough for testing.
-- [ ] Support double-clicking a current-folder video to enqueue and play.
-- [ ] Track the active queue item and advance to the next item on playback end.
-- [ ] Keep queue state in browser memory only.
-- [ ] Add focused JavaScript tests for queue add/remove/reorder/play-next
+- [x] Render current-folder videos in the left panel.
+- [x] Support adding one or more selected videos to the middle queue.
+- [x] Support queue play, remove, clear, and reorder enough for testing.
+- [x] Support double-clicking a current-folder video to enqueue and play.
+- [x] Track the active queue item and advance to the next item on playback end.
+- [x] Keep queue state in browser memory only.
+- [x] Add focused JavaScript tests for queue add/remove/reorder/play-next
       behavior.
 
 ### Phase 6 - Native Playback Path
 
-- [ ] Add a `<video>` element in the playback panel with normal controls.
-- [ ] Use existing `/file?path=...&source=remote` for files that can play
+- [x] Add a `<video>` element in the playback panel with normal controls.
+- [x] Use existing `/file?path=...&source=remote` for files that can play
       natively.
-- [ ] Use `video.canPlayType()` as a hint, not as the only compatibility
+- [x] Use `video.canPlayType()` as a hint, not as the only compatibility
       decision.
-- [ ] Treat `.mkv` as compatibility-mode by default even if a browser returns
+- [x] Treat `.mkv` as compatibility-mode by default even if a browser returns
       ambiguous support.
-- [ ] Preserve seekable playback through current `/file` byte-range behavior.
-- [ ] Add a clear UI state when a file cannot be played natively and ffmpeg is
+- [x] Preserve seekable playback through current `/file` byte-range behavior.
+- [x] Add a clear UI state when a file cannot be played natively and ffmpeg is
       unavailable.
 
 ### Phase 7 - HLS Compatibility Playback
 
-- [ ] Vendor `hls.js` locally under assets; do not hotlink a CDN.
-- [ ] Add a compatibility playback session endpoint, for example
+- [x] Vendor `hls.js` locally under assets; do not hotlink a CDN.
+- [x] Add a compatibility playback session endpoint, for example
       `/video/endpoints/session`.
-- [ ] Start an ffmpeg process that maps the selected video and audio stream to
+- [x] Start an ffmpeg process that maps the selected video and audio stream to
       HLS output.
-- [ ] Write HLS playlists and segments under a constrained temp/session
+- [x] Write HLS playlists and segments under a constrained temp/session
       directory.
-- [ ] Cache HLS output only for the current playback session.
-- [ ] Serve HLS playlists and segments through constrained local endpoints.
-- [ ] Clean up compatibility session files and processes when playback stops,
+- [x] Cache HLS output only for the current playback session.
+- [x] Serve HLS playlists and segments through constrained local endpoints.
+- [x] Clean up compatibility session files and processes when playback stops,
       changes item, or expires.
-- [ ] Limit initial implementation to one active compatibility session per
+- [x] Limit initial implementation to one active compatibility session per
       browser player if that keeps cleanup and resource use simpler.
-- [ ] Add tests for session creation, path confinement, HLS asset serving, and
+- [x] Add tests for session creation, path confinement, HLS asset serving, and
       cleanup behavior.
 
 ### Phase 8 - Audio Track Selection
 
-- [ ] Populate the audio-track selector from probe metadata.
-- [ ] Select the default audio stream from ffprobe default flags when present.
-- [ ] Restart the HLS compatibility session when the selected audio track
+- [x] Populate the audio-track selector from probe metadata.
+- [x] Select the default audio stream from ffprobe default flags when present.
+- [x] Restart the HLS compatibility session when the selected audio track
       changes.
-- [ ] Preserve current queue item and reset playback position on first
+- [x] Preserve current queue item and reset playback position on first
       implementation; resume-position support can come later.
-- [ ] Show track labels using language, title, codec, and stream index.
-- [ ] Add tests for ffmpeg stream mapping command construction.
+- [x] Show track labels using language, title, codec, and stream index.
+- [x] Add tests for ffmpeg stream mapping command construction.
 
 ### Phase 9 - Subtitle Track Selection
 
-- [ ] Populate the subtitle selector from probe metadata.
-- [ ] Include a `Subtitles Off` option.
-- [ ] Add a WebVTT extraction endpoint, for example
+- [x] Populate the subtitle selector from probe metadata.
+- [x] Include a `Subtitles Off` option.
+- [x] Add a WebVTT extraction endpoint, for example
       `/video/endpoints/subtitles?path=...&source=remote&track=...`.
-- [ ] Run ffmpeg to extract/convert the selected subtitle stream to WebVTT.
-- [ ] Attach the generated WebVTT URL as a `<track kind="subtitles">` on the
+- [x] Run ffmpeg to extract/convert the selected subtitle stream to WebVTT.
+- [x] Attach the generated WebVTT URL as a `<track kind="subtitles">` on the
       video element.
-- [ ] Switch subtitle tracks without restarting the video when possible.
-- [ ] Show a video-player error when subtitle extraction or WebVTT conversion
+- [x] Switch subtitle tracks without restarting the video when possible.
+- [x] Show a video-player error when subtitle extraction or WebVTT conversion
       fails.
-- [ ] Add tests for subtitle command construction, WebVTT content type, and
+- [x] Add tests for subtitle command construction, WebVTT content type, and
       path/track validation.
 
 ### Phase 10 - Fullscreen And Playback Ergonomics

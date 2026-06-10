@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/assets/app.css">
   <link rel="stylesheet" href="/assets/css/file-search.css">
   <link rel="stylesheet" href="/assets/css/music.css">
+  <link rel="stylesheet" href="/assets/css/video.css">
   <title>$page_title</title>
 </head>
 <body class="has-log-panel" data-current-folder-path="$current_folder_attr" data-current-sort-key="$current_sort_key_attr" data-current-sort-direction="$current_sort_direction_attr" data-music-library-poll-delay-ms="$music_library_poll_delay_ms_attr" data-client-render="$client_render_attr">
@@ -68,6 +69,7 @@
         <option value="server-log">Server Log</option>
         <option value="file-search">File Search</option>
         <option value="music-player">Music Player</option>
+        <option value="video-player">Video Player</option>
       </select>
       <div id="music-player-status" class="music-player-status hidden" role="status" aria-live="polite" hidden>
         <span id="music-player-status-text" class="music-player-status-text">Library not loaded.</span>
@@ -78,6 +80,7 @@
     </div>
     $file_search_html
     $music_player_html
+    $video_player_html
   </div>
   $browse_script_tags
 </body>
