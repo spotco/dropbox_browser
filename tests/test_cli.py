@@ -9,7 +9,7 @@ from typing import Callable
 from unittest.mock import Mock, patch
 
 from dropbox_browser import cli
-from dropbox_browser.config import ThumbnailConfig
+from dropbox_browser.config import ThumbnailConfig, VideoToolsConfig
 
 
 class FakeServer:
@@ -69,6 +69,9 @@ class CliShutdownTests(unittest.TestCase):
             timeout_seconds=15,
         )
 
+    def _video_tools_config(self, *, ffmpeg_exe: Path | None = None, ffprobe_exe: Path | None = None) -> VideoToolsConfig:
+        return VideoToolsConfig(ffmpeg_exe=ffmpeg_exe, ffprobe_exe=ffprobe_exe)
+
     def test_keyboard_interrupt_closes_server_and_shuts_down_app(self) -> None:
         created_servers: list[FakeServer] = []
 
@@ -108,6 +111,7 @@ class CliShutdownTests(unittest.TestCase):
                     },
                 ),
                 patch.object(cli, "load_thumbnail_config", return_value=self._thumbnail_config()),
+                patch.object(cli, "load_video_tools_config", return_value=self._video_tools_config()),
                 patch.object(cli, "find_dropbox_folder", return_value=local_root),
                 patch.object(cli.workertrace, "configure_server_run", return_value=local_root / "runs" / "1779341234") as configure_run,
                 patch.object(cli, "RcloneClient", return_value=Mock()),
@@ -135,6 +139,9 @@ class CliShutdownTests(unittest.TestCase):
         self.assertFalse(configure_run.call_args.kwargs["metadata"]["thumbnail_enabled"])
         self.assertEqual(configure_run.call_args.kwargs["metadata"]["thumbnail_size"], 64)
         self.assertIsNone(configure_run.call_args.kwargs["metadata"]["thumbnail_magick_path"])
+        self.assertIsNone(configure_run.call_args.kwargs["metadata"]["video_ffmpeg_path"])
+        self.assertIsNone(configure_run.call_args.kwargs["metadata"]["video_ffprobe_path"])
+        self.assertFalse(configure_run.call_args.kwargs["metadata"]["video_compatibility_available"])
 
     def test_sigint_starts_app_shutdown_before_server_close(self) -> None:
         created_servers: list[FakeSignalDrivenServer] = []
@@ -196,6 +203,7 @@ class CliShutdownTests(unittest.TestCase):
                     },
                 ),
                 patch.object(cli, "load_thumbnail_config", return_value=self._thumbnail_config()),
+                patch.object(cli, "load_video_tools_config", return_value=self._video_tools_config()),
                 patch.object(cli, "find_dropbox_folder", return_value=local_root),
                 patch.object(cli.workertrace, "configure_server_run", return_value=local_root / "runs" / "1779341234"),
                 patch.object(cli, "RcloneClient", return_value=Mock()),
@@ -259,6 +267,7 @@ class CliShutdownTests(unittest.TestCase):
                     },
                 ),
                 patch.object(cli, "load_thumbnail_config", return_value=self._thumbnail_config()),
+                patch.object(cli, "load_video_tools_config", return_value=self._video_tools_config()),
                 patch.object(cli, "find_dropbox_folder") as find_dropbox_folder,
                 patch.object(cli.workertrace, "configure_server_run", return_value=local_root / "runs" / "1779341234") as configure_run,
                 patch.object(cli, "RcloneClient", return_value=Mock()),
@@ -316,6 +325,7 @@ class CliShutdownTests(unittest.TestCase):
                     },
                 ),
                 patch.object(cli, "load_thumbnail_config", return_value=self._thumbnail_config()),
+                patch.object(cli, "load_video_tools_config", return_value=self._video_tools_config()),
                 patch.object(cli, "find_dropbox_folder", return_value=local_root),
                 patch.object(cli.workertrace, "configure_server_run", return_value=local_root / "runs" / "1779341234"),
                 patch.object(cli, "RcloneClient", return_value=Mock()),
@@ -332,6 +342,7 @@ class CliShutdownTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(len(created_servers), 1)
         self.assertIn("Thumbnails disabled: vendored ImageMagick not found", stdout.getvalue())
+        self.assertIn("Video compatibility playback unavailable", stdout.getvalue())
 
 
 if __name__ == "__main__":

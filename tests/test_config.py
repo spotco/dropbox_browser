@@ -37,6 +37,12 @@ class ConfigDefaultsTests(unittest.TestCase):
 
         self.assertEqual(config["ThumbnailSize"], 64)
 
+    def test_video_tool_defaults_are_present(self) -> None:
+        config = dict(config_module._APP_CONFIG_DEFAULTS)
+
+        self.assertEqual(config["FFMpegPath"], "")
+        self.assertEqual(config["FFProbePath"], "")
+
 
 class ThumbnailConfigTests(unittest.TestCase):
     def test_find_vendored_magick_returns_none_when_missing(self) -> None:
@@ -76,6 +82,83 @@ class ThumbnailConfigTests(unittest.TestCase):
         self.assertFalse(thumbnail_config.enabled)
         self.assertFalse(thumbnail_config.configured_enabled)
         self.assertEqual(thumbnail_config.magick_exe, fake_magick)
+
+
+class VideoToolsConfigTests(unittest.TestCase):
+    def test_find_vendored_ffmpeg_returns_none_when_missing(self) -> None:
+        with patch.object(config_module, "VENDORED_FFMPEG_EXE", Path("Z:/missing/FFmpeg/bin/ffmpeg.exe")):
+            self.assertIsNone(config_module.find_vendored_ffmpeg())
+
+    def test_find_vendored_ffprobe_returns_none_when_missing(self) -> None:
+        with patch.object(config_module, "VENDORED_FFPROBE_EXE", Path("Z:/missing/FFmpeg/bin/ffprobe.exe")):
+            self.assertIsNone(config_module.find_vendored_ffprobe())
+
+    def test_load_video_tools_config_prefers_vendored_binaries(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ffmpeg_exe = Path(temp_dir) / "FFmpeg" / "bin" / "ffmpeg.exe"
+            ffprobe_exe = Path(temp_dir) / "FFmpeg" / "bin" / "ffprobe.exe"
+            ffmpeg_exe.parent.mkdir(parents=True, exist_ok=True)
+            ffmpeg_exe.write_bytes(b"")
+            ffprobe_exe.write_bytes(b"")
+            with (
+                patch.object(config_module, "VENDORED_FFMPEG_EXE", ffmpeg_exe),
+                patch.object(config_module, "VENDORED_FFPROBE_EXE", ffprobe_exe),
+                patch.object(config_module.shutil, "which", return_value=None),
+            ):
+                video_config = config_module.load_video_tools_config({})
+
+        self.assertEqual(video_config.ffmpeg_exe, ffmpeg_exe)
+        self.assertEqual(video_config.ffprobe_exe, ffprobe_exe)
+        self.assertTrue(video_config.compatibility_available)
+
+    def test_load_video_tools_config_uses_explicit_configured_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ffmpeg_exe = Path(temp_dir) / "tools" / "ffmpeg.exe"
+            ffprobe_exe = Path(temp_dir) / "tools" / "ffprobe.exe"
+            ffmpeg_exe.parent.mkdir(parents=True, exist_ok=True)
+            ffmpeg_exe.write_bytes(b"")
+            ffprobe_exe.write_bytes(b"")
+            with (
+                patch.object(config_module, "find_vendored_ffmpeg", return_value=None),
+                patch.object(config_module, "find_vendored_ffprobe", return_value=None),
+                patch.object(config_module.shutil, "which", return_value=None),
+            ):
+                video_config = config_module.load_video_tools_config({
+                    "FFMpegPath": str(ffmpeg_exe),
+                    "FFProbePath": str(ffprobe_exe),
+                })
+
+        self.assertEqual(video_config.ffmpeg_exe, ffmpeg_exe.resolve())
+        self.assertEqual(video_config.ffprobe_exe, ffprobe_exe.resolve())
+
+    def test_load_video_tools_config_discovers_adjacent_ffprobe_from_ffmpeg_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ffmpeg_exe = Path(temp_dir) / "tools" / "ffmpeg.exe"
+            ffprobe_exe = Path(temp_dir) / "tools" / "ffprobe.exe"
+            ffmpeg_exe.parent.mkdir(parents=True, exist_ok=True)
+            ffprobe_exe.write_bytes(b"")
+            with (
+                patch.object(config_module, "find_vendored_ffmpeg", return_value=None),
+                patch.object(config_module, "find_vendored_ffprobe", return_value=None),
+                patch.object(config_module.shutil, "which", return_value=None),
+            ):
+                video_config = config_module.load_video_tools_config({
+                    "FFMpegPath": str(ffmpeg_exe),
+                })
+
+        self.assertIsNone(video_config.ffmpeg_exe)
+        self.assertEqual(video_config.ffprobe_exe, ffprobe_exe.resolve())
+
+    def test_load_video_tools_config_falls_back_to_path(self) -> None:
+        with (
+            patch.object(config_module, "find_vendored_ffmpeg", return_value=None),
+            patch.object(config_module, "find_vendored_ffprobe", return_value=None),
+            patch.object(config_module.shutil, "which", side_effect=["C:/bin/ffmpeg.exe", "C:/bin/ffprobe.exe"]),
+        ):
+            video_config = config_module.load_video_tools_config({})
+
+        self.assertEqual(video_config.ffmpeg_exe, Path("C:/bin/ffmpeg.exe").resolve())
+        self.assertEqual(video_config.ffprobe_exe, Path("C:/bin/ffprobe.exe").resolve())
 
 
 if __name__ == "__main__":

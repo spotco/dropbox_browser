@@ -14,6 +14,7 @@ from .config import (
     find_dropbox_folder,
     load_app_config,
     load_thumbnail_config,
+    load_video_tools_config,
 )
 from .foldercache import FolderCacheManager
 from .handlers import RequestHandler
@@ -46,6 +47,7 @@ def main() -> int:
     started_at = time.time()
     app_config = load_app_config()
     thumbnail_config = load_thumbnail_config(app_config)
+    video_tools_config = load_video_tools_config(app_config)
     local_root = Path(args.local_root).resolve() if args.local_root else find_dropbox_folder(app_config)
     if local_root.exists() and not local_root.is_dir():
         print(f"DropboxFolder is not a directory: {local_root}", file=sys.stderr)
@@ -62,6 +64,9 @@ def main() -> int:
             "thumbnail_enabled": thumbnail_config.enabled,
             "thumbnail_size": thumbnail_config.size,
             "thumbnail_magick_path": str(thumbnail_config.magick_exe) if thumbnail_config.magick_exe else None,
+            "video_ffmpeg_path": str(video_tools_config.ffmpeg_exe) if video_tools_config.ffmpeg_exe else None,
+            "video_ffprobe_path": str(video_tools_config.ffprobe_exe) if video_tools_config.ffprobe_exe else None,
+            "video_compatibility_available": video_tools_config.compatibility_available,
         },
     )
 
@@ -84,6 +89,7 @@ def main() -> int:
         listing_cache=listing_cache,
         client_render=bool(getattr(args, "client_render", False)),
         thumbnail_config=thumbnail_config,
+        video_tools_config=video_tools_config,
     )
     app.sync_jobs = SyncJobManager(app, workers=int(app_config["SyncJobWorkers"]))
     server = ThreadingHTTPServer((args.host, args.port), RequestHandler)
@@ -124,6 +130,13 @@ def main() -> int:
         print("Thumbnails disabled: vendored ImageMagick not found at ImageMagick\\magick.exe")
     else:
         print("Thumbnails disabled by config.")
+    if video_tools_config.compatibility_available:
+        print(
+            "Video compatibility playback enabled: "
+            f"ffmpeg={video_tools_config.ffmpeg_exe} ffprobe={video_tools_config.ffprobe_exe}"
+        )
+    else:
+        print("Video compatibility playback unavailable: ffmpeg and/or ffprobe not found; native video only.")
     print(f"Trace log: {trace_run_dir / 'foldercache_threads.jsonl'}")
     logoutput.start()
     previous_sigint = signal.getsignal(signal.SIGINT)
