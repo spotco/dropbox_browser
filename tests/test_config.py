@@ -43,6 +43,15 @@ class ConfigDefaultsTests(unittest.TestCase):
         self.assertEqual(config["FFMpegPath"], "")
         self.assertEqual(config["FFProbePath"], "")
 
+    def test_client_log_defaults_are_present(self) -> None:
+        config = dict(config_module._APP_CONFIG_DEFAULTS)
+
+        self.assertTrue(config["ClientLogEnabled"])
+        self.assertTrue(config["ClientLogSubsystems"]["video"])
+        self.assertFalse(config["ClientLogSubsystems"]["browse-reveal"])
+        self.assertFalse(config["ClientLogSubsystems"]["file-search"])
+        self.assertFalse(config["ClientLogSubsystems"]["music-metadata"])
+
 
 class ThumbnailConfigTests(unittest.TestCase):
     def test_find_vendored_magick_returns_none_when_missing(self) -> None:

@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 from . import logoutput, logstore, syncstate, workertrace
+from .clientlog import append_client_log
 from .errors import BrowserError
 from .formatting import display_date, file_type, human_size, status_class
 from .music import MUSIC_ENDPOINT_PREFIX, handle_music_get
@@ -30,6 +31,7 @@ from .streaming import (
 from .syncjobs import SyncJobManager
 from .thumbnails import ThumbnailResult, is_thumbnailable_image, thumbnail_source_for_row
 from .video import (
+    HLS_INIT_SEGMENT_NAME,
     VIDEO_ENDPOINT_PREFIX,
     extract_remote_subtitles_to_webvtt,
     handle_video_get,
@@ -154,6 +156,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.handle_local_only_delete_bat()
             elif parsed.path == "/refresh-cache":
                 self.handle_refresh_cache()
+            elif parsed.path == "/client-log":
+                self.handle_client_log()
             elif parsed.path.startswith(VIDEO_ENDPOINT_PREFIX):
                 self.serve_video_endpoint_post(parsed.path)
             else:
@@ -986,6 +990,25 @@ class RequestHandler(BaseHTTPRequestHandler):
             name = params.get("name", [""])[0]
             asset_path, content_type = video_session_manager(self.app).session_asset(session_id, name)
             body = asset_path.read_bytes()
+            if asset_path.suffix.casefold() == ".m3u8":
+                init_url = "/video/endpoints/session/file?" + urlencode({
+                    "id": session_id,
+                    "name": HLS_INIT_SEGMENT_NAME,
+                })
+                body = body.replace(
+                    f'#EXT-X-MAP:URI="{HLS_INIT_SEGMENT_NAME}"'.encode("utf-8"),
+                    f'#EXT-X-MAP:URI="{init_url}"'.encode("utf-8"),
+                )
+                if b"#EXT-X-START:" not in body:
+                    newline = b"\r\n" if b"\r\n" in body else b"\n"
+                    start_tag = b"#EXT-X-START:TIME-OFFSET=0,PRECISE=YES" + newline
+                    if b"#EXT-X-INDEPENDENT-SEGMENTS" + newline in body:
+                        body = body.replace(
+                            b"#EXT-X-INDEPENDENT-SEGMENTS" + newline,
+                            b"#EXT-X-INDEPENDENT-SEGMENTS" + newline + start_tag,
+                        )
+                    else:
+                        body = body.replace(b"#EXTM3U" + newline, b"#EXTM3U" + newline + start_tag)
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type)
             self.send_header("Cache-Control", "no-store")
@@ -1029,6 +1052,33 @@ class RequestHandler(BaseHTTPRequestHandler):
             raise BrowserError(HTTPStatus.NOT_FOUND, "Video endpoint not found.")
         body = _json.dumps(payload).encode("utf-8")
         self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def handle_client_log(self) -> None:
+        params = self._read_form()
+        details_raw = params.get("details", ["{}"])[0]
+        try:
+            details = _json.loads(details_raw) if details_raw else {}
+        except _json.JSONDecodeError:
+            details = {"raw": details_raw}
+        if not isinstance(details, dict):
+            details = {"value": details}
+        logged = append_client_log(self.app, {
+            "subsystem": params.get("subsystem", [""])[0],
+            "level": params.get("level", ["info"])[0],
+            "message": params.get("message", [""])[0],
+            "url": params.get("url", [""])[0],
+            "details": details,
+            "path": params.get("path", [""])[0],
+            "session_id": params.get("session_id", [""])[0],
+            "playback_mode": params.get("playback_mode", [""])[0],
+            "current_time": params.get("current_time", [""])[0],
+        })
+        body = _json.dumps({"status": "ok", "logged": logged}).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()

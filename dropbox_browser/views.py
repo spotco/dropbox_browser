@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import os
 import posixpath
 from functools import lru_cache
@@ -232,6 +233,7 @@ def browse_table_html(*, rows_html: str, tbody_attrs: str = "") -> str:
 def browse_script_tags(client_render: bool) -> str:
     tags = [
         '<script src="/assets/js/settings.js"></script>',
+        '<script src="/assets/js/client-log.js"></script>',
         '<script src="/assets/js/bottom-pane.js"></script>',
         '<script src="/assets/js/log.js"></script>',
         '<script type="module" src="/assets/js/file-search.js"></script>',
@@ -331,6 +333,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         else ""
     )
     music_library_poll_delay_ms = int(getattr(app, "music_library_poll_delay_ms", 4000) or 4000)
+    client_log_subsystems = getattr(app, "client_log_subsystems", {}) or {}
 
     def sort_link(label: str, key: str) -> str:
         next_dir = "desc" if sort_key == key and direction == "asc" else "asc"
@@ -369,6 +372,8 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         current_sort_direction_attr=html.escape(direction, quote=True),
         music_library_poll_delay_ms_attr=html.escape(str(music_library_poll_delay_ms), quote=True),
         client_render_attr="1" if client_render else "0",
+        client_log_enabled_attr="1" if bool(getattr(app, "client_log_enabled", True)) else "0",
+        client_log_subsystems_attr=html.escape(json.dumps(client_log_subsystems, sort_keys=True), quote=True),
         browse_script_tags=browse_script_tags(client_render),
     )
 

@@ -57,6 +57,57 @@ playback and track control are proven.
   player area using a music-player-style status/error display.
 - The left panel should include child-folder navigation, similar to the music
   player library, instead of showing only direct files.
+- Client-side video diagnostics should go through the shared client log system
+  using the `video` subsystem. Use `Temp/client_logs.jsonl` for browser/HLS
+  events and `Temp/video_debug.jsonl` for server-side ffmpeg/session events.
+
+## Debugging Notes
+
+Video playback has two separate diagnostic streams:
+
+- Browser/client diagnostics: `Temp/client_logs.jsonl`, controlled by
+  `ClientLogEnabled` and `ClientLogSubsystems.video`.
+- Server HLS/session diagnostics: `Temp/video_debug.jsonl`, controlled by
+  `LogVideoDebug`.
+
+For playback failures:
+
+1. Restart the server after code/config changes so the page receives the latest
+   client logging config.
+2. Reproduce the playback failure once.
+3. Inspect `Temp/client_logs.jsonl` for `video` entries around the failure time.
+   Useful fields include HLS `type`, `details`, `reason`, fragment URL/SN,
+   media `readyState`, media `networkState`, and current playback time.
+4. Inspect `Temp/video_debug.jsonl` for session creation, playlist readiness,
+   asset serving/missing events, ffmpeg early exits, and session replacement.
+5. Inspect `Temp/video_sessions/<session-id>/stream.m3u8` and nearby
+   `segment_*.ts` files when a fragment-specific error appears. `ffprobe` and
+   `ffmpeg -f null -` against the segment or a short concat of segments are
+   useful to distinguish corrupt output from browser/MSE rejection.
+
+The Eureka Seven test file used during validation:
+
+```text
+anime/[bonkai77] Eureka Seven [BD-1080p] [DUAL-AUDIO] [x265] [HEVC] [AAC] [10bit] {FILTERED}/[bonkai77] Eureka Seven - Episode 01 [BD 1080p Dual Audio x265 10bit].mkv
+```
+
+Observed while debugging this file: ffmpeg can successfully produce a complete
+HLS event playlist and all segments, while the browser still reports
+compatibility playback failure. In that case, prioritize HLS.js fatal/recoverable
+client log fields over assuming ffmpeg stopped. If a segment URL is named in the
+client log, verify that segment exists, has nonzero size, and decodes with
+ffmpeg before changing the HLS/session architecture.
+
+Current HLS-session safeguards:
+
+- Session creation waits for a playlist that references a segment and for that
+  referenced segment file to exist.
+- Segment asset requests wait briefly while the ffmpeg process is still alive.
+- ffmpeg uses HLS `temp_file` output so the server does not expose partial
+  segment files.
+- The current architecture transcodes linearly. Jumping far ahead with the
+  scrubber may require waiting for generated output or a future seek-aware
+  session restart design.
 
 ## Remaining Work
 
@@ -159,6 +210,11 @@ playback and track control are proven.
       browser player if that keeps cleanup and resource use simpler.
 - [x] Add tests for session creation, path confinement, HLS asset serving, and
       cleanup behavior.
+- [x] Wait for the first referenced segment before returning a session payload.
+- [x] Wait briefly for delayed segment asset requests while ffmpeg is alive.
+- [x] Use ffmpeg HLS temp-file output to avoid serving partially written
+      segments.
+- [x] Add delayed-segment regression tests.
 
 ### Phase 8 - Audio Track Selection
 
@@ -188,6 +244,8 @@ playback and track control are proven.
 
 ### Phase 10 - Fullscreen And Playback Ergonomics
 
+- [x] Add a playback scrubber backed by native duration when available and
+      ffprobe duration for compatibility HLS when native duration is unavailable.
 - [ ] Add a fullscreen button for the playback panel.
 - [ ] Use the browser Fullscreen API on the video shell, not the whole page.
 - [ ] Ensure bottom-pane resizing still works when leaving fullscreen.
@@ -195,19 +253,23 @@ playback and track control are proven.
 - [ ] Add keyboard-safe focus behavior for queue rows and playback controls.
 - [ ] Add a browser smoke test for opening Video Player, loading current-folder
       videos, and entering/exiting fullscreen where Playwright supports it.
+- [ ] Add a seek-aware compatibility playback design if arbitrary far-ahead
+      HLS seeking remains unreliable with the linear ffmpeg session.
 
 ### Phase 11 - First MKV Validation
 
-- [ ] Configure ffmpeg/ffprobe on the development machine.
-- [ ] Open the first example Eureka Seven folder and load the Video Player.
-- [ ] Confirm the target MKV appears in the current-folder video list.
-- [ ] Probe the target MKV and confirm video/audio/subtitle streams appear.
-- [ ] Play the MKV through HLS compatibility mode.
+- [x] Configure ffmpeg/ffprobe on the development machine.
+- [x] Open the first example Eureka Seven folder and load the Video Player.
+- [x] Confirm the target MKV appears in the current-folder video list.
+- [x] Probe the target MKV and confirm video/audio/subtitle streams appear.
+- [ ] Play the MKV through HLS compatibility mode through the full episode.
 - [ ] Switch audio tracks and confirm playback restarts with the selected audio.
 - [ ] Select a subtitle track and confirm WebVTT subtitles display.
 - [ ] Open the Detective Conan Season 1 folder and repeat the same validation.
 - [ ] Capture any unsupported codec/subtitle failures as follow-up items rather
       than expanding scope before first playback works.
+- [ ] Use `Temp/client_logs.jsonl` and `Temp/video_debug.jsonl` to diagnose the
+      observed compatibility failure around early playback.
 
 ### Phase 12 - Follow-Up Playlist Features
 

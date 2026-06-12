@@ -29,11 +29,14 @@ GROUPS: dict[str, list[str]] = {
     "folderdiff": ["tests.test_folderdiff"],
     "status": ["tests.test_diff_status"],
     "cache": ["tests.test_cache_invalidation"],
+    "client-log": ["tests.test_clientlog"],
     "cli": ["tests.test_cli"],
     "names": ["tests.test_listing_merge_names", "tests.test_windows_names"],
     "windows-names": ["tests.test_listing_merge_names", "tests.test_windows_names"],
     "rclone": ["tests.test_rclone"],
     "thumbnails": ["tests.test_thumbnails"],
+    "video": ["tests.test_video_endpoints"],
+    "video-endpoints": ["tests.test_video_endpoints"],
 }
 
 

@@ -142,3 +142,22 @@ test("playbackDecisionForItem reports native-unavailable when browser hints no s
   assert.equal(result.url, "");
   assert.equal(result.status, "This format is not expected to play natively in the browser.");
 });
+
+test("playbackDurationSeconds prefers finite media duration", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
+
+  assert.equal(mod.playbackDurationSeconds(12.5, {duration_seconds: 30}, "compatibility"), 12.5);
+});
+
+test("playbackDurationSeconds uses probe duration for compatibility HLS streams", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
+
+  assert.equal(mod.playbackDurationSeconds(Infinity, {duration_seconds: 1501.25}, "compatibility"), 1501.25);
+});
+
+test("playbackDurationSeconds returns zero when duration is unavailable", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
+
+  assert.equal(mod.playbackDurationSeconds(Infinity, {duration_seconds: 1501.25}, "native"), 0);
+  assert.equal(mod.playbackDurationSeconds(NaN, null, "compatibility"), 0);
+});

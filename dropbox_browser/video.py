@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlencode
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from .config import TEMP_DIR
 from .errors import BrowserError
@@ -24,9 +24,31 @@ SUPPORTED_VIDEO_EXTENSIONS = (".mkv", ".mp4", ".m4v", ".webm", ".mov", ".avi", "
 COMPATIBILITY_EXPECTED_EXTENSIONS = (".mkv", ".avi", ".ts", ".m2ts", ".wmv")
 VIDEO_SESSION_DIR = TEMP_DIR / "video_sessions"
 HLS_PLAYLIST_NAME = "stream.m3u8"
-HLS_SEGMENT_PATTERN = "segment_%05d.ts"
+HLS_SEGMENT_PATTERN = "segment_%05d.m4s"
+HLS_INIT_SEGMENT_NAME = "init.mp4"
 HLS_SESSION_TTL_SECONDS = 15 * 60
 HLS_READY_TIMEOUT_SECONDS = 10.0
+HLS_ASSET_READY_TIMEOUT_SECONDS = 8.0
+VIDEO_DEBUG_LOG_PATH = TEMP_DIR / "video_debug.jsonl"
+_VIDEO_DEBUG_LOG_LOCK = threading.Lock()
+
+
+def log_video_debug(app: Any, event: str, **fields: object) -> None:
+    if not bool(getattr(app, "video_debug_logs", True)):
+        return
+    row = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "event": event,
+        **fields,
+    }
+    try:
+        VIDEO_DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(row, ensure_ascii=False, sort_keys=True)
+        with _VIDEO_DEBUG_LOG_LOCK:
+            with VIDEO_DEBUG_LOG_PATH.open("a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+    except OSError:
+        return
 
 
 def _stream_title(tags: dict[str, object]) -> str | None:
@@ -154,7 +176,7 @@ def build_ffmpeg_hls_command(
     segment_base_url: str,
     audio_stream_index: int | None = None,
 ) -> list[str]:
-    segment_pattern = str(playlist_path.parent / HLS_SEGMENT_PATTERN)
+    segment_pattern = HLS_SEGMENT_PATTERN
     command = [
         str(ffmpeg_exe),
         "-hide_banner",
@@ -197,7 +219,11 @@ def build_ffmpeg_hls_command(
         "-hls_playlist_type",
         "event",
         "-hls_flags",
-        "independent_segments",
+        "independent_segments+temp_file",
+        "-hls_segment_type",
+        "fmp4",
+        "-hls_fmp4_init_filename",
+        HLS_INIT_SEGMENT_NAME,
         "-hls_base_url",
         segment_base_url,
         "-hls_segment_filename",
@@ -321,11 +347,21 @@ class VideoSessionManager:
             segment_base_url=segment_base_url,
             audio_stream_index=audio_stream_index,
         )
+        log_video_debug(
+            self.app,
+            "session_create_start",
+            session_id=session_id,
+            path=rel_path,
+            audio_stream_index=audio_stream_index,
+            playlist=str(playlist_path),
+            command=command,
+        )
         try:
             process: subprocess.Popen[bytes] = subprocess.Popen(  # type: ignore[type-var]
                 command,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
+                cwd=session_dir,
             )
         except FileNotFoundError as exc:
             shutil.rmtree(session_dir, ignore_errors=True)
@@ -350,7 +386,15 @@ class VideoSessionManager:
             with self._lock:
                 if self._active_session is session:
                     self._clear_active_locked()
+            log_video_debug(self.app, "session_create_timeout", session_id=session_id, path=rel_path)
             raise BrowserError(HTTPStatus.BAD_GATEWAY, "ffmpeg did not produce an HLS playlist in time.")
+        log_video_debug(
+            self.app,
+            "session_create_ready",
+            session_id=session_id,
+            path=rel_path,
+            playlist_bytes=session.playlist_path.stat().st_size if session.playlist_path.exists() else 0,
+        )
         return self._session_payload(session)
 
     def stop_active_session(self, session_id: str | None = None) -> dict[str, object]:
@@ -369,17 +413,39 @@ class VideoSessionManager:
             self._cleanup_expired_locked()
             session = self._active_session
             if session is None or session.session_id != session_id:
+                log_video_debug(self.app, "asset_missing_session", session_id=session_id, name=name)
                 raise BrowserError(HTTPStatus.NOT_FOUND, "Video session not found.")
             asset_name = _safe_session_asset_name(name)
             asset_path = (session.session_dir / asset_name).resolve()
             try:
                 asset_path.relative_to(session.session_dir.resolve())
             except ValueError as exc:
+                log_video_debug(self.app, "asset_bad_path", session_id=session_id, name=name)
                 raise BrowserError(HTTPStatus.NOT_FOUND, "Video session asset not found.") from exc
-            if not asset_path.is_file():
-                raise BrowserError(HTTPStatus.NOT_FOUND, "Video session asset not found.")
+        if not self._wait_for_asset(session, asset_path):
+            log_video_debug(
+                self.app,
+                "asset_missing_after_wait",
+                session_id=session_id,
+                name=asset_path.name,
+                process_returncode=session.process.poll(),
+            )
+            raise BrowserError(HTTPStatus.NOT_FOUND, "Video session asset not found.")
+        with self._lock:
+            if self._active_session is not session:
+                log_video_debug(self.app, "asset_session_replaced", session_id=session_id, name=asset_path.name)
+                raise BrowserError(HTTPStatus.NOT_FOUND, "Video session not found.")
             session.touch()
         content_type = _session_asset_content_type(asset_path.name)
+        if asset_path.suffix.casefold() == ".m3u8" or not asset_path.exists():
+            log_video_debug(
+                self.app,
+                "asset_served",
+                session_id=session_id,
+                name=asset_path.name,
+                bytes=asset_path.stat().st_size if asset_path.exists() else None,
+                content_type=content_type,
+            )
         return asset_path, content_type
 
     def active_session_payload(self) -> dict[str, object] | None:
@@ -404,7 +470,12 @@ class VideoSessionManager:
     def _wait_for_playlist(self, session: VideoHlsSession, timeout_seconds: float = HLS_READY_TIMEOUT_SECONDS) -> bool:
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
-            if session.playlist_path.exists() and session.playlist_path.stat().st_size > 0:
+            ready_segment = _first_ready_playlist_segment(session.playlist_path)
+            if (
+                ready_segment is not None
+                and (session.session_dir / HLS_INIT_SEGMENT_NAME).is_file()
+                and (session.session_dir / ready_segment).is_file()
+            ):
                 return True
             return_code = session.process.poll()
             if return_code is not None:
@@ -412,9 +483,41 @@ class VideoSessionManager:
                 if session.process.stderr is not None:
                     stderr = session.process.stderr.read()
                 message = stderr.decode("utf-8", "replace").strip() or "ffmpeg exited before HLS output was ready."
+                log_video_debug(
+                    self.app,
+                    "session_create_ffmpeg_exit",
+                    session_id=session.session_id,
+                    returncode=return_code,
+                    stderr=message[-4000:],
+                )
                 raise BrowserError(HTTPStatus.BAD_GATEWAY, message)
             time.sleep(0.05)
         return False
+
+    def _wait_for_asset(
+        self,
+        session: VideoHlsSession,
+        asset_path: Path,
+        timeout_seconds: float = HLS_ASSET_READY_TIMEOUT_SECONDS,
+    ) -> bool:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            with self._lock:
+                if self._active_session is not session:
+                    return False
+            if asset_path.is_file():
+                return True
+            if session.process.poll() is not None:
+                log_video_debug(
+                    self.app,
+                    "asset_wait_process_exited",
+                    session_id=session.session_id,
+                    name=asset_path.name,
+                    returncode=session.process.poll(),
+                )
+                return asset_path.is_file()
+            time.sleep(0.05)
+        return asset_path.is_file()
 
     def _cleanup_expired_locked(self) -> None:
         session = self._active_session
@@ -451,7 +554,7 @@ def _safe_session_asset_name(name: str) -> str:
     parts = Path(name).parts
     if len(parts) != 1 or parts[0] in {"", ".", ".."}:
         raise BrowserError(HTTPStatus.NOT_FOUND, "Video session asset not found.")
-    if Path(name).suffix.casefold() not in {".m3u8", ".ts"}:
+    if Path(name).suffix.casefold() not in {".m3u8", ".ts", ".m4s", ".mp4"}:
         raise BrowserError(HTTPStatus.NOT_FOUND, "Video session asset not found.")
     return name
 
@@ -462,7 +565,35 @@ def _session_asset_content_type(name: str) -> str:
         return "application/vnd.apple.mpegurl"
     if suffix == ".ts":
         return "video/mp2t"
+    if suffix in {".m4s", ".mp4"}:
+        return "video/mp4"
     raise BrowserError(HTTPStatus.NOT_FOUND, "Video session asset not found.")
+
+
+def _first_ready_playlist_segment(playlist_path: Path) -> str | None:
+    try:
+        text = playlist_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        value = line.strip()
+        if not value or value.startswith("#"):
+            continue
+        asset_name = _playlist_segment_asset_name(value)
+        if asset_name is not None:
+            return asset_name
+    return None
+
+
+def _playlist_segment_asset_name(value: str) -> str | None:
+    try:
+        if "/" not in value and "\\" not in value:
+            return _safe_session_asset_name(value) if Path(value).suffix.casefold() in {".ts", ".m4s"} else None
+        parsed = urlparse(value)
+        name = parse_qs(parsed.query, keep_blank_values=True).get("name", [""])[0]
+        return _safe_session_asset_name(name) if Path(name).suffix.casefold() in {".ts", ".m4s"} else None
+    except BrowserError:
+        return None
 
 
 def video_session_manager(app: Any) -> VideoSessionManager:

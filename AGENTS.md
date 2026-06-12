@@ -40,6 +40,7 @@ Load only the doc that matches the work:
 - `dropbox_browser/windows_names.py` - Windows-safe filename matching and path resolution.
 - `dropbox_browser/namekeys.py` - filename comparison compatibility wrapper.
 - `dropbox_browser/ignored.py` - ignored metadata/system names.
+- `dropbox_browser/clientlog.py` - client-side browser log ingestion and filtering.
 - `dropbox_browser/views.py` - server-rendered HTML/CSS/JS asset responses.
 - `tests/` - stdlib `unittest` tests with fake rclone and isolated temp/cache paths.
 - `Cache/`, `Temp/`, `.dropbox-browser-temp/` - generated local state, ignored by git.
@@ -113,8 +114,10 @@ changes, or when shared helpers used by multiple groups changed.
 
 Common groups:
 
+- `client-log` - browser-to-server client log endpoint and filtering.
 - `web` - rendered pages, assets, UI contracts.
 - `streaming` - pure streaming helpers plus `/file` and `/download` HTTP behavior.
+- `video` - video player endpoints, ffmpeg command construction, HLS sessions.
 - `file-sync` - sync routes and sync job queue.
 - `background-file-info` - folder-cache workers and `/folder-info` polling.
 - `diff` - Dropbox/local status semantics.
@@ -125,6 +128,21 @@ Common groups:
 When fixing a regression, add a focused failing test first when practical, make
 the smallest fix, rerun that test, then run the relevant group. See
 `docs/testing.md` for details.
+
+## Debugging
+
+- Client-side browser logs can be reported to `POST /client-log` and written to
+  `Temp/client_logs.jsonl`.
+- Client logging is controlled by `ClientLogEnabled` and
+  `ClientLogSubsystems` in config. Keep noisy subsystems disabled by default
+  unless they are actively being debugged.
+- Current client log subsystem names include `video`, `browse-reveal`,
+  `file-search`, and `music-metadata`.
+- Server-side video HLS/session diagnostics are written to
+  `Temp/video_debug.jsonl` when `LogVideoDebug` is enabled.
+- Generated run state, logs, caches, and local reproductions under `Temp/`,
+  `Cache/`, and `.dropbox-browser-temp/` are not source artifacts. Inspect them
+  when useful, but do not commit or depend on their contents in tests.
 
 ## Implementation Preferences
 
@@ -142,6 +160,7 @@ the smallest fix, rerun that test, then run the relevant group. See
   - browser-triggered sync/delete workers: `dropbox_browser/syncjobs.py`;
   - rclone command execution and logging: `dropbox_browser/rclone.py`;
   - byte-range parsing and copy helpers: `dropbox_browser/streaming.py`;
+  - browser-originated client logs: `dropbox_browser/clientlog.py`;
   - request routing and response status: `dropbox_browser/handlers.py`;
   - HTML, icons, and browser assets: `dropbox_browser/views.py`;
   - config evolution and path locations: `dropbox_browser/config.py`.

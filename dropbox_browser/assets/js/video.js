@@ -7,6 +7,7 @@ import {
   moveQueueIndex,
   nativePlaybackUrl,
   playbackDecisionForItem,
+  playbackDurationSeconds,
   playQueueIndex,
   removeQueueIndex,
 } from './video-core.js';
@@ -79,6 +80,27 @@ import {
 
   function setStatus(text) {
     if (ctx.els.statusEl) ctx.els.statusEl.textContent = text;
+  }
+
+  function reportVideoDiagnostic(fields) {
+    try {
+      if (!window.ClientLogger) return;
+      var active = activeQueueItem();
+      var details = Object.assign({}, fields || {}, {
+        playback_mode: ctx.state.playbackMode || '',
+        session_id: ctx.state.compatibilitySessionId || '',
+        path: active && active.path ? active.path : '',
+        current_time: ctx.els.videoEl ? ctx.els.videoEl.currentTime || 0 : '',
+        ready_state: ctx.els.videoEl ? ctx.els.videoEl.readyState : '',
+        network_state: ctx.els.videoEl ? ctx.els.videoEl.networkState : '',
+      });
+      var level = details.level || 'debug';
+      var message = details.message || 'video diagnostic';
+      window.ClientLogger.log('video', level, message, details);
+    }
+    catch (_error) {
+      return;
+    }
   }
 
   function setPlaybackSummary(title, meta) {
@@ -177,7 +199,13 @@ import {
 
   function syncPlaybackProgress() {
     if (!ctx.els.videoEl || !ctx.els.progressSliderEl) return;
-    var duration = Number(ctx.els.videoEl.duration);
+    var active = activeQueueItem();
+    var probePayload = active ? ctx.state.probeCache[active.path || ''] || null : null;
+    var duration = playbackDurationSeconds(
+      Number(ctx.els.videoEl.duration),
+      probePayload,
+      ctx.state.playbackMode
+    );
     var currentTime = Number(ctx.els.videoEl.currentTime);
     if (!Number.isFinite(duration) || duration <= 0) {
       resetPlaybackProgress();
@@ -316,27 +344,79 @@ import {
     if (!ctx.els.videoEl) return;
     clearVideoSource();
     resetCompatibilityRecoveryState();
-    if (ctx.els.videoEl.canPlayType('application/vnd.apple.mpegurl')) {
-      setStatus('Compatibility playback session is loading.');
-      ctx.els.videoEl.src = playlistUrl;
-      ctx.els.videoEl.load();
-      ctx.els.videoEl.addEventListener('loadedmetadata', function onLoadedMetadata() {
-        ctx.els.videoEl.removeEventListener('loadedmetadata', onLoadedMetadata);
-        if (ctx.state.playbackMode !== 'compatibility') return;
-        setStatus('Compatibility playback session is ready.');
-        if (ctx.state.pendingAutoplay) requestVideoPlay();
-      });
-    }
-    else if (Hls && typeof Hls.isSupported === 'function' && Hls.isSupported()) {
+    if (Hls && typeof Hls.isSupported === 'function' && Hls.isSupported()) {
       ctx.state.hlsController = new Hls({
+        autoStartLoad: false,
         enableWorker: true,
+        lowLatencyMode: false,
+        maxLiveSyncPlaybackRate: 1,
+      });
+      ctx.state.hlsController.on(Hls.Events.MANIFEST_LOADING, function (_eventName, data) {
+        reportVideoDiagnostic({
+          level: 'debug',
+          message: 'HLS manifest loading',
+          hls_url: data && data.url ? data.url : '',
+        });
+      });
+      ctx.state.hlsController.on(Hls.Events.MANIFEST_LOADED, function (_eventName, data) {
+        reportVideoDiagnostic({
+          level: 'debug',
+          message: 'HLS manifest loaded',
+          hls_level_count: data && Array.isArray(data.levels) ? data.levels.length : '',
+        });
       });
       ctx.state.hlsController.on(Hls.Events.MANIFEST_PARSED, function () {
         if (ctx.state.playbackMode !== 'compatibility') return;
+        reportVideoDiagnostic({
+          level: 'debug',
+          message: 'HLS manifest parsed',
+          hls_start_position: 0,
+          hls_live_sync_mode: 'file-start',
+        });
+        if (ctx.state.hlsController && typeof ctx.state.hlsController.startLoad === 'function') {
+          ctx.state.hlsController.startLoad(0);
+        }
         setStatus('Compatibility playback session is ready.');
         if (ctx.state.pendingAutoplay) requestVideoPlay();
       });
+      ctx.state.hlsController.on(Hls.Events.FRAG_LOADING, function (_eventName, data) {
+        reportVideoDiagnostic({
+          level: 'debug',
+          message: 'HLS fragment loading',
+          frag_sn: data && data.frag ? data.frag.sn : '',
+          frag_url: data && data.frag ? data.frag.url : '',
+        });
+      });
+      ctx.state.hlsController.on(Hls.Events.FRAG_LOADED, function (_eventName, data) {
+        reportVideoDiagnostic({
+          level: 'debug',
+          message: 'HLS fragment loaded',
+          frag_sn: data && data.frag ? data.frag.sn : '',
+          frag_url: data && data.frag ? data.frag.url : '',
+          loaded_bytes: data && data.stats ? data.stats.loaded : '',
+          loading_ms: data && data.stats && data.stats.loading
+            ? Math.round(data.stats.loading.end - data.stats.loading.start)
+            : '',
+        });
+      });
+      ctx.state.hlsController.on(Hls.Events.FRAG_BUFFERED, function (_eventName, data) {
+        reportVideoDiagnostic({
+          level: 'debug',
+          message: 'HLS fragment buffered',
+          frag_sn: data && data.frag ? data.frag.sn : '',
+          frag_url: data && data.frag ? data.frag.url : '',
+        });
+      });
       ctx.state.hlsController.on(Hls.Events.ERROR, function (_eventName, data) {
+        reportVideoDiagnostic({
+          level: data && data.fatal ? 'error' : 'warn',
+          message: data && data.fatal ? 'Fatal HLS error' : 'Recoverable HLS error',
+          hls_type: data && data.type || '',
+          hls_details: data && data.details || '',
+          hls_fatal: data && data.fatal ? '1' : '0',
+          hls_reason: data && (data.reason || data.error && data.error.message) || '',
+          hls_url: data && data.frag && data.frag.url ? data.frag.url : (data && data.context && data.context.url ? data.context.url : ''),
+        });
         if (!data || !data.fatal) return;
         var active = activeQueueItem();
         if (!active) return;
@@ -357,6 +437,17 @@ import {
       ctx.state.hlsController.attachMedia(ctx.els.videoEl);
       ctx.state.hlsController.loadSource(playlistUrl);
       setStatus('Compatibility playback session is loading.');
+    }
+    else if (ctx.els.videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+      setStatus('Compatibility playback session is loading.');
+      ctx.els.videoEl.src = playlistUrl;
+      ctx.els.videoEl.load();
+      ctx.els.videoEl.addEventListener('loadedmetadata', function onLoadedMetadata() {
+        ctx.els.videoEl.removeEventListener('loadedmetadata', onLoadedMetadata);
+        if (ctx.state.playbackMode !== 'compatibility') return;
+        setStatus('Compatibility playback session is ready.');
+        if (ctx.state.pendingAutoplay) requestVideoPlay();
+      });
     }
     else {
       throw new Error('HLS playback is not supported in this browser.');
@@ -521,6 +612,7 @@ import {
       var payload = await response.json();
       ctx.state.probeCache[path] = payload;
       delete ctx.state.probeFailures[path];
+      syncPlaybackProgress();
       return payload;
     }
     catch (_error) {
@@ -1046,6 +1138,9 @@ import {
       var nextTime = Number(ctx.els.progressSliderEl.value);
       if (Number.isFinite(nextTime) && nextTime >= 0) {
         ctx.els.videoEl.currentTime = nextTime;
+        if (ctx.state.playbackMode === 'compatibility' && ctx.state.hlsController) {
+          setStatus('Seeking compatibility playback.');
+        }
       }
       ctx.state.progressSliderActive = false;
       syncPlaybackProgress();
@@ -1055,8 +1150,24 @@ import {
     ctx.els.videoEl.addEventListener('loadedmetadata', syncPlaybackProgress);
     ctx.els.videoEl.addEventListener('durationchange', syncPlaybackProgress);
     ctx.els.videoEl.addEventListener('timeupdate', syncPlaybackProgress);
-    ctx.els.videoEl.addEventListener('seeking', syncPlaybackProgress);
+    ctx.els.videoEl.addEventListener('waiting', function () {
+      if (ctx.state.playbackMode !== 'compatibility') return;
+      reportVideoDiagnostic({level: 'debug', message: 'Video element waiting'});
+    });
+    ctx.els.videoEl.addEventListener('stalled', function () {
+      if (ctx.state.playbackMode !== 'compatibility') return;
+      reportVideoDiagnostic({level: 'warn', message: 'Video element stalled'});
+    });
+    ctx.els.videoEl.addEventListener('seeking', function () {
+      if (ctx.state.playbackMode === 'compatibility') {
+        reportVideoDiagnostic({level: 'debug', message: 'Video element seeking'});
+      }
+      syncPlaybackProgress();
+    });
     ctx.els.videoEl.addEventListener('seeked', function () {
+      if (ctx.state.playbackMode === 'compatibility') {
+        reportVideoDiagnostic({level: 'debug', message: 'Video element seeked'});
+      }
       ctx.state.progressSliderActive = false;
       syncPlaybackProgress();
     });
@@ -1065,6 +1176,10 @@ import {
       resetCompatibilityRecoveryState();
       syncPlaybackProgress();
       if (ctx.state.playbackMode === 'compatibility') {
+        reportVideoDiagnostic({
+          level: 'info',
+          message: 'Compatibility playback playing',
+        });
         setStatus('Playing remote video through HLS compatibility playback.');
         return;
       }
@@ -1078,6 +1193,12 @@ import {
       var active = activeQueueItem();
       if (!active) return;
       if (ctx.state.playbackMode === 'compatibility') {
+        reportVideoDiagnostic({
+          level: 'error',
+          message: 'Video element error during compatibility playback',
+          media_error_code: ctx.els.videoEl.error ? ctx.els.videoEl.error.code : '',
+          media_error_message: ctx.els.videoEl.error ? ctx.els.videoEl.error.message : '',
+        });
         if (ctx.state.hlsController) return;
         failCompatibilityPlayback(active, 'Compatibility playback failed for this file.', 'Compatibility playback failed.');
         return;

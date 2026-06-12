@@ -164,6 +164,14 @@ class DropboxBrowser:
         self.client_render = bool(client_render)
         self.thumbnail_config = thumbnail_config
         self.video_tools_config = video_tools_config
+        self.video_debug_logs = True
+        self.client_log_enabled = True
+        self.client_log_subsystems = {
+            "video": True,
+            "browse-reveal": False,
+            "file-search": False,
+            "music-metadata": False,
+        }
         self._thumbnail_service: ThumbnailService | None = None
         self._video_session_manager: Any | None = None
         self.sync_jobs: Any | None = None
