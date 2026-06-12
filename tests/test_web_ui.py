@@ -37,6 +37,9 @@ class WebUiTests(AppTestCase):
             html = server.get_text("/")
 
         self.assertIn('data-client-render="1"', html)
+        self.assertIn('data-client-log-enabled="1"', html)
+        self.assertIn('data-client-log-subsystems=', html)
+        self.assertIn('&quot;video&quot;: true', html)
         self.assertIn('class="browse-table-shell"', html)
         self.assertIn('data-browse-table', html)
         self.assertIn('data-browse-column="name"', html)
@@ -51,6 +54,7 @@ class WebUiTests(AppTestCase):
         self.assertIn('id="browse-filter-reset"', html)
         self.assertNotIn('<span class="entry-name">cached.txt</span>', html)
         self.assertIn('<script type="module" src="/assets/js/browse/main.js"></script>', html)
+        self.assertLess(html.index('/assets/js/client-log.js'), html.index('/assets/js/browse/main.js'))
         self.assertNotIn('<script src="/assets/js/folder.js"></script>', html)
 
     def test_initial_page_load_only_requests_current_folder_metadata(self) -> None:
@@ -716,7 +720,7 @@ class WebUiTests(AppTestCase):
         self.assertIn("pendingArtworkRemotePath: null", music_entry_js)
         self.assertIn("windowFocused: document.hasFocus ? document.hasFocus() : true", music_entry_js)
         self.assertIn("function showMetadataPlaceholders()", music_metadata_js)
-        self.assertIn("var metadataDebugLoggingEnabled = false", music_metadata_js)
+        self.assertIn("window.ClientLogger.debug('music-metadata'", music_metadata_js)
         self.assertIn("function showUnknownMetadata()", music_metadata_js)
         self.assertIn("function applyMetadataResult(metadata)", music_metadata_js)
         self.assertIn("function revokeCurrentArtObjectUrl()", music_metadata_js)
@@ -919,6 +923,13 @@ class WebUiTests(AppTestCase):
         self.assertIn("syncPlaybackProgress", video_js)
         self.assertIn("Compatibility playback hit a media error; attempting recovery.", video_js)
         self.assertIn("Compatibility playback hit a network error; retrying the stream.", video_js)
+        self.assertIn("autoStartLoad: false", video_js)
+        self.assertIn("startLoad(0)", video_js)
+        self.assertIn("hls_live_sync_mode: 'file-start'", video_js)
+        self.assertLess(
+            video_js.index("Hls && typeof Hls.isSupported"),
+            video_js.index("canPlayType('application/vnd.apple.mpegurl')"),
+        )
         self.assertIn("Loading audio tracks...", video_js)
         self.assertIn("No audio tracks found", video_js)
         self.assertIn("Restarting compatibility playback for the selected audio track.", video_js)

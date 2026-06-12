@@ -332,8 +332,8 @@ export function initFileSearch(options) {
   if (!pane || !rootPathEl || !statusEl || !resultCountEl || !queryEl || !typeEl || !presetEl || !dateFromEl || !dateToEl || !submitButton || !resetButton || !resultsEl) return null;
 
   function logFileSearchDebug(message, extra) {
-    if (!win.console || typeof win.console.log !== 'function') return;
-    win.console.log('[file-search]', message, extra || {});
+    if (!win.ClientLogger) return;
+    win.ClientLogger.debug('file-search', message, extra || {});
   }
 
   var requestVersion = 0;

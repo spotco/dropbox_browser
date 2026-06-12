@@ -115,3 +115,10 @@ export function playbackDecisionForItem(item, canPlayTypeFn) {
     status: 'This format is not expected to play natively in the browser.',
   };
 }
+
+export function playbackDurationSeconds(mediaDuration, probePayload, playbackMode) {
+  if (Number.isFinite(mediaDuration) && mediaDuration > 0) return mediaDuration;
+  if (playbackMode !== 'compatibility' || !probePayload) return 0;
+  var probeDuration = Number(probePayload.duration_seconds);
+  return Number.isFinite(probeDuration) && probeDuration > 0 ? probeDuration : 0;
+}

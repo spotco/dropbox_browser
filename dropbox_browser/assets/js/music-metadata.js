@@ -4,14 +4,10 @@ import {resolveCoverArtFromMetadata, supportedArtMime} from './music-coverart.js
 export function createMetadataController(ctx) {
   var els = ctx.els;
   var state = ctx.state;
-  var metadataDebugLoggingEnabled = false;
 
   function metadataLog(eventName, details) {
-    if (!metadataDebugLoggingEnabled) return;
-    var payload = details || {};
-    try {
-      console.log('[music-metadata]', eventName, payload);
-    } catch (_err) {}
+    if (!window.ClientLogger) return;
+    window.ClientLogger.debug('music-metadata', eventName, details || {});
   }
 
   function setMarqueeState(el) {

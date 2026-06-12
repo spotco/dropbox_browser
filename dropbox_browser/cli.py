@@ -16,6 +16,7 @@ from .config import (
     load_thumbnail_config,
     load_video_tools_config,
 )
+from .clientlog import client_log_config
 from .foldercache import FolderCacheManager
 from .handlers import RequestHandler
 from . import logoutput, workertrace
@@ -91,6 +92,8 @@ def main() -> int:
         thumbnail_config=thumbnail_config,
         video_tools_config=video_tools_config,
     )
+    app.video_debug_logs = bool(app_config.get("LogVideoDebug", True))
+    app.client_log_enabled, app.client_log_subsystems = client_log_config(app_config)
     app.sync_jobs = SyncJobManager(app, workers=int(app_config["SyncJobWorkers"]))
     server = ThreadingHTTPServer((args.host, args.port), RequestHandler)
     server.app = app  # type: ignore[attr-defined]

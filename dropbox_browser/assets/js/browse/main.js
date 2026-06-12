@@ -436,10 +436,8 @@ function initBrowse() {
   body.dataset.browseScrollPreviewIndex = '';
 
   function logRevealDebug(level, message, extra) {
-    var consoleLevel = level === 'debug' ? 'log' : level;
-    if (!window.console || typeof window.console[consoleLevel] !== 'function') return;
-    var details = extra || {};
-    window.console[consoleLevel]('[browse-reveal] ' + message, details);
+    if (!window.ClientLogger) return;
+    window.ClientLogger.log('browse-reveal', level, message, extra || {});
   }
 
   function scrollPageToTop() {
