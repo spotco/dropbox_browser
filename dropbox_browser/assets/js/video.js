@@ -1423,7 +1423,7 @@ import {
       setSubtitleTrackPlaceholder(failed ? 'Subtitle tracks unavailable' : 'Loading subtitle tracks...');
       return;
     }
-    var subtitleStreams = webvttCompatibleSubtitleStreams(probePayload);
+    var subtitleStreams = subtitleStreamsForPayload(probePayload);
     if (!subtitleStreams.length) {
       setSubtitleTrackPlaceholder('No subtitle tracks found');
       return;
@@ -1439,6 +1439,7 @@ import {
       var option = document.createElement('option');
       option.value = String(stream.index);
       option.textContent = subtitleTrackLabel(stream);
+      option.disabled = !subtitleStreamSupportsWebVtt(stream);
       if (selected === stream.index) option.selected = true;
       select.appendChild(option);
     });

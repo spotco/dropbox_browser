@@ -1,5 +1,20 @@
 - anime player with switch audio/subtitles in browser
 
+- analyze:
+http://localhost:8000/file?path=anime%2F%5BJudas%5D+Fairy+Tail+%282009-2014%29+%28Seasons+1-8+%2B+OVAs%29+%5BBD+1080p%5D%5BHEVC+x265+10bit%5D%5BDual-Audio%5D%5BEng-Subs%5D%2F%5BJudas%5D+Fairy+Tail+%282009%29%2F%5BJudas%5D+Fairy+Tail+%282009%29+-+001.mkv&source=remote
+implement subtitle tracks for this one (bitmap?)
+
+- UI: black box change size on load
+- UI: htv load have it as overlay
+- UI: loading, don't change play/pause status.
+- UI: save subtitle/audio track selection matching text
+- UI: loading display overlay over video player 
+
+- library management
+- forward/backward playlist
+
+---
+
 plans\SPEC_RECURSIVE_FILE_SEARCH.md
 	performance improvements
 
