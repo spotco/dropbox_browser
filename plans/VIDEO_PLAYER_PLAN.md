@@ -33,18 +33,25 @@ playback and track control are proven.
 - Bundle ffmpeg in the repo the same way ImageMagick is bundled, with config and
   discovery falling back to `PATH` when the bundled binaries are unavailable.
 - Use `ffprobe` to inspect video, audio, and subtitle streams.
-- Use existing `/file` range streaming for browser-native playable files.
-- Automatically use ffmpeg compatibility playback for `.mkv` files and any file
-  that is likely unsupported natively.
+- Always use ffmpeg compatibility playback in the Video Player so audio track
+  switching, subtitle switching, scrubber behavior, and logging stay consistent.
+  If `ffmpeg`/`ffprobe` are unavailable, the Video Player shows no-playback
+  messaging instead of falling back to native browser playback.
 - Do not require a separate "Transcode" click for the first MKV workflow.
 - Use HLS for ffmpeg compatibility playback, with vendored `hls.js` for
   Chrome/Edge support.
+- Compatibility HLS sessions are seek-started. Initial playback starts ffmpeg at
+  source time `0`; scrubbing starts a new ffmpeg/HLS session at the clicked
+  source timestamp instead of waiting for a linear transcode from the beginning
+  to catch up. The browser media element uses session-relative time while the
+  custom scrubber displays original-video time as
+  `session_start_seconds + media.currentTime`.
 - Use WebVTT subtitle extraction/conversion first because it is lighter than
   subtitle burn-in and allows subtitle switching without full video restart.
 - Accept that ASS/SSA styling may be lost in the first WebVTT implementation.
   Burn-in can be added later only for files that need subtitle styling fidelity.
 - Changing the selected audio track restarts the compatibility playback session
-  with a new ffmpeg stream mapping.
+  with a new ffmpeg stream mapping at the current original-video timestamp.
 - Changing the selected subtitle track updates the active WebVTT track where
   possible.
 - The first queue is in browser memory only. Persisted video playlists are
@@ -105,9 +112,15 @@ Current HLS-session safeguards:
 - Segment asset requests wait briefly while the ffmpeg process is still alive.
 - ffmpeg uses HLS `temp_file` output so the server does not expose partial
   segment files.
-- The current architecture transcodes linearly. Jumping far ahead with the
-  scrubber may require waiting for generated output or a future seek-aware
-  session restart design.
+- The current architecture transcodes linearly only within the active session.
+  Scrubbing no longer waits for earlier segments in that session; it replaces
+  the active session with a new ffmpeg process started at the requested source
+  timestamp via `-ss`.
+- Client diagnostics log scrub requests and seek-started session readiness with
+  requested source time, session start time, media current time, and
+  buffered/seekable ranges. Server diagnostics log session start time, playlist
+  segment count, playlist edge seconds, ENDLIST status, and segment/playlist
+  asset wait timing.
 
 ## Remaining Work
 
@@ -182,16 +195,11 @@ Current HLS-session safeguards:
 
 ### Phase 6 - Native Playback Path
 
-- [x] Add a `<video>` element in the playback panel with normal controls.
-- [x] Use existing `/file?path=...&source=remote` for files that can play
-      natively.
-- [x] Use `video.canPlayType()` as a hint, not as the only compatibility
-      decision.
-- [x] Treat `.mkv` as compatibility-mode by default even if a browser returns
-      ambiguous support.
-- [x] Preserve seekable playback through current `/file` byte-range behavior.
-- [x] Add a clear UI state when a file cannot be played natively and ffmpeg is
-      unavailable.
+- [x] Remove the native browser playback path from the Video Player.
+- [x] Keep a `<video>` element for rendering, fullscreen, volume, and
+      picture-in-picture APIs, but hide the browser-native control bar.
+- [x] Route all Video Player playback through compatibility HLS.
+- [x] Add a clear UI state when ffmpeg/ffprobe are unavailable.
 
 ### Phase 7 - HLS Compatibility Playback
 
@@ -215,6 +223,11 @@ Current HLS-session safeguards:
 - [x] Use ffmpeg HLS temp-file output to avoid serving partially written
       segments.
 - [x] Add delayed-segment regression tests.
+- [x] Accept `start_time_seconds` on compatibility session creation and pass it
+      to ffmpeg as an input seek.
+- [x] Return `start_time_seconds` in the session payload so the browser can map
+      session-relative media time to original-video time.
+- [x] Log playlist edge and asset wait timing for HLS debugging.
 
 ### Phase 8 - Audio Track Selection
 
@@ -222,8 +235,8 @@ Current HLS-session safeguards:
 - [x] Select the default audio stream from ffprobe default flags when present.
 - [x] Restart the HLS compatibility session when the selected audio track
       changes.
-- [x] Preserve current queue item and reset playback position on first
-      implementation; resume-position support can come later.
+- [x] Preserve the current original-video playback position when restarting for
+      audio track changes.
 - [x] Show track labels using language, title, codec, and stream index.
 - [x] Add tests for ffmpeg stream mapping command construction.
 
@@ -246,15 +259,22 @@ Current HLS-session safeguards:
 
 - [x] Add a playback scrubber backed by native duration when available and
       ffprobe duration for compatibility HLS when native duration is unavailable.
-- [ ] Add a fullscreen button for the playback panel.
-- [ ] Use the browser Fullscreen API on the video shell, not the whole page.
+- [x] Add custom play/pause, volume, fullscreen, and picture-in-picture controls
+      so the native browser scrubber is not shown.
+- [x] Back the scrubber with ffprobe duration for compatibility HLS, avoiding
+      temporary 0:06 live/event playlist durations.
+- [x] Restart compatibility playback from the clicked scrubber position instead
+      of assigning `video.currentTime` beyond the generated playlist edge.
+- [x] Add seek diagnostics to client logs.
+- [x] Add a fullscreen button for the playback panel.
+- [x] Use the browser Fullscreen API on the video element, not the whole page.
 - [ ] Ensure bottom-pane resizing still works when leaving fullscreen.
 - [ ] Keep video aspect ratio stable inside the playback panel.
 - [ ] Add keyboard-safe focus behavior for queue rows and playback controls.
 - [ ] Add a browser smoke test for opening Video Player, loading current-folder
       videos, and entering/exiting fullscreen where Playwright supports it.
-- [ ] Add a seek-aware compatibility playback design if arbitrary far-ahead
-      HLS seeking remains unreliable with the linear ffmpeg session.
+- [x] Add a seek-aware compatibility playback design for arbitrary far-ahead HLS
+      seeking.
 
 ### Phase 11 - First MKV Validation
 

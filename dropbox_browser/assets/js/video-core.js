@@ -63,62 +63,11 @@ export function advanceQueueAfterPlaybackEnd(queueLength, activeIndex) {
   return nextIndex < queueLength ? nextIndex : -1;
 }
 
-export function nativePlaybackUrl(item) {
-  if (!item || !item.stream_path) return '';
-  return '/file?path=' + encodeURIComponent(item.stream_path) + '&source=remote';
-}
-
-export function shouldPreferCompatibilityPlayback(item) {
-  if (!item) return false;
-  if (item.compatibility_expected) return true;
-  const extension = typeof item.extension === 'string' ? item.extension.toLowerCase() : '';
-  return extension === '.mkv';
-}
-
-export function canAttemptNativePlayback(item, canPlayTypeFn) {
-  if (!item) return false;
-  if (shouldPreferCompatibilityPlayback(item)) return false;
-  if (typeof canPlayTypeFn !== 'function') return true;
-  const extension = typeof item.extension === 'string' ? item.extension.toLowerCase() : '';
-  const mime = ({
-    '.mp4': 'video/mp4',
-    '.m4v': 'video/mp4',
-    '.webm': 'video/webm',
-    '.mov': 'video/quicktime',
-  })[extension];
-  if (!mime) return true;
-  const result = canPlayTypeFn(mime);
-  return result === 'probably' || result === 'maybe';
-}
-
-export function playbackDecisionForItem(item, canPlayTypeFn) {
-  if (!item) {
-    return { mode: 'none', url: '', status: 'No video selected.' };
-  }
-  if (shouldPreferCompatibilityPlayback(item)) {
-    return {
-      mode: 'compatibility-needed',
-      url: '',
-      status: 'Compatibility playback will be required for this format.',
-    };
-  }
-  if (canAttemptNativePlayback(item, canPlayTypeFn)) {
-    return {
-      mode: 'native',
-      url: nativePlaybackUrl(item),
-      status: 'Native playback is ready.',
-    };
-  }
-  return {
-    mode: 'native-unavailable',
-    url: '',
-    status: 'This format is not expected to play natively in the browser.',
-  };
-}
-
 export function playbackDurationSeconds(mediaDuration, probePayload, playbackMode) {
+  if (playbackMode === 'compatibility' && probePayload) {
+    var probeDuration = Number(probePayload.duration_seconds);
+    if (Number.isFinite(probeDuration) && probeDuration > 0) return probeDuration;
+  }
   if (Number.isFinite(mediaDuration) && mediaDuration > 0) return mediaDuration;
-  if (playbackMode !== 'compatibility' || !probePayload) return 0;
-  var probeDuration = Number(probePayload.duration_seconds);
-  return Number.isFinite(probeDuration) && probeDuration > 0 ? probeDuration : 0;
+  return 0;
 }

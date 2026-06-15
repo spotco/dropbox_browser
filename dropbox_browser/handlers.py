@@ -35,6 +35,7 @@ from .video import (
     VIDEO_ENDPOINT_PREFIX,
     extract_remote_subtitles_to_webvtt,
     handle_video_get,
+    parse_video_start_seconds,
     probe_remote_media,
     video_session_manager,
 )
@@ -967,6 +968,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 subtitle_stream_index = int(track_raw)
             except ValueError as exc:
                 raise BrowserError(HTTPStatus.BAD_REQUEST, "Subtitle track must be an integer stream index.") from exc
+            start_time_seconds = parse_video_start_seconds(params.get("start_time_seconds", [""])[0])
             port = int(self.server.server_address[1])  # type: ignore[attr-defined]
             base_url = f"http://127.0.0.1:{port}"
             body, language = extract_remote_subtitles_to_webvtt(
@@ -974,6 +976,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 rel_path=resolved_rel_path,
                 subtitle_stream_index=subtitle_stream_index,
                 base_url=base_url,
+                start_time_seconds=start_time_seconds,
             )
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/vtt; charset=utf-8")
@@ -1036,12 +1039,14 @@ class RequestHandler(BaseHTTPRequestHandler):
             resolved_rel_path, _file_size = self._resolve_remote_file(rel_path)
             audio_stream_index_raw = params.get("audio_stream_index", [""])[0].strip()
             audio_stream_index = int(audio_stream_index_raw) if audio_stream_index_raw else None
+            start_time_seconds = parse_video_start_seconds(params.get("start_time_seconds", [""])[0])
             port = int(self.server.server_address[1])  # type: ignore[attr-defined]
             base_url = f"http://127.0.0.1:{port}"
             payload = video_session_manager(self.app).create_session(
                 rel_path=resolved_rel_path,
                 base_url=base_url,
                 audio_stream_index=audio_stream_index,
+                start_time_seconds=start_time_seconds,
             )
             status = HTTPStatus.OK
         elif endpoint == "session/stop":

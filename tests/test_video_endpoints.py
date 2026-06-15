@@ -369,10 +369,12 @@ class VideoEndpointTests(AppTestCase):
             payload = server.post_json("/video/endpoints/session", {
                 "path": "movie.mp4",
                 "source": "remote",
+                "start_time_seconds": "120.5",
             })
 
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["path"], "movie.mp4")
+        self.assertEqual(payload["start_time_seconds"], 120.5)
         self.assertTrue(payload["session_id"])
         self.assertEqual(
             payload["playlist_url"],
@@ -382,6 +384,8 @@ class VideoEndpointTests(AppTestCase):
         self.assertEqual(len(spawned), 1)
         self.assertEqual(spawned[0].command[0], "C:\\tools\\ffmpeg\\bin\\ffmpeg.exe")
         self.assertTrue(any("/file?path=movie.mp4&source=remote" in part for part in spawned[0].command))
+        self.assertIn("-ss", spawned[0].command)
+        self.assertEqual(spawned[0].command[spawned[0].command.index("-ss") + 1], "120.5")
         self.assertTrue(any(("/video/endpoints/session/file?id=" + payload["session_id"] + "&name=") in part for part in spawned[0].command))
 
     def test_session_asset_endpoint_serves_playlist_and_segment_files(self) -> None:
@@ -622,6 +626,28 @@ class VideoEndpointTests(AppTestCase):
         self.assertEqual(payload["audio_stream_index"], 2)
         self.assertIn("0:2?", spawned[0].command)
 
+    def test_session_endpoint_rejects_negative_start_time(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+
+        with TestServer(app) as server:
+            with self.assertRaises(HTTPError) as ctx:
+                server.post_json("/video/endpoints/session", {
+                    "path": "movie.mp4",
+                    "source": "remote",
+                    "start_time_seconds": "-1",
+                })
+
+        self.assertEqual(ctx.exception.code, 400)
+        ctx.exception.close()
+
     def test_build_ffmpeg_hls_command_maps_selected_audio_stream_by_absolute_index(self) -> None:
         command = build_ffmpeg_hls_command(
             Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
@@ -629,8 +655,11 @@ class VideoEndpointTests(AppTestCase):
             Path("E:/dev/dropbox_browser/Temp/video_sessions/test/stream.m3u8"),
             segment_base_url="/video/endpoints/session/file?id=test&name=",
             audio_stream_index=5,
+            start_time_seconds=366.25,
         )
 
+        self.assertLess(command.index("-ss"), command.index("-i"))
+        self.assertEqual(command[command.index("-ss") + 1], "366.25")
         self.assertIn("0:v:0", command)
         self.assertIn("0:5?", command)
         self.assertNotIn("0:a:5?", command)
@@ -721,8 +750,11 @@ class VideoEndpointTests(AppTestCase):
             Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
             "http://127.0.0.1:8000/file?path=movie.mkv&source=remote",
             7,
+            start_time_seconds=42,
         )
 
+        self.assertLess(command.index("-ss"), command.index("-i"))
+        self.assertEqual(command[command.index("-ss") + 1], "42")
         self.assertEqual(command[-3:], ["-f", "webvtt", "-"])
         self.assertIn("0:7", command)
 
