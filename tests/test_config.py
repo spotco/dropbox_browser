@@ -48,6 +48,7 @@ class ConfigDefaultsTests(unittest.TestCase):
 
         self.assertTrue(config["ClientLogEnabled"])
         self.assertTrue(config["ClientLogSubsystems"]["video"])
+        self.assertFalse(config["ClientLogSubsystems"]["video-subtitles"])
         self.assertFalse(config["ClientLogSubsystems"]["browse-reveal"])
         self.assertFalse(config["ClientLogSubsystems"]["file-search"])
         self.assertFalse(config["ClientLogSubsystems"]["music-metadata"])

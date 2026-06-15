@@ -26,6 +26,7 @@ _APP_CONFIG_DEFAULTS: dict = {
     "ClientLogEnabled": True,
     "ClientLogSubsystems": {
         "video": True,
+        "video-subtitles": False,
         "browse-reveal": False,
         "file-search": False,
         "music-metadata": False,

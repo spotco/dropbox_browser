@@ -48,6 +48,10 @@ import {
       totalTimeEl: document.getElementById('video-total-time'),
       audioTrackSelectEl: document.getElementById('video-audio-track'),
       subtitleTrackSelectEl: document.getElementById('video-subtitle-track'),
+      debugPanelEl: document.getElementById('video-debug-panel'),
+      debugMetaEl: document.getElementById('video-debug-meta'),
+      debugCurrentCueEl: document.getElementById('video-debug-current-cue'),
+      debugNextCueEl: document.getElementById('video-debug-next-cue'),
       libraryListEl: document.getElementById('video-library-list'),
       queueListEl: document.getElementById('video-queue-list'),
       libraryUpButton: document.getElementById('video-library-up'),
@@ -88,6 +92,14 @@ import {
       selectedAudioStreamIndexByPath: Object.create(null),
       selectedSubtitleStreamIndexByPath: Object.create(null),
       subtitleObjectUrl: '',
+      subtitleDebug: {
+        rawVtt: '',
+        cues: [],
+        fetchStartSeconds: 0,
+        trackLabel: '',
+        lastLoggedCueKey: '',
+        browserCuechangeBound: false,
+      },
       progressSliderActive: false,
       controlsIdleTimer: 0,
       controlsOverlayVisible: false,
@@ -463,16 +475,345 @@ import {
     resetPlaybackProgress();
   }
 
+  var SUBTITLE_PREVIEW_MAX_CHARS = 120;
+
+  function resetSubtitleDebugState() {
+    ctx.state.subtitleDebug.rawVtt = '';
+    ctx.state.subtitleDebug.cues = [];
+    ctx.state.subtitleDebug.fetchStartSeconds = 0;
+    ctx.state.subtitleDebug.trackLabel = '';
+    ctx.state.subtitleDebug.lastLoggedCueKey = '';
+    if (ctx.els.debugMetaEl) {
+      ctx.els.debugMetaEl.textContent = 'No subtitle track loaded.';
+    }
+    if (ctx.els.debugCurrentCueEl) {
+      ctx.els.debugCurrentCueEl.textContent = 'No active subtitle cue.';
+    }
+    if (ctx.els.debugNextCueEl) {
+      ctx.els.debugNextCueEl.textContent = 'No upcoming subtitle cue.';
+    }
+  }
+
+  function parseVttTimestamp(raw) {
+    var text = String(raw || '').trim();
+    if (!text) return NaN;
+    var chunks = text.split(':');
+    var seconds = 0;
+    if (chunks.length === 3) {
+      seconds = Number(chunks[0]) * 3600 + Number(chunks[1]) * 60 + Number(chunks[2]);
+    }
+    else if (chunks.length === 2) {
+      seconds = Number(chunks[0]) * 60 + Number(chunks[1]);
+    }
+    else {
+      seconds = Number(text);
+    }
+    return Number.isFinite(seconds) ? seconds : NaN;
+  }
+
+  function parseWebVttCues(vttText) {
+    var cues = [];
+    var normalized = String(vttText || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    var blocks = normalized.split(/\n\n+/);
+    blocks.forEach(function (block) {
+      var trimmed = block.trim();
+      if (!trimmed || trimmed.indexOf('WEBVTT') === 0) return;
+      var lines = trimmed.split('\n');
+      var timingIndex = 0;
+      if (lines.length > 1 && lines[0].indexOf('-->') < 0 && lines[1].indexOf('-->') >= 0) {
+        timingIndex = 1;
+      }
+      var timingLine = lines[timingIndex] || '';
+      if (timingLine.indexOf('-->') < 0) return;
+      var timingParts = timingLine.split('-->');
+      var start = parseVttTimestamp(timingParts[0]);
+      var end = parseVttTimestamp(String(timingParts[1] || '').trim().split(/\s+/)[0]);
+      if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+      var rawText = lines.slice(timingIndex + 1).join('\n');
+      cues.push({
+        start: start,
+        end: end,
+        rawTimingLine: timingLine.trim(),
+        rawText: rawText,
+        rawBlock: trimmed,
+      });
+    });
+    return cues;
+  }
+
+  function findActiveParsedCue(cues, mediaTime) {
+    if (!Array.isArray(cues) || !Number.isFinite(mediaTime)) return null;
+    for (var index = 0; index < cues.length; index += 1) {
+      var cue = cues[index];
+      if (mediaTime >= cue.start && mediaTime < cue.end) return cue;
+    }
+    return null;
+  }
+
+  function findNextParsedCue(cues, mediaTime) {
+    if (!Array.isArray(cues) || !Number.isFinite(mediaTime)) return null;
+    for (var index = 0; index < cues.length; index += 1) {
+      var cue = cues[index];
+      if (cue.start > mediaTime) return cue;
+    }
+    return null;
+  }
+
+  function subtitleTrackOffsetSeconds() {
+    var fetchStart = Number(ctx.state.subtitleDebug.fetchStartSeconds);
+    if (Number.isFinite(fetchStart) && fetchStart >= 0) return fetchStart;
+    return Math.max(0, Number(ctx.state.compatibilityStartSeconds) || 0);
+  }
+
+  function formatAbsoluteCueTimestamp(seconds) {
+    if (!Number.isFinite(seconds) || seconds < 0) return 'n/a';
+    var whole = Math.floor(seconds);
+    var millis = Math.round((seconds - whole) * 1000);
+    if (millis === 1000) {
+      whole += 1;
+      millis = 0;
+    }
+    var hours = Math.floor(whole / 3600);
+    var minutes = Math.floor((whole % 3600) / 60);
+    var remainder = whole % 60;
+    return String(hours).padStart(2, '0')
+      + ':'
+      + String(minutes).padStart(2, '0')
+      + ':'
+      + String(remainder).padStart(2, '0')
+      + '.'
+      + String(millis).padStart(3, '0');
+  }
+
+  function formatAbsoluteCueRange(startSeconds, endSeconds) {
+    return formatAbsoluteCueTimestamp(startSeconds) + ' --> ' + formatAbsoluteCueTimestamp(endSeconds);
+  }
+
+  function previewSubtitleText(text, maxChars) {
+    var limit = Number.isFinite(maxChars) && maxChars > 0 ? maxChars : SUBTITLE_PREVIEW_MAX_CHARS;
+    var normalized = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!normalized) return '';
+    if (normalized.length <= limit) return normalized;
+    return normalized.slice(0, limit - 1) + '…';
+  }
+
+  function resolveDisplayedCue(parsedCue, browserCues) {
+    if (parsedCue) {
+      return {
+        start: parsedCue.start,
+        end: parsedCue.end,
+        text: parsedCue.rawText,
+      };
+    }
+    if (browserCues.length) {
+      return {
+        start: browserCues[0].start,
+        end: browserCues[0].end,
+        text: browserCues[0].text,
+      };
+    }
+    return null;
+  }
+
+  function formatDisplayedCueBlock(cue, trackOffsetSeconds) {
+    if (!cue) return '';
+    return formatAbsoluteCueRange(
+      trackOffsetSeconds + cue.start,
+      trackOffsetSeconds + cue.end
+    ) + '\n' + cue.text;
+  }
+
+  function formatUpcomingCueBlock(cue, trackOffsetSeconds) {
+    if (!cue) return '';
+    return formatAbsoluteCueRange(
+      trackOffsetSeconds + cue.start,
+      trackOffsetSeconds + cue.end
+    ) + '\n' + previewSubtitleText(cue.rawText);
+  }
+
+  function managedSubtitleTextTrack() {
+    if (!ctx.els.videoEl || !ctx.els.videoEl.textTracks) return null;
+    for (var index = 0; index < ctx.els.videoEl.textTracks.length; index += 1) {
+      var textTrack = ctx.els.videoEl.textTracks[index];
+      if (textTrack && textTrack.kind === 'subtitles') return textTrack;
+    }
+    return null;
+  }
+
+  function summarizeBrowserCue(cue) {
+    if (!cue) return null;
+    return {
+      start: Number(cue.startTime),
+      end: Number(cue.endTime),
+      text: String(cue.text || ''),
+    };
+  }
+
+  function summarizeBrowserActiveCues(textTrack) {
+    if (!textTrack || !textTrack.activeCues) return [];
+    var result = [];
+    for (var index = 0; index < textTrack.activeCues.length; index += 1) {
+      var summary = summarizeBrowserCue(textTrack.activeCues[index]);
+      if (summary) result.push(summary);
+    }
+    return result;
+  }
+
+  function formatSubtitleDebugTimestamp(seconds) {
+    if (!Number.isFinite(seconds) || seconds < 0) return 'n/a';
+    return formatPlaybackTime(seconds);
+  }
+
+  function buildSubtitleCueLogKey(displayedCue, globalTime) {
+    if (!displayedCue) return String(globalTime) + '::';
+    return String(globalTime)
+      + '::'
+      + String(displayedCue.start)
+      + '|'
+      + String(displayedCue.end)
+      + '|'
+      + displayedCue.text;
+  }
+
+  function reportSubtitleDiagnostic(fields) {
+    try {
+      if (!window.ClientLogger || !window.ClientLogger.enabledFor('video-subtitles')) return;
+      var active = activeQueueItem();
+      var details = Object.assign({}, fields || {}, {
+        playback_mode: ctx.state.playbackMode || '',
+        path: active && active.path ? active.path : '',
+        media_current_time: ctx.els.videoEl ? ctx.els.videoEl.currentTime || 0 : '',
+        global_current_time: currentGlobalPlaybackSeconds(),
+        source_start_seconds: ctx.state.compatibilityStartSeconds || 0,
+        subtitle_fetch_start_seconds: ctx.state.subtitleDebug.fetchStartSeconds || 0,
+        subtitle_track_label: ctx.state.subtitleDebug.trackLabel || '',
+      });
+      var level = details.level || 'debug';
+      var message = details.message || 'subtitle diagnostic';
+      delete details.level;
+      delete details.message;
+      window.ClientLogger.log('video-subtitles', level, message, details);
+    }
+    catch (_error) {
+      return;
+    }
+  }
+
+  function maybeLogSubtitleCueChange(displayedCue, nextCue, globalTime, trackOffsetSeconds) {
+    var cueKey = buildSubtitleCueLogKey(displayedCue, globalTime);
+    if (cueKey === ctx.state.subtitleDebug.lastLoggedCueKey) return;
+    ctx.state.subtitleDebug.lastLoggedCueKey = cueKey;
+    reportSubtitleDiagnostic({
+      level: 'info',
+      message: 'Subtitle cue display changed',
+      absolute_cue_start: displayedCue ? trackOffsetSeconds + displayedCue.start : '',
+      absolute_cue_end: displayedCue ? trackOffsetSeconds + displayedCue.end : '',
+      cue_text: displayedCue ? displayedCue.text : '',
+      next_absolute_cue_start: nextCue ? trackOffsetSeconds + nextCue.start : '',
+      next_cue_preview: nextCue ? previewSubtitleText(nextCue.rawText) : '',
+    });
+  }
+
+  function syncSubtitleDebugDisplay() {
+    if (!ctx.els.debugMetaEl || !ctx.els.debugCurrentCueEl || !ctx.els.debugNextCueEl) return;
+    var mediaTime = ctx.els.videoEl ? Number(ctx.els.videoEl.currentTime) : NaN;
+    var globalTime = currentGlobalPlaybackSeconds();
+    var trackOffsetSeconds = subtitleTrackOffsetSeconds();
+    var parsedCue = findActiveParsedCue(ctx.state.subtitleDebug.cues, mediaTime);
+    var nextCue = findNextParsedCue(ctx.state.subtitleDebug.cues, mediaTime);
+    var textTrack = managedSubtitleTextTrack();
+    var browserCues = summarizeBrowserActiveCues(textTrack);
+    var displayedCue = resolveDisplayedCue(parsedCue, browserCues);
+    var metaLines = [
+      'Track: ' + (ctx.state.subtitleDebug.trackLabel || 'none'),
+      'Playback position (absolute): ' + formatSubtitleDebugTimestamp(globalTime),
+      'HLS segment offset: ' + formatSubtitleDebugTimestamp(ctx.state.compatibilityStartSeconds),
+      'Subtitle track offset: ' + formatSubtitleDebugTimestamp(trackOffsetSeconds),
+      'HLS media time: ' + formatSubtitleDebugTimestamp(mediaTime),
+      'Parsed cues loaded: ' + String(ctx.state.subtitleDebug.cues.length),
+      'Browser textTrack mode: ' + (textTrack ? textTrack.mode : 'none'),
+    ];
+    ctx.els.debugMetaEl.textContent = metaLines.join('\n');
+
+    if (displayedCue) {
+      ctx.els.debugCurrentCueEl.textContent = formatDisplayedCueBlock(displayedCue, trackOffsetSeconds);
+    }
+    else if (ctx.state.subtitleDebug.cues.length || (textTrack && textTrack.mode !== 'disabled')) {
+      ctx.els.debugCurrentCueEl.textContent = 'No active subtitle cue.';
+    }
+    else if (ctx.state.subtitleDebug.rawVtt) {
+      ctx.els.debugCurrentCueEl.textContent = 'Subtitle track loaded, but no cue is active.';
+    }
+    else {
+      ctx.els.debugCurrentCueEl.textContent = 'No active subtitle cue.';
+    }
+
+    if (nextCue) {
+      ctx.els.debugNextCueEl.textContent = formatUpcomingCueBlock(nextCue, trackOffsetSeconds);
+    }
+    else if (ctx.state.subtitleDebug.cues.length) {
+      ctx.els.debugNextCueEl.textContent = 'No more subtitles in the loaded track.';
+    }
+    else {
+      ctx.els.debugNextCueEl.textContent = 'No upcoming subtitle cue.';
+    }
+
+    if (ctx.state.subtitleDebug.cues.length || browserCues.length) {
+      maybeLogSubtitleCueChange(displayedCue, nextCue, globalTime, trackOffsetSeconds);
+    }
+  }
+
+  function bindSubtitleTextTrackEvents(textTrack) {
+    if (!textTrack || ctx.state.subtitleDebug.browserCuechangeBound) return;
+    textTrack.addEventListener('cuechange', function () {
+      syncSubtitleDebugDisplay();
+    });
+    ctx.state.subtitleDebug.browserCuechangeBound = true;
+  }
+
+  function enableManagedSubtitleTextTrack(trackElement) {
+    if (!trackElement) return;
+    function activate() {
+      var textTrack = trackElement.track || managedSubtitleTextTrack();
+      if (!textTrack) return;
+      for (var index = 0; index < ctx.els.videoEl.textTracks.length; index += 1) {
+        var candidate = ctx.els.videoEl.textTracks[index];
+        if (!candidate) continue;
+        candidate.mode = candidate === textTrack ? 'showing' : 'disabled';
+      }
+      bindSubtitleTextTrackEvents(textTrack);
+      syncSubtitleDebugDisplay();
+    }
+    if (trackElement.readyState >= 2) {
+      activate();
+      return;
+    }
+    trackElement.addEventListener('load', activate, {once: true});
+    trackElement.addEventListener('error', function () {
+      reportSubtitleDiagnostic({
+        level: 'warn',
+        message: 'Subtitle track element failed to load',
+      });
+    }, {once: true});
+  }
+
   function clearSubtitleTrack() {
     if (ctx.els.videoEl) {
       Array.from(ctx.els.videoEl.querySelectorAll('track[data-video-subtitle-track="1"]')).forEach(function (node) {
         node.remove();
       });
+      if (ctx.els.videoEl.textTracks) {
+        for (var index = 0; index < ctx.els.videoEl.textTracks.length; index += 1) {
+          ctx.els.videoEl.textTracks[index].mode = 'disabled';
+        }
+      }
     }
     if (ctx.state.subtitleObjectUrl) {
       URL.revokeObjectURL(ctx.state.subtitleObjectUrl);
       ctx.state.subtitleObjectUrl = '';
     }
+    ctx.state.subtitleDebug.browserCuechangeBound = false;
+    resetSubtitleDebugState();
   }
 
   async function stopCompatibilitySession() {
@@ -948,21 +1289,37 @@ import {
     if (subtitleStreamIndex === '') return;
     var subtitleStreams = Array.isArray(payload.subtitle_streams) ? payload.subtitle_streams : [];
     var subtitleStream = subtitleStreams.find(function (stream) { return stream.index === subtitleStreamIndex; }) || null;
+    var fetchStartSeconds = Math.max(0, ctx.state.compatibilityStartSeconds || 0);
     var url = subtitleTrackUrl(item, subtitleStreamIndex);
     try {
       var response = await fetch(url);
       if (!response.ok) throw new Error('Subtitle extraction failed.');
       var subtitleText = await response.text();
       if (item.path !== activeItemPath()) return;
+      ctx.state.subtitleDebug.rawVtt = subtitleText;
+      ctx.state.subtitleDebug.cues = parseWebVttCues(subtitleText);
+      ctx.state.subtitleDebug.fetchStartSeconds = fetchStartSeconds;
+      ctx.state.subtitleDebug.trackLabel = subtitleStream ? subtitleTrackLabel(subtitleStream) : 'Subtitles';
+      ctx.state.subtitleDebug.lastLoggedCueKey = '';
       ctx.state.subtitleObjectUrl = URL.createObjectURL(new Blob([subtitleText], {type: 'text/vtt'}));
       var track = document.createElement('track');
       track.kind = 'subtitles';
-      track.label = subtitleStream ? subtitleTrackLabel(subtitleStream) : 'Subtitles';
+      track.label = ctx.state.subtitleDebug.trackLabel;
       track.srclang = subtitleStream && subtitleStream.language ? String(subtitleStream.language) : 'und';
       track.src = ctx.state.subtitleObjectUrl;
       track.default = true;
       track.setAttribute('data-video-subtitle-track', '1');
       ctx.els.videoEl.appendChild(track);
+      enableManagedSubtitleTextTrack(track);
+      reportSubtitleDiagnostic({
+        level: 'info',
+        message: 'Subtitle track loaded',
+        subtitle_stream_index: subtitleStreamIndex,
+        subtitle_cue_count: ctx.state.subtitleDebug.cues.length,
+        subtitle_fetch_url: url,
+        subtitle_vtt_preview: subtitleText.slice(0, 400),
+      });
+      syncSubtitleDebugDisplay();
       setStatus('Subtitle track is ready.');
     }
     catch (_error) {
@@ -1576,7 +1933,10 @@ import {
   if (ctx.els.videoEl) {
     ctx.els.videoEl.addEventListener('loadedmetadata', syncPlaybackProgress);
     ctx.els.videoEl.addEventListener('durationchange', syncPlaybackProgress);
-    ctx.els.videoEl.addEventListener('timeupdate', syncPlaybackProgress);
+    ctx.els.videoEl.addEventListener('timeupdate', function () {
+      syncPlaybackProgress();
+      syncSubtitleDebugDisplay();
+    });
     ctx.els.videoEl.addEventListener('play', syncTransportControls);
     ctx.els.videoEl.addEventListener('pause', syncTransportControls);
     ctx.els.videoEl.addEventListener('volumechange', syncTransportControls);
