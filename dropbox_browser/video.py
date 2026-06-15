@@ -1,8 +1,10 @@
 """Video player endpoint helpers."""
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import re
 import shutil
 import subprocess
 import threading
@@ -24,6 +26,8 @@ VIDEO_ENDPOINT_PREFIX = "/video/endpoints/"
 SUPPORTED_VIDEO_EXTENSIONS = (".mkv", ".mp4", ".m4v", ".webm", ".mov", ".avi", ".ts", ".m2ts", ".wmv")
 COMPATIBILITY_EXPECTED_EXTENSIONS = (".mkv", ".avi", ".ts", ".m2ts", ".wmv")
 VIDEO_SESSION_DIR = TEMP_DIR / "video_sessions"
+SUBTITLE_CACHE_DIR = TEMP_DIR / "subtitle_cache"
+SUBTITLE_CACHE_VERSION = "webvtt-v1"
 HLS_PLAYLIST_NAME = "stream.m3u8"
 HLS_SEGMENT_PATTERN = "segment_%05d.m4s"
 HLS_INIT_SEGMENT_NAME = "init.mp4"
@@ -107,10 +111,27 @@ def _audio_stream(stream_data: dict[str, object]) -> dict[str, object]:
     return result
 
 
+_WEBVTT_INCOMPATIBLE_SUBTITLE_CODECS = frozenset({
+    "dvd_subtitle",
+    "dvb_subtitle",
+    "hdmv_pgs_subtitle",
+    "pgssub",
+    "vobsub",
+    "xsub",
+})
+
+
+def subtitle_codec_supports_webvtt(codec_name: object) -> bool:
+    if not isinstance(codec_name, str) or not codec_name.strip():
+        return True
+    return codec_name.casefold() not in _WEBVTT_INCOMPATIBLE_SUBTITLE_CODECS
+
+
 def _subtitle_stream(stream_data: dict[str, object]) -> dict[str, object]:
     result = _base_stream(stream_data)
     result.update({
         "codec_tag_string": stream_data.get("codec_tag_string"),
+        "webvtt_compatible": subtitle_codec_supports_webvtt(stream_data.get("codec_name")),
     })
     return result
 
@@ -126,7 +147,7 @@ def _recommended_audio_index(audio_streams: list[dict[str, object]]) -> int | No
 
 def _recommended_subtitle_index(subtitle_streams: list[dict[str, object]]) -> int | None:
     for stream in subtitle_streams:
-        if stream.get("default"):
+        if stream.get("default") and stream.get("webvtt_compatible", True):
             return int(stream["index"])
     return None
 
@@ -172,6 +193,155 @@ def build_ffprobe_command(ffprobe_exe: Path, input_url: str) -> list[str]:
     ]
 
 
+_VTT_TIMING_LINE_RE = re.compile(
+    r"(?P<start>\d{1,2}:\d{2}(?::\d{2})?\.\d{1,3})"
+    r"\s*-->\s*"
+    r"(?P<end>\d{1,2}:\d{2}(?::\d{2})?\.\d{1,3})"
+    r"(?P<suffix>[^\n]*)",
+)
+
+
+def _parse_vtt_timestamp(raw: str) -> float:
+    text = raw.strip()
+    if not text:
+        raise ValueError("empty VTT timestamp")
+    chunks = text.split(":")
+    if len(chunks) == 3:
+        hours = int(chunks[0])
+        minutes = int(chunks[1])
+        seconds = float(chunks[2])
+        return hours * 3600 + minutes * 60 + seconds
+    if len(chunks) == 2:
+        minutes = int(chunks[0])
+        seconds = float(chunks[1])
+        return minutes * 60 + seconds
+    return float(text)
+
+
+def _format_vtt_timestamp(seconds: float) -> str:
+    clamped = max(0.0, seconds)
+    whole = int(clamped)
+    millis = int(round((clamped - whole) * 1000))
+    if millis == 1000:
+        whole += 1
+        millis = 0
+    hours = whole // 3600
+    minutes = (whole % 3600) // 60
+    remainder = whole % 60
+    if hours > 0:
+        return f"{hours:02d}:{minutes:02d}:{remainder:02d}.{millis:03d}"
+    return f"{minutes:02d}:{remainder:02d}.{millis:03d}"
+
+
+def _webvtt_cue_start_times(body: str) -> list[float]:
+    starts: list[float] = []
+    for match in _VTT_TIMING_LINE_RE.finditer(body):
+        try:
+            starts.append(_parse_vtt_timestamp(match.group("start")))
+        except ValueError:
+            continue
+    return starts
+
+
+def _webvtt_needs_rebase(cue_starts: list[float], start_time_seconds: float) -> bool:
+    if start_time_seconds <= 0 or not cue_starts:
+        return False
+    min_start = min(cue_starts)
+    if min_start < 1.0:
+        return False
+    return min_start >= max(2.0, start_time_seconds - 5.0)
+
+
+def _shift_vtt_timing_match(match: re.Match[str], shift_seconds: float) -> str | None:
+    start = _parse_vtt_timestamp(match.group("start"))
+    end = _parse_vtt_timestamp(match.group("end"))
+    shifted_start = start - shift_seconds
+    shifted_end = end - shift_seconds
+    if shifted_end <= 0:
+        return None
+    if shifted_start < 0:
+        shifted_start = 0.0
+    suffix = match.group("suffix") or ""
+    return (
+        f"{_format_vtt_timestamp(shifted_start)} --> {_format_vtt_timestamp(shifted_end)}"
+        f"{suffix}"
+    )
+
+
+def build_subtitle_cache_key(
+    *,
+    rel_path: str,
+    subtitle_stream_index: int,
+    file_size: int | None = None,
+    cache_version: str = SUBTITLE_CACHE_VERSION,
+) -> str:
+    payload = {
+        "cache_version": str(cache_version),
+        "file_size": None if file_size is None else int(file_size),
+        "rel_path": clean_rel_path(rel_path),
+        "subtitle_stream_index": int(subtitle_stream_index),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def subtitle_cache_path(
+    cache_key: str,
+    *,
+    cache_dir: Path | None = None,
+) -> Path:
+    cache_root = SUBTITLE_CACHE_DIR if cache_dir is None else cache_dir
+    return cache_root / cache_key[:2] / cache_key[2:4] / f"{cache_key}.vtt"
+
+
+def _read_subtitle_cache(cache_path: Path) -> bytes | None:
+    try:
+        return cache_path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def _write_subtitle_cache(cache_path: Path, body: bytes) -> None:
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = cache_path.with_suffix(".vtt.tmp")
+    temp_path.write_bytes(body)
+    temp_path.replace(cache_path)
+
+
+def rebase_webvtt_text(body: str, start_time_seconds: float) -> str:
+    if start_time_seconds <= 0:
+        return body
+    cue_starts = _webvtt_cue_start_times(body)
+    if not _webvtt_needs_rebase(cue_starts, start_time_seconds):
+        return body
+
+    blocks = re.split(r"\n\n+", body.strip())
+    out_blocks: list[str] = []
+    for block in blocks:
+        trimmed = block.strip()
+        if not trimmed:
+            continue
+        if trimmed.startswith("WEBVTT"):
+            out_blocks.append(trimmed)
+            continue
+        lines = trimmed.split("\n")
+        timing_idx = 0
+        if len(lines) > 1 and "-->" not in lines[0] and "-->" in lines[1]:
+            timing_idx = 1
+        timing_match = _VTT_TIMING_LINE_RE.match(lines[timing_idx].strip())
+        if timing_match is None:
+            out_blocks.append(trimmed)
+            continue
+        shifted_timing = _shift_vtt_timing_match(timing_match, start_time_seconds)
+        if shifted_timing is None:
+            continue
+        lines[timing_idx] = shifted_timing
+        out_blocks.append("\n".join(lines))
+    if not out_blocks:
+        return "WEBVTT\n\n"
+    return "\n\n".join(out_blocks) + "\n"
+
+
 def build_ffmpeg_webvtt_command(
     ffmpeg_exe: Path,
     input_url: str,
@@ -195,6 +365,32 @@ def build_ffmpeg_webvtt_command(
         "webvtt",
         "-",
     ])
+    return command
+
+
+def build_ffmpeg_batch_webvtt_command(
+    ffmpeg_exe: Path,
+    input_url: str,
+    subtitle_stream_indices: list[int],
+    output_paths: list[Path],
+) -> list[str]:
+    if len(subtitle_stream_indices) != len(output_paths):
+        raise ValueError("subtitle stream indices and output paths must match.")
+    command = [
+        str(ffmpeg_exe),
+        "-v",
+        "error",
+        "-i",
+        input_url,
+    ]
+    for subtitle_stream_index, output_path in zip(subtitle_stream_indices, output_paths):
+        command.extend([
+            "-map",
+            f"0:{subtitle_stream_index}",
+            "-f",
+            "webvtt",
+            str(output_path),
+        ])
     return command
 
 
@@ -782,7 +978,7 @@ def extract_remote_subtitles_to_webvtt(
     rel_path: str,
     subtitle_stream_index: int,
     base_url: str,
-    start_time_seconds: float = 0.0,
+    file_size: int | None = None,
 ) -> tuple[bytes, str]:
     video_config = getattr(app, "video_tools_config", None)
     ffmpeg_exe = getattr(video_config, "ffmpeg_exe", None)
@@ -800,12 +996,22 @@ def extract_remote_subtitles_to_webvtt(
     )
     if track_info is None:
         raise BrowserError(HTTPStatus.BAD_REQUEST, "Subtitle track was not found in probe metadata.")
+    if not subtitle_codec_supports_webvtt(track_info.get("codec_name")):
+        raise BrowserError(HTTPStatus.BAD_REQUEST, "Subtitle track cannot be converted to WebVTT.")
+    cache_key = build_subtitle_cache_key(
+        rel_path=rel_path,
+        subtitle_stream_index=subtitle_stream_index,
+        file_size=file_size,
+    )
+    cache_path = subtitle_cache_path(cache_key)
+    cached_body = _read_subtitle_cache(cache_path)
+    if cached_body is not None:
+        return cached_body, str(track_info.get("language") or "")
     input_url = base_url + "/file?" + urlencode({"path": rel_path, "source": "remote"})
     command = build_ffmpeg_webvtt_command(
         ffmpeg_exe,
         input_url,
         subtitle_stream_index,
-        start_time_seconds=start_time_seconds,
     )
     try:
         proc = subprocess.run(
@@ -822,7 +1028,214 @@ def extract_remote_subtitles_to_webvtt(
     if proc.returncode != 0:
         message = proc.stderr.decode("utf-8", "replace").strip() or "ffmpeg failed to convert subtitles to WebVTT."
         raise BrowserError(HTTPStatus.BAD_GATEWAY, message)
-    return proc.stdout, str(track_info.get("language") or "")
+    vtt_text = proc.stdout.decode("utf-8", "replace")
+    body = vtt_text.encode("utf-8")
+    _write_subtitle_cache(cache_path, body)
+    return body, str(track_info.get("language") or "")
+
+
+def _store_extracted_subtitle_track(
+    *,
+    rel_path: str,
+    subtitle_stream_index: int,
+    file_size: int | None,
+    row: dict[str, object],
+    body: bytes,
+) -> dict[str, str]:
+    cache_key = build_subtitle_cache_key(
+        rel_path=rel_path,
+        subtitle_stream_index=subtitle_stream_index,
+        file_size=file_size,
+    )
+    cache_path = subtitle_cache_path(cache_key)
+    _write_subtitle_cache(cache_path, body)
+    return {
+        "vtt": body.decode("utf-8", "replace"),
+        "language": str(row.get("language") or ""),
+    }
+
+
+def _run_ffmpeg_single_webvtt(
+    ffmpeg_exe: Path,
+    input_url: str,
+    subtitle_stream_index: int,
+    *,
+    timeout_seconds: int = 30,
+) -> bytes | None:
+    command = build_ffmpeg_webvtt_command(
+        ffmpeg_exe,
+        input_url,
+        subtitle_stream_index,
+    )
+    try:
+        proc = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout
+
+
+def _run_ffmpeg_batch_webvtt(
+    ffmpeg_exe: Path,
+    input_url: str,
+    missing_rows: list[dict[str, object]],
+    *,
+    timeout_seconds: int,
+) -> dict[int, bytes] | None:
+    if not missing_rows:
+        return {}
+    temp_paths: list[Path] = []
+    missing_indices: list[int] = []
+    try:
+        for row in missing_rows:
+            subtitle_stream_index = int(row.get("index") or -1)
+            temp_path = SUBTITLE_CACHE_DIR / f"batch_{uuid.uuid4().hex}_{subtitle_stream_index}.vtt"
+            temp_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_paths.append(temp_path)
+            missing_indices.append(subtitle_stream_index)
+        command = build_ffmpeg_batch_webvtt_command(
+            ffmpeg_exe,
+            input_url,
+            missing_indices,
+            temp_paths,
+        )
+        try:
+            proc = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return None
+        if proc.returncode != 0:
+            return None
+        results: dict[int, bytes] = {}
+        for row, temp_path in zip(missing_rows, temp_paths):
+            subtitle_stream_index = int(row.get("index") or -1)
+            try:
+                body = temp_path.read_bytes()
+            except OSError:
+                return None
+            if body:
+                results[subtitle_stream_index] = body
+        return results
+    finally:
+        for temp_path in temp_paths:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def extract_all_remote_subtitles_to_webvtt(
+    app: Any,
+    *,
+    rel_path: str,
+    base_url: str,
+    file_size: int | None = None,
+) -> dict[str, object]:
+    video_config = getattr(app, "video_tools_config", None)
+    ffmpeg_exe = getattr(video_config, "ffmpeg_exe", None)
+    ffprobe_exe = getattr(video_config, "ffprobe_exe", None)
+    if ffmpeg_exe is None:
+        raise BrowserError(HTTPStatus.SERVICE_UNAVAILABLE, "ffmpeg is not available.")
+    if ffprobe_exe is None:
+        raise BrowserError(HTTPStatus.SERVICE_UNAVAILABLE, "ffprobe is not available.")
+    probe_payload = probe_remote_media(app, rel_path=rel_path, base_url=base_url)
+    subtitle_streams = probe_payload.get("subtitle_streams") if isinstance(probe_payload, dict) else None
+    subtitle_rows = subtitle_streams if isinstance(subtitle_streams, list) else []
+    track_rows = [row for row in subtitle_rows if isinstance(row, dict)]
+    compatible_rows = [
+        row for row in track_rows
+        if subtitle_codec_supports_webvtt(row.get("codec_name"))
+    ]
+    tracks: dict[str, dict[str, str]] = {}
+    if not compatible_rows:
+        return {"status": "ok", "tracks": tracks}
+
+    missing_rows: list[dict[str, object]] = []
+    for row in compatible_rows:
+        subtitle_stream_index = int(row.get("index") or -1)
+        if subtitle_stream_index < 0:
+            continue
+        cache_key = build_subtitle_cache_key(
+            rel_path=rel_path,
+            subtitle_stream_index=subtitle_stream_index,
+            file_size=file_size,
+        )
+        cache_path = subtitle_cache_path(cache_key)
+        cached_body = _read_subtitle_cache(cache_path)
+        if cached_body is not None:
+            tracks[str(subtitle_stream_index)] = {
+                "vtt": cached_body.decode("utf-8", "replace"),
+                "language": str(row.get("language") or ""),
+            }
+            continue
+        missing_rows.append(row)
+
+    if missing_rows:
+        input_url = base_url + "/file?" + urlencode({"path": rel_path, "source": "remote"})
+        timeout_seconds = max(30, 15 * len(missing_rows))
+        batch_results = _run_ffmpeg_batch_webvtt(
+            ffmpeg_exe,
+            input_url,
+            missing_rows,
+            timeout_seconds=timeout_seconds,
+        )
+        if batch_results is None:
+            log_video_debug(
+                app,
+                "subtitle_batch_extract_failed",
+                rel_path=rel_path,
+                track_count=len(missing_rows),
+            )
+            for row in missing_rows:
+                subtitle_stream_index = int(row.get("index") or -1)
+                body = _run_ffmpeg_single_webvtt(
+                    ffmpeg_exe,
+                    input_url,
+                    subtitle_stream_index,
+                    timeout_seconds=timeout_seconds,
+                )
+                if body is None:
+                    log_video_debug(
+                        app,
+                        "subtitle_track_extract_failed",
+                        rel_path=rel_path,
+                        subtitle_stream_index=subtitle_stream_index,
+                    )
+                    continue
+                tracks[str(subtitle_stream_index)] = _store_extracted_subtitle_track(
+                    rel_path=rel_path,
+                    subtitle_stream_index=subtitle_stream_index,
+                    file_size=file_size,
+                    row=row,
+                    body=body,
+                )
+        else:
+            for row in missing_rows:
+                subtitle_stream_index = int(row.get("index") or -1)
+                body = batch_results.get(subtitle_stream_index)
+                if body is None:
+                    continue
+                tracks[str(subtitle_stream_index)] = _store_extracted_subtitle_track(
+                    rel_path=rel_path,
+                    subtitle_stream_index=subtitle_stream_index,
+                    file_size=file_size,
+                    row=row,
+                    body=body,
+                )
+
+    return {"status": "ok", "tracks": tracks}
 
 
 def handle_video_get(app: Any, path: str, query: str) -> tuple[HTTPStatus, dict]:
