@@ -72,87 +72,17 @@ test("advanceQueueAfterPlaybackEnd moves to the next item and stops at the end",
   assert.equal(mod.advanceQueueAfterPlaybackEnd(0, -1), -1);
 });
 
-test("nativePlaybackUrl uses the existing remote file endpoint", async () => {
+test("playbackDurationSeconds uses finite media duration outside compatibility playback", async () => {
   const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
 
-  assert.equal(
-    mod.nativePlaybackUrl({
-      stream_path: "Videos/clip one.mp4",
-    }),
-    "/file?path=Videos%2Fclip%20one.mp4&source=remote",
-  );
+  assert.equal(mod.playbackDurationSeconds(12.5, {duration_seconds: 30}, "native"), 12.5);
 });
 
-test("playbackDecisionForItem prefers native playback for browser-native formats", async () => {
-  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
-
-  const result = mod.playbackDecisionForItem(
-    {
-      path: "Videos/sample.mp4",
-      stream_path: "Videos/sample.mp4",
-      extension: ".mp4",
-      compatibility_expected: false,
-    },
-    function (mime) {
-      return mime === "video/mp4" ? "probably" : "";
-    },
-  );
-
-  assert.equal(result.mode, "native");
-  assert.equal(result.url, "/file?path=Videos%2Fsample.mp4&source=remote");
-  assert.equal(result.status, "Native playback is ready.");
-});
-
-test("playbackDecisionForItem treats mkv as compatibility-first", async () => {
-  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
-
-  const result = mod.playbackDecisionForItem(
-    {
-      path: "Videos/sample.mkv",
-      stream_path: "Videos/sample.mkv",
-      extension: ".mkv",
-      compatibility_expected: true,
-    },
-    function () {
-      return "probably";
-    },
-  );
-
-  assert.equal(result.mode, "compatibility-needed");
-  assert.equal(result.url, "");
-  assert.equal(result.status, "Compatibility playback will be required for this format.");
-});
-
-test("playbackDecisionForItem reports native-unavailable when browser hints no support", async () => {
-  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
-
-  const result = mod.playbackDecisionForItem(
-    {
-      path: "Videos/sample.mp4",
-      stream_path: "Videos/sample.mp4",
-      extension: ".mp4",
-      compatibility_expected: false,
-    },
-    function () {
-      return "";
-    },
-  );
-
-  assert.equal(result.mode, "native-unavailable");
-  assert.equal(result.url, "");
-  assert.equal(result.status, "This format is not expected to play natively in the browser.");
-});
-
-test("playbackDurationSeconds prefers finite media duration", async () => {
-  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
-
-  assert.equal(mod.playbackDurationSeconds(12.5, {duration_seconds: 30}, "compatibility"), 12.5);
-});
-
-test("playbackDurationSeconds uses probe duration for compatibility HLS streams", async () => {
+test("playbackDurationSeconds uses probe duration before temporary HLS duration for compatibility streams", async () => {
   const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
 
   assert.equal(mod.playbackDurationSeconds(Infinity, {duration_seconds: 1501.25}, "compatibility"), 1501.25);
+  assert.equal(mod.playbackDurationSeconds(6, {duration_seconds: 1501.25}, "compatibility"), 1501.25);
 });
 
 test("playbackDurationSeconds returns zero when duration is unavailable", async () => {

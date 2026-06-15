@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import subprocess
 import threading
@@ -140,6 +141,24 @@ def _duration_seconds(format_data: dict[str, object]) -> float | None:
         return None
 
 
+def _format_ffmpeg_seconds(seconds: float) -> str:
+    return f"{max(0.0, seconds):.3f}".rstrip("0").rstrip(".")
+
+
+def parse_video_start_seconds(raw: str) -> float:
+    if not raw.strip():
+        return 0.0
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise BrowserError(HTTPStatus.BAD_REQUEST, "Start time must be a number of seconds.") from exc
+    if not math.isfinite(value):
+        raise BrowserError(HTTPStatus.BAD_REQUEST, "Start time must be finite.")
+    if value < 0:
+        raise BrowserError(HTTPStatus.BAD_REQUEST, "Start time must not be negative.")
+    return value
+
+
 def build_ffprobe_command(ffprobe_exe: Path, input_url: str) -> list[str]:
     return [
         str(ffprobe_exe),
@@ -153,11 +172,21 @@ def build_ffprobe_command(ffprobe_exe: Path, input_url: str) -> list[str]:
     ]
 
 
-def build_ffmpeg_webvtt_command(ffmpeg_exe: Path, input_url: str, subtitle_stream_index: int) -> list[str]:
-    return [
+def build_ffmpeg_webvtt_command(
+    ffmpeg_exe: Path,
+    input_url: str,
+    subtitle_stream_index: int,
+    *,
+    start_time_seconds: float = 0.0,
+) -> list[str]:
+    command = [
         str(ffmpeg_exe),
         "-v",
         "error",
+    ]
+    if start_time_seconds > 0:
+        command.extend(["-ss", _format_ffmpeg_seconds(start_time_seconds)])
+    command.extend([
         "-i",
         input_url,
         "-map",
@@ -165,7 +194,8 @@ def build_ffmpeg_webvtt_command(ffmpeg_exe: Path, input_url: str, subtitle_strea
         "-f",
         "webvtt",
         "-",
-    ]
+    ])
+    return command
 
 
 def build_ffmpeg_hls_command(
@@ -175,6 +205,7 @@ def build_ffmpeg_hls_command(
     *,
     segment_base_url: str,
     audio_stream_index: int | None = None,
+    start_time_seconds: float = 0.0,
 ) -> list[str]:
     segment_pattern = HLS_SEGMENT_PATTERN
     command = [
@@ -183,11 +214,15 @@ def build_ffmpeg_hls_command(
         "-loglevel",
         "error",
         "-y",
+    ]
+    if start_time_seconds > 0:
+        command.extend(["-ss", _format_ffmpeg_seconds(start_time_seconds)])
+    command.extend([
         "-i",
         input_url,
         "-map",
         "0:v:0",
-    ]
+    ])
     if audio_stream_index is None:
         command.extend(["-map", "0:a:0?"])
     else:
@@ -303,6 +338,7 @@ class VideoHlsSession:
     created_at: float
     last_accessed_at: float
     audio_stream_index: int | None
+    start_time_seconds: float
 
     def touch(self) -> None:
         self.last_accessed_at = time.time()
@@ -328,6 +364,7 @@ class VideoSessionManager:
         rel_path: str,
         base_url: str,
         audio_stream_index: int | None = None,
+        start_time_seconds: float = 0.0,
     ) -> dict[str, object]:
         video_config = getattr(self.app, "video_tools_config", None)
         ffmpeg_exe = getattr(video_config, "ffmpeg_exe", None)
@@ -346,6 +383,7 @@ class VideoSessionManager:
             playlist_path,
             segment_base_url=segment_base_url,
             audio_stream_index=audio_stream_index,
+            start_time_seconds=start_time_seconds,
         )
         log_video_debug(
             self.app,
@@ -353,6 +391,7 @@ class VideoSessionManager:
             session_id=session_id,
             path=rel_path,
             audio_stream_index=audio_stream_index,
+            start_time_seconds=start_time_seconds,
             playlist=str(playlist_path),
             command=command,
         )
@@ -377,6 +416,7 @@ class VideoSessionManager:
             created_at=time.time(),
             last_accessed_at=time.time(),
             audio_stream_index=audio_stream_index,
+            start_time_seconds=start_time_seconds,
         )
         with self._lock:
             self._cleanup_expired_locked()
@@ -422,22 +462,29 @@ class VideoSessionManager:
             except ValueError as exc:
                 log_video_debug(self.app, "asset_bad_path", session_id=session_id, name=name)
                 raise BrowserError(HTTPStatus.NOT_FOUND, "Video session asset not found.") from exc
+        existed_initially = asset_path.is_file()
+        wait_started = time.monotonic()
         if not self._wait_for_asset(session, asset_path):
+            wait_ms = round((time.monotonic() - wait_started) * 1000, 3)
             log_video_debug(
                 self.app,
                 "asset_missing_after_wait",
                 session_id=session_id,
                 name=asset_path.name,
+                existed_initially=existed_initially,
+                wait_ms=wait_ms,
                 process_returncode=session.process.poll(),
             )
             raise BrowserError(HTTPStatus.NOT_FOUND, "Video session asset not found.")
+        wait_ms = round((time.monotonic() - wait_started) * 1000, 3)
         with self._lock:
             if self._active_session is not session:
                 log_video_debug(self.app, "asset_session_replaced", session_id=session_id, name=asset_path.name)
                 raise BrowserError(HTTPStatus.NOT_FOUND, "Video session not found.")
             session.touch()
         content_type = _session_asset_content_type(asset_path.name)
-        if asset_path.suffix.casefold() == ".m3u8" or not asset_path.exists():
+        if asset_path.suffix.casefold() == ".m3u8" or not existed_initially or wait_ms >= 1:
+            playlist_info = _playlist_info(asset_path) if asset_path.suffix.casefold() == ".m3u8" else {}
             log_video_debug(
                 self.app,
                 "asset_served",
@@ -445,6 +492,10 @@ class VideoSessionManager:
                 name=asset_path.name,
                 bytes=asset_path.stat().st_size if asset_path.exists() else None,
                 content_type=content_type,
+                existed_initially=existed_initially,
+                wait_ms=wait_ms,
+                source_start_seconds=session.start_time_seconds,
+                **playlist_info,
             )
         return asset_path, content_type
 
@@ -465,6 +516,7 @@ class VideoSessionManager:
             + urlencode({"id": session.session_id, "name": session.playlist_path.name}),
             "asset_root": "/video/endpoints/session/file?id=" + session.session_id + "&name=",
             "audio_stream_index": session.audio_stream_index,
+            "start_time_seconds": session.start_time_seconds,
         }
 
     def _wait_for_playlist(self, session: VideoHlsSession, timeout_seconds: float = HLS_READY_TIMEOUT_SECONDS) -> bool:
@@ -585,6 +637,37 @@ def _first_ready_playlist_segment(playlist_path: Path) -> str | None:
     return None
 
 
+def _playlist_info(playlist_path: Path) -> dict[str, object]:
+    try:
+        text = playlist_path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    segment_count = 0
+    edge_seconds = 0.0
+    pending_duration: float | None = None
+    for raw_line in text.splitlines():
+        value = raw_line.strip()
+        if value.startswith("#EXTINF:"):
+            duration_text = value.removeprefix("#EXTINF:").split(",", 1)[0]
+            try:
+                pending_duration = float(duration_text)
+            except ValueError:
+                pending_duration = None
+            continue
+        if not value or value.startswith("#"):
+            continue
+        if _playlist_segment_asset_name(value) is not None:
+            segment_count += 1
+            if pending_duration is not None:
+                edge_seconds += pending_duration
+            pending_duration = None
+    return {
+        "playlist_segment_count": segment_count,
+        "playlist_edge_seconds": round(edge_seconds, 3),
+        "playlist_has_endlist": "#EXT-X-ENDLIST" in text,
+    }
+
+
 def _playlist_segment_asset_name(value: str) -> str | None:
     try:
         if "/" not in value and "\\" not in value:
@@ -699,6 +782,7 @@ def extract_remote_subtitles_to_webvtt(
     rel_path: str,
     subtitle_stream_index: int,
     base_url: str,
+    start_time_seconds: float = 0.0,
 ) -> tuple[bytes, str]:
     video_config = getattr(app, "video_tools_config", None)
     ffmpeg_exe = getattr(video_config, "ffmpeg_exe", None)
@@ -717,7 +801,12 @@ def extract_remote_subtitles_to_webvtt(
     if track_info is None:
         raise BrowserError(HTTPStatus.BAD_REQUEST, "Subtitle track was not found in probe metadata.")
     input_url = base_url + "/file?" + urlencode({"path": rel_path, "source": "remote"})
-    command = build_ffmpeg_webvtt_command(ffmpeg_exe, input_url, subtitle_stream_index)
+    command = build_ffmpeg_webvtt_command(
+        ffmpeg_exe,
+        input_url,
+        subtitle_stream_index,
+        start_time_seconds=start_time_seconds,
+    )
     try:
         proc = subprocess.run(
             command,
