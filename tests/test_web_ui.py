@@ -948,6 +948,8 @@ class WebUiTests(AppTestCase):
         self.assertIn("function rebaseWebVttText(body, startTimeSeconds)", video_js)
         self.assertIn("function subtitleStreamSupportsWebVtt(stream)", video_js)
         self.assertIn("function webvttCompatibleSubtitleStreams(probePayload)", video_js)
+        self.assertIn("var subtitleStreams = subtitleStreamsForPayload(probePayload);", video_js)
+        self.assertIn("option.disabled = !subtitleStreamSupportsWebVtt(stream);", video_js)
         self.assertIn("function preloadSubtitleVttForStream(item, subtitleStreamIndex)", video_js)
         self.assertIn("function preloadAllSubtitleVttsForItem(item, probePayload)", video_js)
         self.assertIn("Subtitle batch preload failed", video_js)
