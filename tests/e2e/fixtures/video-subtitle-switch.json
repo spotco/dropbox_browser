@@ -1,0 +1,184 @@
+{
+  "scenario": "video-subtitle-switch",
+  "entries": [
+    {
+      "path": "Videos",
+      "type": "dir",
+      "mod_time": "2024-01-01T12:00:00Z"
+    },
+    {
+      "path": "Videos/alpha.mkv",
+      "type": "file",
+      "content": "alpha-fixture-video",
+      "mod_time": "2024-01-01T12:00:01Z"
+    },
+    {
+      "path": "Videos/bravo.mkv",
+      "type": "file",
+      "content": "bravo-fixture-video",
+      "mod_time": "2024-01-01T12:00:02Z"
+    }
+  ],
+  "video": {
+    "probe_by_path": {
+      "Videos/alpha.mkv": {
+        "streams": [
+          {
+            "index": 0,
+            "codec_type": "video",
+            "codec_name": "h264",
+            "codec_long_name": "H.264",
+            "width": 640,
+            "height": 360,
+            "pix_fmt": "yuv420p"
+          },
+          {
+            "index": 1,
+            "codec_type": "audio",
+            "codec_name": "aac",
+            "codec_long_name": "AAC",
+            "channels": 2,
+            "sample_rate": "48000",
+            "tags": {
+              "language": "eng",
+              "title": "Alpha English Audio"
+            },
+            "disposition": {
+              "default": 1
+            }
+          },
+          {
+            "index": 2,
+            "codec_type": "audio",
+            "codec_name": "aac",
+            "codec_long_name": "AAC",
+            "channels": 2,
+            "sample_rate": "48000",
+            "tags": {
+              "language": "jpn",
+              "title": "Alpha Japanese Audio"
+            },
+            "disposition": {
+              "default": 0
+            }
+          },
+          {
+            "index": 3,
+            "codec_type": "subtitle",
+            "codec_name": "ass",
+            "codec_long_name": "ASS",
+            "tags": {
+              "language": "eng",
+              "title": "Alpha English"
+            },
+            "disposition": {
+              "default": 1,
+              "forced": 0
+            }
+          },
+          {
+            "index": 4,
+            "codec_type": "subtitle",
+            "codec_name": "ass",
+            "codec_long_name": "ASS",
+            "tags": {
+              "language": "fra",
+              "title": "Alpha French"
+            },
+            "disposition": {
+              "default": 0,
+              "forced": 0
+            }
+          }
+        ],
+        "format": {
+          "duration": "120.0"
+        }
+      },
+      "Videos/bravo.mkv": {
+        "streams": [
+          {
+            "index": 0,
+            "codec_type": "video",
+            "codec_name": "h264",
+            "codec_long_name": "H.264",
+            "width": 640,
+            "height": 360,
+            "pix_fmt": "yuv420p"
+          },
+          {
+            "index": 1,
+            "codec_type": "audio",
+            "codec_name": "aac",
+            "codec_long_name": "AAC",
+            "channels": 2,
+            "sample_rate": "48000",
+            "tags": {
+              "language": "eng",
+              "title": "Bravo English Audio"
+            },
+            "disposition": {
+              "default": 1
+            }
+          },
+          {
+            "index": 2,
+            "codec_type": "audio",
+            "codec_name": "aac",
+            "codec_long_name": "AAC",
+            "channels": 2,
+            "sample_rate": "48000",
+            "tags": {
+              "language": "jpn",
+              "title": "Bravo Japanese Audio"
+            },
+            "disposition": {
+              "default": 0
+            }
+          },
+          {
+            "index": 3,
+            "codec_type": "subtitle",
+            "codec_name": "ass",
+            "codec_long_name": "ASS",
+            "tags": {
+              "language": "eng",
+              "title": "Bravo English"
+            },
+            "disposition": {
+              "default": 1,
+              "forced": 0
+            }
+          },
+          {
+            "index": 4,
+            "codec_type": "subtitle",
+            "codec_name": "ass",
+            "codec_long_name": "ASS",
+            "tags": {
+              "language": "fra",
+              "title": "Bravo French"
+            },
+            "disposition": {
+              "default": 0,
+              "forced": 0
+            }
+          }
+        ],
+        "format": {
+          "duration": "90.0"
+        }
+      }
+    },
+    "vtt_by_path": {
+      "Videos/alpha.mkv": {
+        "3": "WEBVTT\n\n00:00.000 --> 00:10.000\nALPHA-SUBTITLE-ENG\n",
+        "4": "WEBVTT\n\n00:00.000 --> 00:10.000\nALPHA-SUBTITLE-FRA\n"
+      },
+      "Videos/bravo.mkv": {
+        "3": "WEBVTT\n\n00:00.000 --> 00:10.000\nBRAVO-SUBTITLE-ENG\n",
+        "4": "WEBVTT\n\n00:00.000 --> 00:10.000\nBRAVO-SUBTITLE-FRA\n"
+      }
+    }
+  }
+}

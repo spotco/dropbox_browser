@@ -21,11 +21,13 @@ import dropbox_browser.foldercache as foldercache_module
 import dropbox_browser.listingcache as listingcache_module
 import dropbox_browser.workertrace as workertrace_module
 from dropbox_browser import logoutput
+from dropbox_browser.config import VideoToolsConfig
 from dropbox_browser.foldercache import FolderCacheManager
 from dropbox_browser.handlers import RequestHandler
 from dropbox_browser.listingcache import ListingCacheManager
 from dropbox_browser.services import DropboxBrowser
 from dropbox_browser.syncjobs import SyncJobManager
+from tests.e2e.support.video_mocks import build_video_mock_patches
 from tests.support import SimulatedLsjsonResponse, SimulatedRclone
 
 
@@ -269,6 +271,25 @@ def _write_local_files(local_root: Path, fixture: dict[str, Any]) -> None:
             target.write_text(str(file_entry.get("content", "")), encoding="utf-8")
 
 
+def _file_stat_responses(tree: FixtureRemoteTree) -> dict[str, list[SimulatedLsjsonResponse]]:
+    responses: dict[str, list[SimulatedLsjsonResponse]] = {}
+    for rel_path, entry in tree.entries.items():
+        if entry.get("type") != "file":
+            continue
+        name = rel_path.rsplit("/", 1)[-1]
+        remote_path = "dropbox:" + rel_path
+        responses[remote_path] = [
+            SimulatedLsjsonResponse(items=[{
+                "Name": name,
+                "Path": name,
+                "IsDir": False,
+                "Size": len(entry.get("content") or b""),
+                "ModTime": entry.get("mod_time", DEFAULT_MOD_TIME),
+            }])
+        ]
+    return responses
+
+
 def _parse_fixture_responses(
     fixture: dict[str, Any],
     tree: FixtureRemoteTree,
@@ -277,6 +298,8 @@ def _parse_fixture_responses(
     lsjson_responses: dict[str, list[SimulatedLsjsonResponse]] = {}
     for remote_path in tree.directory_targets("dropbox:"):
         lsjson_responses[remote_path] = [SimulatedLsjsonResponse(items=tree.list_dir(remote_path))]
+    for remote_path, responses in _file_stat_responses(tree).items():
+        lsjson_responses.setdefault(remote_path, responses)
 
     raw_overrides = fixture.get("lsjson_responses", {})
     if not isinstance(raw_overrides, dict):
@@ -363,7 +386,20 @@ def _build_app(fixture_path: Path, port: int) -> tuple[DropboxBrowser, Integrati
         remote="dropbox:",
     )
     rclone.progress_fn = folder_cache.current_progress
-    app = DropboxBrowser(rclone, "dropbox:", local_root, folder_cache=folder_cache, listing_cache=listing_cache)
+    video_tools_config = None
+    if isinstance(fixture.get("video"), dict):
+        video_tools_config = VideoToolsConfig(
+            ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+            ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+        )
+    app = DropboxBrowser(
+        rclone,
+        "dropbox:",
+        local_root,
+        folder_cache=folder_cache,
+        listing_cache=listing_cache,
+        video_tools_config=video_tools_config,
+    )
     app.sync_jobs = SyncJobManager(app, workers=1)
     app.music_library_poll_delay_ms = int(
         os.environ.get("DROPBOX_BROWSER_E2E_MUSIC_LIBRARY_POLL_DELAY_MS", str(DEFAULT_MUSIC_LIBRARY_POLL_DELAY_MS))
@@ -383,8 +419,10 @@ def _build_app(fixture_path: Path, port: int) -> tuple[DropboxBrowser, Integrati
 
 def main() -> int:
     fixture_path = _fixture_path()
+    fixture = _load_fixture(fixture_path)
     port = int(os.environ.get("PLAYWRIGHT_PORT", "8011"))
     app, integration_state = _build_app(fixture_path, port)
+    video_mock_patches = build_video_mock_patches(fixture, integration_state.temp_root)
     server = ThreadingHTTPServer(("127.0.0.1", port), IntegrationRequestHandler)
     server.app = app  # type: ignore[attr-defined]
     server.integration_state = integration_state  # type: ignore[attr-defined]
@@ -401,6 +439,8 @@ def main() -> int:
     print(f"Local root: {integration_state.local_root}")
     print(f"Trace log: {integration_state.trace_log_path}")
     logoutput.start()
+    for mock_patch in video_mock_patches:
+        mock_patch.start()
     previous_sigint = signal.getsignal(signal.SIGINT)
     signal.signal(signal.SIGINT, request_shutdown)
     previous_sigterm = None
@@ -419,6 +459,8 @@ def main() -> int:
             print(f"\nStopped by signal {stop_signal}.")
         server.server_close()
         app.shutdown()
+        for mock_patch in reversed(video_mock_patches):
+            mock_patch.stop()
     return 0
 
 

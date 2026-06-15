@@ -91,14 +91,18 @@ import {
       probeFailures: Object.create(null),
       selectedAudioStreamIndexByPath: Object.create(null),
       selectedSubtitleStreamIndexByPath: Object.create(null),
-      subtitleObjectUrl: '',
+      subtitleFullVttCacheByPath: Object.create(null),
+      subtitleWarmInFlightByPath: Object.create(null),
+      subtitleObjectUrls: [],
+      subtitleMountedSeekSeconds: null,
+      subtitleMountedStreamIndex: null,
       subtitleDebug: {
         rawVtt: '',
         cues: [],
         fetchStartSeconds: 0,
+        streamIndex: '',
         trackLabel: '',
         lastLoggedCueKey: '',
-        browserCuechangeBound: false,
       },
       progressSliderActive: false,
       controlsIdleTimer: 0,
@@ -457,16 +461,27 @@ import {
     resetPlaybackProgress();
   }
 
-  function clearVideoSource() {
+  function resetPlaybackSurface() {
     if (!ctx.els.videoEl) return;
+    hideVideoElement();
     destroyHlsController();
+    clearSubtitleTrack();
     resetCompatibilityRecoveryState();
-    ctx.els.videoEl.controls = false;
-    ctx.els.videoEl.removeAttribute('controls');
-    if (ctx.els.videoEl.getAttribute('src')) {
-      ctx.els.videoEl.pause();
-      ctx.els.videoEl.removeAttribute('src');
-      ctx.els.videoEl.load();
+    var video = ctx.els.videoEl;
+    video.controls = false;
+    video.removeAttribute('controls');
+    try {
+      video.pause();
+    }
+    catch (_pauseError) {
+      // Best-effort pause before resetting media element state.
+    }
+    video.removeAttribute('src');
+    try {
+      video.load();
+    }
+    catch (_loadError) {
+      // Best-effort load to flush native text-track rendering on MSE/HLS playback.
     }
     ctx.state.lastPlaybackPath = '';
     ctx.state.compatibilityStartSeconds = 0;
@@ -475,12 +490,17 @@ import {
     resetPlaybackProgress();
   }
 
+  function clearVideoSource() {
+    resetPlaybackSurface();
+  }
+
   var SUBTITLE_PREVIEW_MAX_CHARS = 120;
 
   function resetSubtitleDebugState() {
     ctx.state.subtitleDebug.rawVtt = '';
     ctx.state.subtitleDebug.cues = [];
     ctx.state.subtitleDebug.fetchStartSeconds = 0;
+    ctx.state.subtitleDebug.streamIndex = '';
     ctx.state.subtitleDebug.trackLabel = '';
     ctx.state.subtitleDebug.lastLoggedCueKey = '';
     if (ctx.els.debugMetaEl) {
@@ -539,6 +559,97 @@ import {
       });
     });
     return cues;
+  }
+
+  var VTT_TIMING_LINE_RE = /(\d{1,2}:\d{2}(?::\d{2})?\.\d{1,3})\s*-->\s*(\d{1,2}:\d{2}(?::\d{2})?\.\d{1,3})([^\n]*)/;
+
+  function formatVttTimestamp(seconds) {
+    var clamped = Math.max(0, Number(seconds) || 0);
+    var whole = Math.floor(clamped);
+    var millis = Math.round((clamped - whole) * 1000);
+    if (millis === 1000) {
+      whole += 1;
+      millis = 0;
+    }
+    var hours = Math.floor(whole / 3600);
+    var minutes = Math.floor((whole % 3600) / 60);
+    var remainder = whole % 60;
+    if (hours > 0) {
+      return String(hours).padStart(2, '0')
+        + ':'
+        + String(minutes).padStart(2, '0')
+        + ':'
+        + String(remainder).padStart(2, '0')
+        + '.'
+        + String(millis).padStart(3, '0');
+    }
+    return String(minutes).padStart(2, '0')
+      + ':'
+      + String(remainder).padStart(2, '0')
+      + '.'
+      + String(millis).padStart(3, '0');
+  }
+
+  function shiftVttTimingLine(match, shiftSeconds) {
+    var start = parseVttTimestamp(match[1]);
+    var end = parseVttTimestamp(match[2]);
+    var shiftedStart = start - shiftSeconds;
+    var shiftedEnd = end - shiftSeconds;
+    if (shiftedEnd <= 0) return null;
+    if (shiftedStart < 0) shiftedStart = 0;
+    return formatVttTimestamp(shiftedStart) + ' --> ' + formatVttTimestamp(shiftedEnd) + (match[3] || '');
+  }
+
+  function rebaseWebVttText(body, startTimeSeconds) {
+    if (!(startTimeSeconds > 0)) return body;
+    var blocks = String(body || '').trim().split(/\n\n+/);
+    var outBlocks = [];
+    blocks.forEach(function (block) {
+      var trimmed = block.trim();
+      if (!trimmed) return;
+      if (trimmed.indexOf('WEBVTT') === 0) {
+        outBlocks.push(trimmed);
+        return;
+      }
+      var lines = trimmed.split('\n');
+      var timingIdx = 0;
+      if (lines.length > 1 && lines[0].indexOf('-->') < 0 && lines[1].indexOf('-->') >= 0) {
+        timingIdx = 1;
+      }
+      var timingMatch = lines[timingIdx].trim().match(VTT_TIMING_LINE_RE);
+      if (!timingMatch) {
+        outBlocks.push(trimmed);
+        return;
+      }
+      var shiftedTiming = shiftVttTimingLine(timingMatch, startTimeSeconds);
+      if (!shiftedTiming) return;
+      lines[timingIdx] = shiftedTiming;
+      outBlocks.push(lines.join('\n'));
+    });
+    if (!outBlocks.length) return 'WEBVTT\n\n';
+    return outBlocks.join('\n\n') + '\n';
+  }
+
+  function subtitleFullVttCacheForPath(path) {
+    var key = String(path || '');
+    if (!key) return null;
+    if (!ctx.state.subtitleFullVttCacheByPath[key]) {
+      ctx.state.subtitleFullVttCacheByPath[key] = Object.create(null);
+    }
+    return ctx.state.subtitleFullVttCacheByPath[key];
+  }
+
+  function getCachedFullSubtitleVtt(path, subtitleStreamIndex) {
+    var cache = subtitleFullVttCacheForPath(path);
+    if (!cache) return '';
+    var stored = cache[String(subtitleStreamIndex)];
+    return typeof stored === 'string' ? stored : '';
+  }
+
+  function storeFullSubtitleVtt(path, subtitleStreamIndex, subtitleText) {
+    var cache = subtitleFullVttCacheForPath(path);
+    if (!cache) return;
+    cache[String(subtitleStreamIndex)] = String(subtitleText || '');
   }
 
   function findActiveParsedCue(cues, mediaTime) {
@@ -633,11 +744,14 @@ import {
 
   function managedSubtitleTextTrack() {
     if (!ctx.els.videoEl || !ctx.els.videoEl.textTracks) return null;
+    var fallback = null;
     for (var index = 0; index < ctx.els.videoEl.textTracks.length; index += 1) {
       var textTrack = ctx.els.videoEl.textTracks[index];
-      if (textTrack && textTrack.kind === 'subtitles') return textTrack;
+      if (!textTrack || textTrack.kind !== 'subtitles') continue;
+      if (textTrack.mode === 'showing') return textTrack;
+      if (!fallback) fallback = textTrack;
     }
-    return null;
+    return fallback;
   }
 
   function summarizeBrowserCue(cue) {
@@ -675,24 +789,46 @@ import {
       + displayedCue.text;
   }
 
+  function subtitleSyncContext(fields) {
+    var active = activeQueueItem();
+    return Object.assign({}, fields || {}, {
+      playback_mode: ctx.state.playbackMode || '',
+      path: active && active.path ? active.path : '',
+      media_current_time: ctx.els.videoEl ? ctx.els.videoEl.currentTime || 0 : '',
+      global_current_time: currentGlobalPlaybackSeconds(),
+      source_start_seconds: ctx.state.compatibilityStartSeconds || 0,
+      subtitle_fetch_start_seconds: ctx.state.subtitleDebug.fetchStartSeconds || 0,
+      subtitle_track_label: ctx.state.subtitleDebug.trackLabel || '',
+      subtitle_mounted_stream_index: ctx.state.subtitleMountedStreamIndex,
+      playback_sync_token: ctx.state.playbackSyncToken,
+    });
+  }
+
   function reportSubtitleDiagnostic(fields) {
     try {
       if (!window.ClientLogger || !window.ClientLogger.enabledFor('video-subtitles')) return;
-      var active = activeQueueItem();
-      var details = Object.assign({}, fields || {}, {
-        playback_mode: ctx.state.playbackMode || '',
-        path: active && active.path ? active.path : '',
-        media_current_time: ctx.els.videoEl ? ctx.els.videoEl.currentTime || 0 : '',
-        global_current_time: currentGlobalPlaybackSeconds(),
-        source_start_seconds: ctx.state.compatibilityStartSeconds || 0,
-        subtitle_fetch_start_seconds: ctx.state.subtitleDebug.fetchStartSeconds || 0,
-        subtitle_track_label: ctx.state.subtitleDebug.trackLabel || '',
-      });
+      var details = subtitleSyncContext(fields || {});
       var level = details.level || 'debug';
       var message = details.message || 'subtitle diagnostic';
       delete details.level;
       delete details.message;
       window.ClientLogger.log('video-subtitles', level, message, details);
+    }
+    catch (_error) {
+      return;
+    }
+  }
+
+  function reportSubtitleSyncDiagnostic(fields) {
+    reportSubtitleDiagnostic(fields);
+    try {
+      if (!window.ClientLogger || !window.ClientLogger.enabledFor('video')) return;
+      var details = subtitleSyncContext(fields || {});
+      var level = details.level || 'info';
+      var message = details.message || 'subtitle sync';
+      delete details.level;
+      delete details.message;
+      window.ClientLogger.log('video', level, message, details);
     }
     catch (_error) {
       return;
@@ -764,42 +900,32 @@ import {
   }
 
   function bindSubtitleTextTrackEvents(textTrack) {
-    if (!textTrack || ctx.state.subtitleDebug.browserCuechangeBound) return;
+    if (!textTrack) return;
     textTrack.addEventListener('cuechange', function () {
       syncSubtitleDebugDisplay();
     });
-    ctx.state.subtitleDebug.browserCuechangeBound = true;
   }
 
-  function enableManagedSubtitleTextTrack(trackElement) {
-    if (!trackElement) return;
-    function activate() {
-      var textTrack = trackElement.track || managedSubtitleTextTrack();
-      if (!textTrack) return;
-      for (var index = 0; index < ctx.els.videoEl.textTracks.length; index += 1) {
-        var candidate = ctx.els.videoEl.textTracks[index];
-        if (!candidate) continue;
-        candidate.mode = candidate === textTrack ? 'showing' : 'disabled';
-      }
-      bindSubtitleTextTrackEvents(textTrack);
-      syncSubtitleDebugDisplay();
-    }
-    if (trackElement.readyState >= 2) {
-      activate();
+  function normalizeSubtitleStreamIndex(value) {
+    if (value === '' || value === null || value === undefined) return null;
+    var parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function revokeSubtitleObjectUrls() {
+    if (!Array.isArray(ctx.state.subtitleObjectUrls)) {
+      ctx.state.subtitleObjectUrls = [];
       return;
     }
-    trackElement.addEventListener('load', activate, {once: true});
-    trackElement.addEventListener('error', function () {
-      reportSubtitleDiagnostic({
-        level: 'warn',
-        message: 'Subtitle track element failed to load',
-      });
-    }, {once: true});
+    ctx.state.subtitleObjectUrls.forEach(function (url) {
+      if (url) URL.revokeObjectURL(url);
+    });
+    ctx.state.subtitleObjectUrls = [];
   }
 
   function clearSubtitleTrack() {
     if (ctx.els.videoEl) {
-      Array.from(ctx.els.videoEl.querySelectorAll('track[data-video-subtitle-track="1"]')).forEach(function (node) {
+      Array.from(ctx.els.videoEl.querySelectorAll('track')).forEach(function (node) {
         node.remove();
       });
       if (ctx.els.videoEl.textTracks) {
@@ -808,12 +934,101 @@ import {
         }
       }
     }
-    if (ctx.state.subtitleObjectUrl) {
-      URL.revokeObjectURL(ctx.state.subtitleObjectUrl);
-      ctx.state.subtitleObjectUrl = '';
-    }
-    ctx.state.subtitleDebug.browserCuechangeBound = false;
+    revokeSubtitleObjectUrls();
+    ctx.state.subtitleMountedSeekSeconds = null;
+    ctx.state.subtitleMountedStreamIndex = null;
     resetSubtitleDebugState();
+  }
+
+  function resetSubtitlesForActiveItemChange(item) {
+    renderSubtitleTrackSelector(item, null);
+    reportSubtitleSyncDiagnostic({
+      level: 'info',
+      message: 'Subtitles cleared for playback item change',
+      item_path: item && item.path ? item.path : '',
+    });
+  }
+
+  function persistSubtitleSelectionFromUi(item) {
+    var select = ctx.els.subtitleTrackSelectEl;
+    if (!item || !select || select.disabled || !select.value) return;
+    var path = item.path || '';
+    if (!path) return;
+    ctx.state.selectedSubtitleStreamIndexByPath[path] = Number(select.value);
+  }
+
+  function resolvedSubtitleStreamIndex(item, probePayload) {
+    if (!item || !probePayload) return '';
+    return selectedSubtitleStreamIndex(item, probePayload);
+  }
+
+  function subtitlesEnabledForItem(item, probePayload) {
+    if (!item || !probePayload) return false;
+    return resolvedSubtitleStreamIndex(item, probePayload) !== '';
+  }
+
+  function subtitlesAlreadyActive() {
+    if (ctx.state.subtitleDebug.trackLabel) return true;
+    var textTrack = managedSubtitleTextTrack();
+    return Boolean(textTrack && textTrack.mode === 'showing');
+  }
+
+  function subtitlesAreMounted(item, streamIndex, seekSeconds) {
+    if (!item || (item.path || '') !== activeItemPath()) return false;
+    var mountedSeek = Math.max(0, Number(ctx.state.subtitleMountedSeekSeconds) || 0);
+    var requestedSeek = Math.max(0, Number(seekSeconds) || 0);
+    if (Math.abs(mountedSeek - requestedSeek) > 0.05) return false;
+    var normalized = normalizeSubtitleStreamIndex(streamIndex);
+    var mounted = normalizeSubtitleStreamIndex(ctx.state.subtitleMountedStreamIndex);
+    if (normalized === null || mounted === null || normalized !== mounted) return false;
+    var textTrack = managedSubtitleTextTrack();
+    return Boolean(textTrack && textTrack.mode === 'showing');
+  }
+
+  function hlsErrorTargetsCurrentSession(data) {
+    var sessionId = ctx.state.compatibilitySessionId || '';
+    if (!sessionId) return true;
+    var url = '';
+    if (data && data.frag && data.frag.url) url = String(data.frag.url);
+    else if (data && data.context && data.context.url) url = String(data.context.url);
+    if (!url) return true;
+    var match = url.match(/[?&]id=([^&]+)/);
+    if (!match) return true;
+    return match[1] === sessionId;
+  }
+
+  function ensureSubtitlesAfterPlaybackReady(reason) {
+    var active = activeQueueItem();
+    if (!active || ctx.state.playbackMode !== 'compatibility') return;
+    if (ctx.state.seekRestartInProgress) return;
+    var probePayload = ctx.state.probeCache[active.path || ''] || null;
+    if (!subtitlesEnabledForItem(active, probePayload)) return;
+    var fetchStartSeconds = Math.max(0, ctx.state.compatibilityStartSeconds || 0);
+    void applySubtitlesForSeek(active, probePayload, fetchStartSeconds, {
+      reloadReason: reason || 'playback-ready',
+      playbackSyncToken: ctx.state.playbackSyncToken,
+    });
+  }
+
+  function resyncSubtitleTrackAfterHlsRecovery(reason, data) {
+    if (!hlsErrorTargetsCurrentSession(data)) {
+      reportSubtitleDiagnostic({
+        level: 'info',
+        message: 'Subtitle resync skipped for stale HLS session',
+        recovery_reason: reason || '',
+      });
+      return;
+    }
+    var active = activeQueueItem();
+    if (!active || ctx.state.playbackMode !== 'compatibility') return;
+    var probePayload = ctx.state.probeCache[active.path || ''] || null;
+    if (!subtitlesEnabledForItem(active, probePayload)) return;
+    reportSubtitleDiagnostic({
+      level: 'info',
+      message: 'Subtitle resync after HLS recovery',
+      recovery_reason: reason || '',
+    });
+    ensureSubtitlesAfterPlaybackReady(reason || 'hls-recovery');
   }
 
   async function stopCompatibilitySession() {
@@ -999,6 +1214,7 @@ import {
           setStatus('Compatibility playback session is ready at ' + formatPlaybackTime(ctx.state.compatibilityStartSeconds) + '.');
         }
         if (ctx.state.pendingAutoplay) requestVideoPlay();
+        ensureSubtitlesAfterPlaybackReady('hls-manifest-parsed');
       });
       ctx.state.hlsController.on(Hls.Events.FRAG_LOADING, function (_eventName, data) {
         reportVideoDiagnostic({
@@ -1045,12 +1261,14 @@ import {
           ctx.state.compatibilityNetworkRecoveries += 1;
           setStatus('Compatibility playback hit a network error; retrying the stream.');
           ctx.state.hlsController.startLoad();
+          resyncSubtitleTrackAfterHlsRecovery('network-error', data);
           return;
         }
         if (data.type === Hls.ErrorTypes.MEDIA_ERROR && ctx.state.compatibilityMediaRecoveries < 2) {
           ctx.state.compatibilityMediaRecoveries += 1;
           setStatus('Compatibility playback hit a media error; attempting recovery.');
           ctx.state.hlsController.recoverMediaError();
+          resyncSubtitleTrackAfterHlsRecovery('media-error', data);
           return;
         }
         failCompatibilityPlayback(active, 'Compatibility playback failed for this file.', 'Compatibility playback failed.');
@@ -1077,6 +1295,7 @@ import {
       throw new Error('HLS playback is not supported in this browser.');
     }
     ctx.state.playbackMode = 'compatibility';
+    clearSubtitleTrack();
     showPlaybackVideo(title, meta);
     syncPlaybackProgress();
     syncTransportControls();
@@ -1173,15 +1392,14 @@ import {
   function selectedSubtitleStreamIndex(item, probePayload) {
     if (!item || !probePayload) return '';
     var path = item.path || '';
-    var subtitleStreams = Array.isArray(probePayload.subtitle_streams) ? probePayload.subtitle_streams : [];
+    var subtitleStreams = webvttCompatibleSubtitleStreams(probePayload);
     if (!subtitleStreams.length) return '';
     var saved = ctx.state.selectedSubtitleStreamIndexByPath[path];
     if (saved === '') return '';
     if (typeof saved === 'number' && subtitleStreams.some(function (stream) { return stream.index === saved; })) {
       return saved;
     }
-    if (probePayload.subtitle_off_default) {
-      ctx.state.selectedSubtitleStreamIndexByPath[path] = '';
+    if (probePayload.subtitle_off_default && saved === undefined) {
       return '';
     }
     var probeDefault = probePayload.default_subtitle_stream_index;
@@ -1205,7 +1423,7 @@ import {
       setSubtitleTrackPlaceholder(failed ? 'Subtitle tracks unavailable' : 'Loading subtitle tracks...');
       return;
     }
-    var subtitleStreams = Array.isArray(probePayload.subtitle_streams) ? probePayload.subtitle_streams : [];
+    var subtitleStreams = webvttCompatibleSubtitleStreams(probePayload);
     if (!subtitleStreams.length) {
       setSubtitleTrackPlaceholder('No subtitle tracks found');
       return;
@@ -1275,57 +1493,266 @@ import {
     return '/video/endpoints/subtitles?path='
       + encodeURIComponent(item.path || '')
       + '&source=remote&track='
-      + encodeURIComponent(String(subtitleStreamIndex))
-      + '&start_time_seconds='
-      + encodeURIComponent(String(Math.max(0, ctx.state.compatibilityStartSeconds || 0)));
+      + encodeURIComponent(String(subtitleStreamIndex));
   }
 
-  async function syncSubtitleTrackForItem(item, probePayload) {
-    clearSubtitleTrack();
-    if (!item || !ctx.els.videoEl) return;
-    var payload = probePayload || await ensureSubtitleTracksForItem(item);
-    if (!payload || item.path !== activeItemPath()) return;
-    var subtitleStreamIndex = selectedSubtitleStreamIndex(item, payload);
-    if (subtitleStreamIndex === '') return;
-    var subtitleStreams = Array.isArray(payload.subtitle_streams) ? payload.subtitle_streams : [];
-    var subtitleStream = subtitleStreams.find(function (stream) { return stream.index === subtitleStreamIndex; }) || null;
-    var fetchStartSeconds = Math.max(0, ctx.state.compatibilityStartSeconds || 0);
-    var url = subtitleTrackUrl(item, subtitleStreamIndex);
-    try {
-      var response = await fetch(url);
-      if (!response.ok) throw new Error('Subtitle extraction failed.');
-      var subtitleText = await response.text();
-      if (item.path !== activeItemPath()) return;
-      ctx.state.subtitleDebug.rawVtt = subtitleText;
-      ctx.state.subtitleDebug.cues = parseWebVttCues(subtitleText);
-      ctx.state.subtitleDebug.fetchStartSeconds = fetchStartSeconds;
-      ctx.state.subtitleDebug.trackLabel = subtitleStream ? subtitleTrackLabel(subtitleStream) : 'Subtitles';
-      ctx.state.subtitleDebug.lastLoggedCueKey = '';
-      ctx.state.subtitleObjectUrl = URL.createObjectURL(new Blob([subtitleText], {type: 'text/vtt'}));
-      var track = document.createElement('track');
-      track.kind = 'subtitles';
-      track.label = ctx.state.subtitleDebug.trackLabel;
-      track.srclang = subtitleStream && subtitleStream.language ? String(subtitleStream.language) : 'und';
-      track.src = ctx.state.subtitleObjectUrl;
-      track.default = true;
-      track.setAttribute('data-video-subtitle-track', '1');
-      ctx.els.videoEl.appendChild(track);
-      enableManagedSubtitleTextTrack(track);
-      reportSubtitleDiagnostic({
-        level: 'info',
-        message: 'Subtitle track loaded',
-        subtitle_stream_index: subtitleStreamIndex,
-        subtitle_cue_count: ctx.state.subtitleDebug.cues.length,
-        subtitle_fetch_url: url,
-        subtitle_vtt_preview: subtitleText.slice(0, 400),
-      });
-      syncSubtitleDebugDisplay();
-      setStatus('Subtitle track is ready.');
+  function allSubtitlesUrl(item) {
+    return '/video/endpoints/subtitles/all?path='
+      + encodeURIComponent(item.path || '')
+      + '&source=remote';
+  }
+
+  function subtitleStreamsForPayload(probePayload) {
+    return Array.isArray(probePayload && probePayload.subtitle_streams)
+      ? probePayload.subtitle_streams
+      : [];
+  }
+
+  function subtitleStreamSupportsWebVtt(stream) {
+    if (!stream) return false;
+    if (stream.webvtt_compatible === false) return false;
+    return true;
+  }
+
+  function webvttCompatibleSubtitleStreams(probePayload) {
+    return subtitleStreamsForPayload(probePayload).filter(subtitleStreamSupportsWebVtt);
+  }
+
+  function isSubtitleVttCachedForStream(path, subtitleStreamIndex) {
+    return Boolean(getCachedFullSubtitleVtt(path, subtitleStreamIndex));
+  }
+
+  function allSubtitleTracksCachedForItem(item, probePayload) {
+    if (!item || !item.path) return true;
+    var subtitleStreams = webvttCompatibleSubtitleStreams(probePayload);
+    if (!subtitleStreams.length) return true;
+    var path = item.path;
+    return subtitleStreams.every(function (stream) {
+      return !stream
+        || stream.index === undefined
+        || stream.index === null
+        || isSubtitleVttCachedForStream(path, stream.index);
+    });
+  }
+
+  async function preloadSubtitleVttForStream(item, subtitleStreamIndex) {
+    var response = await fetch(subtitleTrackUrl(item, subtitleStreamIndex));
+    if (!response.ok) {
+      throw new Error('Subtitle extraction failed for track ' + String(subtitleStreamIndex) + '.');
     }
-    catch (_error) {
+    var body = await response.text();
+    if (!body || body.indexOf('WEBVTT') !== 0) {
+      throw new Error('Invalid WebVTT for track ' + String(subtitleStreamIndex) + '.');
+    }
+    storeFullSubtitleVtt(item.path || '', subtitleStreamIndex, body);
+  }
+
+  async function preloadAllSubtitleVttsForItem(item, probePayload) {
+    if (!item || !item.path) return;
+    var path = item.path;
+    var payload = probePayload || ctx.state.probeCache[path] || null;
+    if (!payload) return;
+    var subtitleStreams = webvttCompatibleSubtitleStreams(payload);
+    if (!subtitleStreams.length) return;
+    if (allSubtitleTracksCachedForItem(item, payload)) return;
+    if (ctx.state.subtitleWarmInFlightByPath[path]) {
+      return ctx.state.subtitleWarmInFlightByPath[path];
+    }
+    var warmWork = (async function () {
+      var batchFailed = false;
+      try {
+        var response = await fetch(allSubtitlesUrl(item));
+        if (!response.ok) {
+          batchFailed = true;
+          reportSubtitleSyncDiagnostic({
+            level: 'warn',
+            message: 'Subtitle batch preload failed',
+            http_status: response.status,
+          });
+        }
+        else {
+          var body = await response.json();
+          var tracks = body && body.tracks && typeof body.tracks === 'object' ? body.tracks : {};
+          Object.keys(tracks).forEach(function (key) {
+            var entry = tracks[key];
+            if (!entry || typeof entry.vtt !== 'string') return;
+            storeFullSubtitleVtt(path, Number(key), entry.vtt);
+          });
+        }
+      }
+      catch (error) {
+        batchFailed = true;
+        reportSubtitleSyncDiagnostic({
+          level: 'warn',
+          message: 'Subtitle batch preload failed',
+          error_message: error && error.message ? String(error.message) : 'unknown',
+        });
+      }
+      if (batchFailed) {
+        var missingStreams = subtitleStreams.filter(function (stream) {
+          return !isSubtitleVttCachedForStream(path, stream.index);
+        });
+        await Promise.all(missingStreams.map(function (stream) {
+          return preloadSubtitleVttForStream(item, stream.index).catch(function (error) {
+            reportSubtitleSyncDiagnostic({
+              level: 'warn',
+              message: 'Subtitle per-track preload failed',
+              subtitle_stream_index: stream.index,
+              error_message: error && error.message ? String(error.message) : 'unknown',
+            });
+          });
+        }));
+      }
+    })().finally(function () {
+      if (ctx.state.subtitleWarmInFlightByPath[path] === warmWork) {
+        delete ctx.state.subtitleWarmInFlightByPath[path];
+      }
+    });
+    ctx.state.subtitleWarmInFlightByPath[path] = warmWork;
+    return warmWork;
+  }
+
+  function subtitlePlaybackRequestIsStale(options) {
+    if (!options || options.playbackSyncToken === undefined) return false;
+    return options.playbackSyncToken !== ctx.state.playbackSyncToken;
+  }
+
+  function updateSubtitleDebugForStream(item, probePayload, streamIndex, fetchStartSeconds) {
+    var normalized = normalizeSubtitleStreamIndex(streamIndex);
+    if (!item || normalized === null) {
+      resetSubtitleDebugState();
+      return;
+    }
+    var fullSubtitleText = getCachedFullSubtitleVtt(item.path || '', normalized);
+    if (!fullSubtitleText) {
+      resetSubtitleDebugState();
+      return;
+    }
+    var subtitleStreams = subtitleStreamsForPayload(probePayload);
+    var subtitleStream = subtitleStreams.find(function (stream) {
+      return normalizeSubtitleStreamIndex(stream.index) === normalized;
+    }) || null;
+    var rebasedText = rebaseWebVttText(fullSubtitleText, fetchStartSeconds);
+    ctx.state.subtitleDebug.rawVtt = rebasedText;
+    ctx.state.subtitleDebug.cues = parseWebVttCues(rebasedText);
+    ctx.state.subtitleDebug.fetchStartSeconds = fetchStartSeconds;
+    ctx.state.subtitleDebug.streamIndex = normalized;
+    ctx.state.subtitleDebug.trackLabel = subtitleStream ? subtitleTrackLabel(subtitleStream) : 'Subtitles';
+    ctx.state.subtitleDebug.lastLoggedCueKey = '';
+    syncSubtitleDebugDisplay();
+  }
+
+  function mountSubtitleTrackForItem(item, probePayload, streamIndex, seekSeconds, options) {
+    options = options || {};
+    if (!item || !ctx.els.videoEl || item.path !== activeItemPath()) return false;
+    if (subtitlePlaybackRequestIsStale(options)) return false;
+    var normalized = normalizeSubtitleStreamIndex(streamIndex);
+    if (normalized === null) {
       clearSubtitleTrack();
-      setStatus('Subtitle extraction failed.');
-      setPlaybackSummary(activeItemTitle(item), 'Selected subtitle track could not be converted to WebVTT.');
+      return true;
+    }
+    var payload = probePayload || ctx.state.probeCache[item.path || ''] || null;
+    if (!payload) return false;
+    var fullSubtitleText = getCachedFullSubtitleVtt(item.path || '', normalized);
+    if (!fullSubtitleText) return false;
+    var requestedSeek = Math.max(0, Number(seekSeconds) || 0);
+    var rebasedText = rebaseWebVttText(fullSubtitleText, requestedSeek);
+    clearSubtitleTrack();
+    var subtitleStreams = subtitleStreamsForPayload(payload);
+    var subtitleStream = subtitleStreams.find(function (stream) {
+      return normalizeSubtitleStreamIndex(stream.index) === normalized;
+    }) || null;
+    var objectUrl = URL.createObjectURL(new Blob([rebasedText], {type: 'text/vtt'}));
+    ctx.state.subtitleObjectUrls.push(objectUrl);
+    var track = document.createElement('track');
+    track.kind = 'subtitles';
+    track.label = subtitleStream ? subtitleTrackLabel(subtitleStream) : 'Subtitles';
+    track.srclang = subtitleStream && subtitleStream.language ? String(subtitleStream.language) : 'und';
+    track.src = objectUrl;
+    track.default = true;
+    track.setAttribute('data-video-subtitle-track', '1');
+    track.setAttribute('data-video-subtitle-stream-index', String(normalized));
+    ctx.els.videoEl.appendChild(track);
+    ctx.state.subtitleMountedSeekSeconds = requestedSeek;
+    ctx.state.subtitleMountedStreamIndex = normalized;
+    function activateTrack() {
+      if (!track.isConnected) return;
+      var textTrack = track.track;
+      if (!textTrack) return;
+      for (var index = 0; index < ctx.els.videoEl.textTracks.length; index += 1) {
+        var candidate = ctx.els.videoEl.textTracks[index];
+        if (!candidate || candidate.kind !== 'subtitles') continue;
+        candidate.mode = candidate === textTrack ? 'showing' : 'disabled';
+      }
+      bindSubtitleTextTrackEvents(textTrack);
+      updateSubtitleDebugForStream(item, payload, normalized, requestedSeek);
+      reportSubtitleSyncDiagnostic({
+        level: 'info',
+        message: 'Subtitle track mounted',
+        subtitle_stream_index: normalized,
+        subtitle_fetch_start_seconds: requestedSeek,
+      });
+    }
+    if (track.readyState >= 2) activateTrack();
+    else track.addEventListener('load', activateTrack, {once: true});
+    if (!options.silent) setStatus('Subtitle track is ready.');
+    return true;
+  }
+
+  async function applySubtitlesForSeek(item, probePayload, seekSeconds, options) {
+    options = options || {};
+    var fetchStartSeconds = Math.max(0, Number(seekSeconds) || 0);
+    persistSubtitleSelectionFromUi(item);
+    if (!item || !ctx.els.videoEl) return;
+    if (subtitlePlaybackRequestIsStale(options)) return;
+    var cachedPayload = probePayload || ctx.state.probeCache[item.path || ''] || null;
+    var streamIndex = resolvedSubtitleStreamIndex(item, cachedPayload);
+    if (streamIndex === '') {
+      clearSubtitleTrack();
+      return;
+    }
+    if (subtitlesAreMounted(item, streamIndex, fetchStartSeconds)) {
+      reportSubtitleSyncDiagnostic({
+        level: 'info',
+        message: 'Subtitle mount skipped',
+        skip_reason: 'already-mounted',
+      });
+      return;
+    }
+    reportSubtitleSyncDiagnostic({
+      level: 'info',
+      message: 'Subtitle mount started',
+      reload_reason: options.reloadReason || '',
+      fetch_start_seconds: fetchStartSeconds,
+    });
+    try {
+      if (!cachedPayload) {
+        cachedPayload = await ensureSubtitleTracksForItem(item);
+        if (!cachedPayload || item.path !== activeItemPath()) return;
+        streamIndex = resolvedSubtitleStreamIndex(item, cachedPayload);
+        if (streamIndex === '') return;
+      }
+      await preloadAllSubtitleVttsForItem(item, cachedPayload);
+      if (subtitlePlaybackRequestIsStale(options)) return;
+      cachedPayload = cachedPayload || ctx.state.probeCache[item.path || ''] || null;
+      if (!mountSubtitleTrackForItem(item, cachedPayload, streamIndex, fetchStartSeconds, options)) {
+        throw new Error('Subtitle mount failed.');
+      }
+    }
+    catch (error) {
+      reportSubtitleSyncDiagnostic({
+        level: 'error',
+        message: 'Subtitle extraction failed',
+        error_message: error && error.message ? String(error.message) : 'unknown',
+        subtitle_stream_index: streamIndex,
+      });
+      if (!subtitlesAlreadyActive()) {
+        setStatus('Subtitle extraction failed.');
+        setPlaybackSummary(activeItemTitle(item), 'Selected subtitle track could not be converted to WebVTT.');
+      }
+      else {
+        setStatus('Subtitle refresh failed; keeping the previous subtitle track.');
+      }
     }
   }
 
@@ -1372,6 +1799,7 @@ import {
     var wasPlaying = ctx.els.videoEl ? !ctx.els.videoEl.paused : false;
     ctx.state.requestedSeekSeconds = clampedTarget;
     ctx.state.seekRestartInProgress = true;
+    clearSubtitleTrack();
     ctx.state.pendingAutoplay = wasPlaying || reason === 'scrub';
     if (ctx.els.videoEl && typeof ctx.els.videoEl.pause === 'function') {
       ctx.els.videoEl.pause();
@@ -1393,6 +1821,7 @@ import {
       duration: duration || '',
     });
     renderSubtitleTrackSelector(active, probePayload);
+    persistSubtitleSelectionFromUi(active);
     if (!probePayload) {
       ctx.state.pendingAutoplay = false;
       ctx.state.seekRestartInProgress = false;
@@ -1400,6 +1829,7 @@ import {
       return;
     }
     var audioStreamIndex = selectedAudioStreamIndex(active, probePayload);
+    var subtitleWarmPromise = preloadAllSubtitleVttsForItem(active, probePayload);
     try {
       var session = await createCompatibilitySession(active, audioStreamIndex, clampedTarget);
       if (syncToken !== ctx.state.playbackSyncToken) {
@@ -1423,7 +1853,12 @@ import {
         source_start_seconds: Number(session.start_time_seconds) || clampedTarget,
         session_id: session.session_id || '',
       });
-      void syncSubtitleTrackForItem(active, probePayload);
+      await subtitleWarmPromise;
+      if (syncToken !== ctx.state.playbackSyncToken) return;
+      await applySubtitlesForSeek(active, probePayload, Number(session.start_time_seconds) || clampedTarget, {
+        reloadReason: reason || 'restart',
+        playbackSyncToken: syncToken,
+      });
     }
     catch (_error) {
       if (syncToken !== ctx.state.playbackSyncToken) return;
@@ -1449,9 +1884,8 @@ import {
       ctx.state.pendingAutoplay = false;
       renderAudioTrackSelector(null, null);
       renderSubtitleTrackSelector(null, null);
-      clearSubtitleTrack();
       await stopCompatibilitySession();
-      clearVideoSource();
+      resetPlaybackSurface();
       showPlaybackPlaceholder(
         'No video selected',
         'Queue a video to start compatibility playback.'
@@ -1462,15 +1896,16 @@ import {
     if (!ctx.state.playbackStatusLoaded) {
       if (!ctx.state.loadingPlaybackStatus) void loadPlaybackStatus();
       ctx.state.playbackMode = 'loading';
-      clearVideoSource();
+      resetPlaybackSurface();
+      resetSubtitlesForActiveItemChange(active);
       renderAudioTrackSelector(active, null);
-      renderSubtitleTrackSelector(active, null);
       showPlaybackPlaceholder(activeItemTitle(active), 'Loading video playback capabilities.');
       setStatus('Loading video playback capabilities.');
       return;
     }
 
-    clearVideoSource();
+    resetPlaybackSurface();
+    resetSubtitlesForActiveItemChange(active);
     showPlaybackPlaceholder(activeItemTitle(active), '');
 
     if (!ctx.state.compatibilityAvailable) {
@@ -1478,7 +1913,6 @@ import {
       ctx.state.playbackMode = 'compatibility-unavailable';
       renderAudioTrackSelector(active, null);
       renderSubtitleTrackSelector(active, null);
-      clearSubtitleTrack();
       await stopCompatibilitySession();
       if (syncToken !== ctx.state.playbackSyncToken) return;
       showPlaybackPlaceholder(activeItemTitle(active), compatibilityNeededMeta(active));
@@ -1490,6 +1924,7 @@ import {
     setStatus(compatibilityNeededStatus());
     var probePayload = await ensureAudioTracksForItem(active);
     renderSubtitleTrackSelector(active, probePayload);
+    var subtitleWarmPromise = preloadAllSubtitleVttsForItem(active, probePayload);
     if (syncToken !== ctx.state.playbackSyncToken) return;
     if (!probePayload) {
       ctx.state.pendingAutoplay = false;
@@ -1513,7 +1948,12 @@ import {
         'Playing through a local HLS compatibility session.',
         Number(session.start_time_seconds) || 0
       );
-      void syncSubtitleTrackForItem(active, probePayload);
+      await subtitleWarmPromise;
+      if (syncToken !== ctx.state.playbackSyncToken) return;
+      await applySubtitlesForSeek(active, probePayload, Number(session.start_time_seconds) || 0, {
+        playbackSyncToken: syncToken,
+        reloadReason: 'initial-playback',
+      });
     }
     catch (_error) {
       if (syncToken !== ctx.state.playbackSyncToken) return;
@@ -1711,13 +2151,31 @@ import {
     if (!active || !select || select.disabled) return;
     var nextValue = select.value;
     ctx.state.selectedSubtitleStreamIndexByPath[active.path || ''] = nextValue ? Number(nextValue) : '';
-    clearSubtitleTrack();
     if (!nextValue) {
+      clearSubtitleTrack();
       setStatus('Subtitles turned off.');
       return;
     }
+    if (ctx.state.seekRestartInProgress) {
+      setStatus('Subtitle track will load when playback seek completes.');
+      return;
+    }
+    var probePayload = ctx.state.probeCache[active.path || ''] || null;
+    var fetchStartSeconds = Math.max(0, ctx.state.compatibilityStartSeconds || 0);
+    var streamIndex = Number(nextValue);
+    if (subtitlesAreMounted(active, streamIndex, fetchStartSeconds)) {
+      setStatus('Subtitle track is ready.');
+      return;
+    }
+    if (getCachedFullSubtitleVtt(active.path || '', streamIndex)
+      && mountSubtitleTrackForItem(active, probePayload, streamIndex, fetchStartSeconds, {silent: true})) {
+      setStatus('Subtitle track is ready.');
+      return;
+    }
     setStatus('Loading subtitle track.');
-    await syncSubtitleTrackForItem(active, ctx.state.probeCache[active.path || ''] || null);
+    await applySubtitlesForSeek(active, probePayload, fetchStartSeconds, {
+      reloadReason: 'subtitle-track-change',
+    });
   }
 
   async function loadPlaybackStatus() {
@@ -1773,10 +2231,9 @@ import {
     pane.setAttribute('data-video-pane-active', active ? '1' : '0');
     if (!active) {
       void stopCompatibilitySession();
-      clearVideoSource();
+      resetPlaybackSurface();
       renderAudioTrackSelector(null, null);
       renderSubtitleTrackSelector(null, null);
-      clearSubtitleTrack();
       return;
     }
     updateCurrentFolder(currentFolderPath());
