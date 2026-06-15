@@ -482,3 +482,77 @@
   line-height: 1.2;
   white-space: nowrap;
 }
+
+.video-debug-panel {
+  border-bottom: 1px solid #2b3a50;
+  flex: 0 0 auto;
+  font-size: 12px;
+  max-height: 280px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.video-debug-summary {
+  background: rgba(24, 36, 53, 0.92);
+  color: #c8d6e4;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  list-style: none;
+  padding: 8px 12px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.video-debug-summary::-webkit-details-marker {
+  display: none;
+}
+
+.video-debug-body {
+  display: grid;
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+
+.video-debug-meta {
+  color: #9fb0c2;
+  display: grid;
+  font-family: Consolas, "Courier New", monospace;
+  gap: 4px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.video-debug-section {
+  display: grid;
+  gap: 6px;
+}
+
+.video-debug-section-title {
+  color: #c8d6e4;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.video-debug-cue {
+  background: rgba(12, 18, 28, 0.88);
+  border: 1px solid #33465f;
+  border-radius: 4px;
+  color: #eef5fb;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+  max-height: 120px;
+  overflow: auto;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
