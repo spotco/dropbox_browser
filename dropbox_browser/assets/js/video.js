@@ -15,6 +15,18 @@ import {
   if (!pane) return;
 
   var body = document.body;
+  var VIDEO_ICONS = {
+    play: '/assets/icons/material-icon-theme/video-play.svg',
+    pause: '/assets/icons/material-icon-theme/video-pause.svg',
+    volume: '/assets/icons/material-icon-theme/video-volume.svg',
+    volumeLow: '/assets/icons/material-icon-theme/video-volume-low.svg',
+    volumeMuted: '/assets/icons/material-icon-theme/video-volume-muted.svg',
+    fullscreen: '/assets/icons/material-icon-theme/video-fullscreen.svg',
+    fullscreenExit: '/assets/icons/material-icon-theme/video-fullscreen-exit.svg',
+    pipEnter: '/assets/icons/material-icon-theme/video-pip-enter.svg',
+    pipExit: '/assets/icons/material-icon-theme/video-pip-exit.svg',
+  };
+  var CONTROLS_IDLE_HIDE_MS = 2800;
   var ctx = {
     pane: pane,
     els: {
@@ -23,6 +35,8 @@ import {
       titleEl: document.getElementById('video-current-title'),
       metaEl: document.getElementById('video-current-meta'),
       placeholderEl: document.getElementById('video-playback-placeholder'),
+      playbackSurfaceEl: document.getElementById('video-playback-surface'),
+      controlsOverlayEl: document.getElementById('video-controls-overlay'),
       videoEl: document.getElementById('video-player-media'),
       playToggleButton: document.getElementById('video-play-toggle'),
       muteToggleButton: document.getElementById('video-mute-toggle'),
@@ -75,8 +89,93 @@ import {
       selectedSubtitleStreamIndexByPath: Object.create(null),
       subtitleObjectUrl: '',
       progressSliderActive: false,
+      controlsIdleTimer: 0,
+      controlsOverlayVisible: false,
     }
   };
+
+  function setControlIcon(button, iconUrl) {
+    var icon;
+    if (!button) return;
+    icon = button.querySelector('.video-control-icon');
+    if (icon) icon.src = iconUrl;
+  }
+
+  function setControlButtonState(button, label, iconUrl) {
+    if (!button) return;
+    button.setAttribute('aria-label', label);
+    button.title = label;
+    setControlIcon(button, iconUrl);
+  }
+
+  function formatNativePlaybackTime(totalSeconds) {
+    if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '0:00';
+    var seconds = Math.floor(totalSeconds);
+    var hours = Math.floor(seconds / 3600);
+    var minutes = Math.floor((seconds % 3600) / 60);
+    var remainder = seconds % 60;
+    if (hours > 0) {
+      return String(hours)
+        + ':'
+        + String(minutes).padStart(2, '0')
+        + ':'
+        + String(remainder).padStart(2, '0');
+    }
+    return String(minutes) + ':' + String(remainder).padStart(2, '0');
+  }
+
+  function volumeIconForLevel(volume, muted) {
+    if (muted || volume === 0) return VIDEO_ICONS.volumeMuted;
+    if (volume < 0.34) return VIDEO_ICONS.volumeLow;
+    return VIDEO_ICONS.volume;
+  }
+
+  function clearControlsIdleTimer() {
+    if (!ctx.state.controlsIdleTimer) return;
+    window.clearTimeout(ctx.state.controlsIdleTimer);
+    ctx.state.controlsIdleTimer = 0;
+  }
+
+  function setControlsOverlayIdle(isIdle) {
+    if (!ctx.els.controlsOverlayEl) return;
+    if (isIdle) ctx.els.controlsOverlayEl.classList.add('is-idle');
+    else ctx.els.controlsOverlayEl.classList.remove('is-idle');
+  }
+
+  function showControlsOverlay() {
+    if (!ctx.els.controlsOverlayEl || !videoControlsAvailable()) return;
+    ctx.els.controlsOverlayEl.hidden = false;
+    ctx.els.controlsOverlayEl.classList.remove('is-hidden');
+    ctx.state.controlsOverlayVisible = true;
+    setControlsOverlayIdle(false);
+  }
+
+  function hideControlsOverlay() {
+    if (!ctx.els.controlsOverlayEl) return;
+    clearControlsIdleTimer();
+    ctx.els.controlsOverlayEl.hidden = true;
+    ctx.els.controlsOverlayEl.classList.add('is-hidden');
+    ctx.els.controlsOverlayEl.classList.remove('is-idle');
+    ctx.state.controlsOverlayVisible = false;
+  }
+
+  function scheduleControlsIdleHide() {
+    clearControlsIdleTimer();
+    if (!ctx.els.videoEl || ctx.els.videoEl.paused || !videoControlsAvailable()) {
+      setControlsOverlayIdle(false);
+      return;
+    }
+    ctx.state.controlsIdleTimer = window.setTimeout(function () {
+      ctx.state.controlsIdleTimer = 0;
+      setControlsOverlayIdle(true);
+    }, CONTROLS_IDLE_HIDE_MS);
+  }
+
+  function revealControlsOverlay() {
+    if (!videoControlsAvailable()) return;
+    showControlsOverlay();
+    scheduleControlsIdleHide();
+  }
 
   function currentFolderPath() {
     return body && typeof body.dataset.currentFolderPath === 'string'
@@ -217,21 +316,22 @@ import {
 
   function resetPlaybackProgress() {
     if (ctx.els.playToggleButton) {
-      ctx.els.playToggleButton.textContent = 'Play';
+      setControlButtonState(ctx.els.playToggleButton, 'Play', VIDEO_ICONS.play);
       ctx.els.playToggleButton.disabled = true;
     }
     if (ctx.els.muteToggleButton) {
-      ctx.els.muteToggleButton.textContent = 'Mute';
+      setControlButtonState(ctx.els.muteToggleButton, 'Mute', VIDEO_ICONS.volume);
       ctx.els.muteToggleButton.disabled = true;
     }
     if (ctx.els.volumeSliderEl) {
       ctx.els.volumeSliderEl.disabled = true;
     }
     if (ctx.els.fullscreenButton) {
+      setControlButtonState(ctx.els.fullscreenButton, 'Fullscreen', VIDEO_ICONS.fullscreen);
       ctx.els.fullscreenButton.disabled = true;
     }
     if (ctx.els.pipButton) {
-      ctx.els.pipButton.textContent = 'PiP';
+      setControlButtonState(ctx.els.pipButton, 'Picture in picture', VIDEO_ICONS.pipEnter);
       ctx.els.pipButton.disabled = true;
     }
     if (ctx.els.progressSliderEl) {
@@ -240,9 +340,10 @@ import {
       ctx.els.progressSliderEl.value = '0';
       ctx.els.progressSliderEl.disabled = true;
     }
-    if (ctx.els.elapsedTimeEl) ctx.els.elapsedTimeEl.textContent = '00:00:00';
-    if (ctx.els.totalTimeEl) ctx.els.totalTimeEl.textContent = '00:00:00';
+    if (ctx.els.elapsedTimeEl) ctx.els.elapsedTimeEl.textContent = '0:00';
+    if (ctx.els.totalTimeEl) ctx.els.totalTimeEl.textContent = '0:00';
     ctx.state.progressSliderActive = false;
+    hideControlsOverlay();
   }
 
   function videoControlsAvailable() {
@@ -254,28 +355,54 @@ import {
   function syncTransportControls() {
     if (!ctx.els.videoEl) return;
     var canControl = videoControlsAvailable();
+    if (canControl) showControlsOverlay();
+    else hideControlsOverlay();
     if (ctx.els.playToggleButton) {
+      var isPaused = ctx.els.videoEl.paused;
       ctx.els.playToggleButton.disabled = !canControl;
-      ctx.els.playToggleButton.textContent = ctx.els.videoEl.paused ? 'Play' : 'Pause';
+      setControlButtonState(
+        ctx.els.playToggleButton,
+        isPaused ? 'Play' : 'Pause',
+        isPaused ? VIDEO_ICONS.play : VIDEO_ICONS.pause
+      );
     }
     if (ctx.els.muteToggleButton) {
+      var isMuted = ctx.els.videoEl.muted || ctx.els.videoEl.volume === 0;
+      var volumeLevel = ctx.els.videoEl.muted ? 0 : ctx.els.videoEl.volume;
       ctx.els.muteToggleButton.disabled = !canControl;
-      ctx.els.muteToggleButton.textContent = ctx.els.videoEl.muted || ctx.els.videoEl.volume === 0 ? 'Unmute' : 'Mute';
+      setControlButtonState(
+        ctx.els.muteToggleButton,
+        isMuted ? 'Unmute' : 'Mute',
+        volumeIconForLevel(volumeLevel, isMuted)
+      );
     }
     if (ctx.els.volumeSliderEl) {
       ctx.els.volumeSliderEl.disabled = !canControl;
       ctx.els.volumeSliderEl.value = String(ctx.els.videoEl.muted ? 0 : ctx.els.videoEl.volume);
     }
     if (ctx.els.fullscreenButton) {
+      var isFullscreen = document.fullscreenElement === ctx.els.videoEl;
       ctx.els.fullscreenButton.disabled = !canControl || typeof ctx.els.videoEl.requestFullscreen !== 'function';
+      setControlButtonState(
+        ctx.els.fullscreenButton,
+        isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
+        isFullscreen ? VIDEO_ICONS.fullscreenExit : VIDEO_ICONS.fullscreen
+      );
     }
     if (ctx.els.pipButton) {
       var pipSupported = Boolean(
         document.pictureInPictureEnabled && typeof ctx.els.videoEl.requestPictureInPicture === 'function'
       );
+      var isPipActive = document.pictureInPictureElement === ctx.els.videoEl;
       ctx.els.pipButton.disabled = !canControl || !pipSupported;
-      ctx.els.pipButton.textContent = document.pictureInPictureElement === ctx.els.videoEl ? 'Exit PiP' : 'PiP';
+      setControlButtonState(
+        ctx.els.pipButton,
+        isPipActive ? 'Exit picture in picture' : 'Picture in picture',
+        isPipActive ? VIDEO_ICONS.pipExit : VIDEO_ICONS.pipEnter
+      );
     }
+    if (canControl && !ctx.els.videoEl.paused) scheduleControlsIdleHide();
+    else setControlsOverlayIdle(false);
   }
 
   function syncPlaybackProgress() {
@@ -306,9 +433,9 @@ import {
       var elapsedValue = ctx.state.progressSliderActive
         ? Number(ctx.els.progressSliderEl.value)
         : currentTime;
-      ctx.els.elapsedTimeEl.textContent = formatPlaybackTime(elapsedValue);
+      ctx.els.elapsedTimeEl.textContent = formatNativePlaybackTime(elapsedValue);
     }
-    if (ctx.els.totalTimeEl) ctx.els.totalTimeEl.textContent = formatPlaybackTime(duration);
+    if (ctx.els.totalTimeEl) ctx.els.totalTimeEl.textContent = formatNativePlaybackTime(duration);
   }
 
   function failCompatibilityPlayback(item, meta, status) {
@@ -893,7 +1020,7 @@ import {
       ctx.els.videoEl.pause();
     }
     if (ctx.els.progressSliderEl) ctx.els.progressSliderEl.value = String(clampedTarget);
-    if (ctx.els.elapsedTimeEl) ctx.els.elapsedTimeEl.textContent = formatPlaybackTime(clampedTarget);
+    if (ctx.els.elapsedTimeEl) ctx.els.elapsedTimeEl.textContent = formatNativePlaybackTime(clampedTarget);
     setPlaybackSummary(activeItemTitle(active), 'Loading compatibility playback at ' + formatPlaybackTime(clampedTarget) + '.');
     setStatus('Loading compatibility playback at ' + formatPlaybackTime(clampedTarget) + '.');
     reportVideoDiagnostic({
@@ -1361,30 +1488,75 @@ import {
       void handleSubtitleTrackChange();
     });
   }
+  if (ctx.els.playbackSurfaceEl) {
+    ctx.els.playbackSurfaceEl.addEventListener('mousemove', revealControlsOverlay);
+    ctx.els.playbackSurfaceEl.addEventListener('mouseenter', revealControlsOverlay);
+    ctx.els.playbackSurfaceEl.addEventListener('mouseleave', function () {
+      clearControlsIdleTimer();
+      if (ctx.els.videoEl && !ctx.els.videoEl.paused && videoControlsAvailable()) {
+        setControlsOverlayIdle(true);
+      }
+    });
+    ctx.els.playbackSurfaceEl.addEventListener('click', function (event) {
+      if (!videoControlsAvailable()) return;
+      if (event.target && event.target.closest && event.target.closest('#video-controls-overlay')) return;
+      toggleVideoPlayPause();
+      revealControlsOverlay();
+    });
+    ctx.els.playbackSurfaceEl.addEventListener('dblclick', function (event) {
+      if (!videoControlsAvailable()) return;
+      if (event.target && event.target.closest && event.target.closest('#video-controls-overlay')) return;
+      void toggleVideoFullscreen();
+      revealControlsOverlay();
+    });
+  }
+  if (ctx.els.controlsOverlayEl) {
+    ctx.els.controlsOverlayEl.addEventListener('mousemove', revealControlsOverlay);
+    ctx.els.controlsOverlayEl.addEventListener('focusin', revealControlsOverlay);
+  }
   if (ctx.els.playToggleButton) {
-    ctx.els.playToggleButton.addEventListener('click', toggleVideoPlayPause);
+    ctx.els.playToggleButton.addEventListener('click', function (event) {
+      event.stopPropagation();
+      toggleVideoPlayPause();
+      revealControlsOverlay();
+    });
   }
   if (ctx.els.muteToggleButton) {
-    ctx.els.muteToggleButton.addEventListener('click', toggleVideoMute);
+    ctx.els.muteToggleButton.addEventListener('click', function (event) {
+      event.stopPropagation();
+      toggleVideoMute();
+      revealControlsOverlay();
+    });
   }
   if (ctx.els.volumeSliderEl) {
-    ctx.els.volumeSliderEl.addEventListener('input', setVideoVolumeFromSlider);
-    ctx.els.volumeSliderEl.addEventListener('change', setVideoVolumeFromSlider);
+    ctx.els.volumeSliderEl.addEventListener('input', function () {
+      setVideoVolumeFromSlider();
+      revealControlsOverlay();
+    });
+    ctx.els.volumeSliderEl.addEventListener('change', function () {
+      setVideoVolumeFromSlider();
+      revealControlsOverlay();
+    });
   }
   if (ctx.els.fullscreenButton) {
-    ctx.els.fullscreenButton.addEventListener('click', function () {
+    ctx.els.fullscreenButton.addEventListener('click', function (event) {
+      event.stopPropagation();
       void toggleVideoFullscreen();
+      revealControlsOverlay();
     });
   }
   if (ctx.els.pipButton) {
-    ctx.els.pipButton.addEventListener('click', function () {
+    ctx.els.pipButton.addEventListener('click', function (event) {
+      event.stopPropagation();
       void togglePictureInPicture();
+      revealControlsOverlay();
     });
   }
   if (ctx.els.progressSliderEl) {
     ctx.els.progressSliderEl.addEventListener('input', function () {
       ctx.state.progressSliderActive = true;
       syncPlaybackProgress();
+      revealControlsOverlay();
     });
     ctx.els.progressSliderEl.addEventListener('change', function () {
       if (!ctx.els.videoEl || ctx.els.progressSliderEl.disabled) {
