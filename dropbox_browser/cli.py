@@ -94,6 +94,11 @@ def main() -> int:
     )
     app.video_debug_logs = bool(app_config.get("LogVideoDebug", True))
     app.client_log_enabled, app.client_log_subsystems = client_log_config(app_config)
+    app.video_subtitle_font_family = str(
+        app_config.get("VideoSubtitleFontFamily", "Arial, Helvetica, sans-serif")
+    ).strip() or "Arial, Helvetica, sans-serif"
+    app.video_subtitle_font_size_px = max(10, int(app_config.get("VideoSubtitleFontSizePx", 28) or 28))
+    app.video_subtitle_bold = bool(app_config.get("VideoSubtitleBold", True))
     app.sync_jobs = SyncJobManager(app, workers=int(app_config["SyncJobWorkers"]))
     server = ThreadingHTTPServer((args.host, args.port), RequestHandler)
     server.app = app  # type: ignore[attr-defined]

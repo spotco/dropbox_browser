@@ -6,7 +6,7 @@ process.env.PLAYWRIGHT_PORT = "8013";
 process.env.DROPBOX_BROWSER_E2E_FIXTURE = path.join(
   __dirname,
   "fixtures",
-  "video-subtitle-switch.json",
+  "video_player_generated_fixture.py",
 );
 
 const { baseURL, startIntegrationServer, stopIntegrationServer } = require("./support/integration_server");
@@ -17,6 +17,8 @@ const hlsStubSource = fs.readFileSync(
 );
 
 let server = null;
+
+test.describe.configure({ timeout: 90000 });
 
 async function installHlsStub(page) {
   await page.route("**/assets/js/vendor/hls.js", async (route) => {
@@ -157,12 +159,23 @@ function waitForSessionPost(page, predicate) {
   }, { timeout: 15000 });
 }
 
+async function scrubTo(page, targetSeconds, sessionPredicate) {
+  const sessionRequest = waitForSessionPost(page, sessionPredicate);
+  await page.locator("#video-progress-slider").evaluate((element, seconds) => {
+    element.value = String(seconds);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  }, targetSeconds);
+  await sessionRequest;
+  await waitForVisibleVideo(page);
+}
+
 async function openVideoPane(page) {
   await page.goto("/?path=Videos");
   await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
   await page.locator("#bottom-pane-mode").selectOption("video-player");
   await expect(page.locator("#video-player-pane")).toBeVisible();
-  await expect(page.locator("#video-library-list .video-library-row")).toHaveCount(2);
+  await expect(page.locator("#video-library-list .video-library-row")).toHaveCount(3);
   await waitForCompatibilityReady(page);
 }
 
@@ -177,6 +190,7 @@ async function playLibraryFile(page, filename) {
 test.use({ baseURL });
 
 test.beforeAll(async () => {
+  test.setTimeout(90000);
   server = await startIntegrationServer();
 });
 
@@ -201,6 +215,21 @@ test("video playback loads tracks, switches tracks, and hides video before subti
   await page.addInitScript(TRACK_REMOVAL_INSTRUMENTATION);
   await openVideoPane(page);
 
+  const probeResponse = await page.request.get("/video/endpoints/probe?path=Videos%2Falpha.mkv&source=remote");
+  expect(probeResponse.ok()).toBe(true);
+  const probePayload = await probeResponse.json();
+  expect(probePayload.audio_streams).toHaveLength(2);
+  expect(probePayload.subtitle_streams).toHaveLength(3);
+  expect(probePayload.default_subtitle_stream_index).toBe(3);
+  expect(probePayload.subtitle_streams.map((stream) => stream.codec_name)).toEqual(["subrip", "subrip", "hdmv_pgs_subtitle"]);
+
+  const allSubtitlesResponse = await page.request.get("/video/endpoints/subtitles/all?path=Videos%2Falpha.mkv&source=remote");
+  expect(allSubtitlesResponse.ok()).toBe(true);
+  const allSubtitlesPayload = await allSubtitlesResponse.json();
+  expect(Object.keys(allSubtitlesPayload.tracks).sort()).toEqual(["3", "4"]);
+  expect(allSubtitlesPayload.tracks["3"].vtt).toContain("ALPHA-SUBTITLE-ENG");
+  expect(allSubtitlesPayload.tracks["4"].vtt).toContain("ALPHA-SUBTITLE-FRA");
+
   const alphaRow = await libraryRow(page, "alpha.mkv");
   const bravoRow = await libraryRow(page, "bravo.mkv");
 
@@ -210,7 +239,7 @@ test("video playback loads tracks, switches tracks, and hides video before subti
 
   await expectTrackSelectors(page, {
     audioOptionCount: 2,
-    subtitleOptionCount: 3,
+    subtitleOptionCount: 4,
     audioValue: "1",
     subtitleValue: "3",
   });
@@ -221,6 +250,14 @@ test("video playback loads tracks, switches tracks, and hides video before subti
   await waitForSubtitleStreamIndex(page, 4);
   await expectTrackSelectors(page, { subtitleValue: "4" });
 
+  await scrubTo(
+    page,
+    5,
+    (body) => body.includes("path=Videos%2Falpha.mkv") && body.includes("start_time_seconds=5"),
+  );
+  await expectTrackSelectors(page, { audioValue: "1", subtitleValue: "4" });
+  await waitForSubtitleStreamIndex(page, 4);
+
   const alphaAudioRestart = waitForSessionPost(
     page,
     (body) => body.includes("path=Videos%2Falpha.mkv") && body.includes("audio_stream_index=2"),
@@ -228,6 +265,14 @@ test("video playback loads tracks, switches tracks, and hides video before subti
   await page.locator("#video-audio-track").selectOption("2");
   await alphaAudioRestart;
   await waitForVisibleVideo(page);
+  await expectTrackSelectors(page, { audioValue: "2", subtitleValue: "4" });
+  await waitForSubtitleStreamIndex(page, 4);
+
+  await scrubTo(
+    page,
+    1,
+    (body) => body.includes("path=Videos%2Falpha.mkv") && body.includes("audio_stream_index=2") && body.includes("start_time_seconds=1"),
+  );
   await expectTrackSelectors(page, { audioValue: "2", subtitleValue: "4" });
   await waitForSubtitleStreamIndex(page, 4);
 
@@ -255,7 +300,7 @@ test("video playback loads tracks, switches tracks, and hides video before subti
   await waitForVisibleVideo(page);
   await expectTrackSelectors(page, {
     audioOptionCount: 2,
-    subtitleOptionCount: 3,
+    subtitleOptionCount: 4,
     audioValue: "1",
     subtitleValue: "3",
   });
@@ -265,6 +310,14 @@ test("video playback loads tracks, switches tracks, and hides video before subti
   await waitForSubtitleStreamIndex(page, 4);
   await expectTrackSelectors(page, { subtitleValue: "4" });
 
+  await scrubTo(
+    page,
+    6,
+    (body) => body.includes("path=Videos%2Fbravo.mkv") && body.includes("start_time_seconds=6"),
+  );
+  await expectTrackSelectors(page, { audioValue: "1", subtitleValue: "4" });
+  await waitForSubtitleStreamIndex(page, 4);
+
   const bravoAudioRestart = waitForSessionPost(
     page,
     (body) => body.includes("path=Videos%2Fbravo.mkv") && body.includes("audio_stream_index=2"),
@@ -272,6 +325,14 @@ test("video playback loads tracks, switches tracks, and hides video before subti
   await page.locator("#video-audio-track").selectOption("2");
   await bravoAudioRestart;
   await waitForVisibleVideo(page);
+  await expectTrackSelectors(page, { audioValue: "2", subtitleValue: "4" });
+  await waitForSubtitleStreamIndex(page, 4);
+
+  await scrubTo(
+    page,
+    2,
+    (body) => body.includes("path=Videos%2Fbravo.mkv") && body.includes("audio_stream_index=2") && body.includes("start_time_seconds=2"),
+  );
   await expectTrackSelectors(page, { audioValue: "2", subtitleValue: "4" });
   await waitForSubtitleStreamIndex(page, 4);
 

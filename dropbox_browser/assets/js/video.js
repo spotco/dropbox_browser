@@ -84,6 +84,7 @@ import {
       compatibilityNetworkRecoveries: 0,
       compatibilityMediaRecoveries: 0,
       compatibilityStartSeconds: 0,
+      compatibilitySubtitleStreamIndex: null,
       requestedSeekSeconds: null,
       seekRestartInProgress: false,
       playbackSyncToken: 0,
@@ -485,6 +486,7 @@ import {
     }
     ctx.state.lastPlaybackPath = '';
     ctx.state.compatibilityStartSeconds = 0;
+    ctx.state.compatibilitySubtitleStreamIndex = null;
     ctx.state.requestedSeekSeconds = null;
     ctx.state.seekRestartInProgress = false;
     resetPlaybackProgress();
@@ -967,6 +969,25 @@ import {
     return resolvedSubtitleStreamIndex(item, probePayload) !== '';
   }
 
+  function selectedSubtitleStream(item, probePayload) {
+    var streamIndex = resolvedSubtitleStreamIndex(item, probePayload);
+    var normalized = normalizeSubtitleStreamIndex(streamIndex);
+    if (normalized === null) return null;
+    return subtitleStreamsForPayload(probePayload).find(function (stream) {
+      return normalizeSubtitleStreamIndex(stream.index) === normalized;
+    }) || null;
+  }
+
+  function selectedBurnedInSubtitleStreamIndex(item, probePayload) {
+    var stream = selectedSubtitleStream(item, probePayload);
+    if (!stream || !subtitleStreamRequiresBurnIn(stream)) return null;
+    return normalizeSubtitleStreamIndex(stream.index);
+  }
+
+  function compatibilitySessionHasBurnedInSubtitles() {
+    return normalizeSubtitleStreamIndex(ctx.state.compatibilitySubtitleStreamIndex) !== null;
+  }
+
   function subtitlesAlreadyActive() {
     if (ctx.state.subtitleDebug.trackLabel) return true;
     var textTrack = managedSubtitleTextTrack();
@@ -1003,6 +1024,7 @@ import {
     if (ctx.state.seekRestartInProgress) return;
     var probePayload = ctx.state.probeCache[active.path || ''] || null;
     if (!subtitlesEnabledForItem(active, probePayload)) return;
+    if (selectedBurnedInSubtitleStreamIndex(active, probePayload) !== null) return;
     var fetchStartSeconds = Math.max(0, ctx.state.compatibilityStartSeconds || 0);
     void applySubtitlesForSeek(active, probePayload, fetchStartSeconds, {
       reloadReason: reason || 'playback-ready',
@@ -1034,6 +1056,7 @@ import {
   async function stopCompatibilitySession() {
     var sessionId = ctx.state.compatibilitySessionId;
     ctx.state.compatibilitySessionId = '';
+    ctx.state.compatibilitySubtitleStreamIndex = null;
     destroyHlsController();
     if (!sessionId) return;
     try {
@@ -1315,6 +1338,7 @@ import {
     if (stream.language) parts.push(String(stream.language).toUpperCase());
     if (stream.title) parts.push(stream.title);
     if (stream.codec_name) parts.push(String(stream.codec_name).toUpperCase());
+    if (subtitleStreamRequiresBurnIn(stream)) parts.push('Burn-in restart');
     parts.push('Stream ' + String(stream.index));
     return parts.join(' • ');
   }
@@ -1392,7 +1416,7 @@ import {
   function selectedSubtitleStreamIndex(item, probePayload) {
     if (!item || !probePayload) return '';
     var path = item.path || '';
-    var subtitleStreams = webvttCompatibleSubtitleStreams(probePayload);
+    var subtitleStreams = subtitleStreamsForPayload(probePayload);
     if (!subtitleStreams.length) return '';
     var saved = ctx.state.selectedSubtitleStreamIndexByPath[path];
     if (saved === '') return '';
@@ -1439,7 +1463,6 @@ import {
       var option = document.createElement('option');
       option.value = String(stream.index);
       option.textContent = subtitleTrackLabel(stream);
-      option.disabled = !subtitleStreamSupportsWebVtt(stream);
       if (selected === stream.index) option.selected = true;
       select.appendChild(option);
     });
@@ -1513,6 +1536,10 @@ import {
     if (!stream) return false;
     if (stream.webvtt_compatible === false) return false;
     return true;
+  }
+
+  function subtitleStreamRequiresBurnIn(stream) {
+    return !subtitleStreamSupportsWebVtt(stream);
   }
 
   function webvttCompatibleSubtitleStreams(probePayload) {
@@ -1757,12 +1784,15 @@ import {
     }
   }
 
-  async function createCompatibilitySession(item, audioStreamIndex, startSeconds) {
+  async function createCompatibilitySession(item, audioStreamIndex, startSeconds, subtitleStreamIndex) {
     var body = 'path=' + encodeURIComponent(item.path || '')
       + '&source=remote'
       + '&start_time_seconds=' + encodeURIComponent(String(Math.max(0, Number(startSeconds) || 0)));
     if (typeof audioStreamIndex === 'number') {
       body += '&audio_stream_index=' + encodeURIComponent(String(audioStreamIndex));
+    }
+    if (typeof subtitleStreamIndex === 'number') {
+      body += '&subtitle_stream_index=' + encodeURIComponent(String(subtitleStreamIndex));
     }
     var response = await fetch('/video/endpoints/session', {
       method: 'POST',
@@ -1829,10 +1859,18 @@ import {
       setStatus('Could not inspect video tracks.');
       return;
     }
+    await stopCompatibilitySession();
+    if (syncToken !== ctx.state.playbackSyncToken) return;
     var audioStreamIndex = selectedAudioStreamIndex(active, probePayload);
+    var burnedInSubtitleStreamIndex = selectedBurnedInSubtitleStreamIndex(active, probePayload);
     var subtitleWarmPromise = preloadAllSubtitleVttsForItem(active, probePayload);
     try {
-      var session = await createCompatibilitySession(active, audioStreamIndex, clampedTarget);
+      var session = await createCompatibilitySession(
+        active,
+        audioStreamIndex,
+        clampedTarget,
+        burnedInSubtitleStreamIndex
+      );
       if (syncToken !== ctx.state.playbackSyncToken) {
         await stopCompatibilitySession();
         return;
@@ -1846,6 +1884,7 @@ import {
         'Playing through a local HLS compatibility session from ' + formatPlaybackTime(Number(session.start_time_seconds) || 0) + '.',
         Number(session.start_time_seconds) || clampedTarget
       );
+      ctx.state.compatibilitySubtitleStreamIndex = normalizeSubtitleStreamIndex(session.subtitle_stream_index);
       reportVideoDiagnostic({
         level: 'info',
         message: 'Compatibility seek restart ready',
@@ -1853,9 +1892,11 @@ import {
         requested_time: clampedTarget,
         source_start_seconds: Number(session.start_time_seconds) || clampedTarget,
         session_id: session.session_id || '',
+        subtitle_stream_index: session.subtitle_stream_index,
       });
       await subtitleWarmPromise;
       if (syncToken !== ctx.state.playbackSyncToken) return;
+      if (selectedBurnedInSubtitleStreamIndex(active, probePayload) !== null) return;
       await applySubtitlesForSeek(active, probePayload, Number(session.start_time_seconds) || clampedTarget, {
         reloadReason: reason || 'restart',
         playbackSyncToken: syncToken,
@@ -1864,6 +1905,7 @@ import {
     catch (_error) {
       if (syncToken !== ctx.state.playbackSyncToken) return;
       ctx.state.compatibilitySessionId = '';
+      ctx.state.compatibilitySubtitleStreamIndex = null;
       ctx.state.seekRestartInProgress = false;
       ctx.state.requestedSeekSeconds = null;
       ctx.state.playbackMode = 'compatibility-error';
@@ -1936,8 +1978,9 @@ import {
       return;
     }
     var audioStreamIndex = selectedAudioStreamIndex(active, probePayload);
+    var burnedInSubtitleStreamIndex = selectedBurnedInSubtitleStreamIndex(active, probePayload);
     try {
-      var session = await createCompatibilitySession(active, audioStreamIndex, 0);
+      var session = await createCompatibilitySession(active, audioStreamIndex, 0, burnedInSubtitleStreamIndex);
       if (syncToken !== ctx.state.playbackSyncToken) {
         await stopCompatibilitySession();
         return;
@@ -1949,8 +1992,10 @@ import {
         'Playing through a local HLS compatibility session.',
         Number(session.start_time_seconds) || 0
       );
+      ctx.state.compatibilitySubtitleStreamIndex = normalizeSubtitleStreamIndex(session.subtitle_stream_index);
       await subtitleWarmPromise;
       if (syncToken !== ctx.state.playbackSyncToken) return;
+      if (selectedBurnedInSubtitleStreamIndex(active, probePayload) !== null) return;
       await applySubtitlesForSeek(active, probePayload, Number(session.start_time_seconds) || 0, {
         playbackSyncToken: syncToken,
         reloadReason: 'initial-playback',
@@ -1959,6 +2004,7 @@ import {
     catch (_error) {
       if (syncToken !== ctx.state.playbackSyncToken) return;
       ctx.state.compatibilitySessionId = '';
+      ctx.state.compatibilitySubtitleStreamIndex = null;
       ctx.state.playbackMode = 'compatibility-error';
       showPlaybackPlaceholder(
         activeItemTitle(active),
@@ -2150,10 +2196,28 @@ import {
     var active = activeQueueItem();
     var select = ctx.els.subtitleTrackSelectEl;
     if (!active || !select || select.disabled) return;
+    var path = active.path || '';
     var nextValue = select.value;
-    ctx.state.selectedSubtitleStreamIndexByPath[active.path || ''] = nextValue ? Number(nextValue) : '';
+    var probePayload = ctx.state.probeCache[path] || null;
+    var previousSelectedValue = ctx.state.selectedSubtitleStreamIndexByPath[path];
+    var previousSelectedStream = subtitleStreamsForPayload(probePayload).find(function (stream) {
+      return typeof previousSelectedValue === 'number'
+        && normalizeSubtitleStreamIndex(stream.index) === normalizeSubtitleStreamIndex(previousSelectedValue);
+    }) || null;
+    ctx.state.selectedSubtitleStreamIndexByPath[path] = nextValue ? Number(nextValue) : '';
     if (!nextValue) {
+      if (
+        compatibilitySessionHasBurnedInSubtitles()
+        || (previousSelectedStream && subtitleStreamRequiresBurnIn(previousSelectedStream))
+      ) {
+        ctx.state.compatibilitySubtitleStreamIndex = null;
+        ctx.state.pendingAutoplay = true;
+        setStatus('Restarting compatibility playback without subtitles.');
+        await restartCompatibilityAt(currentGlobalPlaybackSeconds(), 'subtitle-track-change');
+        return;
+      }
       clearSubtitleTrack();
+      ctx.state.compatibilitySubtitleStreamIndex = null;
       setStatus('Subtitles turned off.');
       return;
     }
@@ -2161,7 +2225,22 @@ import {
       setStatus('Subtitle track will load when playback seek completes.');
       return;
     }
-    var probePayload = ctx.state.probeCache[active.path || ''] || null;
+    var selectedStream = selectedSubtitleStream(active, probePayload);
+    if (selectedStream && subtitleStreamRequiresBurnIn(selectedStream)) {
+      clearSubtitleTrack();
+      ctx.state.compatibilitySubtitleStreamIndex = normalizeSubtitleStreamIndex(selectedStream.index);
+      ctx.state.pendingAutoplay = true;
+      setStatus('Restarting compatibility playback for burned-in subtitles.');
+      await restartCompatibilityAt(currentGlobalPlaybackSeconds(), 'subtitle-track-change');
+      return;
+    }
+    if (compatibilitySessionHasBurnedInSubtitles()) {
+      ctx.state.compatibilitySubtitleStreamIndex = null;
+      ctx.state.pendingAutoplay = true;
+      setStatus('Restarting compatibility playback for sidecar subtitles.');
+      await restartCompatibilityAt(currentGlobalPlaybackSeconds(), 'subtitle-track-change');
+      return;
+    }
     var fetchStartSeconds = Math.max(0, ctx.state.compatibilityStartSeconds || 0);
     var streamIndex = Number(nextValue);
     if (subtitlesAreMounted(active, streamIndex, fetchStartSeconds)) {

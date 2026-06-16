@@ -255,6 +255,45 @@ Current HLS-session safeguards:
 - [x] Add tests for subtitle command construction, WebVTT content type, and
       path/track validation.
 
+### Phase 9B - Bitmap Subtitle Support For MKV Files
+
+- [ ] Keep the existing WebVTT subtitle path for text subtitle formats such as
+      SRT, ASS, and SSA.
+- [ ] Add a second subtitle-rendering mode for bitmap subtitle formats such as
+      PGS, VobSub, DVD subtitles, and other non-WebVTT-compatible tracks.
+- [ ] Extend the compatibility session creation endpoint to accept an optional
+      `subtitle_stream_index` alongside `audio_stream_index` and
+      `start_time_seconds`.
+- [ ] Update compatibility session creation so subtitle handling follows three
+      cases:
+      no subtitle selected, WebVTT-compatible subtitle selected, or bitmap
+      subtitle selected for burn-in.
+- [ ] Keep WebVTT-compatible subtitle tracks on the existing sidecar `<track>`
+      path without restarting video unless the current seek/session logic
+      already requires it.
+- [ ] When a bitmap subtitle track is selected, restart the ffmpeg/HLS
+      compatibility session at the current original-video timestamp and burn the
+      selected subtitle stream into the video output.
+- [ ] Update ffmpeg compatibility command construction so bitmap subtitle
+      burn-in is included only when a subtitle stream is explicitly selected.
+- [ ] Keep `Subtitles Off` behavior working for both WebVTT and bitmap subtitle
+      paths.
+- [ ] Update probe payload handling and subtitle UI state so bitmap subtitle
+      tracks are selectable instead of disabled.
+- [ ] Label bitmap subtitle tracks in the subtitle selector so the UI makes it
+      clear they require compatibility-session restart and burn-in.
+- [ ] Preserve the current original-video playback position when restarting for
+      bitmap subtitle selection changes, matching the existing audio-track
+      restart behavior.
+- [ ] Keep current subtitle debug/status messaging for WebVTT tracks, and add
+      clear status/error messaging for bitmap subtitle burn-in session restarts.
+- [ ] Add focused Python tests for compatibility-session request parsing and
+      ffmpeg command construction with and without burned-in subtitle mapping.
+- [ ] Add focused browser or E2E tests covering:
+      WebVTT subtitle selection, bitmap subtitle selection, session restart on
+      bitmap subtitle change, and `Subtitles Off` after a bitmap subtitle was
+      active.
+
 ### Phase 10 - Fullscreen And Playback Ergonomics
 
 - [x] Add a playback scrubber backed by native duration when available and

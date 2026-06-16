@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -15,6 +16,8 @@ from urllib.parse import parse_qs, urlparse
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
+VENDORED_FFMPEG_EXE = REPO_ROOT / "FFmpeg" / "bin" / "ffmpeg.exe"
+VENDORED_FFPROBE_EXE = REPO_ROOT / "FFmpeg" / "bin" / "ffprobe.exe"
 
 import dropbox_browser.config as config_module
 import dropbox_browser.foldercache as foldercache_module
@@ -38,6 +41,8 @@ E2E_TEMP_ROOT = REPO_ROOT / ".dropbox-browser-temp" / "e2e-integration"
 
 
 def _decode_content(entry: dict[str, Any]) -> bytes:
+    if "file_path" in entry:
+        return Path(str(entry["file_path"])).read_bytes()
     if "base64" in entry:
         import base64
 
@@ -246,7 +251,34 @@ def _fixture_path() -> Path:
     return Path(raw) if raw else DEFAULT_FIXTURE_PATH
 
 
-def _load_fixture(fixture_path: Path) -> dict[str, Any]:
+def _run_fixture_script(fixture_path: Path, generated_root: Path) -> dict[str, Any]:
+    generated_root.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.run(
+        [sys.executable, str(fixture_path), "--output-dir", str(generated_root)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=180,
+        cwd=str(REPO_ROOT),
+        env=dict(os.environ),
+    )
+    if proc.returncode != 0:
+        stderr = proc.stderr.decode("utf-8", "replace").strip()
+        raise SystemExit(
+            f"Fixture generator failed ({fixture_path}): {stderr or f'exit code {proc.returncode}'}"
+        )
+    try:
+        payload = json.loads(proc.stdout.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"Fixture generator returned invalid JSON: {fixture_path}") from exc
+    if not isinstance(payload, dict):
+        raise SystemExit(f"Fixture generator returned non-object JSON: {fixture_path}")
+    return payload
+
+
+def _load_fixture(fixture_path: Path, temp_root: Path) -> dict[str, Any]:
+    if fixture_path.suffix.casefold() == ".py":
+        return _run_fixture_script(fixture_path, temp_root / "generated-fixture")
     return json.loads(fixture_path.read_text(encoding="utf-8"))
 
 
@@ -352,8 +384,8 @@ def _patch_isolated_paths(temp_root: Path) -> None:
 
 
 def _build_app(fixture_path: Path, port: int) -> tuple[DropboxBrowser, IntegrationState]:
-    fixture = _load_fixture(fixture_path)
     temp_root = _create_repo_temp_root("run")
+    fixture = _load_fixture(fixture_path, temp_root)
     local_root = temp_root / "local"
     _write_local_files(local_root, fixture)
     _patch_isolated_paths(temp_root)
@@ -389,8 +421,8 @@ def _build_app(fixture_path: Path, port: int) -> tuple[DropboxBrowser, Integrati
     video_tools_config = None
     if isinstance(fixture.get("video"), dict):
         video_tools_config = VideoToolsConfig(
-            ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
-            ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ffmpeg_exe=VENDORED_FFMPEG_EXE,
+            ffprobe_exe=VENDORED_FFPROBE_EXE,
         )
     app = DropboxBrowser(
         rclone,
@@ -419,10 +451,9 @@ def _build_app(fixture_path: Path, port: int) -> tuple[DropboxBrowser, Integrati
 
 def main() -> int:
     fixture_path = _fixture_path()
-    fixture = _load_fixture(fixture_path)
     port = int(os.environ.get("PLAYWRIGHT_PORT", "8011"))
     app, integration_state = _build_app(fixture_path, port)
-    video_mock_patches = build_video_mock_patches(fixture, integration_state.temp_root)
+    video_mock_patches = build_video_mock_patches(integration_state.fixture, integration_state.temp_root)
     server = ThreadingHTTPServer(("127.0.0.1", port), IntegrationRequestHandler)
     server.app = app  # type: ignore[attr-defined]
     server.integration_state = integration_state  # type: ignore[attr-defined]

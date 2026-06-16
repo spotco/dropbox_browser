@@ -205,6 +205,19 @@
   width: 100%;
 }
 
+.video-player-media::cue {
+  color: #f8fbff;
+  font-family: var(--video-subtitle-font-family, Arial, Helvetica, sans-serif);
+  font-size: var(--video-subtitle-font-size, 28px);
+  font-weight: var(--video-subtitle-font-weight, 700);
+  text-shadow:
+    -1px -1px 0 rgba(0, 0, 0, 0.95),
+    1px -1px 0 rgba(0, 0, 0, 0.95),
+    -1px 1px 0 rgba(0, 0, 0, 0.95),
+    1px 1px 0 rgba(0, 0, 0, 0.95),
+    0 0 6px rgba(0, 0, 0, 0.7);
+}
+
 .video-current-title {
   color: #eef5fb;
   font-size: 18px;

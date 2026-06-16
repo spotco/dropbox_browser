@@ -289,6 +289,23 @@ def client_browse_filter_html() -> str:
     )
 
 
+def _subtitle_style_attr(app: Any) -> str:
+    font_family = str(
+        getattr(app, "video_subtitle_font_family", "Arial, Helvetica, sans-serif")
+        or "Arial, Helvetica, sans-serif"
+    ).strip()
+    font_size_px = int(getattr(app, "video_subtitle_font_size_px", 28) or 28)
+    font_weight = "700" if bool(getattr(app, "video_subtitle_bold", True)) else "400"
+    return html.escape(
+        (
+            f"--video-subtitle-font-family: {font_family}; "
+            f"--video-subtitle-font-size: {font_size_px}px; "
+            f"--video-subtitle-font-weight: {font_weight};"
+        ),
+        quote=True,
+    )
+
+
 def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: str, direction: str, msg: str, folder_cache_map: dict | None = None, current_folder_cache: dict | None = None) -> str:
     client_render = bool(getattr(app, "client_render", False))
     if client_render:
@@ -371,6 +388,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         current_sort_key_attr=html.escape(sort_key, quote=True),
         current_sort_direction_attr=html.escape(direction, quote=True),
         music_library_poll_delay_ms_attr=html.escape(str(music_library_poll_delay_ms), quote=True),
+        subtitle_style_attr=_subtitle_style_attr(app),
         client_render_attr="1" if client_render else "0",
         client_log_enabled_attr="1" if bool(getattr(app, "client_log_enabled", True)) else "0",
         client_log_subsystems_attr=html.escape(json.dumps(client_log_subsystems, sort_keys=True), quote=True),
