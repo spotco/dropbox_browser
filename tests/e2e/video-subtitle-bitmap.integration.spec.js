@@ -9,7 +9,8 @@ process.env.DROPBOX_BROWSER_E2E_FIXTURE = path.join(
   "video_player_generated_fixture.py",
 );
 
-const { baseURL, startIntegrationServer, stopIntegrationServer } = require("./support/integration_server");
+const { startIntegrationServer, stopIntegrationServer } = require("./support/integration_server");
+const baseURL = `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT}`;
 
 const hlsStubSource = fs.readFileSync(
   path.join(__dirname, "support", "hls-stub.js"),

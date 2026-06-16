@@ -2,8 +2,14 @@ const path = require("path");
 const { spawn } = require("node:child_process");
 
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
-const port = String(process.env.PLAYWRIGHT_PORT || "8010");
-const baseURL = `http://127.0.0.1:${port}`;
+
+function resolvePort() {
+  return String(process.env.PLAYWRIGHT_PORT || "8010");
+}
+
+function resolveBaseURL() {
+  return `http://127.0.0.1:${resolvePort()}`;
+}
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -36,6 +42,8 @@ function mirrorOutput(stream, prefix) {
 }
 
 async function startServer(options = {}) {
+  const port = resolvePort();
+  const baseURL = resolveBaseURL();
   const fixtureName = options.fixtureName || "basic-library.json";
   const fixturePath = path.join(repoRoot, "tests", "e2e", "fixtures", fixtureName);
   const child = spawn(
@@ -119,7 +127,7 @@ async function stopServer(server) {
 }
 
 module.exports = {
-  baseURL,
+  resolveBaseURL,
   startServer,
   stopServer,
 };

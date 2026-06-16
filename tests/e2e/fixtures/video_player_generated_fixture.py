@@ -10,8 +10,10 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+FIXTURES_DIR = Path(__file__).resolve().parent
 FFMPEG_EXE = REPO_ROOT / "FFmpeg" / "bin" / "ffmpeg.exe"
 FFPROBE_EXE = REPO_ROOT / "FFmpeg" / "bin" / "ffprobe.exe"
+BUNDLED_BITMAP_SAMPLE = FIXTURES_DIR / "fairy-tail-sample.sup"
 DEFAULT_BITMAP_SOURCE_URL = (
     "http://127.0.0.1:8000/file?"
     "path=anime%2F%5BJudas%5D+Fairy+Tail+%282009-2014%29+%28Seasons+1-8+%2B+OVAs%29+"
@@ -42,6 +44,17 @@ def write_srt(path: Path, cues: list[tuple[str, str]]) -> None:
     for index, (timing, text) in enumerate(cues, start=1):
         blocks.append(f"{index}\n{timing}\n{text}\n")
     path.write_text("\n".join(blocks), encoding="utf-8")
+
+
+def resolve_bitmap_sample_path(output_path: Path) -> Path:
+    override_source = os.environ.get("DROPBOX_BROWSER_E2E_BITMAP_SOURCE_URL", "").strip()
+    if override_source:
+        extract_bitmap_sample(output_path, override_source)
+        return output_path
+    if BUNDLED_BITMAP_SAMPLE.is_file():
+        return BUNDLED_BITMAP_SAMPLE
+    extract_bitmap_sample(output_path, DEFAULT_BITMAP_SOURCE_URL)
+    return output_path
 
 
 def extract_bitmap_sample(output_path: Path, source_url: str) -> None:
@@ -220,9 +233,7 @@ def main() -> int:
     videos_dir = output_dir / "Videos"
     videos_dir.mkdir(parents=True, exist_ok=True)
 
-    bitmap_source_url = os.environ.get("DROPBOX_BROWSER_E2E_BITMAP_SOURCE_URL", DEFAULT_BITMAP_SOURCE_URL)
-    bitmap_sample_path = output_dir / "fairy-tail-sample.sup"
-    extract_bitmap_sample(bitmap_sample_path, bitmap_source_url)
+    bitmap_sample_path = resolve_bitmap_sample_path(output_dir / "fairy-tail-sample.sup")
 
     video_specs = [
         {
