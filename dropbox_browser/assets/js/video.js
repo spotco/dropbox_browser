@@ -514,22 +514,27 @@ import {
     resetPlaybackProgress();
   }
 
-  function resetPlaybackSurface() {
+  function flushNativeSubtitleRenderSurface() {
     if (!ctx.els.videoEl) return;
-    hideLoadingOverlay();
-    hideVideoElement();
-    destroyHlsController();
-    clearSubtitleTrack();
-    resetCompatibilityRecoveryState();
     var video = ctx.els.videoEl;
+    hideVideoElement();
+    disableNativeSubtitleTracks();
+    Array.from(video.querySelectorAll('track')).forEach(function (node) {
+      node.remove();
+    });
+    revokeSubtitleObjectUrls();
+    ctx.state.subtitleMountedSeekSeconds = null;
+    ctx.state.subtitleMountedStreamIndex = null;
+    resetSubtitleDebugState();
     video.controls = false;
     video.removeAttribute('controls');
     try {
       video.pause();
     }
     catch (_pauseError) {
-      // Best-effort pause before resetting media element state.
+      // Best-effort pause before flushing media element state.
     }
+    destroyHlsController();
     video.removeAttribute('src');
     try {
       video.load();
@@ -537,6 +542,13 @@ import {
     catch (_loadError) {
       // Best-effort load to flush native text-track rendering on MSE/HLS playback.
     }
+  }
+
+  function resetPlaybackSurface() {
+    if (!ctx.els.videoEl) return;
+    hideLoadingOverlay();
+    flushNativeSubtitleRenderSurface();
+    resetCompatibilityRecoveryState();
     ctx.state.lastPlaybackPath = '';
     ctx.state.compatibilityStartSeconds = 0;
     ctx.state.compatibilitySubtitleStreamIndex = null;
@@ -2064,7 +2076,6 @@ import {
       return;
     }
 
-    disableNativeSubtitleTracks();
     resetPlaybackSurface();
     resetSubtitlesForActiveItemChange(active);
     showPlaybackPlaceholder(activeItemTitle(active), '');

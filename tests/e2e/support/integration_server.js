@@ -2,10 +2,14 @@ const path = require("path");
 const { spawn } = require("node:child_process");
 
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
-const fixturePath = process.env.DROPBOX_BROWSER_E2E_FIXTURE ||
-  path.join(repoRoot, "tests", "e2e", "fixtures", "basic-library.json");
-const port = String(process.env.PLAYWRIGHT_PORT || "8011");
-const baseURL = `http://127.0.0.1:${port}`;
+
+function resolvePort() {
+  return String(process.env.PLAYWRIGHT_PORT || "8011");
+}
+
+function resolveBaseURL() {
+  return `http://127.0.0.1:${resolvePort()}`;
+}
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -38,6 +42,10 @@ function mirrorOutput(stream, prefix) {
 }
 
 async function startIntegrationServer() {
+  const port = resolvePort();
+  const baseURL = resolveBaseURL();
+  const fixturePath = process.env.DROPBOX_BROWSER_E2E_FIXTURE ||
+    path.join(repoRoot, "tests", "e2e", "fixtures", "basic-library.json");
   const child = spawn(
     "python",
     [path.join(repoRoot, "tests", "e2e", "support", "run_integration_server.py")],
@@ -119,7 +127,7 @@ async function stopIntegrationServer(server) {
 }
 
 module.exports = {
-  baseURL,
+  resolveBaseURL,
   startIntegrationServer,
   stopIntegrationServer,
 };

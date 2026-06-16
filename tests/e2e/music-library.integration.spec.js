@@ -4,7 +4,8 @@ const { test, expect } = require("@playwright/test");
 process.env.PLAYWRIGHT_PORT = "8011";
 process.env.DROPBOX_BROWSER_E2E_FIXTURE = path.join(__dirname, "fixtures", "music-library-deep.json");
 
-const { baseURL, startIntegrationServer, stopIntegrationServer } = require("./support/integration_server");
+const { startIntegrationServer, stopIntegrationServer } = require("./support/integration_server");
+const baseURL = `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT}`;
 
 let server = null;
 
