@@ -978,16 +978,21 @@ import {
     ctx.state.subtitleObjectUrls = [];
   }
 
+  function disableNativeSubtitleTracks() {
+    if (!ctx.els.videoEl || !ctx.els.videoEl.textTracks) return;
+    for (var index = 0; index < ctx.els.videoEl.textTracks.length; index += 1) {
+      var textTrack = ctx.els.videoEl.textTracks[index];
+      if (!textTrack) continue;
+      textTrack.mode = 'disabled';
+    }
+  }
+
   function clearSubtitleTrack() {
     if (ctx.els.videoEl) {
+      disableNativeSubtitleTracks();
       Array.from(ctx.els.videoEl.querySelectorAll('track')).forEach(function (node) {
         node.remove();
       });
-      if (ctx.els.videoEl.textTracks) {
-        for (var index = 0; index < ctx.els.videoEl.textTracks.length; index += 1) {
-          ctx.els.videoEl.textTracks[index].mode = 'disabled';
-        }
-      }
     }
     revokeSubtitleObjectUrls();
     ctx.state.subtitleMountedSeekSeconds = null;
@@ -2059,6 +2064,7 @@ import {
       return;
     }
 
+    disableNativeSubtitleTracks();
     resetPlaybackSurface();
     resetSubtitlesForActiveItemChange(active);
     showPlaybackPlaceholder(activeItemTitle(active), '');

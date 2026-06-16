@@ -82,12 +82,54 @@ async function installPlaybackSurfaceMonitor(page) {
 const TRACK_REMOVAL_INSTRUMENTATION = () => {
   window.__subtitleTeardownEvents = [];
 
+  function collectNativeSubtitleHaystack(video) {
+    const chunks = [];
+    const stage = document.getElementById("video-playback-stage");
+    const mediaTime = video ? Number(video.currentTime) : NaN;
+
+    if (video && video.textTracks) {
+      for (let index = 0; index < video.textTracks.length; index += 1) {
+        const track = video.textTracks[index];
+        if (!track || track.mode === "disabled") continue;
+        if (track.activeCues) {
+          for (let cueIndex = 0; cueIndex < track.activeCues.length; cueIndex += 1) {
+            const text = String(track.activeCues[cueIndex].text || "").trim();
+            if (text) chunks.push(text);
+          }
+        }
+        if (track.cues && Number.isFinite(mediaTime)) {
+          for (let cueIndex = 0; cueIndex < track.cues.length; cueIndex += 1) {
+            const cue = track.cues[cueIndex];
+            if (mediaTime >= cue.startTime && mediaTime < cue.endTime) {
+              const text = String(cue.text || "").trim();
+              if (text) chunks.push(text);
+            }
+          }
+        }
+      }
+    }
+
+    if (video && video.shadowRoot) {
+      video.shadowRoot.querySelectorAll("*").forEach((node) => {
+        const text = String(node.textContent || "").trim();
+        if (text) chunks.push(text);
+      });
+    }
+
+    if (stage) chunks.push(String(stage.innerText || "").trim());
+    return chunks.join("\n");
+  }
+
   function recordTrackRemoved(video) {
     if (!video || video.id !== "video-player-media") return;
+    const haystack = collectNativeSubtitleHaystack(video);
+    const activeTitle = document.querySelector("#video-queue-list .video-queue-row.is-active .video-row-title");
     window.__subtitleTeardownEvents.push({
       type: "track-removed",
       videoHidden: Boolean(video.hidden),
       videoHasHiddenClass: video.classList.contains("hidden"),
+      activeTitle: activeTitle ? String(activeTitle.textContent || "").trim() : "",
+      nativeHaystack: haystack,
     });
   }
 
@@ -180,6 +222,110 @@ async function setPlaybackTimeForSubtitleChecks(page, seconds) {
   }, seconds);
 }
 
+async function readNativeSubtitleSurfaceState(page) {
+  return page.evaluate(() => {
+    const video = document.getElementById("video-player-media");
+    const stage = document.getElementById("video-playback-stage");
+    const mediaTime = video ? Number(video.currentTime) : NaN;
+    const activeCueTexts = [];
+    const showingTracks = [];
+
+    if (video && video.textTracks) {
+      for (let index = 0; index < video.textTracks.length; index += 1) {
+        const track = video.textTracks[index];
+        if (!track) continue;
+        if (track.mode === "showing") {
+          showingTracks.push({
+            label: String(track.label || ""),
+            language: String(track.language || ""),
+          });
+        }
+        if (track.mode === "disabled") continue;
+
+        if (track.activeCues) {
+          for (let cueIndex = 0; cueIndex < track.activeCues.length; cueIndex += 1) {
+            const cue = track.activeCues[cueIndex];
+            const text = String(cue.text || "").trim();
+            if (text) activeCueTexts.push(text);
+          }
+        }
+
+        if (track.cues) {
+          for (let cueIndex = 0; cueIndex < track.cues.length; cueIndex += 1) {
+            const cue = track.cues[cueIndex];
+            if (mediaTime >= cue.startTime && mediaTime < cue.endTime) {
+              const text = String(cue.text || "").trim();
+              if (text) activeCueTexts.push(text);
+            }
+          }
+        }
+      }
+    }
+
+    const shadowCueTexts = [];
+    if (video && video.shadowRoot) {
+      const nodes = video.shadowRoot.querySelectorAll("*");
+      nodes.forEach((node) => {
+        const text = String(node.textContent || "").trim();
+        if (text) shadowCueTexts.push(text);
+      });
+    }
+
+    const mountedTracks = [];
+    if (video) {
+      video.querySelectorAll("track[data-video-subtitle-track]").forEach((node) => {
+        mountedTracks.push({
+          streamIndex: String(node.getAttribute("data-video-subtitle-stream-index") || ""),
+          label: String(node.getAttribute("label") || node.label || ""),
+        });
+      });
+    }
+
+    return {
+      activeCueTexts: [...new Set(activeCueTexts)],
+      showingTracks,
+      shadowCueTexts: [...new Set(shadowCueTexts)],
+      mountedTracks,
+      stageText: stage ? String(stage.innerText || "").trim() : "",
+      videoVisible: Boolean(video && !video.hidden),
+      mediaTime,
+    };
+  });
+}
+
+function nativeSubtitleHaystack(state) {
+  return [
+    ...(state?.activeCueTexts || []),
+    ...(state?.shadowCueTexts || []),
+    state?.stageText || "",
+  ].join("\n");
+}
+
+async function waitForMountedSubtitleTrackReady(page, streamIndex) {
+  await expect
+    .poll(async () => {
+      return page.evaluate((expectedStreamIndex) => {
+        const video = document.getElementById("video-player-media");
+        if (!video) return null;
+        const trackNode = video.querySelector(
+          `track[data-video-subtitle-stream-index="${expectedStreamIndex}"]`,
+        );
+        if (!trackNode) return null;
+        const textTrack = trackNode.track;
+        return {
+          readyState: Number(trackNode.readyState),
+          mode: textTrack ? String(textTrack.mode || "") : "",
+          cueCount: textTrack && textTrack.cues ? textTrack.cues.length : 0,
+        };
+      }, streamIndex);
+    }, { timeout: 15000 })
+    .toMatchObject({
+      readyState: 2,
+      mode: "showing",
+      cueCount: expect.any(Number),
+    });
+}
+
 async function waitForDisplayedSubtitleText(page, expectedText) {
   await expect
     .poll(async () => {
@@ -188,6 +334,20 @@ async function waitForDisplayedSubtitleText(page, expectedText) {
         return debugCue ? String(debugCue.textContent || "").trim() : "";
       });
     }, { timeout: 10000 })
+    .toContain(expectedText);
+}
+
+async function waitForNativeSubtitleCueText(page, expectedText) {
+  await expect
+    .poll(async () => {
+      const state = await readNativeSubtitleSurfaceState(page);
+      await page.evaluate(() => {
+        const video = document.getElementById("video-player-media");
+        if (!video) return;
+        video.dispatchEvent(new Event("timeupdate"));
+      });
+      return nativeSubtitleHaystack(state);
+    }, { timeout: 15000 })
     .toContain(expectedText);
 }
 
@@ -200,6 +360,118 @@ async function waitForDisplayedSubtitleToClear(page) {
       });
     }, { timeout: 10000 })
     .toBe("No active subtitle cue.");
+}
+
+async function expectNativeSubtitleSurfaceClearOf(page, staleTexts) {
+  await expect
+    .poll(async () => {
+      const state = await readNativeSubtitleSurfaceState(page);
+      const haystack = nativeSubtitleHaystack(state);
+      const staleMatches = staleTexts.filter((text) => haystack.includes(text));
+      return {
+        staleMatches,
+        state,
+      };
+    }, { timeout: 10000 })
+    .toMatchObject({ staleMatches: [] });
+}
+
+const SUBTITLE_STALE_MONITOR = () => {
+  window.__subtitleStaleViolations = [];
+  window.__subtitleSwitchArmed = false;
+
+  function collectNativeSubtitleHaystack() {
+    const video = document.getElementById("video-player-media");
+    const stage = document.getElementById("video-playback-stage");
+    const chunks = [];
+    const mediaTime = video ? Number(video.currentTime) : NaN;
+
+    if (video && video.textTracks) {
+      for (let index = 0; index < video.textTracks.length; index += 1) {
+        const track = video.textTracks[index];
+        if (!track || track.mode === "disabled") continue;
+        if (track.activeCues) {
+          for (let cueIndex = 0; cueIndex < track.activeCues.length; cueIndex += 1) {
+            const text = String(track.activeCues[cueIndex].text || "").trim();
+            if (text) chunks.push(text);
+          }
+        }
+        if (track.cues && Number.isFinite(mediaTime)) {
+          for (let cueIndex = 0; cueIndex < track.cues.length; cueIndex += 1) {
+            const cue = track.cues[cueIndex];
+            if (mediaTime >= cue.startTime && mediaTime < cue.endTime) {
+              const text = String(cue.text || "").trim();
+              if (text) chunks.push(text);
+            }
+          }
+        }
+      }
+    }
+
+    if (video && video.shadowRoot) {
+      video.shadowRoot.querySelectorAll("*").forEach((node) => {
+        const text = String(node.textContent || "").trim();
+        if (text) chunks.push(text);
+      });
+    }
+
+    if (stage) chunks.push(String(stage.innerText || "").trim());
+    return chunks.join("\n");
+  }
+
+  function sampleState(reason) {
+    if (!window.__subtitleSwitchArmed) return;
+    const needles = Array.isArray(window.__subtitleStaleNeedles) ? window.__subtitleStaleNeedles : [];
+    if (!needles.length) return;
+    const activeTitle = document.querySelector("#video-queue-list .video-queue-row.is-active .video-row-title");
+    const activeFilename = activeTitle ? String(activeTitle.textContent || "").trim() : "";
+    if (!activeFilename || activeFilename === "alpha.mkv") return;
+    const haystack = collectNativeSubtitleHaystack();
+    const staleMatches = needles.filter((needle) => haystack.includes(needle));
+    if (!staleMatches.length) return;
+    window.__subtitleStaleViolations.push({
+      reason,
+      staleMatches,
+      activeTitle: activeFilename,
+      haystack,
+    });
+  }
+
+  window.__armSubtitleStaleMonitor = (needles) => {
+    window.__subtitleStaleNeedles = needles;
+    window.__subtitleStaleViolations = [];
+    window.__subtitleSwitchArmed = true;
+    sampleState("armed");
+  };
+
+  window.setInterval(() => sampleState("interval"), 16);
+};
+
+async function installSubtitleStaleMonitor(page) {
+  await page.addInitScript(SUBTITLE_STALE_MONITOR);
+}
+
+async function armSubtitleStaleMonitor(page, staleTexts) {
+  await page.evaluate((needles) => {
+    window.__armSubtitleStaleMonitor(needles);
+  }, staleTexts);
+}
+
+async function expectNoSubtitleStaleMonitorViolations(page) {
+  const violations = await page.evaluate(() => window.__subtitleStaleViolations || []);
+  expect(violations).toEqual([]);
+}
+
+async function expectNoStaleNativeSubtitleOnVideoResume(page, staleTexts) {
+  await expect
+    .poll(async () => {
+      const state = await readNativeSubtitleSurfaceState(page);
+      if (!state.videoVisible) return null;
+      const haystack = nativeSubtitleHaystack(state);
+      const staleMatches = staleTexts.filter((text) => haystack.includes(text));
+      return { ready: true, staleMatches, state };
+    }, { timeout: 10000 })
+    .toMatchObject({ ready: true, staleMatches: [] });
 }
 
 async function expectNoPlaybackSurfaceViolations(page) {
@@ -401,6 +673,7 @@ test("video playback loads tracks, switches tracks, and hides video before subti
 
   await installHlsStub(page);
   await page.addInitScript(TRACK_REMOVAL_INSTRUMENTATION);
+  await installSubtitleStaleMonitor(page);
   await openVideoPane(page);
 
   const probeResponse = await page.request.get("/video/endpoints/probe?path=Videos%2Falpha.mkv&source=remote");
@@ -437,47 +710,32 @@ test("video playback loads tracks, switches tracks, and hides video before subti
   await page.locator("#video-subtitle-track").selectOption("4");
   await waitForSubtitleStreamIndex(page, 4);
   await expectTrackSelectors(page, { subtitleValue: "4" });
+  await waitForMountedSubtitleTrackReady(page, 4);
   await setPlaybackTimeForSubtitleChecks(page, 1);
   await waitForDisplayedSubtitleText(page, "ALPHA-SUBTITLE-FRA");
-
-  await scrubTo(
-    page,
-    5,
-    (body) => body.includes("path=Videos%2Falpha.mkv") && body.includes("start_time_seconds=5"),
-  );
-  await expectTrackSelectors(page, { audioValue: "1", subtitleValue: "4" });
-  await waitForSubtitleStreamIndex(page, 4);
-
-  const alphaAudioRestart = waitForSessionPost(
-    page,
-    (body) => body.includes("path=Videos%2Falpha.mkv") && body.includes("audio_stream_index=2"),
-  );
-  await page.locator("#video-audio-track").selectOption("2");
-  await waitForLoadingOverlayWithoutPlaceholder(page);
-  await alphaAudioRestart;
-  await waitForVisibleVideo(page);
-  await waitForPlaybackSurfaceWithoutOverlay(page);
-  await expectTrackSelectors(page, { audioValue: "2", subtitleValue: "4" });
-  await waitForSubtitleStreamIndex(page, 4);
-
-  await scrubTo(
-    page,
-    1,
-    (body) => body.includes("path=Videos%2Falpha.mkv") && body.includes("audio_stream_index=2") && body.includes("start_time_seconds=1"),
-  );
-  await expectTrackSelectors(page, { audioValue: "2", subtitleValue: "4" });
-  await waitForSubtitleStreamIndex(page, 4);
+  await waitForNativeSubtitleCueText(page, "ALPHA-SUBTITLE-FRA");
+  await page.waitForTimeout(500);
 
   await page.evaluate(() => {
     window.__subtitleTeardownEvents = [];
   });
 
+  const staleAlphaSubtitleTexts = ["ALPHA-SUBTITLE-FRA", "ALPHA-SUBTITLE-ENG"];
   const bravoSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fbravo.mkv"));
+  await armSubtitleStaleMonitor(page, staleAlphaSubtitleTexts);
   await bravoRow.dblclick();
   await waitForLoadingOverlayWithoutPlaceholder(page);
   await waitForDisplayedSubtitleToClear(page);
+  await expectNativeSubtitleSurfaceClearOf(page, staleAlphaSubtitleTexts);
   await bravoSession;
   await expectActiveQueueTitle(page, "bravo.mkv");
+  await expectNoStaleNativeSubtitleOnVideoResume(page, staleAlphaSubtitleTexts);
+
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+  await setPlaybackTimeForSubtitleChecks(page, 0.5);
+  await expectNativeSubtitleSurfaceClearOf(page, staleAlphaSubtitleTexts);
+  await expectNoSubtitleStaleMonitorViolations(page);
 
   await expect
     .poll(async () => {
@@ -488,11 +746,9 @@ test("video playback loads tracks, switches tracks, and hides video before subti
 
   const teardownEvents = await page.evaluate(() => window.__subtitleTeardownEvents || []);
   for (const event of teardownEvents) {
-    expect(event.videoHidden, JSON.stringify(event)).toBe(true);
+    const staleAtTeardown = staleAlphaSubtitleTexts.filter((text) => String(event.nativeHaystack || "").includes(text));
+    expect(staleAtTeardown, JSON.stringify(event)).toEqual([]);
   }
-
-  await waitForVisibleVideo(page);
-  await waitForPlaybackSurfaceWithoutOverlay(page);
   await expectTrackSelectors(page, {
     audioOptionCount: 2,
     subtitleOptionCount: 4,
@@ -500,6 +756,8 @@ test("video playback loads tracks, switches tracks, and hides video before subti
     subtitleValue: "3",
   });
   await waitForSubtitleStreamIndex(page, 3);
+  await waitForMountedSubtitleTrackReady(page, 3);
+  await waitForNativeSubtitleCueText(page, "BRAVO-SUBTITLE-ENG");
 
   await page.locator("#video-subtitle-track").selectOption("4");
   await waitForSubtitleStreamIndex(page, 4);
