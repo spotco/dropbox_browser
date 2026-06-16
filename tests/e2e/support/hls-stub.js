@@ -28,6 +28,7 @@ class Hls {
 
   constructor() {
     this._listeners = Object.create(null);
+    this._media = null;
   }
 
   on(eventName, handler) {
@@ -42,11 +43,20 @@ class Hls {
     handlers.forEach((handler) => handler(eventName, data));
   }
 
-  attachMedia() {}
+  attachMedia(media) {
+    this._media = media || null;
+  }
 
   loadSource() {
     queueMicrotask(() => {
+      this.emit(Events.MANIFEST_LOADING, { url: "stub://manifest.m3u8" });
+      this.emit(Events.MANIFEST_LOADED, { levels: [{}] });
       this.emit(Events.MANIFEST_PARSED);
+      if (this._media) {
+        this._media.dispatchEvent(new Event("loadedmetadata"));
+        this._media.dispatchEvent(new Event("loadeddata"));
+        this._media.dispatchEvent(new Event("canplay"));
+      }
     });
   }
 
