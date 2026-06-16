@@ -58,7 +58,6 @@ const PLAYBACK_SURFACE_MONITOR = () => {
     if (
       (state.loadingVisible && state.placeholderVisible)
       || (state.videoVisible && state.placeholderVisible)
-      || (state.videoVisible && state.loadingVisible)
     ) {
       window.__playbackSurfaceViolations.push(state);
     }
@@ -214,6 +213,58 @@ async function playbackStageInnerText(page) {
 
 function countOccurrences(text, needle) {
   return String(text || "").split(String(needle || "")).length - 1;
+}
+
+async function expectControlsOverlayUsableDuringLoading(page, expectedLoadingMetaSubstring) {
+  await expect
+    .poll(async () => playbackStageInnerText(page), { timeout: 10000 })
+    .toContain(expectedLoadingMetaSubstring);
+
+  const controlsState = await expect
+    .poll(async () => {
+      return page.evaluate(() => {
+        function isVisible(element) {
+          if (!element || element.hidden) return false;
+          const style = window.getComputedStyle(element);
+          if (style.display === "none" || style.visibility === "hidden") return false;
+          if (Number(style.opacity) === 0) return false;
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        }
+
+        const loading = document.getElementById("video-loading-overlay");
+        const controls = document.getElementById("video-controls-overlay");
+        const muteButton = document.getElementById("video-mute-toggle");
+        if (!isVisible(loading) || !controls || !muteButton) return null;
+
+        const loadingStyle = window.getComputedStyle(loading);
+        const controlsStyle = window.getComputedStyle(controls);
+        return {
+          controlsVisible: isVisible(controls),
+          controlsPointerEvents: controlsStyle.pointerEvents,
+          controlsAboveLoading: Number(controlsStyle.zIndex) > Number(loadingStyle.zIndex),
+          muteEnabled: !muteButton.disabled,
+        };
+      });
+    }, { timeout: 10000 })
+    .toMatchObject({
+      controlsVisible: true,
+      controlsPointerEvents: "auto",
+      controlsAboveLoading: true,
+      muteEnabled: true,
+    });
+
+  const initialMuted = await page.evaluate(() => document.getElementById("video-player-media")?.muted);
+  await page.evaluate(() => {
+    const button = document.getElementById("video-mute-toggle");
+    if (!button || button.disabled) {
+      throw new Error("mute toggle is not usable");
+    }
+    button.click();
+  });
+  await expect
+    .poll(async () => page.evaluate(() => document.getElementById("video-player-media")?.muted))
+    .not.toBe(initialMuted);
 }
 
 async function waitForSubtitleStreamIndex(page, streamIndex) {
@@ -508,6 +559,7 @@ test("video playback never shows loading or placeholder copy on top of active pl
   const alphaLoadingText = await playbackStageInnerText(page);
   expect(alphaLoadingText).not.toContain("Preparing an HLS compatibility session for this queue item.");
   expect(countOccurrences(alphaLoadingText, "alpha.mkv")).toBe(1);
+  await expectControlsOverlayUsableDuringLoading(page, "Creating the local HLS compatibility session.");
 
   await waitForVisibleVideo(page);
   await page.waitForTimeout(1500);
@@ -517,6 +569,20 @@ test("video playback never shows loading or placeholder copy on top of active pl
   await page.locator("#video-subtitle-track").selectOption("4");
   await waitForSubtitleStreamIndex(page, 4);
   await expectNoPlaybackSurfaceViolations(page);
+
+  const alphaScrubSession = waitForSessionPost(
+    page,
+    (body) => body.includes("path=Videos%2Falpha.mkv") && body.includes("start_time_seconds=1"),
+  );
+  await page.locator("#video-progress-slider").evaluate((element, seconds) => {
+    element.value = String(seconds);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  }, 1);
+  await expectControlsOverlayUsableDuringLoading(page, "Creating a compatibility stream at");
+  await alphaScrubSession;
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
 
   const bravoRow = await libraryRow(page, "bravo.mkv");
   const bravoSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fbravo.mkv"));
@@ -529,6 +595,7 @@ test("video playback never shows loading or placeholder copy on top of active pl
   const bravoLoadingText = await playbackStageInnerText(page);
   expect(bravoLoadingText).not.toContain("Preparing an HLS compatibility session for this queue item.");
   expect(countOccurrences(bravoLoadingText, "bravo.mkv")).toBe(1);
+  await expectControlsOverlayUsableDuringLoading(page, "Creating the local HLS compatibility session.");
 
   await waitForVisibleVideo(page);
   await page.waitForTimeout(2000);

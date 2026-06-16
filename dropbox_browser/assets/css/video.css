@@ -11,6 +11,15 @@
   box-sizing: border-box;
 }
 
+/* Playback layers rely on hidden/class toggles for exclusivity across
+   placeholder, loading, video, and controls states. Keep this explicit so
+   component display rules like display:flex cannot accidentally resurrect a
+   hidden layer. */
+#video-player-pane [hidden],
+#video-player-pane .hidden {
+  display: none !important;
+}
+
 .video-player-shell {
   display: grid;
   gap: 0;
@@ -182,11 +191,6 @@
   position: relative;
 }
 
-.video-playback-stage[data-loading-state="active"] .video-controls-overlay {
-  opacity: 0;
-  pointer-events: none;
-}
-
 .video-empty-state,
 .video-playback-placeholder {
   border: 1px dashed #3c4f69;
@@ -352,7 +356,7 @@
   position: absolute;
   right: 0;
   transition: opacity 0.2s ease;
-  z-index: 2;
+  z-index: 4;
 }
 
 .video-controls-overlay.is-hidden {

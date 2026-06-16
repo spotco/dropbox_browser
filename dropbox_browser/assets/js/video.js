@@ -276,13 +276,11 @@ import {
     }
     if (ctx.els.loadingOverlayEl) {
       if (visible) {
-        ctx.els.loadingOverlayEl.hidden = false;
-        ctx.els.loadingOverlayEl.classList.remove('hidden');
+        setStageLayerVisibility(ctx.els.loadingOverlayEl, true);
         hidePlaceholderElement();
       }
       else {
-        ctx.els.loadingOverlayEl.hidden = true;
-        ctx.els.loadingOverlayEl.classList.add('hidden');
+        setStageLayerVisibility(ctx.els.loadingOverlayEl, false);
       }
       ctx.els.loadingOverlayEl.setAttribute('aria-busy', visible ? 'true' : 'false');
       var progressHost = ctx.els.loadingOverlayEl.querySelector('.video-loading-progress');
@@ -296,6 +294,7 @@ import {
 
   function showLoadingOverlay(options) {
     updateLoadingOverlay(true, options);
+    syncTransportControls();
   }
 
   function hideLoadingOverlay() {
@@ -330,28 +329,30 @@ import {
     return active && active.path ? active.path : '';
   }
 
+  // Stage layers must always toggle both the hidden attribute and the hidden class.
+  // The CSS now enforces this contract, but centralizing it here keeps future
+  // playback-surface changes from drifting into mixed visibility states again.
+  function setStageLayerVisibility(element, visible) {
+    if (!element) return;
+    element.hidden = !visible;
+    if (visible) element.classList.remove('hidden');
+    else element.classList.add('hidden');
+  }
+
   function hideVideoElement() {
-    if (!ctx.els.videoEl) return;
-    ctx.els.videoEl.hidden = true;
-    ctx.els.videoEl.classList.add('hidden');
+    setStageLayerVisibility(ctx.els.videoEl, false);
   }
 
   function showVideoElement() {
-    if (!ctx.els.videoEl) return;
-    ctx.els.videoEl.hidden = false;
-    ctx.els.videoEl.classList.remove('hidden');
+    setStageLayerVisibility(ctx.els.videoEl, true);
   }
 
   function showPlaceholderElement() {
-    if (!ctx.els.placeholderEl) return;
-    ctx.els.placeholderEl.hidden = false;
-    ctx.els.placeholderEl.classList.remove('hidden');
+    setStageLayerVisibility(ctx.els.placeholderEl, true);
   }
 
   function hidePlaceholderElement() {
-    if (!ctx.els.placeholderEl) return;
-    ctx.els.placeholderEl.hidden = true;
-    ctx.els.placeholderEl.classList.add('hidden');
+    setStageLayerVisibility(ctx.els.placeholderEl, false);
   }
 
   function destroyHlsController() {
@@ -408,13 +409,15 @@ import {
     if (ctx.els.elapsedTimeEl) ctx.els.elapsedTimeEl.textContent = '0:00';
     if (ctx.els.totalTimeEl) ctx.els.totalTimeEl.textContent = '0:00';
     ctx.state.progressSliderActive = false;
-    hideControlsOverlay();
+    if (!ctx.state.loadingOverlayVisible) hideControlsOverlay();
   }
 
   function videoControlsAvailable() {
     if (!ctx.els.videoEl) return false;
     var active = activeQueueItem();
-    return Boolean(active && ctx.state.playbackMode === 'compatibility' && !ctx.els.videoEl.hidden);
+    if (!active || !ctx.state.compatibilityAvailable) return false;
+    if (ctx.state.loadingOverlayVisible) return true;
+    return ctx.state.playbackMode === 'compatibility' && !ctx.els.videoEl.hidden;
   }
 
   function syncTransportControls() {
