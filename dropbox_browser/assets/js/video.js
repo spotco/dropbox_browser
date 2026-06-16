@@ -36,6 +36,12 @@ import {
       metaEl: document.getElementById('video-current-meta'),
       placeholderEl: document.getElementById('video-playback-placeholder'),
       playbackSurfaceEl: document.getElementById('video-playback-surface'),
+      playbackStageEl: document.getElementById('video-playback-stage'),
+      loadingOverlayEl: document.getElementById('video-loading-overlay'),
+      loadingTitleEl: document.getElementById('video-loading-title'),
+      loadingMetaEl: document.getElementById('video-loading-meta'),
+      loadingProgressEl: document.getElementById('video-loading-progress-fill'),
+      loadingProgressLabelEl: document.getElementById('video-loading-progress-label'),
       controlsOverlayEl: document.getElementById('video-controls-overlay'),
       videoEl: document.getElementById('video-player-media'),
       playToggleButton: document.getElementById('video-play-toggle'),
@@ -108,6 +114,7 @@ import {
       progressSliderActive: false,
       controlsIdleTimer: 0,
       controlsOverlayVisible: false,
+      loadingOverlayVisible: false,
     }
   };
 
@@ -252,6 +259,47 @@ import {
   function setPlaybackSummary(title, meta) {
     if (ctx.els.titleEl) ctx.els.titleEl.textContent = title;
     if (ctx.els.metaEl) ctx.els.metaEl.textContent = meta;
+  }
+
+  function updateLoadingOverlay(visible, options) {
+    var title = options && typeof options.title === 'string' ? options.title : 'Preparing playback';
+    var meta = options && typeof options.meta === 'string' ? options.meta : '';
+    var progressValue = options ? Number(options.progress) : NaN;
+    var progressPercent = Number.isFinite(progressValue)
+      ? Math.max(0, Math.min(100, Math.round(progressValue * 100)))
+      : 0;
+    if (ctx.els.loadingTitleEl) ctx.els.loadingTitleEl.textContent = title;
+    if (ctx.els.loadingMetaEl) ctx.els.loadingMetaEl.textContent = meta;
+    if (ctx.els.loadingProgressEl) ctx.els.loadingProgressEl.style.width = progressPercent + '%';
+    if (ctx.els.loadingProgressLabelEl) {
+      ctx.els.loadingProgressLabelEl.textContent = progressPercent + '%';
+    }
+    if (ctx.els.loadingOverlayEl) {
+      if (visible) {
+        ctx.els.loadingOverlayEl.hidden = false;
+        ctx.els.loadingOverlayEl.classList.remove('hidden');
+        hidePlaceholderElement();
+      }
+      else {
+        ctx.els.loadingOverlayEl.hidden = true;
+        ctx.els.loadingOverlayEl.classList.add('hidden');
+      }
+      ctx.els.loadingOverlayEl.setAttribute('aria-busy', visible ? 'true' : 'false');
+      var progressHost = ctx.els.loadingOverlayEl.querySelector('.video-loading-progress');
+      if (progressHost) progressHost.setAttribute('aria-valuenow', String(progressPercent));
+    }
+    if (ctx.els.playbackStageEl) {
+      ctx.els.playbackStageEl.setAttribute('data-loading-state', visible ? 'active' : 'idle');
+    }
+    ctx.state.loadingOverlayVisible = visible;
+  }
+
+  function showLoadingOverlay(options) {
+    updateLoadingOverlay(true, options);
+  }
+
+  function hideLoadingOverlay() {
+    updateLoadingOverlay(false, {progress: 1});
   }
 
   function updateCurrentFolder(path) {
@@ -459,11 +507,13 @@ import {
     clearVideoSource();
     showPlaybackPlaceholder(activeItemTitle(item), meta || 'Compatibility playback failed for this file.');
     setStatus(status || 'Compatibility playback failed.');
+    hideLoadingOverlay();
     resetPlaybackProgress();
   }
 
   function resetPlaybackSurface() {
     if (!ctx.els.videoEl) return;
+    hideLoadingOverlay();
     hideVideoElement();
     destroyHlsController();
     clearSubtitleTrack();
@@ -1072,12 +1122,14 @@ import {
   }
 
   function showPlaybackPlaceholder(title, meta) {
+    hideLoadingOverlay();
     hideVideoElement();
     showPlaceholderElement();
     setPlaybackSummary(title, meta);
   }
 
   function showPlaybackVideo(title, meta) {
+    hideLoadingOverlay();
     hidePlaceholderElement();
     showVideoElement();
     setPlaybackSummary(title, meta);
@@ -1101,6 +1153,18 @@ import {
       return 'Install or configure ffmpeg and ffprobe to enable video playback.';
     }
     return 'Preparing an HLS compatibility session for this queue item.';
+  }
+
+  function loadingOverlayCopy(item, meta, progress) {
+    return {
+      title: activeItemTitle(item),
+      meta: meta,
+      progress: progress,
+    };
+  }
+
+  function playbackSyncTokenIsCurrent(syncToken) {
+    return !Number.isFinite(syncToken) || syncToken === ctx.state.playbackSyncToken;
   }
 
   function requestVideoPlay() {
@@ -1191,7 +1255,7 @@ import {
     }
   }
 
-  function attachCompatibilityVideo(playlistUrl, title, meta, startSeconds) {
+  function attachCompatibilityVideo(playlistUrl, title, meta, startSeconds, surfaceSyncToken) {
     if (!ctx.els.videoEl) return;
     clearVideoSource();
     ctx.state.compatibilityStartSeconds = Math.max(0, Number(startSeconds) || 0);
@@ -1207,6 +1271,12 @@ import {
         maxLiveSyncPlaybackRate: 1,
       });
       ctx.state.hlsController.on(Hls.Events.MANIFEST_LOADING, function (_eventName, data) {
+        if (!playbackSyncTokenIsCurrent(surfaceSyncToken)) return;
+        showLoadingOverlay({
+          title: title,
+          meta: 'Loading the HLS playlist.',
+          progress: 0.84,
+        });
         reportVideoDiagnostic({
           level: 'debug',
           message: 'HLS manifest loading',
@@ -1214,6 +1284,12 @@ import {
         });
       });
       ctx.state.hlsController.on(Hls.Events.MANIFEST_LOADED, function (_eventName, data) {
+        if (!playbackSyncTokenIsCurrent(surfaceSyncToken)) return;
+        showLoadingOverlay({
+          title: title,
+          meta: 'Playlist is ready. Attaching the stream.',
+          progress: 0.9,
+        });
         reportVideoDiagnostic({
           level: 'debug',
           message: 'HLS manifest loaded',
@@ -1221,7 +1297,12 @@ import {
         });
       });
       ctx.state.hlsController.on(Hls.Events.MANIFEST_PARSED, function () {
-        if (ctx.state.playbackMode !== 'compatibility') return;
+        if (ctx.state.playbackMode !== 'compatibility' || !playbackSyncTokenIsCurrent(surfaceSyncToken)) return;
+        showLoadingOverlay({
+          title: title,
+          meta: 'Buffering the first frame.',
+          progress: 0.96,
+        });
         reportVideoDiagnostic({
           level: 'debug',
           message: 'HLS manifest parsed',
@@ -1298,15 +1379,30 @@ import {
       });
       ctx.state.hlsController.attachMedia(ctx.els.videoEl);
       ctx.state.hlsController.loadSource(playlistUrl);
+      if (playbackSyncTokenIsCurrent(surfaceSyncToken)) {
+        showLoadingOverlay({
+          title: title,
+          meta: 'Connecting the video player to the HLS session.',
+          progress: 0.78,
+        });
+      }
       setStatus('Compatibility playback session is loading.');
     }
     else if (ctx.els.videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+      if (playbackSyncTokenIsCurrent(surfaceSyncToken)) {
+        showLoadingOverlay({
+          title: title,
+          meta: 'Loading the HLS playlist.',
+          progress: 0.84,
+        });
+      }
       setStatus('Compatibility playback session is loading.');
       ctx.els.videoEl.src = playlistUrl;
       ctx.els.videoEl.load();
       ctx.els.videoEl.addEventListener('loadedmetadata', function onLoadedMetadata() {
         ctx.els.videoEl.removeEventListener('loadedmetadata', onLoadedMetadata);
-        if (ctx.state.playbackMode !== 'compatibility') return;
+        if (ctx.state.playbackMode !== 'compatibility' || !playbackSyncTokenIsCurrent(surfaceSyncToken)) return;
+        hideLoadingOverlay();
         setStatus('Compatibility playback session is ready.');
         if (ctx.state.compatibilityStartSeconds > 0) {
           setStatus('Compatibility playback session is ready at ' + formatPlaybackTime(ctx.state.compatibilityStartSeconds) + '.');
@@ -1838,6 +1934,11 @@ import {
     if (ctx.els.progressSliderEl) ctx.els.progressSliderEl.value = String(clampedTarget);
     if (ctx.els.elapsedTimeEl) ctx.els.elapsedTimeEl.textContent = formatNativePlaybackTime(clampedTarget);
     setPlaybackSummary(activeItemTitle(active), 'Loading compatibility playback at ' + formatPlaybackTime(clampedTarget) + '.');
+    showLoadingOverlay(loadingOverlayCopy(
+      active,
+      'Creating a compatibility stream at ' + formatPlaybackTime(clampedTarget) + '.',
+      0.48
+    ));
     setStatus('Loading compatibility playback at ' + formatPlaybackTime(clampedTarget) + '.');
     reportVideoDiagnostic({
       level: 'info',
@@ -1878,11 +1979,17 @@ import {
       ctx.state.compatibilitySessionId = session.session_id || '';
       ctx.state.seekRestartInProgress = false;
       ctx.state.requestedSeekSeconds = null;
+      showLoadingOverlay(loadingOverlayCopy(
+        active,
+        'Compatibility session is ready. Starting the video player.',
+        0.72
+      ));
       attachCompatibilityVideo(
         session.playlist_url,
         activeItemTitle(active),
         'Playing through a local HLS compatibility session from ' + formatPlaybackTime(Number(session.start_time_seconds) || 0) + '.',
-        Number(session.start_time_seconds) || clampedTarget
+        Number(session.start_time_seconds) || clampedTarget,
+        syncToken
       );
       ctx.state.compatibilitySubtitleStreamIndex = normalizeSubtitleStreamIndex(session.subtitle_stream_index);
       reportVideoDiagnostic({
@@ -1909,6 +2016,7 @@ import {
       ctx.state.seekRestartInProgress = false;
       ctx.state.requestedSeekSeconds = null;
       ctx.state.playbackMode = 'compatibility-error';
+      hideLoadingOverlay();
       setStatus('Could not start compatibility playback at ' + formatPlaybackTime(clampedTarget) + '.');
       reportVideoDiagnostic({
         level: 'error',
@@ -1943,6 +2051,7 @@ import {
       resetSubtitlesForActiveItemChange(active);
       renderAudioTrackSelector(active, null);
       showPlaybackPlaceholder(activeItemTitle(active), 'Loading video playback capabilities.');
+      showLoadingOverlay(loadingOverlayCopy(active, 'Loading video playback capabilities.', 0.08));
       setStatus('Loading video playback capabilities.');
       return;
     }
@@ -1964,6 +2073,11 @@ import {
     }
 
     setPlaybackSummary(activeItemTitle(active), compatibilityNeededMeta(active));
+    showLoadingOverlay(loadingOverlayCopy(
+      active,
+      'Inspecting video tracks and preparing compatibility playback.',
+      0.22
+    ));
     setStatus(compatibilityNeededStatus());
     var probePayload = await ensureAudioTracksForItem(active);
     renderSubtitleTrackSelector(active, probePayload);
@@ -1980,17 +2094,24 @@ import {
     var audioStreamIndex = selectedAudioStreamIndex(active, probePayload);
     var burnedInSubtitleStreamIndex = selectedBurnedInSubtitleStreamIndex(active, probePayload);
     try {
+      showLoadingOverlay(loadingOverlayCopy(active, 'Creating the local HLS compatibility session.', 0.48));
       var session = await createCompatibilitySession(active, audioStreamIndex, 0, burnedInSubtitleStreamIndex);
       if (syncToken !== ctx.state.playbackSyncToken) {
         await stopCompatibilitySession();
         return;
       }
       ctx.state.compatibilitySessionId = session.session_id || '';
+      showLoadingOverlay(loadingOverlayCopy(
+        active,
+        'Compatibility session is ready. Starting the video player.',
+        0.72
+      ));
       attachCompatibilityVideo(
         session.playlist_url,
         activeItemTitle(active),
         'Playing through a local HLS compatibility session.',
-        Number(session.start_time_seconds) || 0
+        Number(session.start_time_seconds) || 0,
+        syncToken
       );
       ctx.state.compatibilitySubtitleStreamIndex = normalizeSubtitleStreamIndex(session.subtitle_stream_index);
       await subtitleWarmPromise;
@@ -2006,6 +2127,7 @@ import {
       ctx.state.compatibilitySessionId = '';
       ctx.state.compatibilitySubtitleStreamIndex = null;
       ctx.state.playbackMode = 'compatibility-error';
+      hideLoadingOverlay();
       showPlaybackPlaceholder(
         activeItemTitle(active),
         'Compatibility playback could not be started for this file.'
@@ -2469,6 +2591,12 @@ import {
   }
   if (ctx.els.videoEl) {
     ctx.els.videoEl.addEventListener('loadedmetadata', syncPlaybackProgress);
+    ctx.els.videoEl.addEventListener('loadeddata', function () {
+      if (ctx.state.playbackMode === 'compatibility') hideLoadingOverlay();
+    });
+    ctx.els.videoEl.addEventListener('canplay', function () {
+      if (ctx.state.playbackMode === 'compatibility') hideLoadingOverlay();
+    });
     ctx.els.videoEl.addEventListener('durationchange', syncPlaybackProgress);
     ctx.els.videoEl.addEventListener('timeupdate', function () {
       syncPlaybackProgress();
@@ -2523,6 +2651,7 @@ import {
     ctx.els.videoEl.addEventListener('emptied', resetPlaybackProgress);
     ctx.els.videoEl.addEventListener('playing', function () {
       resetCompatibilityRecoveryState();
+      hideLoadingOverlay();
       syncTransportControls();
       syncPlaybackProgress();
       if (ctx.state.playbackMode === 'compatibility') {

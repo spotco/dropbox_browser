@@ -30,6 +30,56 @@ async function installHlsStub(page) {
   });
 }
 
+const PLAYBACK_SURFACE_MONITOR = () => {
+  window.__playbackSurfaceViolations = [];
+
+  function isVisible(element) {
+    if (!element || element.hidden) return false;
+    const style = window.getComputedStyle(element);
+    if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+      return false;
+    }
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function sampleState(reason) {
+    const loading = document.getElementById("video-loading-overlay");
+    const placeholder = document.getElementById("video-playback-placeholder");
+    const video = document.getElementById("video-player-media");
+    const state = {
+      reason,
+      loadingVisible: isVisible(loading),
+      placeholderVisible: isVisible(placeholder),
+      videoVisible: isVisible(video),
+      loadingText: loading ? String(loading.textContent || "").trim() : "",
+      placeholderText: placeholder ? String(placeholder.textContent || "").trim() : "",
+    };
+    if (
+      (state.loadingVisible && state.placeholderVisible)
+      || (state.videoVisible && state.placeholderVisible)
+      || (state.videoVisible && state.loadingVisible)
+    ) {
+      window.__playbackSurfaceViolations.push(state);
+    }
+  }
+
+  function start() {
+    sampleState("init");
+    window.setInterval(() => sampleState("interval"), 16);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", start, { once: true });
+  } else {
+    start();
+  }
+};
+
+async function installPlaybackSurfaceMonitor(page) {
+  await page.addInitScript(PLAYBACK_SURFACE_MONITOR);
+}
+
 const TRACK_REMOVAL_INSTRUMENTATION = () => {
   window.__subtitleTeardownEvents = [];
 
@@ -81,6 +131,89 @@ async function waitForVisibleVideo(page) {
       });
     }, { timeout: 10000 })
     .toBe(true);
+}
+
+async function waitForLoadingOverlayWithoutPlaceholder(page) {
+  await expect
+    .poll(async () => {
+      return page.evaluate(() => {
+        function isVisible(element) {
+          if (!element || element.hidden) return false;
+          const style = window.getComputedStyle(element);
+          return style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+        }
+        const loading = document.getElementById("video-loading-overlay");
+        const placeholder = document.getElementById("video-playback-placeholder");
+        return Boolean(isVisible(loading) && !isVisible(placeholder));
+      });
+    }, { timeout: 10000 })
+    .toBe(true);
+}
+
+async function waitForPlaybackSurfaceWithoutOverlay(page) {
+  await expect
+    .poll(async () => {
+      return page.evaluate(() => {
+        function isVisible(element) {
+          if (!element || element.hidden) return false;
+          const style = window.getComputedStyle(element);
+          return style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+        }
+        const loading = document.getElementById("video-loading-overlay");
+        const placeholder = document.getElementById("video-playback-placeholder");
+        const video = document.getElementById("video-player-media");
+        return Boolean(isVisible(video) && !isVisible(loading) && !isVisible(placeholder));
+      });
+    }, { timeout: 10000 })
+    .toBe(true);
+}
+
+async function setPlaybackTimeForSubtitleChecks(page, seconds) {
+  await page.evaluate((targetSeconds) => {
+    const video = document.getElementById("video-player-media");
+    if (!video) return;
+    try {
+      video.currentTime = Number(targetSeconds);
+    } catch (_error) {
+      return;
+    }
+    video.dispatchEvent(new Event("timeupdate"));
+  }, seconds);
+}
+
+async function waitForDisplayedSubtitleText(page, expectedText) {
+  await expect
+    .poll(async () => {
+      return page.evaluate(() => {
+        const debugCue = document.getElementById("video-debug-current-cue");
+        return debugCue ? String(debugCue.textContent || "").trim() : "";
+      });
+    }, { timeout: 10000 })
+    .toContain(expectedText);
+}
+
+async function waitForDisplayedSubtitleToClear(page) {
+  await expect
+    .poll(async () => {
+      return page.evaluate(() => {
+        const debugCue = document.getElementById("video-debug-current-cue");
+        return debugCue ? String(debugCue.textContent || "").trim() : "";
+      });
+    }, { timeout: 10000 })
+    .toBe("No active subtitle cue.");
+}
+
+async function expectNoPlaybackSurfaceViolations(page) {
+  const violations = await page.evaluate(() => window.__playbackSurfaceViolations || []);
+  expect(violations).toEqual([]);
+}
+
+async function playbackStageInnerText(page) {
+  return page.locator("#video-playback-stage").innerText();
+}
+
+function countOccurrences(text, needle) {
+  return String(text || "").split(String(needle || "")).length - 1;
 }
 
 async function waitForSubtitleStreamIndex(page, streamIndex) {
@@ -166,8 +299,10 @@ async function scrubTo(page, targetSeconds, sessionPredicate) {
     element.dispatchEvent(new Event("input", { bubbles: true }));
     element.dispatchEvent(new Event("change", { bubbles: true }));
   }, targetSeconds);
+  await waitForLoadingOverlayWithoutPlaceholder(page);
   await sessionRequest;
   await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
 }
 
 async function openVideoPane(page) {
@@ -183,8 +318,10 @@ async function playLibraryFile(page, filename) {
   const row = await libraryRow(page, filename);
   await expect(row).toBeVisible();
   await row.dblclick();
+  await waitForLoadingOverlayWithoutPlaceholder(page);
   await expectActiveQueueTitle(page, filename);
   await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
 }
 
 test.use({ baseURL });
@@ -249,6 +386,8 @@ test("video playback loads tracks, switches tracks, and hides video before subti
   await page.locator("#video-subtitle-track").selectOption("4");
   await waitForSubtitleStreamIndex(page, 4);
   await expectTrackSelectors(page, { subtitleValue: "4" });
+  await setPlaybackTimeForSubtitleChecks(page, 1);
+  await waitForDisplayedSubtitleText(page, "ALPHA-SUBTITLE-FRA");
 
   await scrubTo(
     page,
@@ -263,8 +402,10 @@ test("video playback loads tracks, switches tracks, and hides video before subti
     (body) => body.includes("path=Videos%2Falpha.mkv") && body.includes("audio_stream_index=2"),
   );
   await page.locator("#video-audio-track").selectOption("2");
+  await waitForLoadingOverlayWithoutPlaceholder(page);
   await alphaAudioRestart;
   await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
   await expectTrackSelectors(page, { audioValue: "2", subtitleValue: "4" });
   await waitForSubtitleStreamIndex(page, 4);
 
@@ -282,6 +423,8 @@ test("video playback loads tracks, switches tracks, and hides video before subti
 
   const bravoSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fbravo.mkv"));
   await bravoRow.dblclick();
+  await waitForLoadingOverlayWithoutPlaceholder(page);
+  await waitForDisplayedSubtitleToClear(page);
   await bravoSession;
   await expectActiveQueueTitle(page, "bravo.mkv");
 
@@ -298,6 +441,7 @@ test("video playback loads tracks, switches tracks, and hides video before subti
   }
 
   await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
   await expectTrackSelectors(page, {
     audioOptionCount: 2,
     subtitleOptionCount: 4,
@@ -323,8 +467,10 @@ test("video playback loads tracks, switches tracks, and hides video before subti
     (body) => body.includes("path=Videos%2Fbravo.mkv") && body.includes("audio_stream_index=2"),
   );
   await page.locator("#video-audio-track").selectOption("2");
+  await waitForLoadingOverlayWithoutPlaceholder(page);
   await bravoAudioRestart;
   await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
   await expectTrackSelectors(page, { audioValue: "2", subtitleValue: "4" });
   await waitForSubtitleStreamIndex(page, 4);
 
@@ -343,4 +489,51 @@ test("video playback loads tracks, switches tracks, and hides video before subti
   await page.locator("#video-subtitle-track").selectOption("3");
   await waitForSubtitleStreamIndex(page, 3);
   await expectTrackSelectors(page, { subtitleValue: "3" });
+});
+
+test("video playback never shows loading or placeholder copy on top of active playback during real HLS switching", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await installPlaybackSurfaceMonitor(page);
+  await openVideoPane(page);
+
+  const alphaSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
+  const alphaRow = await libraryRow(page, "alpha.mkv");
+  await alphaRow.dblclick();
+  await waitForLoadingOverlayWithoutPlaceholder(page);
+  await alphaSession;
+  await expect
+    .poll(async () => playbackStageInnerText(page), { timeout: 10000 })
+    .toContain("Creating the local HLS compatibility session.");
+  const alphaLoadingText = await playbackStageInnerText(page);
+  expect(alphaLoadingText).not.toContain("Preparing an HLS compatibility session for this queue item.");
+  expect(countOccurrences(alphaLoadingText, "alpha.mkv")).toBe(1);
+
+  await waitForVisibleVideo(page);
+  await page.waitForTimeout(1500);
+  const alphaPlayText = await playbackStageInnerText(page);
+  expect(alphaPlayText).not.toContain("Playing through a local HLS compatibility session.");
+  expect(alphaPlayText).not.toContain("alpha.mkv");
+  await page.locator("#video-subtitle-track").selectOption("4");
+  await waitForSubtitleStreamIndex(page, 4);
+  await expectNoPlaybackSurfaceViolations(page);
+
+  const bravoRow = await libraryRow(page, "bravo.mkv");
+  const bravoSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fbravo.mkv"));
+  await bravoRow.dblclick();
+  await waitForLoadingOverlayWithoutPlaceholder(page);
+  await bravoSession;
+  await expect
+    .poll(async () => playbackStageInnerText(page), { timeout: 10000 })
+    .toContain("Creating the local HLS compatibility session.");
+  const bravoLoadingText = await playbackStageInnerText(page);
+  expect(bravoLoadingText).not.toContain("Preparing an HLS compatibility session for this queue item.");
+  expect(countOccurrences(bravoLoadingText, "bravo.mkv")).toBe(1);
+
+  await waitForVisibleVideo(page);
+  await page.waitForTimeout(2000);
+  const bravoPlayText = await playbackStageInnerText(page);
+  expect(bravoPlayText).not.toContain("Playing through a local HLS compatibility session.");
+  expect(bravoPlayText).not.toContain("bravo.mkv");
+  await expectNoPlaybackSurfaceViolations(page);
 });
