@@ -42,6 +42,16 @@ class ConfigDefaultsTests(unittest.TestCase):
 
         self.assertEqual(config["FFMpegPath"], "")
         self.assertEqual(config["FFProbePath"], "")
+        self.assertEqual(config["VideoSubtitleFontFamily"], "Arial, Helvetica, sans-serif")
+        self.assertEqual(config["VideoSubtitleFontSizePx"], 28)
+        self.assertTrue(config["VideoSubtitleBold"])
+
+    def test_packaged_config_video_subtitle_defaults_are_present(self) -> None:
+        config = config_module._read_config_file(config_module.PROJECT_ROOT / "config.json")
+
+        self.assertEqual(config["VideoSubtitleFontFamily"], "Arial, Helvetica, sans-serif")
+        self.assertEqual(config["VideoSubtitleFontSizePx"], 28)
+        self.assertTrue(config["VideoSubtitleBold"])
 
     def test_client_log_defaults_are_present(self) -> None:
         config = dict(config_module._APP_CONFIG_DEFAULTS)

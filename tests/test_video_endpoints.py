@@ -390,6 +390,7 @@ class VideoEndpointTests(AppTestCase):
             "/video/endpoints/session/file?id=" + payload["session_id"] + "&name=stream.m3u8",
         )
         self.assertIsNone(payload["audio_stream_index"])
+        self.assertIsNone(payload["subtitle_stream_index"])
         self.assertEqual(len(spawned), 1)
         self.assertEqual(spawned[0].command[0], "C:\\tools\\ffmpeg\\bin\\ffmpeg.exe")
         self.assertTrue(any("/file?path=movie.mp4&source=remote" in part for part in spawned[0].command))
@@ -633,7 +634,43 @@ class VideoEndpointTests(AppTestCase):
             })
 
         self.assertEqual(payload["audio_stream_index"], 2)
+        self.assertIsNone(payload["subtitle_stream_index"])
         self.assertIn("0:2?", spawned[0].command)
+
+    def test_session_endpoint_passes_selected_bitmap_subtitle_stream_index_to_ffmpeg(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        spawned: list[FakeFfmpegProcess] = []
+
+        def fake_popen(command, stdout=None, stderr=None, cwd=None):
+            playlist_path = Path(command[-1])
+            playlist_path.parent.mkdir(parents=True, exist_ok=True)
+            playlist_path.write_text("#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:6,\nsegment_00000.m4s\n", encoding="utf-8")
+            (playlist_path.parent / "init.mp4").write_bytes(b"init")
+            (playlist_path.parent / "segment_00000.m4s").write_bytes(b"segment")
+            process = FakeFfmpegProcess(command)
+            spawned.append(process)
+            return process
+
+        with TestServer(app) as server, patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen):
+            payload = server.post_json("/video/endpoints/session", {
+                "path": "movie.mp4",
+                "source": "remote",
+                "subtitle_stream_index": "4",
+            })
+
+        self.assertIsNone(payload["audio_stream_index"])
+        self.assertEqual(payload["subtitle_stream_index"], 4)
+        self.assertIn("-filter_complex", spawned[0].command)
+        self.assertIn("[0:v:0][0:4]overlay[vout]", spawned[0].command)
+        self.assertIn("[vout]", spawned[0].command)
 
     def test_session_endpoint_rejects_negative_start_time(self) -> None:
         rclone = self._remote_media_rclone()
@@ -680,6 +717,25 @@ class VideoEndpointTests(AppTestCase):
         self.assertIn("-hls_fmp4_init_filename", command)
         self.assertIn("init.mp4", command)
         self.assertIn("segment_%05d.m4s", command)
+
+    def test_build_ffmpeg_hls_command_burns_in_selected_bitmap_subtitle_stream(self) -> None:
+        command = build_ffmpeg_hls_command(
+            Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+            "http://127.0.0.1:8000/file?path=movie.mkv&source=remote",
+            Path("E:/dev/dropbox_browser/Temp/video_sessions/test/stream.m3u8"),
+            segment_base_url="/video/endpoints/session/file?id=test&name=",
+            audio_stream_index=5,
+            subtitle_stream_index=4,
+            start_time_seconds=12.5,
+        )
+
+        self.assertLess(command.index("-ss"), command.index("-i"))
+        self.assertIn("-filter_complex", command)
+        self.assertIn("[0:v:0][0:4]overlay[vout]", command)
+        self.assertIn("[vout]", command)
+        self.assertNotIn("0:v:0", [item for item in command if item == "0:v:0"])
+        self.assertIn("0:5?", command)
+        self.assertIn("-sn", command)
 
     def test_subtitles_endpoint_returns_webvtt_with_content_type(self) -> None:
         rclone = self._remote_media_rclone()

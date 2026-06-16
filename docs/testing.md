@@ -84,6 +84,11 @@ fixture `tests/e2e/fixtures/music-library-deep.json`, keeps temp/cache paths
 isolated, and verifies `Music Player -> Song Library -> Load Current Folder`
 through partial cached-library polling and final completion.
 
+Video-player integration tests may also point `DROPBOX_BROWSER_E2E_FIXTURE` at a
+Python fixture generator script. The integration harness executes that script
+into its isolated temp root, lets it materialize binary test media on disk, and
+then loads the returned JSON fixture description.
+
 Run that integration test directly:
 
 ```powershell

@@ -94,6 +94,8 @@ def build_video_mock_patches(fixture: dict[str, Any], temp_dir: Path) -> list[An
     video_section = fixture.get("video")
     if not isinstance(video_section, dict):
         return []
+    if bool(video_section.get("use_real_media")):
+        return []
 
     probe_by_path: dict[str, Any] = dict(video_section.get("probe_by_path") or {})
     vtt_by_path: dict[str, dict[str, str]] = {

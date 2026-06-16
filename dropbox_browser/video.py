@@ -34,6 +34,7 @@ HLS_INIT_SEGMENT_NAME = "init.mp4"
 HLS_SESSION_TTL_SECONDS = 15 * 60
 HLS_READY_TIMEOUT_SECONDS = 10.0
 HLS_ASSET_READY_TIMEOUT_SECONDS = 8.0
+HLS_READY_TIMEOUT_BURN_IN_SECONDS = 30.0
 VIDEO_DEBUG_LOG_PATH = TEMP_DIR / "video_debug.jsonl"
 _VIDEO_DEBUG_LOG_LOCK = threading.Lock()
 
@@ -401,6 +402,7 @@ def build_ffmpeg_hls_command(
     *,
     segment_base_url: str,
     audio_stream_index: int | None = None,
+    subtitle_stream_index: int | None = None,
     start_time_seconds: float = 0.0,
 ) -> list[str]:
     segment_pattern = HLS_SEGMENT_PATTERN
@@ -416,9 +418,19 @@ def build_ffmpeg_hls_command(
     command.extend([
         "-i",
         input_url,
-        "-map",
-        "0:v:0",
     ])
+    if subtitle_stream_index is None:
+        command.extend([
+            "-map",
+            "0:v:0",
+        ])
+    else:
+        command.extend([
+            "-filter_complex",
+            f"[0:v:0][0:{subtitle_stream_index}]overlay[vout]",
+            "-map",
+            "[vout]",
+        ])
     if audio_stream_index is None:
         command.extend(["-map", "0:a:0?"])
     else:
@@ -534,6 +546,7 @@ class VideoHlsSession:
     created_at: float
     last_accessed_at: float
     audio_stream_index: int | None
+    subtitle_stream_index: int | None
     start_time_seconds: float
 
     def touch(self) -> None:
@@ -560,6 +573,7 @@ class VideoSessionManager:
         rel_path: str,
         base_url: str,
         audio_stream_index: int | None = None,
+        subtitle_stream_index: int | None = None,
         start_time_seconds: float = 0.0,
     ) -> dict[str, object]:
         video_config = getattr(self.app, "video_tools_config", None)
@@ -579,6 +593,7 @@ class VideoSessionManager:
             playlist_path,
             segment_base_url=segment_base_url,
             audio_stream_index=audio_stream_index,
+            subtitle_stream_index=subtitle_stream_index,
             start_time_seconds=start_time_seconds,
         )
         log_video_debug(
@@ -587,6 +602,7 @@ class VideoSessionManager:
             session_id=session_id,
             path=rel_path,
             audio_stream_index=audio_stream_index,
+            subtitle_stream_index=subtitle_stream_index,
             start_time_seconds=start_time_seconds,
             playlist=str(playlist_path),
             command=command,
@@ -612,13 +628,19 @@ class VideoSessionManager:
             created_at=time.time(),
             last_accessed_at=time.time(),
             audio_stream_index=audio_stream_index,
+            subtitle_stream_index=subtitle_stream_index,
             start_time_seconds=start_time_seconds,
         )
         with self._lock:
             self._cleanup_expired_locked()
             self._clear_active_locked()
             self._active_session = session
-        if not self._wait_for_playlist(session):
+        ready_timeout_seconds = (
+            HLS_READY_TIMEOUT_BURN_IN_SECONDS
+            if subtitle_stream_index is not None
+            else HLS_READY_TIMEOUT_SECONDS
+        )
+        if not self._wait_for_playlist(session, timeout_seconds=ready_timeout_seconds):
             with self._lock:
                 if self._active_session is session:
                     self._clear_active_locked()
@@ -712,6 +734,7 @@ class VideoSessionManager:
             + urlencode({"id": session.session_id, "name": session.playlist_path.name}),
             "asset_root": "/video/endpoints/session/file?id=" + session.session_id + "&name=",
             "audio_stream_index": session.audio_stream_index,
+            "subtitle_stream_index": session.subtitle_stream_index,
             "start_time_seconds": session.start_time_seconds,
         }
 
