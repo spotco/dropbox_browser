@@ -4,13 +4,23 @@ var DEFAULT_COLUMN_MIN_WIDTH = 32;
 export var BROWSE_COLUMN_KEYS = ['name', 'type', 'status', 'size', 'date', 'view', 'sync'];
 
 export var BROWSE_COLUMN_MIN_WIDTHS = {
-  name: DEFAULT_COLUMN_MIN_WIDTH,
-  type: DEFAULT_COLUMN_MIN_WIDTH,
-  status: DEFAULT_COLUMN_MIN_WIDTH,
-  size: DEFAULT_COLUMN_MIN_WIDTH,
-  date: DEFAULT_COLUMN_MIN_WIDTH,
-  view: DEFAULT_COLUMN_MIN_WIDTH,
-  sync: DEFAULT_COLUMN_MIN_WIDTH,
+  name: 200,
+  type: 72,
+  status: 96,
+  size: 88,
+  date: 144,
+  view: 60,
+  sync: 100,
+};
+
+var BROWSE_COLUMN_DEFAULT_WEIGHTS = {
+  name: 3.2,
+  type: 1,
+  status: 1.3,
+  size: 1.1,
+  date: 1.8,
+  view: 0.8,
+  sync: 1.4,
 };
 
 function normalizedColumnKeys(keys) {
@@ -62,11 +72,20 @@ function minimumTotalWidth(keys, columnMinWidths) {
 
 function distributeExtraWidth(keys, extraWidth, columnMinWidths) {
   var minWidths = minWidthsForConfig(columnMinWidths);
-  var base = Math.floor(extraWidth / keys.length);
-  var remainder = extraWidth - (base * keys.length);
   var widths = {};
+  var normalizedExtra = Math.max(0, Math.round(Number(extraWidth) || 0));
+  var totalWeight = keys.reduce(function (sum, key) {
+    return sum + (BROWSE_COLUMN_DEFAULT_WEIGHTS[key] || 1);
+  }, 0);
+  var assigned = 0;
   keys.forEach(function (key, index) {
-    widths[key] = (minWidths[key] || DEFAULT_COLUMN_MIN_WIDTH) + base + (index < remainder ? 1 : 0);
+    var minWidth = minWidths[key] || DEFAULT_COLUMN_MIN_WIDTH;
+    var weight = BROWSE_COLUMN_DEFAULT_WEIGHTS[key] || 1;
+    var extra = index === keys.length - 1
+      ? normalizedExtra - assigned
+      : Math.round((weight / totalWeight) * normalizedExtra);
+    widths[key] = minWidth + extra;
+    assigned += extra;
   });
   return widths;
 }
@@ -118,20 +137,61 @@ export function fitColumnWidthsToTotal(keys, widths, totalWidth, columnMinWidths
   return scaled;
 }
 
+function availableShrink(width, key, columnMinWidths) {
+  var minWidth = minWidthsForConfig(columnMinWidths)[key] || DEFAULT_COLUMN_MIN_WIDTH;
+  return Math.max(0, width - minWidth);
+}
+
+function consumeShrinkAlongKeys(widths, shrinkKeys, requestedDelta, columnMinWidths) {
+  var remaining = Math.max(0, Math.round(Number(requestedDelta) || 0));
+  if (!remaining) return 0;
+  shrinkKeys.some(function (key) {
+    if (!remaining) return true;
+    var currentWidth = widths[key];
+    if (!currentWidth) return false;
+    var reduction = Math.min(remaining, availableShrink(currentWidth, key, columnMinWidths));
+    if (reduction <= 0) return false;
+    widths[key] = currentWidth - reduction;
+    remaining -= reduction;
+    return remaining === 0;
+  });
+  return Math.max(0, Math.round(Number(requestedDelta) || 0)) - remaining;
+}
+
 export function resizeColumnPair(widths, leftKey, rightKey, delta, columnKeys, columnMinWidths) {
   var normalized = normalizeStoredColumnWidths(widths, columnKeys, columnMinWidths);
   var leftWidth = normalized[leftKey];
   var rightWidth = normalized[rightKey];
   if (!leftWidth || !rightWidth) return normalized;
-  var minWidths = minWidthsForConfig(columnMinWidths);
-  var leftMin = minWidths[leftKey] || DEFAULT_COLUMN_MIN_WIDTH;
-  var rightMin = minWidths[rightKey] || DEFAULT_COLUMN_MIN_WIDTH;
-  var pairTotal = leftWidth + rightWidth;
-  var nextLeft = Math.min(Math.max(leftWidth + Math.round(Number(delta) || 0), leftMin), pairTotal - rightMin);
-  var nextRight = pairTotal - nextLeft;
-  normalized[leftKey] = nextLeft;
-  normalized[rightKey] = nextRight;
+  var keys = normalizedColumnKeys(columnKeys);
+  var dividerIndex = keys.indexOf(leftKey);
+  if (dividerIndex < 0 || keys[dividerIndex + 1] !== rightKey) return normalized;
+  var requestedDelta = Math.round(Number(delta) || 0);
+  if (!requestedDelta) return normalized;
+  if (requestedDelta > 0) {
+    var gainedRight = consumeShrinkAlongKeys(normalized, keys.slice(dividerIndex + 1), requestedDelta, columnMinWidths);
+    normalized[leftKey] = leftWidth + gainedRight;
+    return normalized;
+  }
+  var gainedLeft = consumeShrinkAlongKeys(normalized, keys.slice(0, dividerIndex + 1).reverse(), Math.abs(requestedDelta), columnMinWidths);
+  normalized[rightKey] = rightWidth + gainedLeft;
   return normalized;
+}
+
+function measureAvailableTableWidth(table) {
+  if (!table) return 0;
+  if (table.parentElement) {
+    if (table.parentElement.clientWidth) return Math.round(table.parentElement.clientWidth);
+    if (typeof table.parentElement.getBoundingClientRect === 'function') {
+      var parentRect = table.parentElement.getBoundingClientRect();
+      if (parentRect && parentRect.width) return Math.round(parentRect.width);
+    }
+  }
+  if (typeof table.getBoundingClientRect === 'function') {
+    var tableRect = table.getBoundingClientRect();
+    if (tableRect && tableRect.width) return Math.round(tableRect.width);
+  }
+  return 0;
 }
 
 export function applyBrowseColumnWidths(table, widths) {
@@ -141,13 +201,7 @@ export function applyBrowseColumnWidths(table, widths) {
     var key = column.getAttribute('data-browse-column') || '';
     if (key) keys.push(key);
   });
-  var totalWidth = 0;
-  if (typeof table.getBoundingClientRect === 'function') {
-    totalWidth = Math.round(table.getBoundingClientRect().width);
-  }
-  if (!totalWidth && table.parentElement && typeof table.parentElement.getBoundingClientRect === 'function') {
-    totalWidth = Math.round(table.parentElement.getBoundingClientRect().width);
-  }
+  var totalWidth = measureAvailableTableWidth(table);
   var normalized = fitColumnWidthsToTotal(keys, widths, totalWidth);
   return writeBrowseColumnWidths(table, normalized);
 }
@@ -168,11 +222,20 @@ export function writeBrowseColumnWidths(table, widths) {
 }
 
 function readPersistedBrowseColumnWidths() {
-  return normalizeStoredColumnWidths(readSetting(STORAGE_KEY, {}));
+  var stored = readSetting(STORAGE_KEY, {});
+  if (!stored || typeof stored !== 'object') return {};
+  if (stored.preferred && typeof stored.preferred === 'object') {
+    return normalizeStoredColumnWidths(stored.preferred);
+  }
+  return normalizeStoredColumnWidths(stored);
 }
 
 function writePersistedBrowseColumnWidths(widths) {
-  writeSetting(STORAGE_KEY, normalizeStoredColumnWidths(widths));
+  writeSetting(STORAGE_KEY, {preferred: normalizeStoredColumnWidths(widths)});
+}
+
+function clearPersistedBrowseColumnWidths() {
+  writePersistedBrowseColumnWidths({});
 }
 
 function columnKeysFromTable(table) {
@@ -188,22 +251,24 @@ export function initBrowseColumnResizing(options) {
   var doc = options && options.document ? options.document : document;
   var win = options && options.window ? options.window : window;
   var table = options && options.table ? options.table : (doc ? doc.querySelector('table[data-browse-table]') : null);
+  var onWidthsChanged = options && typeof options.onWidthsChanged === 'function' ? options.onWidthsChanged : function () {};
   if (!doc || !win || !table) return null;
   if (table.__browseColumnResizeApi) return table.__browseColumnResizeApi;
 
   var columnKeys = columnKeysFromTable(table);
-  var widths = applyBrowseColumnWidths(table, readPersistedBrowseColumnWidths());
+  var preferredWidths = readPersistedBrowseColumnWidths();
+  var widths = applyBrowseColumnWidths(table, preferredWidths);
   var activeDrag = null;
 
-  function fitWidthsToTable(persist) {
-    widths = applyBrowseColumnWidths(table, widths);
-    if (persist !== false) writePersistedBrowseColumnWidths(widths);
+  function fitWidthsToTable() {
+    widths = applyBrowseColumnWidths(table, preferredWidths);
+    onWidthsChanged(widths);
     return widths;
   }
 
-  function writeCurrentWidths(persist) {
+  function writeCurrentWidths() {
     widths = writeBrowseColumnWidths(table, widths);
-    if (persist !== false) writePersistedBrowseColumnWidths(widths);
+    onWidthsChanged(widths);
     return widths;
   }
 
@@ -214,7 +279,8 @@ export function initBrowseColumnResizing(options) {
     win.removeEventListener('pointermove', activeDrag.move);
     win.removeEventListener('pointerup', activeDrag.end);
     win.removeEventListener('pointercancel', activeDrag.end);
-    writePersistedBrowseColumnWidths(widths);
+    preferredWidths = normalizeStoredColumnWidths(widths, columnKeys);
+    writePersistedBrowseColumnWidths(preferredWidths);
     activeDrag = null;
   }
 
@@ -239,7 +305,7 @@ export function initBrowseColumnResizing(options) {
         handle: handle,
         move: function (moveEvent) {
           widths = resizeColumnPair(startWidths, leftKey, rightKey, moveEvent.clientX - startX);
-          writeCurrentWidths(false);
+          writeCurrentWidths();
         },
         end: function () {
           stopDrag();
@@ -252,15 +318,24 @@ export function initBrowseColumnResizing(options) {
   });
 
   win.addEventListener('resize', function () {
-    fitWidthsToTable(false);
+    fitWidthsToTable();
   });
 
   var api = {
     getWidths: function () {
       return Object.assign({}, widths);
     },
+    getPreferredWidths: function () {
+      return Object.assign({}, preferredWidths);
+    },
     refresh: function () {
-      fitWidthsToTable(false);
+      fitWidthsToTable();
+      return Object.assign({}, widths);
+    },
+    reset: function () {
+      preferredWidths = {};
+      clearPersistedBrowseColumnWidths();
+      fitWidthsToTable();
       return Object.assign({}, widths);
     },
   };

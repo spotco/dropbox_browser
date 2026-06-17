@@ -45,10 +45,10 @@ h1 {
 }
 main {
   box-sizing: border-box;
-  margin: 0 16px;
+  margin: 0;
   max-width: none;
-  padding: 24px 0;
-  width: calc(100% - 32px);
+  padding: 24px 16px 0;
+  width: 100%;
 }
 body.has-log-panel main {
   flex: 1 1 auto;
@@ -86,6 +86,9 @@ body.has-log-panel main {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+.browse-column-reset {
+  min-width: 0;
 }
 .browse-filter-bar {
   align-items: end;
@@ -188,7 +191,6 @@ table {
   border: 1px solid #d8dde3;
 }
 .browse-table {
-  min-width: 1040px;
   table-layout: fixed;
   width: 100%;
 }

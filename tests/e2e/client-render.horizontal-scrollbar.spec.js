@@ -49,4 +49,25 @@ test("client-render keeps horizontal browse scrollbar visible and synced when ta
   });
   await expect(bar).toBeVisible();
   await expect(shell).toHaveCSS("overflow-x", "hidden");
+
+  const resizer = page.locator("#log-resizer");
+  const resizerBox = await resizer.boundingBox();
+  expect(resizerBox).not.toBeNull();
+  await page.mouse.move(resizerBox.x + (resizerBox.width / 2), resizerBox.y + (resizerBox.height / 2));
+  await page.mouse.down();
+  await page.mouse.move(resizerBox.x + (resizerBox.width / 2), 120, { steps: 12 });
+  await page.mouse.up();
+
+  await expect.poll(async () => {
+    const nextBarBox = await bar.boundingBox();
+    const nextLogBox = await page.locator("#log-panel").boundingBox();
+    if (!nextBarBox || !nextLogBox) return null;
+    return Math.round(nextLogBox.y - (nextBarBox.y + nextBarBox.height));
+  }).toBeGreaterThanOrEqual(-1);
+  await expect.poll(async () => {
+    const nextBarBox = await bar.boundingBox();
+    const nextLogBox = await page.locator("#log-panel").boundingBox();
+    if (!nextBarBox || !nextLogBox) return null;
+    return Math.round(nextLogBox.y - (nextBarBox.y + nextBarBox.height));
+  }).toBeLessThanOrEqual(1);
 });

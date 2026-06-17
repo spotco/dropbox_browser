@@ -397,15 +397,22 @@ function initBrowse() {
   if (!body || body.dataset.clientRender !== '1') return;
   var mount = document.getElementById('browse-rows');
   if (!mount) return;
-  initBrowseColumnResizing({document: document, window: window});
-  initImageHoverPreview({document: document, window: window, root: mount});
-  var thumbnailLoader = initBrowseThumbnails({document: document, window: window, root: mount});
   var horizontalScrollbar = initBrowseHorizontalScrollbar({
     document: document,
     window: window,
     shell: document.querySelector('.browse-table-shell'),
     scrollContainer: document.querySelector('main'),
+    logPanel: document.getElementById('log-panel'),
   });
+  var browseColumns = initBrowseColumnResizing({
+    document: document,
+    window: window,
+    onWidthsChanged: function () {
+      horizontalScrollbar.refresh();
+    },
+  });
+  initImageHoverPreview({document: document, window: window, root: mount});
+  var thumbnailLoader = initBrowseThumbnails({document: document, window: window, root: mount});
   var scrollPreview = document.getElementById('browse-scroll-preview');
   var scrollPreviewIndex = document.getElementById('browse-scroll-preview-index');
   var scrollPreviewName = document.getElementById('browse-scroll-preview-name');
@@ -952,6 +959,12 @@ function initBrowse() {
     if (resetButton) {
       event.preventDefault();
       applyFilterChange({ query: '', kind: 'all', status: 'all', type: 'all' }, 'push');
+      return;
+    }
+    var resetColumnsButton = event.target && event.target.closest ? event.target.closest('#browse-column-reset') : null;
+    if (resetColumnsButton) {
+      event.preventDefault();
+      if (browseColumns && typeof browseColumns.reset === 'function') browseColumns.reset();
       return;
     }
     var sortLink = event.target && event.target.closest ? event.target.closest('thead a[data-browse-sort]') : null;
