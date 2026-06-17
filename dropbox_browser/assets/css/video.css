@@ -191,6 +191,17 @@
   position: relative;
 }
 
+.video-playback-stage:fullscreen {
+  border: 0;
+  border-radius: 0;
+  height: 100%;
+  width: 100%;
+}
+
+.video-playback-stage:fullscreen::backdrop {
+  background: #000;
+}
+
 .video-empty-state,
 .video-playback-placeholder {
   border: 1px dashed #3c4f69;

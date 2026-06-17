@@ -248,6 +248,37 @@ async function readControlsOverlayState(page) {
   });
 }
 
+async function readFullscreenPlaybackState(page) {
+  return page.evaluate(() => {
+    function isVisible(element) {
+      if (!element || element.hidden) return false;
+      const style = window.getComputedStyle(element);
+      if (style.display === "none" || style.visibility === "hidden") return false;
+      if (Number(style.opacity) === 0) return false;
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    }
+
+    const stage = document.getElementById("video-playback-stage");
+    const overlay = document.getElementById("video-controls-overlay");
+    const slider = document.getElementById("video-progress-slider");
+    const fullscreenButton = document.getElementById("video-fullscreen-toggle");
+    const elapsed = document.getElementById("video-elapsed-time");
+
+    return {
+      fullscreenElementId: document.fullscreenElement ? String(document.fullscreenElement.id || "") : "",
+      stageVisible: isVisible(stage),
+      overlayVisible: isVisible(overlay),
+      sliderVisible: isVisible(slider),
+      sliderDisabled: slider ? Boolean(slider.disabled) : true,
+      sliderValue: slider ? Number(slider.value) : NaN,
+      sliderMax: slider ? Number(slider.max) : NaN,
+      fullscreenLabel: fullscreenButton ? String(fullscreenButton.getAttribute("aria-label") || "") : "",
+      elapsedText: elapsed ? String(elapsed.textContent || "").trim() : "",
+    };
+  });
+}
+
 async function readStoredTrackPreferences(page) {
   return page.evaluate(() => {
     return {
@@ -1046,6 +1077,70 @@ test("video controls follow standard hover and idle visibility behavior", async 
 
   await page.mouse.move(box.x + (box.width / 2) + 8, box.y + (box.height / 2) + 8);
   await expectControlsOverlayVisible(page);
+});
+
+test("video fullscreen keeps the scrubber overlay visible and functional", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await installHlsStub(page);
+  await openVideoPane(page);
+
+  const alphaSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
+  await playLibraryFile(page, "alpha.mkv");
+  await alphaSession;
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+
+  const surface = page.locator("#video-playback-surface");
+  const box = await surface.boundingBox();
+  expect(box).not.toBeNull();
+
+  await page.mouse.move(box.x + (box.width / 2), box.y + (box.height / 2));
+  await expectControlsOverlayVisible(page);
+  await page.mouse.dblclick(box.x + (box.width / 2), box.y + (box.height / 2));
+
+  await expect
+    .poll(async () => readFullscreenPlaybackState(page), { timeout: 10000 })
+    .toMatchObject({
+      fullscreenElementId: "video-playback-stage",
+      stageVisible: true,
+      overlayVisible: true,
+      sliderVisible: true,
+      sliderDisabled: false,
+      fullscreenLabel: "Exit fullscreen",
+    });
+
+  await scrubTo(
+    page,
+    1,
+    (body) => body.includes("path=Videos%2Falpha.mkv") && body.includes("start_time_seconds=1"),
+  );
+
+  await expect
+    .poll(async () => readFullscreenPlaybackState(page), { timeout: 10000 })
+    .toMatchObject({
+      fullscreenElementId: "video-playback-stage",
+      stageVisible: true,
+      sliderVisible: true,
+      sliderDisabled: false,
+      fullscreenLabel: "Exit fullscreen",
+    });
+
+  const fullscreenState = await readFullscreenPlaybackState(page);
+  expect(fullscreenState.sliderMax).toBeGreaterThan(0);
+  expect(fullscreenState.sliderValue).toBeGreaterThanOrEqual(1);
+
+  await page.evaluate(async () => {
+    if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
+      await document.exitFullscreen();
+    }
+  });
+  await expect
+    .poll(async () => readFullscreenPlaybackState(page), { timeout: 10000 })
+    .toMatchObject({
+      fullscreenElementId: "",
+      fullscreenLabel: "Fullscreen",
+    });
 });
 
 test("video track selections persist across reload and matching track layouts", async ({ page }) => {
