@@ -151,6 +151,10 @@ import {
     return String(minutes) + ':' + String(remainder).padStart(2, '0');
   }
 
+  function fullscreenHostElement() {
+    return ctx.els.playbackStageEl || ctx.els.videoEl || null;
+  }
+
   function volumeIconForLevel(volume, muted) {
     if (muted || volume === 0) return VIDEO_ICONS.volumeMuted;
     if (volume < 0.34) return VIDEO_ICONS.volumeLow;
@@ -456,8 +460,9 @@ import {
       ctx.els.volumeSliderEl.value = String(ctx.els.videoEl.muted ? 0 : ctx.els.videoEl.volume);
     }
     if (ctx.els.fullscreenButton) {
-      var isFullscreen = document.fullscreenElement === ctx.els.videoEl;
-      ctx.els.fullscreenButton.disabled = !canControl || typeof ctx.els.videoEl.requestFullscreen !== 'function';
+      var fullscreenHost = fullscreenHostElement();
+      var isFullscreen = document.fullscreenElement === fullscreenHost;
+      ctx.els.fullscreenButton.disabled = !canControl || !fullscreenHost || typeof fullscreenHost.requestFullscreen !== 'function';
       setControlButtonState(
         ctx.els.fullscreenButton,
         isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
@@ -1291,14 +1296,15 @@ import {
   }
 
   async function toggleVideoFullscreen() {
-    if (!ctx.els.videoEl || !videoControlsAvailable()) return;
+    var fullscreenHost = fullscreenHostElement();
+    if (!ctx.els.videoEl || !fullscreenHost || !videoControlsAvailable()) return;
     try {
-      if (document.fullscreenElement === ctx.els.videoEl && typeof document.exitFullscreen === 'function') {
+      if (document.fullscreenElement === fullscreenHost && typeof document.exitFullscreen === 'function') {
         await document.exitFullscreen();
         return;
       }
-      if (typeof ctx.els.videoEl.requestFullscreen === 'function') {
-        await ctx.els.videoEl.requestFullscreen();
+      if (typeof fullscreenHost.requestFullscreen === 'function') {
+        await fullscreenHost.requestFullscreen();
       }
     }
     catch (_error) {
@@ -2785,6 +2791,10 @@ import {
       void toggleVideoFullscreen();
       revealControlsOverlay();
     });
+  }
+  if (ctx.els.playbackStageEl) {
+    ctx.els.playbackStageEl.addEventListener('mousemove', revealControlsOverlay);
+    ctx.els.playbackStageEl.addEventListener('mouseenter', revealControlsOverlay);
   }
   if (ctx.els.controlsOverlayEl) {
     ctx.els.controlsOverlayEl.addEventListener('mousemove', revealControlsOverlay);
