@@ -192,6 +192,103 @@ async function waitForLoadingOverlayWithoutPlaceholder(page) {
     .toBe(true);
 }
 
+async function readPlayToggleState(page) {
+  return page.evaluate(() => {
+    const button = document.getElementById("video-play-toggle");
+    if (!button) return null;
+    const icon = button.querySelector(".video-control-icon");
+    return {
+      disabled: Boolean(button.disabled),
+      label: String(button.getAttribute("aria-label") || ""),
+      title: String(button.getAttribute("title") || ""),
+      icon: icon ? String(icon.getAttribute("src") || "") : "",
+    };
+  });
+}
+
+async function expectPlayToggleState(page, expectedLabel) {
+  const expectedIcon = expectedLabel === "Pause"
+    ? "/assets/icons/material-icon-theme/video-pause.svg"
+    : "/assets/icons/material-icon-theme/video-play.svg";
+  await expect
+    .poll(async () => readPlayToggleState(page), { timeout: 10000 })
+    .toMatchObject({
+      disabled: false,
+      label: expectedLabel,
+      title: expectedLabel,
+      icon: expectedIcon,
+    });
+}
+
+async function clickPlayToggle(page) {
+  await page.evaluate(() => {
+    const button = document.getElementById("video-play-toggle");
+    if (!button || button.disabled) {
+      throw new Error("play toggle is not usable");
+    }
+    button.click();
+  });
+}
+
+async function readControlsOverlayState(page) {
+  return page.evaluate(() => {
+    const overlay = document.getElementById("video-controls-overlay");
+    if (!overlay) return null;
+    const style = window.getComputedStyle(overlay);
+    const rect = overlay.getBoundingClientRect();
+    return {
+      hidden: Boolean(overlay.hidden),
+      className: String(overlay.className || ""),
+      display: style.display,
+      opacity: style.opacity,
+      pointerEvents: style.pointerEvents,
+      width: rect.width,
+      height: rect.height,
+    };
+  });
+}
+
+async function readStoredTrackPreferences(page) {
+  return page.evaluate(() => {
+    return {
+      audio: window.localStorage.getItem("dropbox-browser-video-audio-track-preferences") || "",
+      subtitle: window.localStorage.getItem("dropbox-browser-video-subtitle-track-preferences") || "",
+    };
+  });
+}
+
+async function clearStoredTrackPreferences(page) {
+  await page.goto("/");
+  await page.evaluate(() => {
+    window.localStorage.removeItem("dropbox-browser-video-audio-track-preferences");
+    window.localStorage.removeItem("dropbox-browser-video-subtitle-track-preferences");
+  });
+}
+
+async function expectControlsOverlayVisible(page) {
+  await expect
+    .poll(async () => readControlsOverlayState(page), { timeout: 10000 })
+    .toMatchObject({
+      hidden: false,
+      display: "flex",
+      opacity: "1",
+      pointerEvents: "auto",
+    });
+}
+
+async function expectControlsOverlayHidden(page) {
+  await expect
+    .poll(async () => {
+      const state = await readControlsOverlayState(page);
+      if (!state) return false;
+      return state.hidden === true
+        || state.display === "none"
+        || state.opacity === "0"
+        || state.pointerEvents === "none";
+    }, { timeout: 10000 })
+    .toBe(true);
+}
+
 async function waitForPlaybackSurfaceWithoutOverlay(page) {
   await expect
     .poll(async () => {
@@ -629,6 +726,15 @@ async function scrubTo(page, targetSeconds, sessionPredicate) {
   await waitForPlaybackSurfaceWithoutOverlay(page);
 }
 
+async function startScrub(page, targetSeconds) {
+  await page.locator("#video-progress-slider").evaluate((element, seconds) => {
+    element.value = String(seconds);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  }, targetSeconds);
+  await waitForLoadingOverlayWithoutPlaceholder(page);
+}
+
 async function openVideoPane(page) {
   await page.goto("/?path=Videos");
   await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
@@ -653,6 +759,10 @@ test.use({ baseURL });
 test.beforeAll(async () => {
   test.setTimeout(90000);
   server = await startIntegrationServer();
+});
+
+test.beforeEach(async ({ page }) => {
+  await clearStoredTrackPreferences(page);
 });
 
 test.afterAll(async () => {
@@ -754,15 +864,11 @@ test("video playback loads tracks, switches tracks, and hides video before subti
     audioOptionCount: 2,
     subtitleOptionCount: 4,
     audioValue: "1",
-    subtitleValue: "3",
+    subtitleValue: "4",
   });
-  await waitForSubtitleStreamIndex(page, 3);
-  await waitForMountedSubtitleTrackReady(page, 3);
-  await waitForNativeSubtitleCueText(page, "BRAVO-SUBTITLE-ENG");
-
-  await page.locator("#video-subtitle-track").selectOption("4");
   await waitForSubtitleStreamIndex(page, 4);
-  await expectTrackSelectors(page, { subtitleValue: "4" });
+  await waitForMountedSubtitleTrackReady(page, 4);
+  await waitForNativeSubtitleCueText(page, "BRAVO-SUBTITLE-FRA");
 
   await scrubTo(
     page,
@@ -862,4 +968,151 @@ test("video playback never shows loading or placeholder copy on top of active pl
   expect(bravoPlayText).not.toContain("Playing through a local HLS compatibility session.");
   expect(bravoPlayText).not.toContain("bravo.mkv");
   await expectNoPlaybackSurfaceViolations(page);
+});
+
+test("video play toggle keeps intended state during compatibility seek loading", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await installHlsStub(page);
+  await openVideoPane(page);
+
+  const alphaSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
+  await playLibraryFile(page, "alpha.mkv");
+  await alphaSession;
+  await expectPlayToggleState(page, "Pause");
+
+  const firstScrubSession = waitForSessionPost(
+    page,
+    (body) => body.includes("path=Videos%2Falpha.mkv") && body.includes("start_time_seconds=1"),
+  );
+  await startScrub(page, 1);
+  await expectPlayToggleState(page, "Pause");
+  await clickPlayToggle(page);
+  await expectPlayToggleState(page, "Play");
+  await firstScrubSession;
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+  await expectPlayToggleState(page, "Play");
+
+  await clickPlayToggle(page);
+  await expectPlayToggleState(page, "Pause");
+  await clickPlayToggle(page);
+  await expectPlayToggleState(page, "Play");
+
+  const secondScrubSession = waitForSessionPost(
+    page,
+    (body) => body.includes("path=Videos%2Falpha.mkv") && body.includes("start_time_seconds=2"),
+  );
+  await startScrub(page, 2);
+  await expectPlayToggleState(page, "Play");
+  await clickPlayToggle(page);
+  await expectPlayToggleState(page, "Pause");
+  await secondScrubSession;
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+  await expectPlayToggleState(page, "Pause");
+});
+
+test("video controls follow standard hover and idle visibility behavior", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await installHlsStub(page);
+  await openVideoPane(page);
+
+  const alphaSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
+  await playLibraryFile(page, "alpha.mkv");
+  await alphaSession;
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+
+  await clickPlayToggle(page);
+  await expectPlayToggleState(page, "Play");
+
+  const surface = page.locator("#video-playback-surface");
+  const box = await surface.boundingBox();
+  expect(box).not.toBeNull();
+
+  await page.mouse.move(box.x + (box.width / 2), box.y + (box.height / 2));
+  await expectControlsOverlayVisible(page);
+
+  await page.mouse.move(4, 4);
+  await expectControlsOverlayHidden(page);
+
+  await page.mouse.move(box.x + (box.width / 2), box.y + (box.height / 2));
+  await expectControlsOverlayVisible(page);
+
+  await page.waitForTimeout(3200);
+  await expectControlsOverlayHidden(page);
+
+  await page.mouse.move(box.x + (box.width / 2) + 8, box.y + (box.height / 2) + 8);
+  await expectControlsOverlayVisible(page);
+});
+
+test("video track selections persist across reload and matching track layouts", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await installHlsStub(page);
+  await openVideoPane(page);
+
+  const alphaSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
+  await playLibraryFile(page, "alpha.mkv");
+  await alphaSession;
+
+  await expectTrackSelectors(page, {
+    audioValue: "1",
+    subtitleValue: "3",
+    audioOptionCount: 2,
+    subtitleOptionCount: 4,
+  });
+
+  const alphaAudioRestart = waitForSessionPost(
+    page,
+    (body) => body.includes("path=Videos%2Falpha.mkv") && body.includes("audio_stream_index=2"),
+  );
+  await page.locator("#video-audio-track").selectOption("2");
+  await waitForLoadingOverlayWithoutPlaceholder(page);
+  await alphaAudioRestart;
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+
+  await page.locator("#video-subtitle-track").selectOption("4");
+  await waitForSubtitleStreamIndex(page, 4);
+  await expectTrackSelectors(page, { audioValue: "2", subtitleValue: "4" });
+  await expect
+    .poll(async () => readStoredTrackPreferences(page), { timeout: 10000 })
+    .toMatchObject({
+      audio: expect.stringContaining("\"signature\""),
+      subtitle: expect.stringContaining("\"signature\""),
+    });
+
+  await page.reload();
+  await openVideoPane(page);
+  await expect
+    .poll(async () => readStoredTrackPreferences(page), { timeout: 10000 })
+    .toMatchObject({
+      audio: expect.stringContaining("\"signature\""),
+      subtitle: expect.stringContaining("\"signature\""),
+    });
+
+  await playLibraryFile(page, "alpha.mkv");
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+  await expectTrackSelectors(page, {
+    audioValue: "2",
+    subtitleValue: "4",
+    audioOptionCount: 2,
+    subtitleOptionCount: 4,
+  });
+  await waitForSubtitleStreamIndex(page, 4);
+
+  await playLibraryFile(page, "bravo.mkv");
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+  await expectTrackSelectors(page, {
+    audioValue: "2",
+    subtitleValue: "4",
+    audioOptionCount: 2,
+    subtitleOptionCount: 4,
+  });
+  await waitForSubtitleStreamIndex(page, 4);
 });
