@@ -1,18 +1,15 @@
 - anime player with switch audio/subtitles in browser
 
-- UI: black box change size on load
-- UI: htv load have it as overlay
-
-- UI: loading, don't change play/pause status.
-- UI: save subtitle/audio track selection matching text
-- UI: loading display overlay over video player 
+	x UI: loading, don't change play/pause status.
+	x UI: loading display overlay over video player 
+	x UI: overlay controls still show when mouse off
+	x UI: save subtitle/audio track selection matching text
+	x misc: bottom pane when pulled up to top, scrollbar goes past 
+	- playback: use burn-in route for WebVTT (full screen + pip-mode)
+	- full screen, playback scrubber does not work
 
 - library management
 - forward/backward playlist
-
----
-
-misc: bottom pane when pulled up to top, scrollbar goes past 
 
 ---
 

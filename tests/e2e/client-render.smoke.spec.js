@@ -8,6 +8,33 @@ const { startServer, stopServer } = require("./support/server");
 
 let server = null;
 
+async function browseColumnMetrics(page) {
+  return page.evaluate(() => {
+    const table = document.querySelector("table[data-browse-table]");
+    const shell = document.querySelector(".browse-table-shell");
+    const api = table && table.__browseColumnResizeApi;
+    return {
+      currentWidths: api && typeof api.getWidths === "function" ? api.getWidths() : {},
+      preferredWidths: api && typeof api.getPreferredWidths === "function" ? api.getPreferredWidths() : {},
+      shellClientWidth: shell ? shell.clientWidth : 0,
+      shellScrollWidth: shell ? shell.scrollWidth : 0,
+      storage: JSON.parse(window.localStorage.getItem("dropbox-browser.browse-column-widths-v1") || "null"),
+    };
+  });
+}
+
+async function dragBrowseColumnResizer(page, columnKey, deltaX) {
+  const handle = page.locator(`th[data-browse-column-key="${columnKey}"] .browse-column-resizer`);
+  const box = await handle.boundingBox();
+  expect(box).not.toBeNull();
+  const startX = box.x + (box.width / 2);
+  const startY = box.y + (box.height / 2);
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(startX + deltaX, startY, { steps: 10 });
+  await page.mouse.up();
+}
+
 test.beforeAll(async () => {
   server = await startServer({ clientRender: true });
 });
@@ -318,4 +345,130 @@ test("client-render music library load follows the current folder and resets on 
   await expect(page.locator("body")).toHaveAttribute("data-current-folder-path", "");
   await expect(page.locator("#music-player-status")).toContainText("Library not loaded.");
   await expect(page.getByRole("button", { name: "Load Current Folder" })).toBeEnabled();
+});
+
+test("client-render shrinks saved browse columns to the viewport without overwriting the user's preferred widths", async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 820 });
+  await page.goto("/");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+
+  const savedWideColumns = {
+    name: 560,
+    type: 90,
+    status: 130,
+    size: 120,
+    date: 220,
+    view: 80,
+    sync: 160,
+  };
+  await page.evaluate((preferred) => {
+    window.localStorage.setItem(
+      "dropbox-browser.browse-column-widths-v1",
+      JSON.stringify({ preferred }),
+    );
+  }, savedWideColumns);
+  await page.reload();
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+
+  const widenedMetrics = await browseColumnMetrics(page);
+  expect(widenedMetrics.storage).toEqual({ preferred: widenedMetrics.preferredWidths });
+  expect(widenedMetrics.preferredWidths).toEqual(savedWideColumns);
+  expect(widenedMetrics.currentWidths.name).toBeGreaterThan(500);
+
+  await page.setViewportSize({ width: 820, height: 820 });
+  await expect.poll(async () => {
+    const metrics = await browseColumnMetrics(page);
+    return {
+      preferredName: metrics.preferredWidths.name,
+      currentName: metrics.currentWidths.name,
+      shellClientWidth: metrics.shellClientWidth,
+      shellScrollWidth: metrics.shellScrollWidth,
+    };
+  }).toEqual({
+    preferredName: widenedMetrics.preferredWidths.name,
+    currentName: expect.any(Number),
+    shellClientWidth: expect.any(Number),
+    shellScrollWidth: expect.any(Number),
+  });
+
+  await expect.poll(async () => {
+    const metrics = await browseColumnMetrics(page);
+    return metrics.currentWidths.name < widenedMetrics.currentWidths.name
+      && metrics.shellScrollWidth <= metrics.shellClientWidth + 1;
+  }).toBe(true);
+  const settledSmallMetrics = await browseColumnMetrics(page);
+  expect(settledSmallMetrics.currentWidths.name).toBeLessThan(widenedMetrics.currentWidths.name);
+  expect(settledSmallMetrics.preferredWidths).toEqual(widenedMetrics.preferredWidths);
+  expect(settledSmallMetrics.storage).toEqual({ preferred: widenedMetrics.preferredWidths });
+  expect(settledSmallMetrics.shellScrollWidth).toBeLessThanOrEqual(settledSmallMetrics.shellClientWidth + 1);
+
+  await page.reload();
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  const reloadedSmallMetrics = await browseColumnMetrics(page);
+  expect(reloadedSmallMetrics.preferredWidths).toEqual(widenedMetrics.preferredWidths);
+  expect(reloadedSmallMetrics.currentWidths.name).toBeLessThan(widenedMetrics.currentWidths.name);
+  expect(reloadedSmallMetrics.shellScrollWidth).toBeLessThanOrEqual(reloadedSmallMetrics.shellClientWidth + 1);
+
+  await page.setViewportSize({ width: 1400, height: 820 });
+  await expect.poll(async () => {
+    const metrics = await browseColumnMetrics(page);
+    return metrics.currentWidths.name;
+  }).toBeGreaterThan(reloadedSmallMetrics.currentWidths.name + 20);
+
+  await page.locator("#browse-column-reset").click();
+  const resetMetrics = await browseColumnMetrics(page);
+  expect(resetMetrics.preferredWidths).toEqual({});
+  expect(resetMetrics.storage).toEqual({ preferred: {} });
+  expect(resetMetrics.currentWidths.name).toBeLessThan(widenedMetrics.currentWidths.name);
+});
+
+test("client-render column dragging cascades through successive columns until that direction is exhausted", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 820 });
+  await page.goto("/");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+
+  const seededColumns = {
+    name: 260,
+    type: 120,
+    status: 140,
+    size: 120,
+    date: 220,
+    view: 80,
+    sync: 160,
+  };
+  await page.evaluate((preferred) => {
+    window.localStorage.setItem(
+      "dropbox-browser.browse-column-widths-v1",
+      JSON.stringify({ preferred }),
+    );
+  }, seededColumns);
+  await page.reload();
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+
+  const beforeDrag = await browseColumnMetrics(page);
+  await dragBrowseColumnResizer(page, "name", 220);
+  const afterCascade = await browseColumnMetrics(page);
+
+  expect(afterCascade.currentWidths.name).toBeGreaterThan(beforeDrag.currentWidths.name);
+  expect(afterCascade.currentWidths.type).toBeLessThan(beforeDrag.currentWidths.type);
+  expect(afterCascade.currentWidths.status).toBeLessThan(beforeDrag.currentWidths.status);
+  expect(afterCascade.currentWidths.size).toBeLessThan(beforeDrag.currentWidths.size);
+  expect(afterCascade.currentWidths.type).toBe(72);
+  expect(afterCascade.currentWidths.status).toBe(96);
+  expect(afterCascade.currentWidths.size).toBeGreaterThanOrEqual(88);
+
+  await dragBrowseColumnResizer(page, "name", 2000);
+  const fullyExhausted = await browseColumnMetrics(page);
+
+  expect(fullyExhausted.currentWidths.type).toBe(72);
+  expect(fullyExhausted.currentWidths.status).toBe(96);
+  expect(fullyExhausted.currentWidths.size).toBe(88);
+  expect(fullyExhausted.currentWidths.date).toBe(144);
+  expect(fullyExhausted.currentWidths.view).toBe(60);
+  expect(fullyExhausted.currentWidths.sync).toBe(100);
+
+  await dragBrowseColumnResizer(page, "name", 400);
+  const beyondExhausted = await browseColumnMetrics(page);
+  expect(beyondExhausted.currentWidths).toEqual(fullyExhausted.currentWidths);
+  expect(beyondExhausted.preferredWidths).toEqual(fullyExhausted.preferredWidths);
 });

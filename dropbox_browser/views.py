@@ -339,6 +339,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
     topbar_actions = (
         '<div class="topbar-actions">'
         '<button type="button" id="browse-filter-toggle" class="browse-filter-toggle">Show Filters</button>'
+        '<button type="button" id="browse-column-reset" class="browse-column-reset">Reset Columns</button>'
         f'<button type="button" class="copy-path" data-copy-path="{html.escape(current_local_folder)}">Copy Folder Path</button>'
         f'<a class="dropbox-link" href="{html.escape(dropbox_home_url(rel_path))}" target="_blank" rel="noopener noreferrer">Go to Dropbox</a>'
         '<label class="recursive-toggle"><input type="checkbox" id="batch-recursive"> Recursive</label>'
