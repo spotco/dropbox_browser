@@ -92,7 +92,7 @@ def main() -> int:
         thumbnail_config=thumbnail_config,
         video_tools_config=video_tools_config,
     )
-    app.video_debug_logs = bool(app_config.get("LogVideoDebug", True))
+    app.video_debug_logs = bool(app_config.get("LogVideoDebug", False))
     app.client_log_enabled, app.client_log_subsystems = client_log_config(app_config)
     app.video_subtitle_font_family = str(
         app_config.get("VideoSubtitleFontFamily", "Arial, Helvetica, sans-serif")

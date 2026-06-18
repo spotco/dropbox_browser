@@ -10,7 +10,7 @@ process.env.DROPBOX_BROWSER_E2E_FIXTURE = path.join(
 
 const { startIntegrationServer, stopIntegrationServer } = require("./support/integration_server");
 const {
-  expectConsistentStackedSubtitleLayout,
+  expectEmbeddedSmallerThanFullscreenSubtitleLayout,
   expectStackedSubtitleLayout,
   readSubtitleLayoutMetrics,
 } = require("./support/subtitle_layout");
@@ -200,7 +200,7 @@ test.afterAll(async () => {
   server = null;
 });
 
-test("multiline WebVTT subtitles stack consistently in embedded and fullscreen modes", async ({ page }) => {
+test("multiline WebVTT subtitles stay smaller in embedded mode and full size in fullscreen", async ({ page }) => {
   test.setTimeout(120000);
 
   await openVideoPane(page);
@@ -220,7 +220,7 @@ test("multiline WebVTT subtitles stack consistently in embedded and fullscreen m
 
   await enterStageFullscreen(page);
   const fullscreenMetrics = await readSubtitleLayoutMetrics(page);
-  expectConsistentStackedSubtitleLayout(
+  expectEmbeddedSmallerThanFullscreenSubtitleLayout(
     embeddedMetrics.screenshot,
     fullscreenMetrics.screenshot,
   );

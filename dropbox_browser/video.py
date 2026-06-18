@@ -32,15 +32,17 @@ HLS_PLAYLIST_NAME = "stream.m3u8"
 HLS_SEGMENT_PATTERN = "segment_%05d.m4s"
 HLS_INIT_SEGMENT_NAME = "init.mp4"
 HLS_SESSION_TTL_SECONDS = 15 * 60
-HLS_READY_TIMEOUT_SECONDS = 10.0
-HLS_ASSET_READY_TIMEOUT_SECONDS = 8.0
+HLS_MIN_READY_SEGMENTS = 2
+HLS_READY_TIMEOUT_SECONDS = 20.0
+HLS_ASSET_READY_TIMEOUT_SECONDS = 30.0
+HLS_ASSET_READY_TIMEOUT_PROCESS_ALIVE_SECONDS = 120.0
 HLS_READY_TIMEOUT_BURN_IN_SECONDS = 30.0
 VIDEO_DEBUG_LOG_PATH = TEMP_DIR / "video_debug.jsonl"
 _VIDEO_DEBUG_LOG_LOCK = threading.Lock()
 
 
 def log_video_debug(app: Any, event: str, **fields: object) -> None:
-    if not bool(getattr(app, "video_debug_logs", True)):
+    if not bool(getattr(app, "video_debug_logs", False)):
         return
     row = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -741,12 +743,7 @@ class VideoSessionManager:
     def _wait_for_playlist(self, session: VideoHlsSession, timeout_seconds: float = HLS_READY_TIMEOUT_SECONDS) -> bool:
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
-            ready_segment = _first_ready_playlist_segment(session.playlist_path)
-            if (
-                ready_segment is not None
-                and (session.session_dir / HLS_INIT_SEGMENT_NAME).is_file()
-                and (session.session_dir / ready_segment).is_file()
-            ):
+            if _playlist_ready_for_playback(session):
                 return True
             return_code = session.process.poll()
             if return_code is not None:
@@ -765,29 +762,40 @@ class VideoSessionManager:
             time.sleep(0.05)
         return False
 
+    def _asset_wait_timeout_seconds(self, session: VideoHlsSession) -> float:
+        if session.process.poll() is None:
+            return HLS_ASSET_READY_TIMEOUT_PROCESS_ALIVE_SECONDS
+        return HLS_ASSET_READY_TIMEOUT_SECONDS
+
     def _wait_for_asset(
         self,
         session: VideoHlsSession,
         asset_path: Path,
-        timeout_seconds: float = HLS_ASSET_READY_TIMEOUT_SECONDS,
+        timeout_seconds: float | None = None,
     ) -> bool:
-        deadline = time.monotonic() + timeout_seconds
+        wait_timeout_seconds = (
+            self._asset_wait_timeout_seconds(session)
+            if timeout_seconds is None
+            else timeout_seconds
+        )
+        deadline = time.monotonic() + wait_timeout_seconds
         while time.monotonic() < deadline:
             with self._lock:
                 if self._active_session is not session:
                     return False
             if asset_path.is_file():
                 return True
-            if session.process.poll() is not None:
-                log_video_debug(
-                    self.app,
-                    "asset_wait_process_exited",
-                    session_id=session.session_id,
-                    name=asset_path.name,
-                    returncode=session.process.poll(),
-                )
-                return asset_path.is_file()
-            time.sleep(0.05)
+            if session.process.poll() is None or _hls_asset_temp_path(asset_path).is_file():
+                time.sleep(0.05)
+                continue
+            log_video_debug(
+                self.app,
+                "asset_wait_process_exited",
+                session_id=session.session_id,
+                name=asset_path.name,
+                returncode=session.process.poll(),
+            )
+            return asset_path.is_file()
         return asset_path.is_file()
 
     def _cleanup_expired_locked(self) -> None:
@@ -841,19 +849,44 @@ def _session_asset_content_type(name: str) -> str:
     raise BrowserError(HTTPStatus.NOT_FOUND, "Video session asset not found.")
 
 
-def _first_ready_playlist_segment(playlist_path: Path) -> str | None:
+def _hls_asset_temp_path(asset_path: Path) -> Path:
+    return asset_path.with_name(asset_path.name + ".tmp")
+
+
+def _playlist_segment_names(playlist_path: Path) -> list[str]:
     try:
         text = playlist_path.read_text(encoding="utf-8")
     except OSError:
-        return None
+        return []
+    names: list[str] = []
     for line in text.splitlines():
         value = line.strip()
         if not value or value.startswith("#"):
             continue
         asset_name = _playlist_segment_asset_name(value)
         if asset_name is not None:
-            return asset_name
-    return None
+            names.append(asset_name)
+    return names
+
+
+def _playlist_ready_for_playback(
+    session: VideoHlsSession,
+    *,
+    min_segments: int = HLS_MIN_READY_SEGMENTS,
+) -> bool:
+    if min_segments <= 0:
+        return False
+    if not (session.session_dir / HLS_INIT_SEGMENT_NAME).is_file():
+        return False
+    segment_names = _playlist_segment_names(session.playlist_path)
+    if len(segment_names) < min_segments:
+        return False
+    return all((session.session_dir / name).is_file() for name in segment_names[:min_segments])
+
+
+def _first_ready_playlist_segment(playlist_path: Path) -> str | None:
+    names = _playlist_segment_names(playlist_path)
+    return names[0] if names else None
 
 
 def _playlist_info(playlist_path: Path) -> dict[str, object]:
