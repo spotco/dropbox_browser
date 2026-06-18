@@ -25,10 +25,10 @@ _APP_CONFIG_DEFAULTS: dict = {
     "LocalhostOnlyAccess": True,
     "LogRcloneCommands": True,
     "LogHttpRequests": True,
-    "LogVideoDebug": True,
+    "LogVideoDebug": False,
     "ClientLogEnabled": True,
     "ClientLogSubsystems": {
-        "video": True,
+        "video": False,
         "video-subtitles": False,
         "browse-reveal": False,
         "file-search": False,

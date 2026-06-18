@@ -27,6 +27,9 @@ import {
     pipExit: '/assets/icons/material-icon-theme/video-pip-exit.svg',
   };
   var CONTROLS_IDLE_HIDE_MS = 2800;
+  var COMPATIBILITY_START_BUFFER_FRAGMENTS = 2;
+  var COMPATIBILITY_RECOVERY_MIN_DELAY_MS = 1500;
+  var COMPATIBILITY_RECOVERY_MAX_DELAY_MS = 30000;
   var ctx = {
     pane: pane,
     els: {
@@ -89,9 +92,12 @@ import {
       transportWantsPlay: false,
       compatibilitySessionId: '',
       hlsController: null,
-      compatibilityNetworkRecoveries: 0,
-      compatibilityMediaRecoveries: 0,
+      compatibilityRecoveryAttempts: 0,
+      compatibilityRecoveryTimer: 0,
+      compatibilityRecoveryScheduled: false,
       compatibilityStartSeconds: 0,
+      compatibilityBufferedFragmentCount: 0,
+      compatibilityPlaybackRevealed: false,
       compatibilitySubtitleStreamIndex: null,
       requestedSeekSeconds: null,
       seekRestartInProgress: false,
@@ -398,9 +404,167 @@ import {
     ctx.state.hlsController = null;
   }
 
+  function clearCompatibilityRecoveryTimer() {
+    if (!ctx.state.compatibilityRecoveryTimer) return;
+    window.clearTimeout(ctx.state.compatibilityRecoveryTimer);
+    ctx.state.compatibilityRecoveryTimer = 0;
+    ctx.state.compatibilityRecoveryScheduled = false;
+  }
+
   function resetCompatibilityRecoveryState() {
-    ctx.state.compatibilityNetworkRecoveries = 0;
-    ctx.state.compatibilityMediaRecoveries = 0;
+    ctx.state.compatibilityRecoveryAttempts = 0;
+    clearCompatibilityRecoveryTimer();
+  }
+
+  function compatibilityRecoveryDelayMs() {
+    var attempt = Math.max(0, Number(ctx.state.compatibilityRecoveryAttempts) || 0);
+    return Math.min(
+      COMPATIBILITY_RECOVERY_MAX_DELAY_MS,
+      Math.round(COMPATIBILITY_RECOVERY_MIN_DELAY_MS * Math.pow(1.6, Math.min(attempt, 12)))
+    );
+  }
+
+  function isStaleOrMissingSegmentHlsError(data) {
+    if (!data) return false;
+    if (data.details === 'fragLoadError' || data.details === 'levelLoadError') return true;
+    var reason = String(data.reason || (data.error && data.error.message) || '');
+    return reason.indexOf('404') >= 0 || reason.indexOf('Not Found') >= 0;
+  }
+
+  function scheduleCompatibilityRecovery(reason, targetSeconds, data) {
+    var active = activeQueueItem();
+    if (!active || !ctx.state.compatibilityAvailable) return;
+    if (ctx.state.compatibilityRecoveryTimer || ctx.state.compatibilityRecoveryScheduled) return;
+    if (ctx.state.seekRestartInProgress) return;
+
+    ctx.state.compatibilityRecoveryAttempts += 1;
+    ctx.state.compatibilityRecoveryScheduled = true;
+    ctx.state.transportWantsPlay = true;
+    ctx.state.pendingAutoplay = true;
+
+    var resumeSeconds = Number.isFinite(Number(targetSeconds)) && Number(targetSeconds) >= 0
+      ? Number(targetSeconds)
+      : currentGlobalPlaybackSeconds();
+    var delayMs = compatibilityRecoveryDelayMs();
+
+    showLoadingOverlay({
+      title: activeItemTitle(active),
+      meta: 'Recovering compatibility playback...',
+      progress: 0.5,
+    });
+    setStatus('Recovering compatibility playback (attempt ' + String(ctx.state.compatibilityRecoveryAttempts) + ').');
+    reportVideoDiagnostic({
+      level: 'warn',
+      message: 'Compatibility playback recovery scheduled',
+      recovery_reason: reason || '',
+      recovery_attempt: ctx.state.compatibilityRecoveryAttempts,
+      recovery_delay_ms: delayMs,
+      resume_time: resumeSeconds,
+      hls_details: data && data.details || '',
+      hls_reason: data && (data.reason || data.error && data.error.message) || '',
+      hls_url: data && data.frag && data.frag.url ? data.frag.url : (data && data.context && data.context.url ? data.context.url : ''),
+    });
+
+    ctx.state.compatibilityRecoveryTimer = window.setTimeout(function () {
+      ctx.state.compatibilityRecoveryTimer = 0;
+      ctx.state.compatibilityRecoveryScheduled = false;
+      if (!activeQueueItem() || !ctx.state.compatibilityAvailable) return;
+      void restartCompatibilityAt(resumeSeconds, reason || 'auto-recovery');
+    }, delayMs);
+  }
+
+  function handleCompatibilityHlsError(data) {
+    if (!data || !data.fatal) return;
+    var active = activeQueueItem();
+    if (!active || ctx.state.playbackMode !== 'compatibility') return;
+    if (!hlsErrorTargetsCurrentSession(data)) return;
+
+    if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+      if (isStaleOrMissingSegmentHlsError(data)) {
+        scheduleCompatibilityRecovery('hls-missing-segment', currentGlobalPlaybackSeconds(), data);
+        return;
+      }
+      setStatus('Compatibility playback hit a network error; retrying the stream.');
+      if (ctx.state.hlsController) {
+        ctx.state.hlsController.startLoad();
+        resyncSubtitleTrackAfterHlsRecovery('network-error', data);
+      }
+      return;
+    }
+
+    if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+      setStatus('Compatibility playback hit a media error; attempting recovery.');
+      if (ctx.state.hlsController) {
+        ctx.state.hlsController.recoverMediaError();
+        resyncSubtitleTrackAfterHlsRecovery('media-error', data);
+      }
+      return;
+    }
+
+    scheduleCompatibilityRecovery('hls-fatal-error', currentGlobalPlaybackSeconds(), data);
+  }
+
+  function resetCompatibilityBufferState() {
+    ctx.state.compatibilityBufferedFragmentCount = 0;
+    ctx.state.compatibilityPlaybackRevealed = false;
+  }
+
+  function compatibilityStartBufferReady() {
+    return ctx.state.compatibilityBufferedFragmentCount >= COMPATIBILITY_START_BUFFER_FRAGMENTS;
+  }
+
+  function compatibilityBufferedSecondsAhead() {
+    if (!ctx.els.videoEl || !ctx.els.videoEl.buffered || ctx.els.videoEl.buffered.length === 0) return 0;
+    try {
+      var currentTime = Number(ctx.els.videoEl.currentTime);
+      if (!Number.isFinite(currentTime) || currentTime < 0) return 0;
+      return Math.max(0, ctx.els.videoEl.buffered.end(ctx.els.videoEl.buffered.length - 1) - currentTime);
+    }
+    catch (_error) {
+      return 0;
+    }
+  }
+
+  function maybeRevealCompatibilityPlayback(title, surfaceSyncToken, reason) {
+    if (ctx.state.playbackMode !== 'compatibility' || !playbackSyncTokenIsCurrent(surfaceSyncToken)) return;
+    if (ctx.state.compatibilityPlaybackRevealed) return;
+    if (!compatibilityStartBufferReady()) return;
+    ctx.state.compatibilityPlaybackRevealed = true;
+    hideLoadingOverlay();
+    setStatus('Compatibility playback session is ready.');
+    if (ctx.state.compatibilityStartSeconds > 0) {
+      setStatus('Compatibility playback session is ready at ' + formatPlaybackTime(ctx.state.compatibilityStartSeconds) + '.');
+    }
+    reportVideoDiagnostic({
+      level: 'info',
+      message: 'Compatibility playback buffer ready',
+      reveal_reason: reason || '',
+      buffered_fragments: ctx.state.compatibilityBufferedFragmentCount,
+      buffered_seconds_ahead: compatibilityBufferedSecondsAhead(),
+      source_start_seconds: ctx.state.compatibilityStartSeconds,
+    });
+    if (ctx.state.pendingAutoplay) requestVideoPlay();
+    ensureSubtitlesAfterPlaybackReady(reason || 'hls-buffer-ready');
+  }
+
+  function noteCompatibilityFragmentBuffered(data, title, surfaceSyncToken) {
+    if (ctx.state.playbackMode !== 'compatibility' || !playbackSyncTokenIsCurrent(surfaceSyncToken)) return;
+    ctx.state.compatibilityBufferedFragmentCount += 1;
+    if (
+      ctx.state.compatibilityBufferedFragmentCount < COMPATIBILITY_START_BUFFER_FRAGMENTS
+      && ctx.state.hlsController
+      && Array.isArray(ctx.state.hlsController.levels)
+      && ctx.state.hlsController.levels[0]
+      && ctx.state.hlsController.levels[0].details
+      && data
+      && data.frag
+    ) {
+      var details = ctx.state.hlsController.levels[0].details;
+      if (details.live === false && details.endSN === data.frag.sn) {
+        ctx.state.compatibilityBufferedFragmentCount = COMPATIBILITY_START_BUFFER_FRAGMENTS;
+      }
+    }
+    maybeRevealCompatibilityPlayback(title, surfaceSyncToken, 'hls-fragment-buffered');
   }
 
   function formatPlaybackTime(totalSeconds) {
@@ -600,6 +764,7 @@ import {
 
   function resetPlaybackSurface() {
     if (!ctx.els.videoEl) return;
+    clearCompatibilityRecoveryTimer();
     hideLoadingOverlay();
     flushNativeSubtitleRenderSurface();
     resetCompatibilityRecoveryState();
@@ -1273,7 +1438,6 @@ import {
   }
 
   function showPlaybackVideo(title, meta) {
-    hideLoadingOverlay();
     hidePlaceholderElement();
     showVideoElement();
     setPlaybackSummary(title, meta);
@@ -1417,6 +1581,7 @@ import {
   function attachCompatibilityVideo(playlistUrl, title, meta, startSeconds, surfaceSyncToken) {
     if (!ctx.els.videoEl) return;
     clearVideoSource();
+    resetCompatibilityBufferState();
     ctx.state.compatibilityStartSeconds = Math.max(0, Number(startSeconds) || 0);
     ctx.els.videoEl.controls = false;
     ctx.els.videoEl.removeAttribute('controls');
@@ -1428,6 +1593,7 @@ import {
         liveDurationInfinity: true,
         lowLatencyMode: false,
         maxLiveSyncPlaybackRate: 1,
+        startFragPrefetch: true,
       });
       ctx.state.hlsController.on(Hls.Events.MANIFEST_LOADING, function (_eventName, data) {
         if (!playbackSyncTokenIsCurrent(surfaceSyncToken)) return;
@@ -1472,12 +1638,7 @@ import {
         if (ctx.state.hlsController && typeof ctx.state.hlsController.startLoad === 'function') {
           ctx.state.hlsController.startLoad(0);
         }
-        setStatus('Compatibility playback session is ready.');
-        if (ctx.state.compatibilityStartSeconds > 0) {
-          setStatus('Compatibility playback session is ready at ' + formatPlaybackTime(ctx.state.compatibilityStartSeconds) + '.');
-        }
-        if (ctx.state.pendingAutoplay) requestVideoPlay();
-        ensureSubtitlesAfterPlaybackReady('hls-manifest-parsed');
+        setStatus('Buffering compatibility playback before starting.');
       });
       ctx.state.hlsController.on(Hls.Events.FRAG_LOADING, function (_eventName, data) {
         reportVideoDiagnostic({
@@ -1506,6 +1667,7 @@ import {
           frag_sn: data && data.frag ? data.frag.sn : '',
           frag_url: data && data.frag ? data.frag.url : '',
         });
+        noteCompatibilityFragmentBuffered(data, title, surfaceSyncToken);
       });
       ctx.state.hlsController.on(Hls.Events.ERROR, function (_eventName, data) {
         reportVideoDiagnostic({
@@ -1517,24 +1679,7 @@ import {
           hls_reason: data && (data.reason || data.error && data.error.message) || '',
           hls_url: data && data.frag && data.frag.url ? data.frag.url : (data && data.context && data.context.url ? data.context.url : ''),
         });
-        if (!data || !data.fatal) return;
-        var active = activeQueueItem();
-        if (!active) return;
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && ctx.state.compatibilityNetworkRecoveries < 2) {
-          ctx.state.compatibilityNetworkRecoveries += 1;
-          setStatus('Compatibility playback hit a network error; retrying the stream.');
-          ctx.state.hlsController.startLoad();
-          resyncSubtitleTrackAfterHlsRecovery('network-error', data);
-          return;
-        }
-        if (data.type === Hls.ErrorTypes.MEDIA_ERROR && ctx.state.compatibilityMediaRecoveries < 2) {
-          ctx.state.compatibilityMediaRecoveries += 1;
-          setStatus('Compatibility playback hit a media error; attempting recovery.');
-          ctx.state.hlsController.recoverMediaError();
-          resyncSubtitleTrackAfterHlsRecovery('media-error', data);
-          return;
-        }
-        failCompatibilityPlayback(active, 'Compatibility playback failed for this file.', 'Compatibility playback failed.');
+        handleCompatibilityHlsError(data);
       });
       ctx.state.hlsController.attachMedia(ctx.els.videoEl);
       ctx.state.hlsController.loadSource(playlistUrl);
@@ -1561,12 +1706,7 @@ import {
       ctx.els.videoEl.addEventListener('loadedmetadata', function onLoadedMetadata() {
         ctx.els.videoEl.removeEventListener('loadedmetadata', onLoadedMetadata);
         if (ctx.state.playbackMode !== 'compatibility' || !playbackSyncTokenIsCurrent(surfaceSyncToken)) return;
-        hideLoadingOverlay();
-        setStatus('Compatibility playback session is ready.');
-        if (ctx.state.compatibilityStartSeconds > 0) {
-          setStatus('Compatibility playback session is ready at ' + formatPlaybackTime(ctx.state.compatibilityStartSeconds) + '.');
-        }
-        if (ctx.state.pendingAutoplay) requestVideoPlay();
+        setStatus('Buffering compatibility playback before starting.');
       });
     }
     else {
@@ -2240,6 +2380,7 @@ import {
   async function restartCompatibilityAt(targetSeconds, reason) {
     var active = activeQueueItem();
     if (!active || !ctx.state.compatibilityAvailable) return;
+    clearCompatibilityRecoveryTimer();
     var syncToken = ++ctx.state.playbackSyncToken;
     var probePayload = ctx.state.probeCache[active.path || ''] || await ensureAudioTracksForItem(active);
     if (syncToken !== ctx.state.playbackSyncToken) return;
@@ -2345,21 +2486,20 @@ import {
       ctx.state.compatibilitySubtitleStreamIndex = null;
       ctx.state.seekRestartInProgress = false;
       ctx.state.requestedSeekSeconds = null;
-      ctx.state.playbackMode = 'compatibility-error';
-      ctx.state.transportWantsPlay = false;
-      hideLoadingOverlay();
-      setStatus('Could not start compatibility playback at ' + formatPlaybackTime(clampedTarget) + '.');
+      ctx.state.playbackMode = 'compatibility';
       reportVideoDiagnostic({
-        level: 'error',
-        message: 'Compatibility seek restart failed',
+        level: 'warn',
+        message: 'Compatibility seek restart failed; scheduling recovery',
         seek_reason: reason || '',
         requested_time: clampedTarget,
       });
+      scheduleCompatibilityRecovery(reason || 'restart-failed', clampedTarget, null);
     }
   }
 
   async function syncPlaybackForActiveItem() {
     var active = activeQueueItem();
+    clearCompatibilityRecoveryTimer();
     var syncToken = ++ctx.state.playbackSyncToken;
     if (!active) {
       ctx.state.playbackMode = 'none';
@@ -2460,15 +2600,12 @@ import {
       if (syncToken !== ctx.state.playbackSyncToken) return;
       ctx.state.compatibilitySessionId = '';
       ctx.state.compatibilitySubtitleStreamIndex = null;
-      ctx.state.playbackMode = 'compatibility-error';
-      ctx.state.transportWantsPlay = false;
-      hideLoadingOverlay();
-      showPlaybackPlaceholder(
-        activeItemTitle(active),
-        'Compatibility playback could not be started for this file.'
-      );
-      setStatus('Could not start compatibility playback.');
-      resetPlaybackProgress();
+      ctx.state.playbackMode = 'compatibility';
+      reportVideoDiagnostic({
+        level: 'warn',
+        message: 'Compatibility playback start failed; scheduling recovery',
+      });
+      scheduleCompatibilityRecovery('initial-start-failed', 0, null);
     }
   }
 
@@ -2948,10 +3085,16 @@ import {
   if (ctx.els.videoEl) {
     ctx.els.videoEl.addEventListener('loadedmetadata', syncPlaybackProgress);
     ctx.els.videoEl.addEventListener('loadeddata', function () {
-      if (ctx.state.playbackMode === 'compatibility') hideLoadingOverlay();
+      if (ctx.state.playbackMode !== 'compatibility') return;
+      if (compatibilityBufferedSecondsAhead() >= 6) {
+        maybeRevealCompatibilityPlayback(activeItemTitle(activeQueueItem()), ctx.state.playbackSyncToken, 'media-loadeddata');
+      }
     });
     ctx.els.videoEl.addEventListener('canplay', function () {
-      if (ctx.state.playbackMode === 'compatibility') hideLoadingOverlay();
+      if (ctx.state.playbackMode !== 'compatibility') return;
+      if (compatibilityBufferedSecondsAhead() >= 6) {
+        maybeRevealCompatibilityPlayback(activeItemTitle(activeQueueItem()), ctx.state.playbackSyncToken, 'media-canplay');
+      }
     });
     ctx.els.videoEl.addEventListener('durationchange', syncPlaybackProgress);
     ctx.els.videoEl.addEventListener('timeupdate', function () {
@@ -2978,6 +3121,13 @@ import {
     ctx.els.videoEl.addEventListener('waiting', function () {
       if (ctx.state.playbackMode !== 'compatibility') return;
       reportVideoDiagnostic({level: 'debug', message: 'Video element waiting'});
+      if (!playbackShouldBeRunning() || ctx.state.seekRestartInProgress) return;
+      var active = activeQueueItem();
+      showLoadingOverlay({
+        title: activeItemTitle(active),
+        meta: 'Buffering compatibility playback.',
+        progress: 0.96,
+      });
     });
     ctx.els.videoEl.addEventListener('stalled', function () {
       if (ctx.state.playbackMode !== 'compatibility') return;
@@ -3049,8 +3199,7 @@ import {
           media_error_code: ctx.els.videoEl.error ? ctx.els.videoEl.error.code : '',
           media_error_message: ctx.els.videoEl.error ? ctx.els.videoEl.error.message : '',
         });
-        if (ctx.state.hlsController) return;
-        failCompatibilityPlayback(active, 'Compatibility playback failed for this file.', 'Compatibility playback failed.');
+        scheduleCompatibilityRecovery('media-element-error', currentGlobalPlaybackSeconds(), null);
         return;
       }
       clearVideoSource();
@@ -3072,6 +3221,7 @@ import {
   });
 
   window.addEventListener('beforeunload', function () {
+    clearCompatibilityRecoveryTimer();
     void stopCompatibilitySession();
   });
 

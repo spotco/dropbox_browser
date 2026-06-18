@@ -13,10 +13,14 @@ from unittest.mock import patch
 
 from dropbox_browser.config import VideoToolsConfig
 from dropbox_browser.video import (
+    HLS_MIN_READY_SEGMENTS,
+    VideoHlsSession,
     build_ffmpeg_batch_webvtt_command,
     build_ffmpeg_hls_command,
     build_ffmpeg_webvtt_command,
     build_subtitle_cache_key,
+    _playlist_ready_for_playback,
+    _playlist_segment_names,
     rebase_webvtt_text,
     subtitle_cache_path,
     subtitle_codec_supports_webvtt,
@@ -28,6 +32,26 @@ try:
 except ImportError:
     from app_test_support import AppTestCase
     from support import SimulatedLsjsonResponse, SimulatedRclone, TestServer
+
+
+def write_hls_session_fixture(
+    playlist_path: Path,
+    *,
+    segment_base_url: str = "",
+    segment_count: int = HLS_MIN_READY_SEGMENTS,
+    include_segments: bool = True,
+) -> None:
+    playlist_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["#EXTM3U", '#EXT-X-MAP:URI="init.mp4"']
+    for index in range(segment_count):
+        segment_name = f"segment_{index:05d}.m4s"
+        lines.append("#EXTINF:6,")
+        lines.append(f"{segment_base_url}{segment_name}" if segment_base_url else segment_name)
+    playlist_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (playlist_path.parent / "init.mp4").write_bytes(b"init")
+    if include_segments:
+        for index in range(segment_count):
+            (playlist_path.parent / f"segment_{index:05d}.m4s").write_bytes(f"segment{index}".encode())
 
 
 class FakeFfmpegProcess:
@@ -361,15 +385,7 @@ class VideoEndpointTests(AppTestCase):
         def fake_popen(command, stdout=None, stderr=None, cwd=None):
             playlist_path = Path(command[-1])
             segment_base_url = command[command.index("-hls_base_url") + 1]
-            playlist_path.parent.mkdir(parents=True, exist_ok=True)
-            playlist_path.write_text(
-                "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:6,\n"
-                + segment_base_url
-                + "segment_00000.m4s\n",
-                encoding="utf-8",
-            )
-            (playlist_path.parent / "init.mp4").write_bytes(b"init")
-            (playlist_path.parent / "segment_00000.m4s").write_bytes(b"segment")
+            write_hls_session_fixture(playlist_path, segment_base_url=segment_base_url)
             process = FakeFfmpegProcess(command)
             spawned.append(process)
             return process
@@ -412,15 +428,7 @@ class VideoEndpointTests(AppTestCase):
         def fake_popen(command, stdout=None, stderr=None, cwd=None):
             playlist_path = Path(command[-1])
             segment_base_url = command[command.index("-hls_base_url") + 1]
-            playlist_path.parent.mkdir(parents=True, exist_ok=True)
-            playlist_path.write_text(
-                "#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:6,\n"
-                + segment_base_url
-                + "segment_00000.m4s\n",
-                encoding="utf-8",
-            )
-            (playlist_path.parent / "init.mp4").write_bytes(b"init")
-            (playlist_path.parent / "segment_00000.m4s").write_bytes(b"segment")
+            write_hls_session_fixture(playlist_path, segment_base_url=segment_base_url)
             return FakeFfmpegProcess(command)
 
         with TestServer(app) as server, patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen):
@@ -441,14 +449,14 @@ class VideoEndpointTests(AppTestCase):
         self.assertIn("#EXTM3U", playlist_text)
         self.assertIn("#EXT-X-START:TIME-OFFSET=0,PRECISE=YES", playlist_text)
         self.assertIn("name=init.mp4", playlist_text)
-        self.assertEqual(segment_bytes, b"segment")
+        self.assertEqual(segment_bytes, b"segment0")
         self.assertEqual(segment_type, "video/mp4")
         self.assertEqual(init_bytes, b"init")
         self.assertEqual(init_type, "video/mp4")
         self.assertEqual(ctx.exception.code, 404)
         ctx.exception.close()
 
-    def test_session_endpoint_waits_for_first_referenced_segment(self) -> None:
+    def test_session_endpoint_waits_for_minimum_ready_segments(self) -> None:
         rclone = self._remote_media_rclone()
         app = self._build_app(
             rclone,
@@ -461,15 +469,15 @@ class VideoEndpointTests(AppTestCase):
 
         def fake_popen(command, stdout=None, stderr=None, cwd=None):
             playlist_path = Path(command[-1])
-            playlist_path.parent.mkdir(parents=True, exist_ok=True)
-            playlist_path.write_text("#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:6,\nsegment_00000.m4s\n", encoding="utf-8")
-            (playlist_path.parent / "init.mp4").write_bytes(b"init")
+            write_hls_session_fixture(playlist_path, include_segments=False)
 
-            def write_segment() -> None:
-                time.sleep(0.2)
-                (playlist_path.parent / "segment_00000.m4s").write_bytes(b"segment")
+            def write_segments() -> None:
+                time.sleep(0.1)
+                (playlist_path.parent / "segment_00000.m4s").write_bytes(b"segment0")
+                time.sleep(0.1)
+                (playlist_path.parent / "segment_00001.m4s").write_bytes(b"segment1")
 
-            threading.Thread(target=write_segment, daemon=True).start()
+            threading.Thread(target=write_segments, daemon=True).start()
             return FakeFfmpegProcess(command)
 
         with TestServer(app) as server, patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen):
@@ -479,11 +487,11 @@ class VideoEndpointTests(AppTestCase):
                 "source": "remote",
             })
             elapsed = time.monotonic() - started
-            with urlopen(server.base_url + payload["asset_root"] + "segment_00000.m4s", timeout=5) as response:
+            with urlopen(server.base_url + payload["asset_root"] + "segment_00001.m4s", timeout=5) as response:
                 body = response.read()
 
         self.assertGreaterEqual(elapsed, 0.15)
-        self.assertEqual(body, b"segment")
+        self.assertEqual(body, b"segment1")
 
     def test_session_asset_endpoint_waits_for_delayed_segment_while_process_runs(self) -> None:
         rclone = self._remote_media_rclone()
@@ -499,18 +507,18 @@ class VideoEndpointTests(AppTestCase):
 
         def fake_popen(command, stdout=None, stderr=None, cwd=None):
             playlist_path = Path(command[-1])
-            playlist_path.parent.mkdir(parents=True, exist_ok=True)
+            write_hls_session_fixture(playlist_path, segment_count=3)
+            (playlist_path.parent / "segment_00002.m4s").unlink(missing_ok=True)
             playlist_path.write_text(
-                "#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:6,\nsegment_00000.m4s\n#EXTINF:6,\nsegment_00001.m4s\n",
+                playlist_path.read_text(encoding="utf-8")
+                + "#EXTINF:6,\nsegment_00002.m4s\n",
                 encoding="utf-8",
             )
-            (playlist_path.parent / "init.mp4").write_bytes(b"init")
-            (playlist_path.parent / "segment_00000.m4s").write_bytes(b"first")
 
             def write_delayed_segment() -> None:
                 requested_segment.wait(timeout=2)
                 time.sleep(0.2)
-                (playlist_path.parent / "segment_00001.m4s").write_bytes(b"second")
+                (playlist_path.parent / "segment_00002.m4s").write_bytes(b"third")
 
             threading.Thread(target=write_delayed_segment, daemon=True).start()
             return FakeFfmpegProcess(command)
@@ -522,12 +530,12 @@ class VideoEndpointTests(AppTestCase):
             })
             started = time.monotonic()
             requested_segment.set()
-            with urlopen(server.base_url + payload["asset_root"] + "segment_00001.m4s", timeout=5) as response:
+            with urlopen(server.base_url + payload["asset_root"] + "segment_00002.m4s", timeout=5) as response:
                 body = response.read()
                 elapsed = time.monotonic() - started
 
         self.assertGreaterEqual(elapsed, 0.15)
-        self.assertEqual(body, b"second")
+        self.assertEqual(body, b"third")
 
     def test_new_session_replaces_previous_session_and_cleans_up_old_assets(self) -> None:
         rclone = self._remote_media_rclone()
@@ -543,10 +551,7 @@ class VideoEndpointTests(AppTestCase):
 
         def fake_popen(command, stdout=None, stderr=None, cwd=None):
             playlist_path = Path(command[-1])
-            playlist_path.parent.mkdir(parents=True, exist_ok=True)
-            playlist_path.write_text("#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:6,\nsegment_00000.m4s\n", encoding="utf-8")
-            (playlist_path.parent / "init.mp4").write_bytes(b"init")
-            (playlist_path.parent / "segment_00000.m4s").write_bytes(b"segment")
+            write_hls_session_fixture(playlist_path)
             process = FakeFfmpegProcess(command)
             spawned.append(process)
             return process
@@ -583,10 +588,7 @@ class VideoEndpointTests(AppTestCase):
 
         def fake_popen(command, stdout=None, stderr=None, cwd=None):
             playlist_path = Path(command[-1])
-            playlist_path.parent.mkdir(parents=True, exist_ok=True)
-            playlist_path.write_text("#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:6,\nsegment_00000.m4s\n", encoding="utf-8")
-            (playlist_path.parent / "init.mp4").write_bytes(b"init")
-            (playlist_path.parent / "segment_00000.m4s").write_bytes(b"segment")
+            write_hls_session_fixture(playlist_path)
             return FakeFfmpegProcess(command)
 
         with TestServer(app) as server, patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen):
@@ -618,10 +620,7 @@ class VideoEndpointTests(AppTestCase):
 
         def fake_popen(command, stdout=None, stderr=None, cwd=None):
             playlist_path = Path(command[-1])
-            playlist_path.parent.mkdir(parents=True, exist_ok=True)
-            playlist_path.write_text("#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:6,\nsegment_00000.m4s\n", encoding="utf-8")
-            (playlist_path.parent / "init.mp4").write_bytes(b"init")
-            (playlist_path.parent / "segment_00000.m4s").write_bytes(b"segment")
+            write_hls_session_fixture(playlist_path)
             process = FakeFfmpegProcess(command)
             spawned.append(process)
             return process
@@ -651,10 +650,7 @@ class VideoEndpointTests(AppTestCase):
 
         def fake_popen(command, stdout=None, stderr=None, cwd=None):
             playlist_path = Path(command[-1])
-            playlist_path.parent.mkdir(parents=True, exist_ok=True)
-            playlist_path.write_text("#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:6,\nsegment_00000.m4s\n", encoding="utf-8")
-            (playlist_path.parent / "init.mp4").write_bytes(b"init")
-            (playlist_path.parent / "segment_00000.m4s").write_bytes(b"segment")
+            write_hls_session_fixture(playlist_path)
             process = FakeFfmpegProcess(command)
             spawned.append(process)
             return process
@@ -693,6 +689,35 @@ class VideoEndpointTests(AppTestCase):
 
         self.assertEqual(ctx.exception.code, 400)
         ctx.exception.close()
+
+    def test_playlist_ready_for_playback_requires_minimum_segment_count(self) -> None:
+        session_dir = self.temp_dir / "playlist_ready"
+        session_dir.mkdir(parents=True, exist_ok=True)
+        playlist_path = session_dir / "stream.m3u8"
+        write_hls_session_fixture(playlist_path, include_segments=False)
+        session = VideoHlsSession(
+            session_id="test",
+            rel_path="movie.mp4",
+            session_dir=session_dir,
+            playlist_path=playlist_path,
+            process=FakeFfmpegProcess([]),
+            command=[],
+            created_at=time.time(),
+            last_accessed_at=time.time(),
+            audio_stream_index=None,
+            subtitle_stream_index=None,
+            start_time_seconds=0.0,
+        )
+
+        self.assertFalse(_playlist_ready_for_playback(session))
+        (session_dir / "segment_00000.m4s").write_bytes(b"segment0")
+        self.assertFalse(_playlist_ready_for_playback(session))
+        (session_dir / "segment_00001.m4s").write_bytes(b"segment1")
+        self.assertTrue(_playlist_ready_for_playback(session))
+        self.assertEqual(
+            _playlist_segment_names(playlist_path),
+            ["segment_00000.m4s", "segment_00001.m4s"],
+        )
 
     def test_build_ffmpeg_hls_command_maps_selected_audio_stream_by_absolute_index(self) -> None:
         command = build_ffmpeg_hls_command(

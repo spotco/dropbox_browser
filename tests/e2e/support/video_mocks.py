@@ -137,14 +137,15 @@ def build_video_mock_patches(fixture: dict[str, Any], temp_dir: Path) -> list[An
         playlist_path = Path(command[-1])
         segment_base_url = command[command.index("-hls_base_url") + 1]
         playlist_path.parent.mkdir(parents=True, exist_ok=True)
-        playlist_path.write_text(
-            "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:6,\n"
-            + segment_base_url
-            + "segment_00000.m4s\n",
-            encoding="utf-8",
-        )
+        lines = ["#EXTM3U", '#EXT-X-VERSION:7', '#EXT-X-MAP:URI="init.mp4"']
+        for index in range(2):
+            segment_name = f"segment_{index:05d}.m4s"
+            lines.append("#EXTINF:6,")
+            lines.append(segment_base_url + segment_name)
+        playlist_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         (playlist_path.parent / "init.mp4").write_bytes(b"init")
-        (playlist_path.parent / "segment_00000.m4s").write_bytes(b"segment")
+        for index in range(2):
+            (playlist_path.parent / f"segment_{index:05d}.m4s").write_bytes(f"segment{index}".encode())
         return FakeFfmpegProcess(command)
 
     return [

@@ -258,23 +258,40 @@ function expectStackedSubtitleLayout(layout, label) {
   expect(layout.medianGap, `${label} median gap`).toBeLessThan(48);
 }
 
-function expectConsistentStackedSubtitleLayout(embeddedLayout, fullscreenLayout) {
+function subtitleBottomLineCenterRatio(layout) {
+  const bottomLineCenter = Math.max(...layout.bands.map((band) => band.center));
+  return bottomLineCenter / layout.height;
+}
+
+function expectSimilarSubtitleVerticalPosition(embeddedLayout, fullscreenLayout, tolerance = 0.05) {
+  expect(embeddedLayout.bandCount, "embedded band count").toBeGreaterThan(0);
+  expect(fullscreenLayout.bandCount, "fullscreen band count").toBeGreaterThan(0);
+
+  const embeddedRatio = subtitleBottomLineCenterRatio(embeddedLayout);
+  const fullscreenRatio = subtitleBottomLineCenterRatio(fullscreenLayout);
+  expect(
+    Math.abs(fullscreenRatio - embeddedRatio),
+    "embedded and fullscreen subtitles should sit near the same vertical position",
+  ).toBeLessThanOrEqual(tolerance);
+}
+
+function expectEmbeddedSmallerThanFullscreenSubtitleLayout(embeddedLayout, fullscreenLayout) {
   expectStackedSubtitleLayout(embeddedLayout, "embedded");
   expectStackedSubtitleLayout(fullscreenLayout, "fullscreen");
+  expectSimilarSubtitleVerticalPosition(embeddedLayout, fullscreenLayout);
 
-  const gapDelta = Math.abs(fullscreenLayout.medianGap - embeddedLayout.medianGap);
   expect(
-    gapDelta,
-    "fullscreen and embedded subtitle line spacing should match closely",
-  ).toBeLessThanOrEqual(10);
+    embeddedLayout.medianGap,
+    "embedded subtitle line spacing should be smaller than fullscreen",
+  ).toBeLessThan(fullscreenLayout.medianGap);
 
   if (embeddedLayout.medianGap > 0) {
     const spacingRatio = fullscreenLayout.medianGap / embeddedLayout.medianGap;
     expect(
       spacingRatio,
-      "fullscreen subtitle spacing should not diverge from embedded mode",
-    ).toBeGreaterThan(0.65);
-    expect(spacingRatio).toBeLessThan(1.45);
+      "fullscreen subtitles should remain larger than embedded subtitles",
+    ).toBeGreaterThan(1.15);
+    expect(spacingRatio).toBeLessThan(2.5);
   }
 }
 
@@ -283,7 +300,9 @@ module.exports = {
   analyzeSubtitleLayout,
   captureStageImageData,
   captureVideoImageData,
-  expectConsistentStackedSubtitleLayout,
+  expectEmbeddedSmallerThanFullscreenSubtitleLayout,
+  expectSimilarSubtitleVerticalPosition,
+  subtitleBottomLineCenterRatio,
   expectStackedSubtitleLayout,
   medianGapForBands,
   readActiveCueLineCenters,

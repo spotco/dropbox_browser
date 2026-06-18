@@ -57,7 +57,8 @@ class ConfigDefaultsTests(unittest.TestCase):
         config = dict(config_module._APP_CONFIG_DEFAULTS)
 
         self.assertTrue(config["ClientLogEnabled"])
-        self.assertTrue(config["ClientLogSubsystems"]["video"])
+        self.assertFalse(config["LogVideoDebug"])
+        self.assertFalse(config["ClientLogSubsystems"]["video"])
         self.assertFalse(config["ClientLogSubsystems"]["video-subtitles"])
         self.assertFalse(config["ClientLogSubsystems"]["browse-reveal"])
         self.assertFalse(config["ClientLogSubsystems"]["file-search"])
