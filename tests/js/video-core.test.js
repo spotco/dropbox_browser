@@ -91,3 +91,116 @@ test("playbackDurationSeconds returns zero when duration is unavailable", async 
   assert.equal(mod.playbackDurationSeconds(Infinity, {duration_seconds: 1501.25}, "native"), 0);
   assert.equal(mod.playbackDurationSeconds(NaN, null, "compatibility"), 0);
 });
+
+function baseSeekDecisionInput(overrides = {}) {
+  return {
+    targetSeconds: 30,
+    sessionStartSeconds: 0,
+    seekableRanges: [{start: 0, end: 60}],
+    encodedMediaEndSeconds: 60,
+    hasActiveSession: true,
+    sessionId: "session-1",
+    playbackMode: "compatibility",
+    itemPath: "Videos/alpha.mkv",
+    sessionPath: "Videos/alpha.mkv",
+    selectedAudioStreamIndex: 1,
+    sessionAudioStreamIndex: 1,
+    selectedBurnedInSubtitleStreamIndex: null,
+    sessionSubtitleStreamIndex: null,
+    ...overrides,
+  };
+}
+
+test("compatibilityInSessionSeekDecision uses in-session seek inside encoded range", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
+
+  const backward = mod.compatibilityInSessionSeekDecision(baseSeekDecisionInput({
+    targetSeconds: 12,
+    encodedMediaEndSeconds: 48,
+    seekableRanges: [{start: 0, end: 48}],
+  }));
+  assert.equal(backward.action, "in-session");
+  assert.equal(backward.reason, "encoded-range");
+  assert.equal(backward.mediaTargetSeconds, 12);
+
+  const forwardWithinRange = mod.compatibilityInSessionSeekDecision(baseSeekDecisionInput({
+    targetSeconds: 42,
+    encodedMediaEndSeconds: 48,
+    seekableRanges: [{start: 0, end: 30}],
+  }));
+  assert.equal(forwardWithinRange.action, "in-session");
+  assert.equal(forwardWithinRange.mediaTargetSeconds, 42);
+});
+
+test("compatibilityInSessionSeekDecision restarts when target is beyond encoded range", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
+
+  const beyondEncoded = mod.compatibilityInSessionSeekDecision(baseSeekDecisionInput({
+    targetSeconds: 55,
+    encodedMediaEndSeconds: 48,
+    seekableRanges: [{start: 0, end: 48}],
+  }));
+  assert.equal(beyondEncoded.action, "restart");
+  assert.equal(beyondEncoded.reason, "beyond-encoded-range");
+
+  const beforeSessionStart = mod.compatibilityInSessionSeekDecision(baseSeekDecisionInput({
+    targetSeconds: 690,
+    sessionStartSeconds: 696,
+    encodedMediaEndSeconds: 48,
+    seekableRanges: [{start: 0, end: 48}],
+  }));
+  assert.equal(beforeSessionStart.action, "restart");
+  assert.equal(beforeSessionStart.reason, "before-session-start");
+});
+
+test("compatibilityInSessionSeekDecision restarts when tracks or session context changed", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
+
+  const audioChanged = mod.compatibilityInSessionSeekDecision(baseSeekDecisionInput({
+    selectedAudioStreamIndex: 2,
+    sessionAudioStreamIndex: 1,
+  }));
+  assert.equal(audioChanged.action, "restart");
+  assert.equal(audioChanged.reason, "track-selection");
+
+  const burnedInChanged = mod.compatibilityInSessionSeekDecision(baseSeekDecisionInput({
+    selectedBurnedInSubtitleStreamIndex: 5,
+    sessionSubtitleStreamIndex: null,
+  }));
+  assert.equal(burnedInChanged.action, "restart");
+  assert.equal(burnedInChanged.reason, "track-selection");
+
+  const noSession = mod.compatibilityInSessionSeekDecision(baseSeekDecisionInput({
+    hasActiveSession: false,
+    sessionId: "",
+  }));
+  assert.equal(noSession.action, "restart");
+  assert.equal(noSession.reason, "no-session");
+});
+
+test("shouldApplyDeferredCompatibilitySeek ignores cleared null seek state", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
+
+  assert.equal(mod.shouldApplyDeferredCompatibilitySeek(null, 250.5, 0.05), false);
+  assert.equal(mod.shouldApplyDeferredCompatibilitySeek(undefined, 250.5, 0.05), false);
+  assert.equal(mod.shouldApplyDeferredCompatibilitySeek("", 250.5, 0.05), false);
+  assert.equal(mod.shouldApplyDeferredCompatibilitySeek(250.5, 250.5, 0.05), false);
+  assert.equal(mod.shouldApplyDeferredCompatibilitySeek(260, 250.5, 0.05), true);
+});
+
+test("compatibilityEncodedMediaEndSeconds prefers the widest known encoded extent", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
+
+  assert.equal(
+    mod.compatibilityEncodedMediaEndSeconds([{start: 0, end: 18}], 12),
+    18,
+  );
+  assert.equal(
+    mod.compatibilityEncodedMediaEndSeconds([], 12),
+    12,
+  );
+  assert.equal(
+    mod.compatibilityEncodedMediaEndSeconds([], 0),
+    0,
+  );
+});

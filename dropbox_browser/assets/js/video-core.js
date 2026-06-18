@@ -63,6 +63,8 @@ export function advanceQueueAfterPlaybackEnd(queueLength, activeIndex) {
   return nextIndex < queueLength ? nextIndex : -1;
 }
 
+export const HLS_SEGMENT_DURATION_SECONDS = 6;
+
 export function playbackDurationSeconds(mediaDuration, probePayload, playbackMode) {
   if (playbackMode === 'compatibility' && probePayload) {
     var probeDuration = Number(probePayload.duration_seconds);
@@ -70,4 +72,97 @@ export function playbackDurationSeconds(mediaDuration, probePayload, playbackMod
   }
   if (Number.isFinite(mediaDuration) && mediaDuration > 0) return mediaDuration;
   return 0;
+}
+
+function normalizeStreamIndex(value) {
+  if (value === null || value === undefined || value === '') return null;
+  var numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+export function mediaTimeFromGlobalTime(sessionStartSeconds, globalTimeSeconds) {
+  var sessionStart = Math.max(0, Number(sessionStartSeconds) || 0);
+  var globalTime = Math.max(0, Number(globalTimeSeconds) || 0);
+  return Math.max(0, globalTime - sessionStart);
+}
+
+export function compatibilityEncodedMediaEndSeconds(seekableRanges, trackedMediaEndSeconds) {
+  var tracked = Number(trackedMediaEndSeconds);
+  var seekableEnd = 0;
+  if (Array.isArray(seekableRanges)) {
+    for (var index = 0; index < seekableRanges.length; index += 1) {
+      var range = seekableRanges[index];
+      var end = Number(range && range.end);
+      if (Number.isFinite(end) && end > seekableEnd) seekableEnd = end;
+    }
+  }
+  if (seekableEnd > 0 && Number.isFinite(tracked) && tracked > 0) {
+    return Math.max(seekableEnd, tracked);
+  }
+  if (seekableEnd > 0) return seekableEnd;
+  if (Number.isFinite(tracked) && tracked > 0) return tracked;
+  return 0;
+}
+
+export function compatibilityInSessionSeekDecision(input) {
+  var target = Math.max(0, Number(input && input.targetSeconds) || 0);
+  var sessionStart = Math.max(0, Number(input && input.sessionStartSeconds) || 0);
+  var tolerance = Number(input && input.toleranceSeconds);
+  if (!Number.isFinite(tolerance) || tolerance < 0) tolerance = 0.25;
+
+  if (!input || input.playbackMode !== 'compatibility') {
+    return {action: 'restart', reason: 'playback-mode'};
+  }
+  if (!input.hasActiveSession || !input.sessionId) {
+    return {action: 'restart', reason: 'no-session'};
+  }
+  if ((input.itemPath || '') !== (input.sessionPath || '')) {
+    return {action: 'restart', reason: 'path-changed'};
+  }
+
+  var selectedAudio = normalizeStreamIndex(input.selectedAudioStreamIndex);
+  var sessionAudio = normalizeStreamIndex(input.sessionAudioStreamIndex);
+  var selectedSubtitle = normalizeStreamIndex(input.selectedBurnedInSubtitleStreamIndex);
+  var sessionSubtitle = normalizeStreamIndex(input.sessionSubtitleStreamIndex);
+  if (selectedAudio !== sessionAudio || selectedSubtitle !== sessionSubtitle) {
+    return {action: 'restart', reason: 'track-selection'};
+  }
+
+  var encodedMediaEnd = compatibilityEncodedMediaEndSeconds(
+    input.seekableRanges,
+    input.encodedMediaEndSeconds,
+  );
+  if (!(encodedMediaEnd > 0)) {
+    return {action: 'restart', reason: 'no-encoded-range'};
+  }
+
+  if (target < sessionStart - tolerance) {
+    return {action: 'restart', reason: 'before-session-start'};
+  }
+  if (target > sessionStart + encodedMediaEnd + tolerance) {
+    return {action: 'restart', reason: 'beyond-encoded-range'};
+  }
+
+  return {
+    action: 'in-session',
+    reason: 'encoded-range',
+    mediaTargetSeconds: mediaTimeFromGlobalTime(sessionStart, target),
+  };
+}
+
+export function shouldApplyDeferredCompatibilitySeek(
+  deferredSeekSeconds,
+  completedSeekSeconds,
+  toleranceSeconds,
+) {
+  if (deferredSeekSeconds === null || deferredSeekSeconds === undefined || deferredSeekSeconds === '') {
+    return false;
+  }
+  var deferred = Number(deferredSeekSeconds);
+  var completed = Number(completedSeekSeconds);
+  if (!Number.isFinite(deferred) || deferred < 0) return false;
+  if (!Number.isFinite(completed)) return false;
+  var tolerance = Number(toleranceSeconds);
+  if (!Number.isFinite(tolerance) || tolerance < 0) tolerance = 0.05;
+  return Math.abs(deferred - completed) > tolerance;
 }

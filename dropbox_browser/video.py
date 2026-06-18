@@ -46,6 +46,7 @@ DEFAULT_PROBE_PROBE_SIZE_BYTES = 2 * 1024 * 1024
 DEFAULT_PROBE_ANALYZE_DURATION_US = 3_000_000
 HLS_PLAYLIST_NAME = "stream.m3u8"
 HLS_SEGMENT_PATTERN = "segment_%05d.m4s"
+HLS_SEGMENT_DURATION_SECONDS = 6.0
 HLS_INIT_SEGMENT_NAME = "init.mp4"
 HLS_SESSION_TTL_SECONDS = 15 * 60
 HLS_MIN_READY_SEGMENTS = 1
@@ -760,6 +761,14 @@ class VideoSessionManager:
                 return None
             return self._session_payload(self._active_session)
 
+    def _encoded_media_end_seconds(self, session: VideoHlsSession) -> float:
+        if not session.playlist_path.is_file():
+            return 0.0
+        segment_count = len(_playlist_segment_names(session.playlist_path))
+        if segment_count <= 0:
+            return 0.0
+        return segment_count * HLS_SEGMENT_DURATION_SECONDS
+
     def _session_payload(
         self,
         session: VideoHlsSession,
@@ -779,6 +788,7 @@ class VideoSessionManager:
             "audio_stream_index": session.audio_stream_index,
             "subtitle_stream_index": session.subtitle_stream_index,
             "start_time_seconds": session.start_time_seconds,
+            "encoded_media_end_seconds": self._encoded_media_end_seconds(session),
             "session_create_elapsed_ms": ready_elapsed_ms,
         }
 
