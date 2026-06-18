@@ -44,6 +44,7 @@ import {
       loadingProgressLabelEl: document.getElementById('video-loading-progress-label'),
       controlsOverlayEl: document.getElementById('video-controls-overlay'),
       videoEl: document.getElementById('video-player-media'),
+      subtitleOverlayEl: document.getElementById('video-subtitle-overlay'),
       playToggleButton: document.getElementById('video-play-toggle'),
       muteToggleButton: document.getElementById('video-mute-toggle'),
       volumeSliderEl: document.getElementById('video-volume-slider'),
@@ -567,6 +568,7 @@ import {
   }
 
   function flushNativeSubtitleRenderSurface() {
+    clearSubtitleOverlay();
     if (!ctx.els.videoEl) return;
     var video = ctx.els.videoEl;
     hideVideoElement();
@@ -717,6 +719,40 @@ import {
     if (shiftedEnd <= 0) return null;
     if (shiftedStart < 0) shiftedStart = 0;
     return formatVttTimestamp(shiftedStart) + ' --> ' + formatVttTimestamp(shiftedEnd) + (match[3] || '');
+  }
+
+  function subtitleTrackIsActive(textTrack) {
+    return Boolean(textTrack && (textTrack.mode === 'showing' || textTrack.mode === 'hidden'));
+  }
+
+  function collectActiveSubtitleTexts(textTrack) {
+    var texts = [];
+    if (!textTrack || !textTrack.activeCues) return texts;
+    for (var index = 0; index < textTrack.activeCues.length; index += 1) {
+      var text = String(textTrack.activeCues[index].text || '').trim();
+      if (text) texts.push(text);
+    }
+    return texts;
+  }
+
+  function clearSubtitleOverlay() {
+    if (!ctx.els.subtitleOverlayEl) return;
+    ctx.els.subtitleOverlayEl.textContent = '';
+    ctx.els.subtitleOverlayEl.hidden = true;
+    ctx.els.subtitleOverlayEl.classList.add('hidden');
+  }
+
+  function syncSubtitleOverlayDisplay() {
+    if (!ctx.els.subtitleOverlayEl) return;
+    var textTrack = managedSubtitleTextTrack();
+    var texts = collectActiveSubtitleTexts(textTrack);
+    if (!texts.length) {
+      clearSubtitleOverlay();
+      return;
+    }
+    ctx.els.subtitleOverlayEl.textContent = texts.join('\n');
+    ctx.els.subtitleOverlayEl.hidden = false;
+    ctx.els.subtitleOverlayEl.classList.remove('hidden');
   }
 
   function rebaseWebVttText(body, startTimeSeconds) {
@@ -1021,6 +1057,7 @@ import {
   function bindSubtitleTextTrackEvents(textTrack) {
     if (!textTrack) return;
     textTrack.addEventListener('cuechange', function () {
+      syncSubtitleOverlayDisplay();
       syncSubtitleDebugDisplay();
     });
   }
@@ -1052,6 +1089,7 @@ import {
   }
 
   function clearSubtitleTrack() {
+    clearSubtitleOverlay();
     if (ctx.els.videoEl) {
       disableNativeSubtitleTracks();
       Array.from(ctx.els.videoEl.querySelectorAll('track')).forEach(function (node) {
@@ -1147,7 +1185,7 @@ import {
   function subtitlesAlreadyActive() {
     if (ctx.state.subtitleDebug.trackLabel) return true;
     var textTrack = managedSubtitleTextTrack();
-    return Boolean(textTrack && textTrack.mode === 'showing');
+    return subtitleTrackIsActive(textTrack);
   }
 
   function subtitlesAreMounted(item, streamIndex, seekSeconds) {
@@ -1159,7 +1197,7 @@ import {
     var mounted = normalizeSubtitleStreamIndex(ctx.state.subtitleMountedStreamIndex);
     if (normalized === null || mounted === null || normalized !== mounted) return false;
     var textTrack = managedSubtitleTextTrack();
-    return Boolean(textTrack && textTrack.mode === 'showing');
+    return subtitleTrackIsActive(textTrack);
   }
 
   function hlsErrorTargetsCurrentSession(data) {
@@ -2096,9 +2134,10 @@ import {
       for (var index = 0; index < ctx.els.videoEl.textTracks.length; index += 1) {
         var candidate = ctx.els.videoEl.textTracks[index];
         if (!candidate || candidate.kind !== 'subtitles') continue;
-        candidate.mode = candidate === textTrack ? 'showing' : 'disabled';
+        candidate.mode = candidate === textTrack ? 'hidden' : 'disabled';
       }
       bindSubtitleTextTrackEvents(textTrack);
+      syncSubtitleOverlayDisplay();
       updateSubtitleDebugForStream(item, payload, normalized, requestedSeek);
       reportSubtitleSyncDiagnostic({
         level: 'info',
@@ -2917,6 +2956,7 @@ import {
     ctx.els.videoEl.addEventListener('durationchange', syncPlaybackProgress);
     ctx.els.videoEl.addEventListener('timeupdate', function () {
       syncPlaybackProgress();
+      syncSubtitleOverlayDisplay();
       syncSubtitleDebugDisplay();
     });
     ctx.els.videoEl.addEventListener('play', function () {

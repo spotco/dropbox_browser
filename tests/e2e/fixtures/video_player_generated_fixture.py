@@ -272,6 +272,18 @@ def main() -> int:
             "english_frequency": "480",
             "japanese_frequency": "720",
         },
+        {
+            "filename": "multiline.mkv",
+            "english_audio_title": "Multiline English Audio",
+            "japanese_audio_title": "Multiline Japanese Audio",
+            "english_subtitle_title": "Multiline English Text",
+            "french_subtitle_title": "Multiline French Text",
+            "bitmap_subtitle_title": "Multiline English PGS",
+            "english_cue_text": "MULTI-LINE-ONE\nMULTI-LINE-TWO\nMULTI-LINE-THREE",
+            "french_cue_text": "MULTI-LIGNE-UN\nMULTI-LIGNE-DEUX",
+            "english_frequency": "500",
+            "japanese_frequency": "700",
+        },
     ]
 
     for spec in video_specs:

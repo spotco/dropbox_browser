@@ -410,7 +410,7 @@ async function readNativeSubtitleSurfaceState(page) {
       for (let index = 0; index < video.textTracks.length; index += 1) {
         const track = video.textTracks[index];
         if (!track) continue;
-        if (track.mode === "showing") {
+        if (track.mode === "showing" || track.mode === "hidden") {
           showingTracks.push({
             label: String(track.label || ""),
             language: String(track.language || ""),
@@ -497,7 +497,7 @@ async function waitForMountedSubtitleTrackReady(page, streamIndex) {
     }, { timeout: 15000 })
     .toMatchObject({
       readyState: 2,
-      mode: "showing",
+      mode: "hidden",
       cueCount: expect.any(Number),
     });
 }
@@ -818,7 +818,7 @@ async function openVideoPane(page) {
   await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
   await page.locator("#bottom-pane-mode").selectOption("video-player");
   await expect(page.locator("#video-player-pane")).toBeVisible();
-  await expect(page.locator("#video-library-list .video-library-row")).toHaveCount(3);
+  await expect(page.locator("#video-library-list .video-library-row")).toHaveCount(4);
   await waitForCompatibilityReady(page);
 }
 
