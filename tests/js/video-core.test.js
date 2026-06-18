@@ -143,6 +143,14 @@ test("compatibilityInSessionSeekDecision restarts when target is beyond encoded 
   assert.equal(beyondEncoded.action, "restart");
   assert.equal(beyondEncoded.reason, "beyond-encoded-range");
 
+  const inflatedSeekable = mod.compatibilityInSessionSeekDecision(baseSeekDecisionInput({
+    targetSeconds: 164.9,
+    encodedMediaEndSeconds: 54,
+    seekableRanges: [{start: 0, end: 1500}],
+  }));
+  assert.equal(inflatedSeekable.action, "restart");
+  assert.equal(inflatedSeekable.reason, "beyond-encoded-range");
+
   const beforeSessionStart = mod.compatibilityInSessionSeekDecision(baseSeekDecisionInput({
     targetSeconds: 690,
     sessionStartSeconds: 696,
