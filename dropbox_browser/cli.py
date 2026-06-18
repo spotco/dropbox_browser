@@ -99,6 +99,42 @@ def main() -> int:
     ).strip() or "Arial, Helvetica, sans-serif"
     app.video_subtitle_font_size_px = max(10, int(app_config.get("VideoSubtitleFontSizePx", 28) or 28))
     app.video_subtitle_bold = bool(app_config.get("VideoSubtitleBold", True))
+    app.video_probe_cache_ttl_seconds = max(
+        0,
+        int(app_config.get("VideoProbeCacheTTLSeconds", 7 * 24 * 60 * 60) or (7 * 24 * 60 * 60)),
+    )
+    app.video_probe_cache_max_bytes = max(
+        0,
+        int(app_config.get("VideoProbeCacheMaxBytes", 50 * 1024 * 1024) or (50 * 1024 * 1024)),
+    )
+    app.video_subtitle_cache_ttl_seconds = max(
+        0,
+        int(app_config.get("VideoSubtitleCacheTTLSeconds", 7 * 24 * 60 * 60) or (7 * 24 * 60 * 60)),
+    )
+    app.video_subtitle_cache_max_bytes = max(
+        0,
+        int(app_config.get("VideoSubtitleCacheMaxBytes", 200 * 1024 * 1024) or (200 * 1024 * 1024)),
+    )
+    app.video_header_cache_ttl_seconds = max(
+        0,
+        int(app_config.get("VideoHeaderCacheTTLSeconds", 24 * 60 * 60) or (24 * 60 * 60)),
+    )
+    app.video_header_cache_max_bytes = max(
+        0,
+        int(app_config.get("VideoHeaderCacheMaxBytes", 500 * 1024 * 1024) or (500 * 1024 * 1024)),
+    )
+    app.video_header_cache_bytes = max(
+        0,
+        int(app_config.get("VideoHeaderCacheBytes", 8 * 1024 * 1024) or (8 * 1024 * 1024)),
+    )
+    app.video_probe_probe_size_bytes = max(
+        32,
+        int(app_config.get("VideoProbeProbeSizeBytes", 2 * 1024 * 1024) or (2 * 1024 * 1024)),
+    )
+    app.video_probe_analyze_duration_us = max(
+        0,
+        int(app_config.get("VideoProbeAnalyzeDurationUs", 3_000_000) or 3_000_000),
+    )
     app.sync_jobs = SyncJobManager(app, workers=int(app_config["SyncJobWorkers"]))
     server = ThreadingHTTPServer((args.host, args.port), RequestHandler)
     server.app = app  # type: ignore[attr-defined]

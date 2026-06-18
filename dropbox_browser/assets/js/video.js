@@ -27,9 +27,12 @@ import {
     pipExit: '/assets/icons/material-icon-theme/video-pip-exit.svg',
   };
   var CONTROLS_IDLE_HIDE_MS = 2800;
-  var COMPATIBILITY_START_BUFFER_FRAGMENTS = 2;
+  var COMPATIBILITY_START_BUFFER_FRAGMENTS = 1;
   var COMPATIBILITY_RECOVERY_MIN_DELAY_MS = 1500;
   var COMPATIBILITY_RECOVERY_MAX_DELAY_MS = 30000;
+  var PROBE_STORAGE_KEY = 'dropbox-browser:video-probe-v1';
+  var PROBE_STORAGE_TTL_MS = 60 * 60 * 1000;
+  var PROBE_STORAGE_MAX_BYTES = 2 * 1024 * 1024;
   var ctx = {
     pane: pane,
     els: {
@@ -125,6 +128,7 @@ import {
       controlsIdleTimer: 0,
       controlsOverlayVisible: false,
       loadingOverlayVisible: false,
+      playbackTiming: null,
       lastControlsRevealPointerKey: '',
       controlsScrubReveal: false,
     }
@@ -251,6 +255,50 @@ import {
 
   function setStatus(text) {
     if (ctx.els.statusEl) ctx.els.statusEl.textContent = text;
+  }
+
+  function resetPlaybackTiming(path, reason) {
+    ctx.state.playbackTiming = {
+      path: String(path || ''),
+      reason: String(reason || 'playback'),
+      startedAtMs: performance.now(),
+      milestones: Object.create(null),
+      summaryLogged: false,
+    };
+    reportPlaybackTiming('playback_requested');
+  }
+
+  function reportPlaybackTiming(milestone, fields) {
+    var timing = ctx.state.playbackTiming;
+    if (!timing || !timing.startedAtMs) return 0;
+    var elapsedMs = Math.round(performance.now() - timing.startedAtMs);
+    if (milestone) timing.milestones[milestone] = elapsedMs;
+    if (!window.ClientLogger || !window.ClientLogger.enabledFor('video-timing')) return elapsedMs;
+    var details = Object.assign({}, fields || {}, {
+      milestone: milestone,
+      elapsed_ms: elapsedMs,
+      path: timing.path || '',
+      reason: timing.reason || '',
+      session_id: ctx.state.compatibilitySessionId || '',
+      playback_mode: ctx.state.playbackMode || '',
+    });
+    window.ClientLogger.log('video-timing', 'info', 'Playback timing: ' + milestone, details);
+    return elapsedMs;
+  }
+
+  function emitPlaybackTimingSummary(fields) {
+    var timing = ctx.state.playbackTiming;
+    if (!timing || timing.summaryLogged) return;
+    timing.summaryLogged = true;
+    var totalMs = Math.round(performance.now() - timing.startedAtMs);
+    if (!window.ClientLogger || !window.ClientLogger.enabledFor('video-timing')) return;
+    window.ClientLogger.log('video-timing', 'info', 'Playback timing summary', Object.assign({
+      path: timing.path || '',
+      reason: timing.reason || '',
+      session_id: ctx.state.compatibilitySessionId || '',
+      milestones: Object.assign({}, timing.milestones),
+      total_to_playing_ms: totalMs,
+    }, fields || {}));
   }
 
   function reportVideoDiagnostic(fields) {
@@ -542,6 +590,11 @@ import {
       buffered_fragments: ctx.state.compatibilityBufferedFragmentCount,
       buffered_seconds_ahead: compatibilityBufferedSecondsAhead(),
       source_start_seconds: ctx.state.compatibilityStartSeconds,
+    });
+    reportPlaybackTiming('buffer_ready', {
+      reveal_reason: reason || '',
+      buffered_fragments: ctx.state.compatibilityBufferedFragmentCount,
+      buffered_seconds_ahead: compatibilityBufferedSecondsAhead(),
     });
     if (ctx.state.pendingAutoplay) requestVideoPlay();
     ensureSubtitlesAfterPlaybackReady(reason || 'hls-buffer-ready');
@@ -1481,6 +1534,7 @@ import {
       ctx.state.transportWantsPlay = false;
       return;
     }
+    reportPlaybackTiming('play_requested');
     var requestedSyncToken = ctx.state.playbackSyncToken;
     ctx.state.transportWantsPlay = true;
     ctx.state.pendingAutoplay = true;
@@ -1582,6 +1636,7 @@ import {
     if (!ctx.els.videoEl) return;
     clearVideoSource();
     resetCompatibilityBufferState();
+    reportPlaybackTiming('hls_attached');
     ctx.state.compatibilityStartSeconds = Math.max(0, Number(startSeconds) || 0);
     ctx.els.videoEl.controls = false;
     ctx.els.videoEl.removeAttribute('controls');
@@ -1607,6 +1662,7 @@ import {
           message: 'HLS manifest loading',
           hls_url: data && data.url ? data.url : '',
         });
+        reportPlaybackTiming('hls_manifest_loading');
       });
       ctx.state.hlsController.on(Hls.Events.MANIFEST_LOADED, function (_eventName, data) {
         if (!playbackSyncTokenIsCurrent(surfaceSyncToken)) return;
@@ -1618,6 +1674,9 @@ import {
         reportVideoDiagnostic({
           level: 'debug',
           message: 'HLS manifest loaded',
+          hls_level_count: data && Array.isArray(data.levels) ? data.levels.length : '',
+        });
+        reportPlaybackTiming('hls_manifest_loaded', {
           hls_level_count: data && Array.isArray(data.levels) ? data.levels.length : '',
         });
       });
@@ -1633,6 +1692,9 @@ import {
           message: 'HLS manifest parsed',
           hls_start_position: 0,
           hls_live_sync_mode: 'file-start',
+          source_start_seconds: ctx.state.compatibilityStartSeconds,
+        });
+        reportPlaybackTiming('hls_manifest_parsed', {
           source_start_seconds: ctx.state.compatibilityStartSeconds,
         });
         if (ctx.state.hlsController && typeof ctx.state.hlsController.startLoad === 'function') {
@@ -1659,6 +1721,18 @@ import {
             ? Math.round(data.stats.loading.end - data.stats.loading.start)
             : '',
         });
+        if (
+          data && data.frag && data.frag.sn !== 'initSegment'
+          && ctx.state.playbackTiming
+          && !ctx.state.playbackTiming.milestones.hls_first_fragment_loaded
+        ) {
+          reportPlaybackTiming('hls_first_fragment_loaded', {
+            frag_sn: data.frag.sn,
+            loading_ms: data && data.stats && data.stats.loading
+              ? Math.round(data.stats.loading.end - data.stats.loading.start)
+              : '',
+          });
+        }
       });
       ctx.state.hlsController.on(Hls.Events.FRAG_BUFFERED, function (_eventName, data) {
         reportVideoDiagnostic({
@@ -2033,16 +2107,122 @@ import {
     select.disabled = false;
   }
 
+  function probeStorageEntrySize(path, entry) {
+    if (!entry || !entry.payload) return path.length + 32;
+    return path.length + JSON.stringify(entry.payload).length + 32;
+  }
+
+  function readProbeStorageIndex() {
+    try {
+      var raw = sessionStorage.getItem(PROBE_STORAGE_KEY);
+      if (!raw) return {entries: Object.create(null), totalBytes: 0};
+      var parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || !parsed.entries || typeof parsed.entries !== 'object') {
+        return {entries: Object.create(null), totalBytes: 0};
+      }
+      return parsed;
+    }
+    catch (_error) {
+      return {entries: Object.create(null), totalBytes: 0};
+    }
+  }
+
+  function writeProbeStorageIndex(index) {
+    try {
+      sessionStorage.setItem(PROBE_STORAGE_KEY, JSON.stringify(index));
+    }
+    catch (_error) {
+      return;
+    }
+  }
+
+  function evictProbeStorageForSize(index) {
+    var paths = Object.keys(index.entries || {});
+    var rows = paths.map(function (path) {
+      var entry = index.entries[path];
+      return {
+        path: path,
+        accessedAt: entry && entry.accessedAt ? entry.accessedAt : 0,
+        size: probeStorageEntrySize(path, entry),
+      };
+    });
+    rows.sort(function (left, right) {
+      return left.accessedAt - right.accessedAt;
+    });
+    var totalBytes = rows.reduce(function (sum, row) { return sum + row.size; }, 0);
+    while (totalBytes > PROBE_STORAGE_MAX_BYTES && rows.length) {
+      var oldest = rows.shift();
+      if (!oldest) break;
+      delete index.entries[oldest.path];
+      totalBytes -= oldest.size;
+    }
+    index.totalBytes = totalBytes;
+  }
+
+  function pruneExpiredProbeStorage(index) {
+    var now = Date.now();
+    var totalBytes = 0;
+    Object.keys(index.entries || {}).forEach(function (path) {
+      var entry = index.entries[path];
+      if (!entry || !entry.cachedAt || now - entry.cachedAt > PROBE_STORAGE_TTL_MS) {
+        delete index.entries[path];
+        return;
+      }
+      totalBytes += probeStorageEntrySize(path, entry);
+    });
+    index.totalBytes = totalBytes;
+    evictProbeStorageForSize(index);
+  }
+
+  function getProbeFromSessionStorage(path) {
+    var index = readProbeStorageIndex();
+    pruneExpiredProbeStorage(index);
+    var entry = index.entries[path];
+    if (!entry || !entry.payload) {
+      writeProbeStorageIndex(index);
+      return null;
+    }
+    entry.accessedAt = Date.now();
+    writeProbeStorageIndex(index);
+    return entry.payload;
+  }
+
+  function setProbeInSessionStorage(path, payload) {
+    var index = readProbeStorageIndex();
+    pruneExpiredProbeStorage(index);
+    if (index.entries[path]) {
+      index.totalBytes = Math.max(
+        0,
+        (index.totalBytes || 0) - probeStorageEntrySize(path, index.entries[path])
+      );
+    }
+    var entry = {
+      payload: payload,
+      cachedAt: Date.now(),
+      accessedAt: Date.now(),
+    };
+    index.entries[path] = entry;
+    index.totalBytes = (index.totalBytes || 0) + probeStorageEntrySize(path, entry);
+    evictProbeStorageForSize(index);
+    writeProbeStorageIndex(index);
+  }
+
   async function loadProbeMetadata(item) {
     if (!item || !item.path) return null;
     var path = item.path;
     if (ctx.state.probeCache[path]) return ctx.state.probeCache[path];
+    var storedPayload = getProbeFromSessionStorage(path);
+    if (storedPayload) {
+      ctx.state.probeCache[path] = storedPayload;
+      return storedPayload;
+    }
     if (ctx.state.probeFailures[path]) return null;
     try {
       var response = await fetch('/video/endpoints/probe?path=' + encodeURIComponent(path) + '&source=remote');
       if (!response.ok) throw new Error('Failed to probe video metadata.');
       var payload = await response.json();
       ctx.state.probeCache[path] = payload;
+      setProbeInSessionStorage(path, payload);
       delete ctx.state.probeFailures[path];
       syncPlaybackProgress();
       return payload;
@@ -2292,6 +2472,18 @@ import {
     return true;
   }
 
+  function scheduleSubtitlesAfterPlaybackReady(item, probePayload, seekSeconds, syncToken, reloadReason) {
+    if (!item || !probePayload) return;
+    if (selectedBurnedInSubtitleStreamIndex(item, probePayload) !== null) return;
+    void preloadAllSubtitleVttsForItem(item, probePayload).then(function () {
+      if (syncToken !== ctx.state.playbackSyncToken) return;
+      return applySubtitlesForSeek(item, probePayload, seekSeconds, {
+        playbackSyncToken: syncToken,
+        reloadReason: reloadReason || 'initial-playback',
+      });
+    });
+  }
+
   async function applySubtitlesForSeek(item, probePayload, seekSeconds, options) {
     options = options || {};
     var fetchStartSeconds = Math.max(0, Number(seekSeconds) || 0);
@@ -2382,7 +2574,10 @@ import {
     if (!active || !ctx.state.compatibilityAvailable) return;
     clearCompatibilityRecoveryTimer();
     var syncToken = ++ctx.state.playbackSyncToken;
+    resetPlaybackTiming(active.path || '', reason || 'seek-restart');
+    reportPlaybackTiming('probe_start', {probe_cache_hit: Boolean(ctx.state.probeCache[active.path || ''])});
     var probePayload = ctx.state.probeCache[active.path || ''] || await ensureAudioTracksForItem(active);
+    reportPlaybackTiming('probe_complete', {probe_cache_hit: Boolean(ctx.state.probeCache[active.path || ''])});
     if (syncToken !== ctx.state.playbackSyncToken) return;
     var duration = playbackDurationSeconds(
       ctx.els.videoEl ? Number(ctx.els.videoEl.duration) : NaN,
@@ -2435,8 +2630,8 @@ import {
     if (syncToken !== ctx.state.playbackSyncToken) return;
     var audioStreamIndex = selectedAudioStreamIndex(active, probePayload);
     var burnedInSubtitleStreamIndex = selectedBurnedInSubtitleStreamIndex(active, probePayload);
-    var subtitleWarmPromise = preloadAllSubtitleVttsForItem(active, probePayload);
     try {
+      reportPlaybackTiming('session_create_requested', {requested_time: clampedTarget});
       var session = await createCompatibilitySession(
         active,
         audioStreamIndex,
@@ -2448,6 +2643,10 @@ import {
         return;
       }
       ctx.state.compatibilitySessionId = session.session_id || '';
+      reportPlaybackTiming('session_create_complete', {
+        requested_time: clampedTarget,
+        server_session_create_elapsed_ms: session.session_create_elapsed_ms,
+      });
       ctx.state.seekRestartInProgress = false;
       ctx.state.requestedSeekSeconds = null;
       showLoadingOverlay(loadingOverlayCopy(
@@ -2472,13 +2671,13 @@ import {
         session_id: session.session_id || '',
         subtitle_stream_index: session.subtitle_stream_index,
       });
-      await subtitleWarmPromise;
-      if (syncToken !== ctx.state.playbackSyncToken) return;
-      if (selectedBurnedInSubtitleStreamIndex(active, probePayload) !== null) return;
-      await applySubtitlesForSeek(active, probePayload, Number(session.start_time_seconds) || clampedTarget, {
-        reloadReason: reason || 'restart',
-        playbackSyncToken: syncToken,
-      });
+      scheduleSubtitlesAfterPlaybackReady(
+        active,
+        probePayload,
+        Number(session.start_time_seconds) || clampedTarget,
+        syncToken,
+        reason || 'restart'
+      );
     }
     catch (_error) {
       if (syncToken !== ctx.state.playbackSyncToken) return;
@@ -2546,15 +2745,17 @@ import {
     }
 
     setPlaybackSummary(activeItemTitle(active), compatibilityNeededMeta(active));
+    resetPlaybackTiming(active.path || '', 'initial-playback');
     showLoadingOverlay(loadingOverlayCopy(
       active,
       'Inspecting video tracks and preparing compatibility playback.',
       0.22
     ));
     setStatus(compatibilityNeededStatus());
+    reportPlaybackTiming('probe_start', {probe_cache_hit: Boolean(ctx.state.probeCache[active.path || ''])});
     var probePayload = await ensureAudioTracksForItem(active);
+    reportPlaybackTiming('probe_complete', {probe_cache_hit: Boolean(ctx.state.probeCache[active.path || ''])});
     renderSubtitleTrackSelector(active, probePayload);
-    var subtitleWarmPromise = preloadAllSubtitleVttsForItem(active, probePayload);
     if (syncToken !== ctx.state.playbackSyncToken) return;
     if (!probePayload) {
       ctx.state.pendingAutoplay = false;
@@ -2569,12 +2770,16 @@ import {
     var burnedInSubtitleStreamIndex = selectedBurnedInSubtitleStreamIndex(active, probePayload);
     try {
       showLoadingOverlay(loadingOverlayCopy(active, 'Creating the local HLS compatibility session.', 0.48));
+      reportPlaybackTiming('session_create_requested');
       var session = await createCompatibilitySession(active, audioStreamIndex, 0, burnedInSubtitleStreamIndex);
       if (syncToken !== ctx.state.playbackSyncToken) {
         await stopCompatibilitySession();
         return;
       }
       ctx.state.compatibilitySessionId = session.session_id || '';
+      reportPlaybackTiming('session_create_complete', {
+        server_session_create_elapsed_ms: session.session_create_elapsed_ms,
+      });
       showLoadingOverlay(loadingOverlayCopy(
         active,
         'Compatibility session is ready. Starting the video player.',
@@ -2588,13 +2793,13 @@ import {
         syncToken
       );
       ctx.state.compatibilitySubtitleStreamIndex = normalizeSubtitleStreamIndex(session.subtitle_stream_index);
-      await subtitleWarmPromise;
-      if (syncToken !== ctx.state.playbackSyncToken) return;
-      if (selectedBurnedInSubtitleStreamIndex(active, probePayload) !== null) return;
-      await applySubtitlesForSeek(active, probePayload, Number(session.start_time_seconds) || 0, {
-        playbackSyncToken: syncToken,
-        reloadReason: 'initial-playback',
-      });
+      scheduleSubtitlesAfterPlaybackReady(
+        active,
+        probePayload,
+        Number(session.start_time_seconds) || 0,
+        syncToken,
+        'initial-playback'
+      );
     }
     catch (_error) {
       if (syncToken !== ctx.state.playbackSyncToken) return;
@@ -3174,6 +3379,10 @@ import {
       syncTransportControls();
       syncPlaybackProgress();
       if (ctx.state.playbackMode === 'compatibility') {
+        reportPlaybackTiming('playing');
+        emitPlaybackTimingSummary({
+          buffered_seconds_ahead: compatibilityBufferedSecondsAhead(),
+        });
         reportVideoDiagnostic({
           level: 'info',
           message: 'Compatibility playback playing',

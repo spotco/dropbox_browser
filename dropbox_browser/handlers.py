@@ -950,10 +950,15 @@ class RequestHandler(BaseHTTPRequestHandler):
             if source != "remote":
                 raise BrowserError(HTTPStatus.BAD_REQUEST, "Only remote video probe is supported.")
             rel_path = clean_rel_path(params.get("path", [""])[0])
-            resolved_rel_path, _file_size = self._resolve_remote_file(rel_path)
+            resolved_rel_path, file_size = self._resolve_remote_file(rel_path)
             port = int(self.server.server_address[1])  # type: ignore[attr-defined]
             base_url = f"http://127.0.0.1:{port}"
-            payload = probe_remote_media(self.app, rel_path=resolved_rel_path, base_url=base_url)
+            payload = probe_remote_media(
+                self.app,
+                rel_path=resolved_rel_path,
+                base_url=base_url,
+                file_size=file_size,
+            )
             status = HTTPStatus.OK
         elif endpoint == "subtitles/all":
             params = parse_qs(query, keep_blank_values=True)

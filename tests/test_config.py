@@ -45,6 +45,10 @@ class ConfigDefaultsTests(unittest.TestCase):
         self.assertEqual(config["VideoSubtitleFontFamily"], "Arial, Helvetica, sans-serif")
         self.assertEqual(config["VideoSubtitleFontSizePx"], 28)
         self.assertTrue(config["VideoSubtitleBold"])
+        self.assertEqual(config["VideoProbeCacheTTLSeconds"], 7 * 24 * 60 * 60)
+        self.assertEqual(config["VideoSubtitleCacheTTLSeconds"], 7 * 24 * 60 * 60)
+        self.assertEqual(config["VideoHeaderCacheTTLSeconds"], 24 * 60 * 60)
+        self.assertEqual(config["VideoHeaderCacheBytes"], 8 * 1024 * 1024)
 
     def test_packaged_config_video_subtitle_defaults_are_present(self) -> None:
         config = config_module._read_config_file(config_module.PROJECT_ROOT / "config.json")
@@ -59,6 +63,7 @@ class ConfigDefaultsTests(unittest.TestCase):
         self.assertTrue(config["ClientLogEnabled"])
         self.assertFalse(config["LogVideoDebug"])
         self.assertFalse(config["ClientLogSubsystems"]["video"])
+        self.assertTrue(config["ClientLogSubsystems"]["video-timing"])
         self.assertFalse(config["ClientLogSubsystems"]["video-subtitles"])
         self.assertFalse(config["ClientLogSubsystems"]["browse-reveal"])
         self.assertFalse(config["ClientLogSubsystems"]["file-search"])
