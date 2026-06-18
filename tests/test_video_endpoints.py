@@ -18,9 +18,14 @@ from dropbox_browser.video import (
     build_ffmpeg_batch_webvtt_command,
     build_ffmpeg_hls_command,
     build_ffmpeg_webvtt_command,
+    build_ffprobe_command,
+    build_probe_cache_key,
+    DEFAULT_PROBE_ANALYZE_DURATION_US,
+    DEFAULT_PROBE_PROBE_SIZE_BYTES,
     build_subtitle_cache_key,
     _playlist_ready_for_playback,
     _playlist_segment_names,
+    probe_cache_path,
     rebase_webvtt_text,
     subtitle_cache_path,
     subtitle_codec_supports_webvtt,
@@ -305,7 +310,40 @@ class VideoEndpointTests(AppTestCase):
         self.assertTrue(payload["subtitle_streams"][0]["forced"])
         ffprobe_cmd = run_mock.call_args.args[0]
         self.assertEqual(ffprobe_cmd[0], "C:\\tools\\ffmpeg\\bin\\ffprobe.exe")
-        self.assertIn("/file?path=movie.mp4&source=remote", ffprobe_cmd[-1])
+        self.assertIn("-probesize", ffprobe_cmd)
+        self.assertIn(str(DEFAULT_PROBE_PROBE_SIZE_BYTES), ffprobe_cmd)
+        self.assertIn("-analyzeduration", ffprobe_cmd)
+        self.assertIn(str(DEFAULT_PROBE_ANALYZE_DURATION_US), ffprobe_cmd)
+        input_url = ffprobe_cmd[-1]
+        if input_url.startswith("http://"):
+            self.assertIn("/file?path=movie.mp4&source=remote", input_url)
+        else:
+            self.assertTrue(input_url.endswith(".bin"), input_url)
+
+    def test_build_ffprobe_command_caps_probe_and_analyze_duration(self) -> None:
+        command = build_ffprobe_command(
+            Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            "http://127.0.0.1:8000/file?path=movie.mkv&source=remote",
+            probe_size_bytes=DEFAULT_PROBE_PROBE_SIZE_BYTES,
+            analyze_duration_us=DEFAULT_PROBE_ANALYZE_DURATION_US,
+        )
+        self.assertEqual(
+            command,
+            [
+                "C:\\tools\\ffmpeg\\bin\\ffprobe.exe",
+                "-v",
+                "error",
+                "-probesize",
+                str(DEFAULT_PROBE_PROBE_SIZE_BYTES),
+                "-analyzeduration",
+                str(DEFAULT_PROBE_ANALYZE_DURATION_US),
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
+                "http://127.0.0.1:8000/file?path=movie.mkv&source=remote",
+            ],
+        )
 
     def test_probe_endpoint_rejects_local_source(self) -> None:
         rclone = self._remote_media_rclone()
@@ -369,6 +407,131 @@ class VideoEndpointTests(AppTestCase):
 
         self.assertEqual(payload["path"], "Movie.mkv")
         self.assertEqual(payload["stream_path"], "Movie.mkv")
+
+    def test_probe_endpoint_uses_disk_cache_on_repeat_request(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        app.video_probe_cache_ttl_seconds = 3600
+        ffprobe_payload = {
+            "streams": [
+                {
+                    "index": 0,
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                }
+            ],
+            "format": {"duration": "120.0"},
+        }
+        run_calls: list[list[str]] = []
+
+        def fake_run(cmd, stdout=None, stderr=None, check=False, timeout=None):
+            run_calls.append(list(cmd))
+            return CompletedProcess(cmd, 0, json.dumps(ffprobe_payload).encode("utf-8"), b"")
+
+        with (
+            TestServer(app) as server,
+            patch("dropbox_browser.video.subprocess.run", side_effect=fake_run),
+        ):
+            first = server.get_json("/video/endpoints/probe?path=movie.mp4&source=remote")
+            second = server.get_json("/video/endpoints/probe?path=movie.mp4&source=remote")
+
+        self.assertEqual(first["path"], "movie.mp4")
+        self.assertEqual(second["path"], "movie.mp4")
+        self.assertEqual(len(run_calls), 1)
+        cache_path = probe_cache_path(build_probe_cache_key("movie.mp4", file_size=10))
+        self.assertTrue(cache_path.is_file())
+
+    def test_probe_cache_key_changes_when_file_size_changes(self) -> None:
+        self.assertNotEqual(
+            build_probe_cache_key("movie.mp4", file_size=10),
+            build_probe_cache_key("movie.mp4", file_size=11),
+        )
+
+    def test_probe_endpoint_uses_header_cache_for_ffprobe_input(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        app.video_header_cache_bytes = 8
+        ffprobe_payload = {
+            "streams": [{"index": 0, "codec_type": "video", "codec_name": "h264"}],
+            "format": {"duration": "120.0"},
+        }
+        run_calls: list[list[str]] = []
+
+        def fake_run(cmd, stdout=None, stderr=None, check=False, timeout=None):
+            run_calls.append(list(cmd))
+            return CompletedProcess(cmd, 0, json.dumps(ffprobe_payload).encode("utf-8"), b"")
+
+        with (
+            TestServer(app) as server,
+            patch("dropbox_browser.video.subprocess.run", side_effect=fake_run),
+        ):
+            server.get_json("/video/endpoints/probe?path=movie.mp4&source=remote")
+
+        self.assertEqual(len(run_calls), 1)
+        input_url = run_calls[0][-1]
+        self.assertFalse(input_url.startswith("http://"))
+        self.assertTrue(input_url.endswith(".bin"), input_url)
+
+    def test_subtitles_endpoint_expires_disk_cache_after_ttl(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        app.video_subtitle_cache_ttl_seconds = 0.01
+        ffprobe_payload = {
+            "streams": [
+                {"index": 0, "codec_type": "video", "codec_name": "h264"},
+                {
+                    "index": 3,
+                    "codec_type": "subtitle",
+                    "codec_name": "ass",
+                    "tags": {"language": "eng"},
+                    "disposition": {"default": 1, "forced": 0},
+                },
+            ],
+            "format": {"duration": "15.0"},
+        }
+        vtt_body = b"WEBVTT\n\n00:00.000 --> 00:01.000\nHello\n"
+
+        with (
+            TestServer(app) as server,
+            patch(
+                "dropbox_browser.video.subprocess.run",
+                side_effect=lambda cmd, stdout=None, stderr=None, check=False, timeout=None: CompletedProcess(
+                    cmd,
+                    0,
+                    json.dumps(ffprobe_payload).encode("utf-8") if "ffprobe" in Path(cmd[0]).name.lower() else vtt_body,
+                    b"",
+                ),
+            ) as mock_run,
+            patch("dropbox_browser.video.SUBTITLE_CACHE_DIR", self.temp_dir / "subtitle_cache"),
+        ):
+            url = server.base_url + "/video/endpoints/subtitles?path=movie.mp4&source=remote&track=3"
+            with urlopen(url, timeout=5) as response:
+                self.assertEqual(response.read(), vtt_body)
+            time.sleep(0.02)
+            with urlopen(url, timeout=5) as response:
+                self.assertEqual(response.read(), vtt_body)
+            self.assertEqual(mock_run.call_count, 3)
 
     def test_session_endpoint_creates_hls_session_and_returns_playlist_url(self) -> None:
         rclone = self._remote_media_rclone()
@@ -474,8 +637,6 @@ class VideoEndpointTests(AppTestCase):
             def write_segments() -> None:
                 time.sleep(0.1)
                 (playlist_path.parent / "segment_00000.m4s").write_bytes(b"segment0")
-                time.sleep(0.1)
-                (playlist_path.parent / "segment_00001.m4s").write_bytes(b"segment1")
 
             threading.Thread(target=write_segments, daemon=True).start()
             return FakeFfmpegProcess(command)
@@ -487,11 +648,11 @@ class VideoEndpointTests(AppTestCase):
                 "source": "remote",
             })
             elapsed = time.monotonic() - started
-            with urlopen(server.base_url + payload["asset_root"] + "segment_00001.m4s", timeout=5) as response:
+            with urlopen(server.base_url + payload["asset_root"] + "segment_00000.m4s", timeout=5) as response:
                 body = response.read()
 
-        self.assertGreaterEqual(elapsed, 0.15)
-        self.assertEqual(body, b"segment1")
+        self.assertGreaterEqual(elapsed, 0.08)
+        self.assertEqual(body, b"segment0")
 
     def test_session_asset_endpoint_waits_for_delayed_segment_while_process_runs(self) -> None:
         rclone = self._remote_media_rclone()
@@ -703,6 +864,7 @@ class VideoEndpointTests(AppTestCase):
             process=FakeFfmpegProcess([]),
             command=[],
             created_at=time.time(),
+            create_started_at=time.monotonic(),
             last_accessed_at=time.time(),
             audio_stream_index=None,
             subtitle_stream_index=None,
@@ -711,9 +873,8 @@ class VideoEndpointTests(AppTestCase):
 
         self.assertFalse(_playlist_ready_for_playback(session))
         (session_dir / "segment_00000.m4s").write_bytes(b"segment0")
-        self.assertFalse(_playlist_ready_for_playback(session))
-        (session_dir / "segment_00001.m4s").write_bytes(b"segment1")
         self.assertTrue(_playlist_ready_for_playback(session))
+        write_hls_session_fixture(playlist_path, segment_count=2)
         self.assertEqual(
             _playlist_segment_names(playlist_path),
             ["segment_00000.m4s", "segment_00001.m4s"],
@@ -839,7 +1000,6 @@ class VideoEndpointTests(AppTestCase):
                 side_effect=[
                     CompletedProcess(["ffprobe"], 0, json.dumps(ffprobe_payload).encode("utf-8"), b""),
                     CompletedProcess(["ffmpeg"], 0, vtt_body, b""),
-                    CompletedProcess(["ffprobe"], 0, json.dumps(ffprobe_payload).encode("utf-8"), b""),
                 ],
             ) as mock_run,
             patch("dropbox_browser.video.SUBTITLE_CACHE_DIR", self.temp_dir / "subtitle_cache"),
@@ -852,7 +1012,7 @@ class VideoEndpointTests(AppTestCase):
             with urlopen(url, timeout=5) as response:
                 second_body = response.read()
             self.assertEqual(second_body, vtt_body)
-            self.assertEqual(mock_run.call_count, 3)
+            self.assertEqual(mock_run.call_count, 2)
 
     def test_subtitles_all_endpoint_returns_all_tracks_in_one_ffmpeg_pass(self) -> None:
         rclone = self._remote_media_rclone()

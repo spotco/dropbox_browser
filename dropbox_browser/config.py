@@ -22,6 +22,15 @@ _APP_CONFIG_DEFAULTS: dict = {
     "VideoSubtitleFontFamily": "Arial, Helvetica, sans-serif",
     "VideoSubtitleFontSizePx": 28,
     "VideoSubtitleBold": True,
+    "VideoProbeCacheTTLSeconds": 7 * 24 * 60 * 60,
+    "VideoProbeCacheMaxBytes": 50 * 1024 * 1024,
+    "VideoSubtitleCacheTTLSeconds": 7 * 24 * 60 * 60,
+    "VideoSubtitleCacheMaxBytes": 200 * 1024 * 1024,
+    "VideoHeaderCacheTTLSeconds": 24 * 60 * 60,
+    "VideoHeaderCacheMaxBytes": 500 * 1024 * 1024,
+    "VideoHeaderCacheBytes": 8 * 1024 * 1024,
+    "VideoProbeProbeSizeBytes": 2 * 1024 * 1024,
+    "VideoProbeAnalyzeDurationUs": 3_000_000,
     "LocalhostOnlyAccess": True,
     "LogRcloneCommands": True,
     "LogHttpRequests": True,
@@ -29,6 +38,7 @@ _APP_CONFIG_DEFAULTS: dict = {
     "ClientLogEnabled": True,
     "ClientLogSubsystems": {
         "video": False,
+        "video-timing": True,
         "video-subtitles": False,
         "browse-reveal": False,
         "file-search": False,
@@ -80,12 +90,28 @@ def _read_config_file(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
+def _merge_app_config_layers(*layers: dict) -> dict:
+    result = dict(_APP_CONFIG_DEFAULTS)
+    for layer in layers:
+        merged = dict(result)
+        merged.update(layer)
+        default_subsystems = result.get("ClientLogSubsystems")
+        layer_subsystems = layer.get("ClientLogSubsystems")
+        if isinstance(default_subsystems, dict) and isinstance(layer_subsystems, dict):
+            merged["ClientLogSubsystems"] = {
+                **default_subsystems,
+                **layer_subsystems,
+            }
+        result = merged
+    return result
+
+
 def load_app_config() -> dict:
     """Load config.json plus local overrides and return a dict merged with defaults."""
-    result = dict(_APP_CONFIG_DEFAULTS)
-    result.update(_read_config_file(PROJECT_ROOT / "config.json"))
-    result.update(_read_config_file(PROJECT_ROOT / "config_local.json"))
-    return result
+    return _merge_app_config_layers(
+        _read_config_file(PROJECT_ROOT / "config.json"),
+        _read_config_file(PROJECT_ROOT / "config_local.json"),
+    )
 
 
 def find_default_rclone() -> str:

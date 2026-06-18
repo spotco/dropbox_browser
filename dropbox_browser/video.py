@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import math
 import re
@@ -20,6 +21,8 @@ from .config import TEMP_DIR
 from .errors import BrowserError
 from .namekeys import filename_compare_key
 from .paths import clean_rel_path, remote_target
+from .streaming import copy_exact
+from .videocache import DiskCacheStore
 
 
 VIDEO_ENDPOINT_PREFIX = "/video/endpoints/"
@@ -27,12 +30,25 @@ SUPPORTED_VIDEO_EXTENSIONS = (".mkv", ".mp4", ".m4v", ".webm", ".mov", ".avi", "
 COMPATIBILITY_EXPECTED_EXTENSIONS = (".mkv", ".avi", ".ts", ".m2ts", ".wmv")
 VIDEO_SESSION_DIR = TEMP_DIR / "video_sessions"
 SUBTITLE_CACHE_DIR = TEMP_DIR / "subtitle_cache"
+HEADER_CACHE_SUBDIR = "video_header_cache"
+PROBE_CACHE_SUBDIR = "probe_cache"
 SUBTITLE_CACHE_VERSION = "webvtt-v1"
+PROBE_CACHE_VERSION = "ffprobe-v3"
+HEADER_CACHE_VERSION = "header-v1"
+DEFAULT_PROBE_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60.0
+DEFAULT_PROBE_CACHE_MAX_BYTES = 50 * 1024 * 1024
+DEFAULT_SUBTITLE_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60.0
+DEFAULT_SUBTITLE_CACHE_MAX_BYTES = 200 * 1024 * 1024
+DEFAULT_HEADER_CACHE_TTL_SECONDS = 24 * 60 * 60.0
+DEFAULT_HEADER_CACHE_MAX_BYTES = 500 * 1024 * 1024
+DEFAULT_HEADER_CACHE_BYTES = 8 * 1024 * 1024
+DEFAULT_PROBE_PROBE_SIZE_BYTES = 2 * 1024 * 1024
+DEFAULT_PROBE_ANALYZE_DURATION_US = 3_000_000
 HLS_PLAYLIST_NAME = "stream.m3u8"
 HLS_SEGMENT_PATTERN = "segment_%05d.m4s"
 HLS_INIT_SEGMENT_NAME = "init.mp4"
 HLS_SESSION_TTL_SECONDS = 15 * 60
-HLS_MIN_READY_SEGMENTS = 2
+HLS_MIN_READY_SEGMENTS = 1
 HLS_READY_TIMEOUT_SECONDS = 20.0
 HLS_ASSET_READY_TIMEOUT_SECONDS = 30.0
 HLS_ASSET_READY_TIMEOUT_PROCESS_ALIVE_SECONDS = 120.0
@@ -183,11 +199,21 @@ def parse_video_start_seconds(raw: str) -> float:
     return value
 
 
-def build_ffprobe_command(ffprobe_exe: Path, input_url: str) -> list[str]:
+def build_ffprobe_command(
+    ffprobe_exe: Path,
+    input_url: str,
+    *,
+    probe_size_bytes: int = DEFAULT_PROBE_PROBE_SIZE_BYTES,
+    analyze_duration_us: int = DEFAULT_PROBE_ANALYZE_DURATION_US,
+) -> list[str]:
     return [
         str(ffprobe_exe),
         "-v",
         "error",
+        "-probesize",
+        str(max(32, int(probe_size_bytes))),
+        "-analyzeduration",
+        str(max(0, int(analyze_duration_us))),
         "-print_format",
         "json",
         "-show_format",
@@ -294,21 +320,24 @@ def subtitle_cache_path(
     cache_dir: Path | None = None,
 ) -> Path:
     cache_root = SUBTITLE_CACHE_DIR if cache_dir is None else cache_dir
-    return cache_root / cache_key[:2] / cache_key[2:4] / f"{cache_key}.vtt"
+    return cache_root / "files" / f"{cache_key}.vtt"
 
 
-def _read_subtitle_cache(cache_path: Path) -> bytes | None:
-    try:
-        return cache_path.read_bytes()
-    except FileNotFoundError:
-        return None
+def _subtitle_cache_store(app: Any, *, cache_dir: Path | None = None) -> DiskCacheStore:
+    cache_root = SUBTITLE_CACHE_DIR if cache_dir is None else cache_dir
+    return DiskCacheStore(
+        cache_root,
+        ttl_seconds=_subtitle_cache_ttl_seconds(app),
+        max_bytes=_subtitle_cache_max_bytes(app),
+    )
 
 
-def _write_subtitle_cache(cache_path: Path, body: bytes) -> None:
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = cache_path.with_suffix(".vtt.tmp")
-    temp_path.write_bytes(body)
-    temp_path.replace(cache_path)
+def _read_subtitle_cache(app: Any, cache_key: str, *, cache_dir: Path | None = None) -> bytes | None:
+    return _subtitle_cache_store(app, cache_dir=cache_dir).read_bytes(cache_key, suffix=".vtt")
+
+
+def _write_subtitle_cache(app: Any, cache_key: str, body: bytes, *, cache_dir: Path | None = None) -> None:
+    _subtitle_cache_store(app, cache_dir=cache_dir).write_bytes(cache_key, body, suffix=".vtt")
 
 
 def rebase_webvtt_text(body: str, start_time_seconds: float) -> str:
@@ -442,7 +471,7 @@ def build_ffmpeg_hls_command(
         "-c:v",
         "libx264",
         "-preset",
-        "veryfast",
+        "ultrafast",
         "-crf",
         "23",
         "-pix_fmt",
@@ -546,6 +575,7 @@ class VideoHlsSession:
     process: subprocess.Popen[bytes]
     command: list[str]
     created_at: float
+    create_started_at: float
     last_accessed_at: float
     audio_stream_index: int | None
     subtitle_stream_index: int | None
@@ -585,6 +615,7 @@ class VideoSessionManager:
 
         input_url = base_url + "/file?" + urlencode({"path": rel_path, "source": "remote"})
         session_id = uuid.uuid4().hex
+        create_started_at = time.monotonic()
         session_dir = self.root_dir / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
         playlist_path = session_dir / HLS_PLAYLIST_NAME
@@ -628,6 +659,7 @@ class VideoSessionManager:
             process=process,
             command=command,
             created_at=time.time(),
+            create_started_at=create_started_at,
             last_accessed_at=time.time(),
             audio_stream_index=audio_stream_index,
             subtitle_stream_index=subtitle_stream_index,
@@ -648,14 +680,16 @@ class VideoSessionManager:
                     self._clear_active_locked()
             log_video_debug(self.app, "session_create_timeout", session_id=session_id, path=rel_path)
             raise BrowserError(HTTPStatus.BAD_GATEWAY, "ffmpeg did not produce an HLS playlist in time.")
+        ready_elapsed_ms = round((time.monotonic() - session.create_started_at) * 1000, 3)
         log_video_debug(
             self.app,
             "session_create_ready",
             session_id=session_id,
             path=rel_path,
             playlist_bytes=session.playlist_path.stat().st_size if session.playlist_path.exists() else 0,
+            elapsed_ms=ready_elapsed_ms,
         )
-        return self._session_payload(session)
+        return self._session_payload(session, ready_elapsed_ms=ready_elapsed_ms)
 
     def stop_active_session(self, session_id: str | None = None) -> dict[str, object]:
         with self._lock:
@@ -726,7 +760,14 @@ class VideoSessionManager:
                 return None
             return self._session_payload(self._active_session)
 
-    def _session_payload(self, session: VideoHlsSession) -> dict[str, object]:
+    def _session_payload(
+        self,
+        session: VideoHlsSession,
+        *,
+        ready_elapsed_ms: float | None = None,
+    ) -> dict[str, object]:
+        if ready_elapsed_ms is None:
+            ready_elapsed_ms = round((time.monotonic() - session.create_started_at) * 1000, 3)
         return {
             "status": "ok",
             "session_id": session.session_id,
@@ -738,6 +779,7 @@ class VideoSessionManager:
             "audio_stream_index": session.audio_stream_index,
             "subtitle_stream_index": session.subtitle_stream_index,
             "start_time_seconds": session.start_time_seconds,
+            "session_create_elapsed_ms": ready_elapsed_ms,
         }
 
     def _wait_for_playlist(self, session: VideoHlsSession, timeout_seconds: float = HLS_READY_TIMEOUT_SECONDS) -> bool:
@@ -968,36 +1010,199 @@ def video_library_payload(app: Any, *, rel_path: str) -> dict[str, object]:
     }
 
 
-def probe_remote_media(app: Any, *, rel_path: str, base_url: str) -> dict[str, object]:
-    video_config = getattr(app, "video_tools_config", None)
-    ffprobe_exe = getattr(video_config, "ffprobe_exe", None)
-    if ffprobe_exe is None:
-        raise BrowserError(HTTPStatus.SERVICE_UNAVAILABLE, "ffprobe is not available.")
-    input_url = base_url + "/file?" + urlencode({"path": rel_path, "source": "remote"})
-    cmd = build_ffprobe_command(ffprobe_exe, input_url)
+def build_probe_cache_key(
+    rel_path: str,
+    *,
+    file_size: int | None = None,
+    probe_size_bytes: int = DEFAULT_PROBE_PROBE_SIZE_BYTES,
+    analyze_duration_us: int = DEFAULT_PROBE_ANALYZE_DURATION_US,
+) -> str:
+    payload = {
+        "version": PROBE_CACHE_VERSION,
+        "path": clean_rel_path(rel_path),
+        "file_size": None if file_size is None else int(file_size),
+        "probe_size_bytes": int(probe_size_bytes),
+        "analyze_duration_us": int(analyze_duration_us),
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def build_header_cache_key(
+    rel_path: str,
+    file_size: int,
+    *,
+    header_bytes: int = DEFAULT_HEADER_CACHE_BYTES,
+) -> str:
+    payload = {
+        "version": HEADER_CACHE_VERSION,
+        "path": clean_rel_path(rel_path),
+        "file_size": int(file_size),
+        "header_bytes": int(header_bytes),
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _probe_limits(app: Any) -> tuple[int, int]:
+    probe_size_bytes = getattr(app, "video_probe_probe_size_bytes", DEFAULT_PROBE_PROBE_SIZE_BYTES)
+    analyze_duration_us = getattr(app, "video_probe_analyze_duration_us", DEFAULT_PROBE_ANALYZE_DURATION_US)
     try:
-        proc = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=30,
-        )
-    except FileNotFoundError as exc:
-        raise BrowserError(HTTPStatus.SERVICE_UNAVAILABLE, f"ffprobe was not found: {exc}") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise BrowserError(HTTPStatus.BAD_GATEWAY, "ffprobe timed out while probing the remote file.") from exc
-    if proc.returncode != 0:
-        message = proc.stderr.decode("utf-8", "replace").strip() or "ffprobe failed to inspect the remote file."
-        raise BrowserError(HTTPStatus.BAD_GATEWAY, message)
+        probe_size_bytes = int(probe_size_bytes)
+    except (TypeError, ValueError):
+        probe_size_bytes = DEFAULT_PROBE_PROBE_SIZE_BYTES
     try:
-        payload = json.loads(proc.stdout.decode("utf-8"))
-    except json.JSONDecodeError as exc:
-        raise BrowserError(HTTPStatus.BAD_GATEWAY, "ffprobe returned invalid JSON.") from exc
-    streams = payload.get("streams")
+        analyze_duration_us = int(analyze_duration_us)
+    except (TypeError, ValueError):
+        analyze_duration_us = DEFAULT_PROBE_ANALYZE_DURATION_US
+    return max(32, probe_size_bytes), max(0, analyze_duration_us)
+
+
+def probe_cache_path(cache_key: str) -> Path:
+    return TEMP_DIR / PROBE_CACHE_SUBDIR / "files" / f"{cache_key}.json"
+
+
+def _probe_cache_ttl_seconds(app: Any) -> float:
+    configured = getattr(app, "video_probe_cache_ttl_seconds", DEFAULT_PROBE_CACHE_TTL_SECONDS)
+    try:
+        ttl_seconds = float(configured)
+    except (TypeError, ValueError):
+        ttl_seconds = DEFAULT_PROBE_CACHE_TTL_SECONDS
+    return max(0.0, ttl_seconds)
+
+
+def _probe_cache_max_bytes(app: Any) -> int:
+    configured = getattr(app, "video_probe_cache_max_bytes", DEFAULT_PROBE_CACHE_MAX_BYTES)
+    try:
+        max_bytes = int(configured)
+    except (TypeError, ValueError):
+        max_bytes = DEFAULT_PROBE_CACHE_MAX_BYTES
+    return max(0, max_bytes)
+
+
+def _subtitle_cache_ttl_seconds(app: Any) -> float:
+    configured = getattr(app, "video_subtitle_cache_ttl_seconds", DEFAULT_SUBTITLE_CACHE_TTL_SECONDS)
+    try:
+        ttl_seconds = float(configured)
+    except (TypeError, ValueError):
+        ttl_seconds = DEFAULT_SUBTITLE_CACHE_TTL_SECONDS
+    return max(0.0, ttl_seconds)
+
+
+def _subtitle_cache_max_bytes(app: Any) -> int:
+    configured = getattr(app, "video_subtitle_cache_max_bytes", DEFAULT_SUBTITLE_CACHE_MAX_BYTES)
+    try:
+        max_bytes = int(configured)
+    except (TypeError, ValueError):
+        max_bytes = DEFAULT_SUBTITLE_CACHE_MAX_BYTES
+    return max(0, max_bytes)
+
+
+def _header_cache_ttl_seconds(app: Any) -> float:
+    configured = getattr(app, "video_header_cache_ttl_seconds", DEFAULT_HEADER_CACHE_TTL_SECONDS)
+    try:
+        ttl_seconds = float(configured)
+    except (TypeError, ValueError):
+        ttl_seconds = DEFAULT_HEADER_CACHE_TTL_SECONDS
+    return max(0.0, ttl_seconds)
+
+
+def _header_cache_max_bytes(app: Any) -> int:
+    configured = getattr(app, "video_header_cache_max_bytes", DEFAULT_HEADER_CACHE_MAX_BYTES)
+    try:
+        max_bytes = int(configured)
+    except (TypeError, ValueError):
+        max_bytes = DEFAULT_HEADER_CACHE_MAX_BYTES
+    return max(0, max_bytes)
+
+
+def _header_cache_bytes(app: Any) -> int:
+    configured = getattr(app, "video_header_cache_bytes", DEFAULT_HEADER_CACHE_BYTES)
+    try:
+        header_bytes = int(configured)
+    except (TypeError, ValueError):
+        header_bytes = DEFAULT_HEADER_CACHE_BYTES
+    return max(0, header_bytes)
+
+
+def _probe_cache_store(app: Any) -> DiskCacheStore:
+    return DiskCacheStore(
+        TEMP_DIR / PROBE_CACHE_SUBDIR,
+        ttl_seconds=_probe_cache_ttl_seconds(app),
+        max_bytes=_probe_cache_max_bytes(app),
+    )
+
+
+def _header_cache_store(app: Any) -> DiskCacheStore:
+    return DiskCacheStore(
+        TEMP_DIR / HEADER_CACHE_SUBDIR,
+        ttl_seconds=_header_cache_ttl_seconds(app),
+        max_bytes=_header_cache_max_bytes(app),
+    )
+
+
+def _read_probe_cache(app: Any, cache_key: str) -> dict[str, object] | None:
+    payload = _probe_cache_store(app).read_json(cache_key, suffix=".json")
+    return payload if isinstance(payload, dict) else None
+
+
+def _write_probe_cache(app: Any, cache_key: str, payload: dict[str, object]) -> None:
+    if _probe_cache_ttl_seconds(app) <= 0:
+        return
+    _probe_cache_store(app).write_json(cache_key, payload, suffix=".json")
+
+
+def ensure_remote_header_cache(
+    app: Any,
+    *,
+    rel_path: str,
+    file_size: int,
+) -> Path | None:
+    header_bytes = _header_cache_bytes(app)
+    if header_bytes <= 0 or file_size <= 0:
+        return None
+    fetch_count = min(file_size, header_bytes)
+    cache_key = build_header_cache_key(rel_path, file_size, header_bytes=header_bytes)
+    store = _header_cache_store(app)
+    cached_path = store.get_path(cache_key, suffix=".bin")
+    if cached_path is not None:
+        return cached_path
+    target = remote_target(app.remote, rel_path)
+    proc = app.rclone.open_cat(target, offset=0, count=fetch_count)
+    assert proc.stdout is not None
+    buffer = io.BytesIO()
+    try:
+        copy_exact(proc.stdout, buffer, fetch_count)
+    finally:
+        app.rclone.finish_cat(proc)
+    data = buffer.getvalue()
+    if not data:
+        return None
+    return store.write_bytes(cache_key, data, suffix=".bin")
+
+
+def resolve_probe_input_url(
+    app: Any,
+    *,
+    rel_path: str,
+    base_url: str,
+    file_size: int | None,
+) -> str:
+    if file_size is not None and file_size > 0:
+        header_path = ensure_remote_header_cache(app, rel_path=rel_path, file_size=file_size)
+        if header_path is not None and header_path.is_file():
+            return str(header_path.resolve())
+    return base_url + "/file?" + urlencode({"path": rel_path, "source": "remote"})
+
+
+def _probe_payload_from_ffprobe_output(
+    rel_path: str,
+    *,
+    input_url: str,
+    raw_payload: dict[str, object],
+) -> dict[str, object]:
+    streams = raw_payload.get("streams")
     if not isinstance(streams, list):
         streams = []
-    format_data = payload.get("format")
+    format_data = raw_payload.get("format")
     format_map = format_data if isinstance(format_data, dict) else {}
     video_streams: list[dict[str, object]] = []
     audio_streams: list[dict[str, object]] = []
@@ -1028,6 +1233,69 @@ def probe_remote_media(app: Any, *, rel_path: str, base_url: str) -> dict[str, o
     }
 
 
+def probe_remote_media(
+    app: Any,
+    *,
+    rel_path: str,
+    base_url: str,
+    file_size: int | None = None,
+) -> dict[str, object]:
+    video_config = getattr(app, "video_tools_config", None)
+    ffprobe_exe = getattr(video_config, "ffprobe_exe", None)
+    if ffprobe_exe is None:
+        raise BrowserError(HTTPStatus.SERVICE_UNAVAILABLE, "ffprobe is not available.")
+    probe_size_bytes, analyze_duration_us = _probe_limits(app)
+    cache_key = build_probe_cache_key(
+        rel_path,
+        file_size=file_size,
+        probe_size_bytes=probe_size_bytes,
+        analyze_duration_us=analyze_duration_us,
+    )
+    cached_payload = _read_probe_cache(app, cache_key)
+    if cached_payload is not None:
+        return dict(cached_payload)
+    input_url = resolve_probe_input_url(
+        app,
+        rel_path=rel_path,
+        base_url=base_url,
+        file_size=file_size,
+    )
+    cmd = build_ffprobe_command(
+        ffprobe_exe,
+        input_url,
+        probe_size_bytes=probe_size_bytes,
+        analyze_duration_us=analyze_duration_us,
+    )
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=30,
+        )
+    except FileNotFoundError as exc:
+        raise BrowserError(HTTPStatus.SERVICE_UNAVAILABLE, f"ffprobe was not found: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise BrowserError(HTTPStatus.BAD_GATEWAY, "ffprobe timed out while probing the remote file.") from exc
+    if proc.returncode != 0:
+        message = proc.stderr.decode("utf-8", "replace").strip() or "ffprobe failed to inspect the remote file."
+        raise BrowserError(HTTPStatus.BAD_GATEWAY, message)
+    try:
+        raw_payload = json.loads(proc.stdout.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise BrowserError(HTTPStatus.BAD_GATEWAY, "ffprobe returned invalid JSON.") from exc
+    if not isinstance(raw_payload, dict):
+        raise BrowserError(HTTPStatus.BAD_GATEWAY, "ffprobe returned invalid JSON.")
+    response_payload = _probe_payload_from_ffprobe_output(
+        rel_path,
+        input_url=input_url,
+        raw_payload=raw_payload,
+    )
+    _write_probe_cache(app, cache_key, response_payload)
+    return response_payload
+
+
 def extract_remote_subtitles_to_webvtt(
     app: Any,
     *,
@@ -1043,7 +1311,12 @@ def extract_remote_subtitles_to_webvtt(
         raise BrowserError(HTTPStatus.SERVICE_UNAVAILABLE, "ffmpeg is not available.")
     if ffprobe_exe is None:
         raise BrowserError(HTTPStatus.SERVICE_UNAVAILABLE, "ffprobe is not available.")
-    probe_payload = probe_remote_media(app, rel_path=rel_path, base_url=base_url)
+    probe_payload = probe_remote_media(
+        app,
+        rel_path=rel_path,
+        base_url=base_url,
+        file_size=file_size,
+    )
     subtitle_streams = probe_payload.get("subtitle_streams") if isinstance(probe_payload, dict) else None
     subtitle_rows = subtitle_streams if isinstance(subtitle_streams, list) else []
     track_info = next(
@@ -1059,8 +1332,7 @@ def extract_remote_subtitles_to_webvtt(
         subtitle_stream_index=subtitle_stream_index,
         file_size=file_size,
     )
-    cache_path = subtitle_cache_path(cache_key)
-    cached_body = _read_subtitle_cache(cache_path)
+    cached_body = _read_subtitle_cache(app, cache_key)
     if cached_body is not None:
         return cached_body, str(track_info.get("language") or "")
     input_url = base_url + "/file?" + urlencode({"path": rel_path, "source": "remote"})
@@ -1086,11 +1358,12 @@ def extract_remote_subtitles_to_webvtt(
         raise BrowserError(HTTPStatus.BAD_GATEWAY, message)
     vtt_text = proc.stdout.decode("utf-8", "replace")
     body = vtt_text.encode("utf-8")
-    _write_subtitle_cache(cache_path, body)
+    _write_subtitle_cache(app, cache_key, body)
     return body, str(track_info.get("language") or "")
 
 
 def _store_extracted_subtitle_track(
+    app: Any,
     *,
     rel_path: str,
     subtitle_stream_index: int,
@@ -1103,8 +1376,7 @@ def _store_extracted_subtitle_track(
         subtitle_stream_index=subtitle_stream_index,
         file_size=file_size,
     )
-    cache_path = subtitle_cache_path(cache_key)
-    _write_subtitle_cache(cache_path, body)
+    _write_subtitle_cache(app, cache_key, body)
     return {
         "vtt": body.decode("utf-8", "replace"),
         "language": str(row.get("language") or ""),
@@ -1206,7 +1478,12 @@ def extract_all_remote_subtitles_to_webvtt(
         raise BrowserError(HTTPStatus.SERVICE_UNAVAILABLE, "ffmpeg is not available.")
     if ffprobe_exe is None:
         raise BrowserError(HTTPStatus.SERVICE_UNAVAILABLE, "ffprobe is not available.")
-    probe_payload = probe_remote_media(app, rel_path=rel_path, base_url=base_url)
+    probe_payload = probe_remote_media(
+        app,
+        rel_path=rel_path,
+        base_url=base_url,
+        file_size=file_size,
+    )
     subtitle_streams = probe_payload.get("subtitle_streams") if isinstance(probe_payload, dict) else None
     subtitle_rows = subtitle_streams if isinstance(subtitle_streams, list) else []
     track_rows = [row for row in subtitle_rows if isinstance(row, dict)]
@@ -1228,8 +1505,7 @@ def extract_all_remote_subtitles_to_webvtt(
             subtitle_stream_index=subtitle_stream_index,
             file_size=file_size,
         )
-        cache_path = subtitle_cache_path(cache_key)
-        cached_body = _read_subtitle_cache(cache_path)
+        cached_body = _read_subtitle_cache(app, cache_key)
         if cached_body is not None:
             tracks[str(subtitle_stream_index)] = {
                 "vtt": cached_body.decode("utf-8", "replace"),
@@ -1271,6 +1547,7 @@ def extract_all_remote_subtitles_to_webvtt(
                     )
                     continue
                 tracks[str(subtitle_stream_index)] = _store_extracted_subtitle_track(
+                    app,
                     rel_path=rel_path,
                     subtitle_stream_index=subtitle_stream_index,
                     file_size=file_size,
@@ -1284,6 +1561,7 @@ def extract_all_remote_subtitles_to_webvtt(
                 if body is None:
                     continue
                 tracks[str(subtitle_stream_index)] = _store_extracted_subtitle_track(
+                    app,
                     rel_path=rel_path,
                     subtitle_stream_index=subtitle_stream_index,
                     file_size=file_size,

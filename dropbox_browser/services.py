@@ -168,6 +168,7 @@ class DropboxBrowser:
         self.client_log_enabled = True
         self.client_log_subsystems = {
             "video": False,
+            "video-timing": True,
             "video-subtitles": False,
             "browse-reveal": False,
             "file-search": False,
