@@ -21,7 +21,10 @@ let server = null;
 
 test.describe.configure({ timeout: 90000 });
 
-async function installHlsStub(page) {
+async function installHlsStub(page, { fragmentCount = 2 } = {}) {
+  await page.addInitScript((count) => {
+    window.__HLS_STUB_FRAGMENT_COUNT = count;
+  }, fragmentCount);
   await page.route("**/assets/js/vendor/hls.js", async (route) => {
     await route.fulfill({
       status: 200,
@@ -29,6 +32,15 @@ async function installHlsStub(page) {
       body: hlsStubSource,
     });
   });
+}
+
+async function pausePlayback(page) {
+  const toggle = page.locator("#video-play-toggle");
+  const label = String(await toggle.textContent() || "").trim();
+  if (label === "Pause") {
+    await toggle.click();
+    await expect(toggle).toHaveText("Play");
+  }
 }
 
 async function waitForCompatibilityReady(page) {
@@ -99,6 +111,40 @@ async function scrubTo(page, targetSeconds, sessionPredicate) {
   await waitForVisibleVideo(page);
 }
 
+async function scrubInSession(page, targetSeconds) {
+  await pausePlayback(page);
+  let sessionPosted = false;
+  const onRequest = (request) => {
+    if (request.url().includes("/video/endpoints/session") && request.method() === "POST") {
+      sessionPosted = true;
+    }
+  };
+  page.on("request", onRequest);
+  try {
+    await page.locator("#video-progress-slider").evaluate((element, seconds) => {
+      element.value = String(seconds);
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+    }, targetSeconds);
+    await page.waitForTimeout(300);
+    expect(sessionPosted).toBe(false);
+  } finally {
+    page.off("request", onRequest);
+  }
+  await waitForVisibleVideo(page);
+}
+
+async function scrubInSessionForward(page, advanceSeconds = 1) {
+  await pausePlayback(page);
+  const sliderValue = await page.evaluate(() => {
+    const slider = document.getElementById("video-progress-slider");
+    return slider ? Number(slider.value) : NaN;
+  });
+  expect(Number.isFinite(sliderValue)).toBe(true);
+  const target = Math.min(7.5, sliderValue + advanceSeconds);
+  await scrubInSession(page, target);
+}
+
 test.use({ baseURL });
 
 test.beforeAll(async () => {
@@ -147,19 +193,11 @@ test("bitmap subtitle tracks restart compatibility playback instead of mounting 
   await expect(page.locator("#video-subtitle-track")).toHaveValue("5");
   await expectNoMountedSubtitleTrack(page);
 
-  await scrubTo(
-    page,
-    5,
-    (body) => body.includes("path=Videos%2Fbitmap.mkv") && body.includes("subtitle_stream_index=5") && body.includes("start_time_seconds=5"),
-  );
+  await scrubInSessionForward(page, 2);
   await expect(page.locator("#video-subtitle-track")).toHaveValue("5");
   await expectNoMountedSubtitleTrack(page);
 
-  await scrubTo(
-    page,
-    1,
-    (body) => body.includes("path=Videos%2Fbitmap.mkv") && body.includes("subtitle_stream_index=5") && body.includes("start_time_seconds=1"),
-  );
+  await scrubInSessionForward(page, 1);
   await expect(page.locator("#video-subtitle-track")).toHaveValue("5");
   await expectNoMountedSubtitleTrack(page);
 

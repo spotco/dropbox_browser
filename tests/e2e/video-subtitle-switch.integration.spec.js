@@ -21,7 +21,10 @@ let server = null;
 
 test.describe.configure({ timeout: 90000 });
 
-async function installHlsStub(page) {
+async function installHlsStub(page, { fragmentCount = 2 } = {}) {
+  await page.addInitScript((count) => {
+    window.__HLS_STUB_FRAGMENT_COUNT = count;
+  }, fragmentCount);
   await page.route("**/assets/js/vendor/hls.js", async (route) => {
     await route.fulfill({
       status: 200,
@@ -804,6 +807,60 @@ async function scrubTo(page, targetSeconds, sessionPredicate) {
   await waitForPlaybackSurfaceWithoutOverlay(page);
 }
 
+async function pausePlayback(page) {
+  const toggle = page.locator("#video-play-toggle");
+  const label = String(await toggle.textContent() || "").trim();
+  if (label === "Pause") {
+    await toggle.click();
+    await expect(toggle).toHaveText("Play");
+  }
+}
+
+async function waitForScrubberReady(page) {
+  await expect
+    .poll(async () => page.evaluate(() => {
+      const slider = document.getElementById("video-progress-slider");
+      const video = document.getElementById("video-player-media");
+      return Boolean(slider && video && !slider.disabled && Number(slider.max) > 0);
+    }), { timeout: 15000 })
+    .toBe(true);
+}
+
+async function scrubInSession(page, targetSeconds) {
+  await pausePlayback(page);
+  let sessionPosted = false;
+  const onRequest = (request) => {
+    if (request.url().includes("/video/endpoints/session") && request.method() === "POST") {
+      sessionPosted = true;
+    }
+  };
+  page.on("request", onRequest);
+  try {
+    await page.locator("#video-progress-slider").evaluate((element, seconds) => {
+      element.value = String(seconds);
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+    }, targetSeconds);
+    await page.waitForTimeout(300);
+    expect(sessionPosted).toBe(false);
+  } finally {
+    page.off("request", onRequest);
+  }
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+  await expectPlaybackNearSeconds(page, targetSeconds, 1);
+}
+
+async function scrubInSessionForward(page, advanceSeconds = 1) {
+  await pausePlayback(page);
+  const state = await readPlaybackProgressState(page);
+  const current = Number(state.sliderValue);
+  expect(Number.isFinite(current)).toBe(true);
+  const target = Math.min(7.5, current + advanceSeconds);
+  await scrubInSession(page, target);
+  return target;
+}
+
 async function startScrub(page, targetSeconds) {
   await page.locator("#video-progress-slider").evaluate((element, seconds) => {
     element.value = String(seconds);
@@ -811,6 +868,15 @@ async function startScrub(page, targetSeconds) {
     element.dispatchEvent(new Event("change", { bubbles: true }));
   }, targetSeconds);
   await waitForLoadingOverlayWithoutPlaceholder(page);
+}
+
+async function startScrubInSession(page, targetSeconds) {
+  await page.locator("#video-progress-slider").evaluate((element, seconds) => {
+    element.value = String(seconds);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  }, targetSeconds);
+  await page.waitForTimeout(100);
 }
 
 async function openVideoPane(page) {
@@ -830,6 +896,38 @@ async function playLibraryFile(page, filename) {
   await expectActiveQueueTitle(page, filename);
   await waitForVisibleVideo(page);
   await waitForPlaybackSurfaceWithoutOverlay(page);
+}
+
+function parseElapsedClock(text) {
+  const parts = String(text || "").split(":").map(Number);
+  if (parts.length !== 3 || parts.some((value) => !Number.isFinite(value))) return NaN;
+  return (parts[0] * 3600) + (parts[1] * 60) + parts[2];
+}
+
+async function readPlaybackProgressState(page) {
+  return page.evaluate(() => {
+    const slider = document.getElementById("video-progress-slider");
+    const elapsed = document.getElementById("video-elapsed-time");
+    return {
+      sliderValue: slider ? Number(slider.value) : NaN,
+      elapsedText: elapsed ? String(elapsed.textContent || "").trim() : "",
+    };
+  });
+}
+
+async function expectPlaybackNearSeconds(page, targetSeconds, toleranceSeconds = 1) {
+  await expect
+    .poll(async () => {
+      const state = await readPlaybackProgressState(page);
+      const elapsedSeconds = parseElapsedClock(state.elapsedText);
+      const candidates = [elapsedSeconds, Number(state.sliderValue)]
+        .filter((value) => Number.isFinite(value));
+      if (!candidates.length) return false;
+      return candidates.some(
+        (seconds) => Math.abs(seconds - targetSeconds) <= toleranceSeconds,
+      );
+    }, { timeout: 15000 })
+    .toBe(true);
 }
 
 test.use({ baseURL });
@@ -948,11 +1046,7 @@ test("video playback loads tracks, switches tracks, and hides video before subti
   await waitForMountedSubtitleTrackReady(page, 4);
   await waitForNativeSubtitleCueText(page, "BRAVO-SUBTITLE-FRA");
 
-  await scrubTo(
-    page,
-    6,
-    (body) => body.includes("path=Videos%2Fbravo.mkv") && body.includes("start_time_seconds=6"),
-  );
+  await scrubInSessionForward(page, 1);
   await expectTrackSelectors(page, { audioValue: "1", subtitleValue: "4" });
   await waitForSubtitleStreamIndex(page, 4);
 
@@ -968,11 +1062,7 @@ test("video playback loads tracks, switches tracks, and hides video before subti
   await expectTrackSelectors(page, { audioValue: "2", subtitleValue: "4" });
   await waitForSubtitleStreamIndex(page, 4);
 
-  await scrubTo(
-    page,
-    2,
-    (body) => body.includes("path=Videos%2Fbravo.mkv") && body.includes("audio_stream_index=2") && body.includes("start_time_seconds=2"),
-  );
+  await scrubInSessionForward(page, 1);
   await expectTrackSelectors(page, { audioValue: "2", subtitleValue: "4" });
   await waitForSubtitleStreamIndex(page, 4);
 
@@ -1013,19 +1103,7 @@ test("video playback never shows loading or placeholder copy on top of active pl
   await waitForSubtitleStreamIndex(page, 4);
   await expectNoPlaybackSurfaceViolations(page);
 
-  const alphaScrubSession = waitForSessionPost(
-    page,
-    (body) => body.includes("path=Videos%2Falpha.mkv") && body.includes("start_time_seconds=1"),
-  );
-  await page.locator("#video-progress-slider").evaluate((element, seconds) => {
-    element.value = String(seconds);
-    element.dispatchEvent(new Event("input", { bubbles: true }));
-    element.dispatchEvent(new Event("change", { bubbles: true }));
-  }, 1);
-  await expectControlsOverlayUsableDuringLoading(page, "Creating a compatibility stream at");
-  await alphaScrubSession;
-  await waitForVisibleVideo(page);
-  await waitForPlaybackSurfaceWithoutOverlay(page);
+  await scrubInSessionForward(page, 1);
 
   const bravoRow = await libraryRow(page, "bravo.mkv");
   const bravoSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fbravo.mkv"));
@@ -1048,6 +1126,70 @@ test("video playback never shows loading or placeholder copy on top of active pl
   await expectNoPlaybackSurfaceViolations(page);
 });
 
+test("forward scrub beyond encoded range keeps the requested playback position", async ({ page }) => {
+  test.setTimeout(90000);
+
+  const sessionPosts = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/video/endpoints/session") && request.method() === "POST") {
+      sessionPosts.push(request.postData() || "");
+    }
+  });
+
+  await page.route("**/video/endpoints/session", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    const payload = await response.json();
+    const body = route.request().postData() || "";
+    if (body.includes("start_time_seconds=0")) {
+      payload.encoded_media_end_seconds = 6;
+    }
+    await route.fulfill({
+      status: response.status(),
+      headers: response.headers(),
+      contentType: "application/json",
+      body: JSON.stringify(payload),
+    });
+  });
+
+  await installHlsStub(page, { fragmentCount: 1 });
+  await openVideoPane(page);
+  const alphaRow = await libraryRow(page, "alpha.mkv");
+  const initialSession = waitForSessionPost(
+    page,
+    (body) => body.includes("path=Videos%2Falpha.mkv") && body.includes("start_time_seconds=0"),
+  );
+  await expect(alphaRow).toBeVisible();
+  await alphaRow.dblclick();
+  await waitForLoadingOverlayWithoutPlaceholder(page);
+  await initialSession;
+  await waitForScrubberReady(page);
+  await pausePlayback(page);
+
+  const postsBeforeScrub = sessionPosts.length;
+  const restartSession = waitForSessionPost(
+    page,
+    (body) => body.includes("path=Videos%2Falpha.mkv") && body.includes("start_time_seconds=7"),
+  );
+  await page.locator("#video-progress-slider").evaluate((element) => {
+    element.value = "7";
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await restartSession;
+  await waitForLoadingOverlayWithoutPlaceholder(page);
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+  await expectPlaybackNearSeconds(page, 7, 1);
+
+  const postsAfterScrub = sessionPosts.slice(postsBeforeScrub);
+  expect(postsAfterScrub.some((body) => body.includes("start_time_seconds=7"))).toBe(true);
+  expect(postsAfterScrub.some((body) => /start_time_seconds=0(?:&|$)/.test(body))).toBe(false);
+});
+
 test("video play toggle keeps intended state during compatibility seek loading", async ({ page }) => {
   test.setTimeout(90000);
 
@@ -1059,15 +1201,10 @@ test("video play toggle keeps intended state during compatibility seek loading",
   await alphaSession;
   await expectPlayToggleState(page, "Pause");
 
-  const firstScrubSession = waitForSessionPost(
-    page,
-    (body) => body.includes("path=Videos%2Falpha.mkv") && body.includes("start_time_seconds=1"),
-  );
-  await startScrub(page, 1);
+  await startScrubInSession(page, 1);
   await expectPlayToggleState(page, "Pause");
   await clickPlayToggle(page);
   await expectPlayToggleState(page, "Play");
-  await firstScrubSession;
   await waitForVisibleVideo(page);
   await waitForPlaybackSurfaceWithoutOverlay(page);
   await expectPlayToggleState(page, "Play");
@@ -1077,15 +1214,11 @@ test("video play toggle keeps intended state during compatibility seek loading",
   await clickPlayToggle(page);
   await expectPlayToggleState(page, "Play");
 
-  const secondScrubSession = waitForSessionPost(
-    page,
-    (body) => body.includes("path=Videos%2Falpha.mkv") && body.includes("start_time_seconds=2"),
-  );
-  await startScrub(page, 2);
+  await startScrubInSession(page, 2);
   await expectPlayToggleState(page, "Play");
   await clickPlayToggle(page);
   await expectPlayToggleState(page, "Pause");
-  await secondScrubSession;
+  await page.waitForTimeout(300);
   await waitForVisibleVideo(page);
   await waitForPlaybackSurfaceWithoutOverlay(page);
   await expectPlayToggleState(page, "Pause");
@@ -1159,11 +1292,7 @@ test("video fullscreen keeps the scrubber overlay visible and functional", async
   await page.waitForTimeout(3200);
   await expectControlsOverlayHidden(page);
 
-  await scrubTo(
-    page,
-    1,
-    (body) => body.includes("path=Videos%2Falpha.mkv") && body.includes("start_time_seconds=1"),
-  );
+  const scrubTarget = await scrubInSessionForward(page, 1);
 
   await expect
     .poll(async () => readFullscreenPlaybackState(page), { timeout: 10000 })
@@ -1177,7 +1306,7 @@ test("video fullscreen keeps the scrubber overlay visible and functional", async
 
   const fullscreenState = await readFullscreenPlaybackState(page);
   expect(fullscreenState.sliderMax).toBeGreaterThan(0);
-  expect(fullscreenState.sliderValue).toBeGreaterThanOrEqual(1);
+  expect(fullscreenState.sliderValue).toBeGreaterThanOrEqual(scrubTarget - 1);
 
   await page.evaluate(async () => {
     if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
