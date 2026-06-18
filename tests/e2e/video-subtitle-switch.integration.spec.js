@@ -826,6 +826,30 @@ async function waitForScrubberReady(page) {
     .toBe(true);
 }
 
+async function inflateVideoSeekableEnd(page, endSeconds) {
+  await page.evaluate((end) => {
+    const video = document.getElementById("video-player-media");
+    if (!video) {
+      throw new Error("video element missing");
+    }
+    const seekable = {
+      length: 1,
+      start(index) {
+        return index === 0 ? 0 : Number.NaN;
+      },
+      end(index) {
+        return index === 0 ? end : Number.NaN;
+      },
+    };
+    Object.defineProperty(video, "seekable", {
+      configurable: true,
+      get() {
+        return seekable;
+      },
+    });
+  }, endSeconds);
+}
+
 async function scrubInSession(page, targetSeconds) {
   await pausePlayback(page);
   let sessionPosted = false;
@@ -1168,6 +1192,71 @@ test("forward scrub beyond encoded range keeps the requested playback position",
   await initialSession;
   await waitForScrubberReady(page);
   await pausePlayback(page);
+
+  const postsBeforeScrub = sessionPosts.length;
+  const restartSession = waitForSessionPost(
+    page,
+    (body) => body.includes("path=Videos%2Falpha.mkv") && body.includes("start_time_seconds=7"),
+  );
+  await page.locator("#video-progress-slider").evaluate((element) => {
+    element.value = "7";
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await restartSession;
+  await waitForLoadingOverlayWithoutPlaceholder(page);
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+  await expectPlaybackNearSeconds(page, 7, 1);
+
+  const postsAfterScrub = sessionPosts.slice(postsBeforeScrub);
+  expect(postsAfterScrub.some((body) => body.includes("start_time_seconds=7"))).toBe(true);
+  expect(postsAfterScrub.some((body) => /start_time_seconds=0(?:&|$)/.test(body))).toBe(false);
+});
+
+test("scrub beyond tracked encoded range restarts when seekable overstates duration", async ({ page }) => {
+  test.setTimeout(90000);
+
+  const sessionPosts = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/video/endpoints/session") && request.method() === "POST") {
+      sessionPosts.push(request.postData() || "");
+    }
+  });
+
+  await page.route("**/video/endpoints/session", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    const payload = await response.json();
+    const body = route.request().postData() || "";
+    if (body.includes("start_time_seconds=0")) {
+      payload.encoded_media_end_seconds = 6;
+    }
+    await route.fulfill({
+      status: response.status(),
+      headers: response.headers(),
+      contentType: "application/json",
+      body: JSON.stringify(payload),
+    });
+  });
+
+  await installHlsStub(page, { fragmentCount: 1 });
+  await openVideoPane(page);
+  const alphaRow = await libraryRow(page, "alpha.mkv");
+  const initialSession = waitForSessionPost(
+    page,
+    (body) => body.includes("path=Videos%2Falpha.mkv") && body.includes("start_time_seconds=0"),
+  );
+  await expect(alphaRow).toBeVisible();
+  await alphaRow.dblclick();
+  await waitForLoadingOverlayWithoutPlaceholder(page);
+  await initialSession;
+  await waitForScrubberReady(page);
+  await pausePlayback(page);
+  await inflateVideoSeekableEnd(page, 1500);
 
   const postsBeforeScrub = sessionPosts.length;
   const restartSession = waitForSessionPost(

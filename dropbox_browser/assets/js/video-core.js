@@ -128,10 +128,16 @@ export function compatibilityInSessionSeekDecision(input) {
     return {action: 'restart', reason: 'track-selection'};
   }
 
-  var encodedMediaEnd = compatibilityEncodedMediaEndSeconds(
-    input.seekableRanges,
-    input.encodedMediaEndSeconds,
-  );
+  var trackedEncodedEnd = Number(input.encodedMediaEndSeconds);
+  var encodedMediaEnd = 0;
+  if (Number.isFinite(trackedEncodedEnd) && trackedEncodedEnd > 0) {
+    encodedMediaEnd = trackedEncodedEnd;
+  } else {
+    encodedMediaEnd = compatibilityEncodedMediaEndSeconds(
+      input.seekableRanges,
+      input.encodedMediaEndSeconds,
+    );
+  }
   if (!(encodedMediaEnd > 0)) {
     return {action: 'restart', reason: 'no-encoded-range'};
   }
