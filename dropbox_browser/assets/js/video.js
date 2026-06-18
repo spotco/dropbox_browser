@@ -118,6 +118,8 @@ import {
       controlsIdleTimer: 0,
       controlsOverlayVisible: false,
       loadingOverlayVisible: false,
+      lastControlsRevealPointerKey: '',
+      controlsScrubReveal: false,
     }
   };
 
@@ -188,6 +190,7 @@ import {
     ctx.els.controlsOverlayEl.classList.add('is-hidden');
     ctx.els.controlsOverlayEl.classList.remove('is-idle');
     ctx.state.controlsOverlayVisible = false;
+    ctx.state.controlsScrubReveal = false;
   }
 
   function scheduleControlsIdleHide() {
@@ -202,8 +205,33 @@ import {
     }, CONTROLS_IDLE_HIDE_MS);
   }
 
-  function revealControlsOverlay() {
+  function scheduleControlsIdleHideIfNotActive() {
+    if (ctx.state.controlsIdleTimer) return;
+    scheduleControlsIdleHide();
+  }
+
+  function controlsPointerMoveIsSignificant(event) {
+    var movementX, movementY, clientX, clientY, pointerKey;
+    if (!event) return true;
+    movementX = Math.round(Number(event.movementX) || 0);
+    movementY = Math.round(Number(event.movementY) || 0);
+    if (movementX !== 0 || movementY !== 0) {
+      clientX = Math.round(Number(event.clientX) || 0);
+      clientY = Math.round(Number(event.clientY) || 0);
+      ctx.state.lastControlsRevealPointerKey = clientX + '|' + clientY;
+      return true;
+    }
+    clientX = Math.round(Number(event.clientX) || 0);
+    clientY = Math.round(Number(event.clientY) || 0);
+    pointerKey = clientX + '|' + clientY;
+    if (pointerKey === ctx.state.lastControlsRevealPointerKey) return false;
+    ctx.state.lastControlsRevealPointerKey = pointerKey;
+    return true;
+  }
+
+  function revealControlsOverlay(event) {
     if (!videoControlsAvailable()) return;
+    if (event && !controlsPointerMoveIsSignificant(event)) return;
     showControlsOverlay();
     scheduleControlsIdleHide();
   }
@@ -416,7 +444,9 @@ import {
     if (ctx.els.elapsedTimeEl) ctx.els.elapsedTimeEl.textContent = '0:00';
     if (ctx.els.totalTimeEl) ctx.els.totalTimeEl.textContent = '0:00';
     ctx.state.progressSliderActive = false;
-    if (!ctx.state.loadingOverlayVisible) hideControlsOverlay();
+    if (!ctx.state.loadingOverlayVisible && !ctx.state.seekRestartInProgress && !ctx.state.controlsScrubReveal) {
+      hideControlsOverlay();
+    }
   }
 
   function videoControlsAvailable() {
@@ -434,8 +464,20 @@ import {
   function syncTransportControls() {
     if (!ctx.els.videoEl) return;
     var canControl = videoControlsAvailable();
-    if (canControl) showControlsOverlay();
-    else hideControlsOverlay();
+    if (!canControl) {
+      if (!ctx.state.loadingOverlayVisible && !ctx.state.controlsScrubReveal) {
+        hideControlsOverlay();
+      }
+    }
+    else if (ctx.state.loadingOverlayVisible || !playbackShouldBeRunning() || ctx.state.controlsScrubReveal) {
+      showControlsOverlay();
+      if (ctx.state.loadingOverlayVisible || !playbackShouldBeRunning()) {
+        clearControlsIdleTimer();
+        setControlsOverlayIdle(false);
+      }
+      else scheduleControlsIdleHideIfNotActive();
+    }
+    else if (ctx.state.controlsOverlayVisible) scheduleControlsIdleHideIfNotActive();
     if (ctx.els.playToggleButton) {
       var isPaused = !playbackShouldBeRunning();
       ctx.els.playToggleButton.disabled = !canControl;
@@ -481,8 +523,6 @@ import {
         isPipActive ? VIDEO_ICONS.pipExit : VIDEO_ICONS.pipEnter
       );
     }
-    if (canControl && !ctx.els.videoEl.paused) scheduleControlsIdleHide();
-    else setControlsOverlayIdle(false);
   }
 
   function syncPlaybackProgress() {
@@ -2774,11 +2814,11 @@ import {
     });
   }
   if (ctx.els.playbackSurfaceEl) {
-    ctx.els.playbackSurfaceEl.addEventListener('mousemove', revealControlsOverlay);
-    ctx.els.playbackSurfaceEl.addEventListener('mouseenter', revealControlsOverlay);
-    ctx.els.playbackSurfaceEl.addEventListener('mouseleave', function () {
-      hideControlsOverlay();
+    ctx.els.playbackSurfaceEl.addEventListener('mousemove', function (event) {
+      revealControlsOverlay(event);
     });
+    ctx.els.playbackSurfaceEl.addEventListener('mouseenter', revealControlsOverlay);
+    ctx.els.playbackSurfaceEl.addEventListener('mouseleave', hideControlsOverlay);
     ctx.els.playbackSurfaceEl.addEventListener('click', function (event) {
       if (!videoControlsAvailable()) return;
       if (event.target && event.target.closest && event.target.closest('#video-controls-overlay')) return;
@@ -2793,11 +2833,15 @@ import {
     });
   }
   if (ctx.els.playbackStageEl) {
-    ctx.els.playbackStageEl.addEventListener('mousemove', revealControlsOverlay);
+    ctx.els.playbackStageEl.addEventListener('mousemove', function (event) {
+      revealControlsOverlay(event);
+    });
     ctx.els.playbackStageEl.addEventListener('mouseenter', revealControlsOverlay);
   }
   if (ctx.els.controlsOverlayEl) {
-    ctx.els.controlsOverlayEl.addEventListener('mousemove', revealControlsOverlay);
+    ctx.els.controlsOverlayEl.addEventListener('mousemove', function (event) {
+      revealControlsOverlay(event);
+    });
     ctx.els.controlsOverlayEl.addEventListener('focusin', revealControlsOverlay);
   }
   if (ctx.els.playToggleButton) {
@@ -2841,6 +2885,7 @@ import {
   if (ctx.els.progressSliderEl) {
     ctx.els.progressSliderEl.addEventListener('input', function () {
       ctx.state.progressSliderActive = true;
+      ctx.state.controlsScrubReveal = true;
       syncPlaybackProgress();
       revealControlsOverlay();
     });
@@ -2852,6 +2897,8 @@ import {
       var nextTime = Number(ctx.els.progressSliderEl.value);
       if (Number.isFinite(nextTime) && nextTime >= 0) {
         ctx.state.progressSliderActive = false;
+        ctx.state.controlsScrubReveal = true;
+        revealControlsOverlay();
         void restartCompatibilityAt(nextTime, 'scrub');
         return;
       }

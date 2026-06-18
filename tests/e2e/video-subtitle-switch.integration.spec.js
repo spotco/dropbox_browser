@@ -338,6 +338,53 @@ async function waitForPlaybackSurfaceWithoutOverlay(page) {
     .toBe(true);
 }
 
+async function startSyntheticControlsPointerStorm(page, {
+  xOffset = 0,
+  yOffset = 0,
+  intervalMs = 50,
+} = {}) {
+  await page.evaluate(({ xOffset: nextXOffset, yOffset: nextYOffset, intervalMs: nextIntervalMs }) => {
+    if (window.__videoControlsPointerStormStop) {
+      window.__videoControlsPointerStormStop();
+    }
+    const surface = document.getElementById("video-playback-surface");
+    const stage = document.getElementById("video-playback-stage");
+    const overlay = document.getElementById("video-controls-overlay");
+    if (!surface || !stage || !overlay) {
+      throw new Error("video controls elements are not ready");
+    }
+    const rect = surface.getBoundingClientRect();
+    const clientX = Math.round(rect.left + (rect.width / 2) + Number(nextXOffset || 0));
+    const clientY = Math.round(rect.top + (rect.height / 2) + Number(nextYOffset || 0));
+    const targets = [overlay, stage, surface];
+    const timerId = window.setInterval(() => {
+      targets.forEach((target) => {
+        target.dispatchEvent(new MouseEvent("mousemove", {
+          bubbles: true,
+          cancelable: true,
+          clientX,
+          clientY,
+          movementX: 0,
+          movementY: 0,
+          view: window,
+        }));
+      });
+    }, Number(nextIntervalMs || 50));
+    window.__videoControlsPointerStormStop = () => {
+      window.clearInterval(timerId);
+      window.__videoControlsPointerStormStop = null;
+    };
+  }, { xOffset, yOffset, intervalMs });
+}
+
+async function stopSyntheticControlsPointerStorm(page) {
+  await page.evaluate(() => {
+    if (window.__videoControlsPointerStormStop) {
+      window.__videoControlsPointerStormStop();
+    }
+  });
+}
+
 async function setPlaybackTimeForSubtitleChecks(page, seconds) {
   await page.evaluate((targetSeconds) => {
     const video = document.getElementById("video-player-media");
@@ -1056,8 +1103,7 @@ test("video controls follow standard hover and idle visibility behavior", async 
   await waitForVisibleVideo(page);
   await waitForPlaybackSurfaceWithoutOverlay(page);
 
-  await clickPlayToggle(page);
-  await expectPlayToggleState(page, "Play");
+  await expectPlayToggleState(page, "Pause");
 
   const surface = page.locator("#video-playback-surface");
   const box = await surface.boundingBox();
@@ -1110,6 +1156,9 @@ test("video fullscreen keeps the scrubber overlay visible and functional", async
       fullscreenLabel: "Exit fullscreen",
     });
 
+  await page.waitForTimeout(3200);
+  await expectControlsOverlayHidden(page);
+
   await scrubTo(
     page,
     1,
@@ -1142,6 +1191,36 @@ test("video fullscreen keeps the scrubber overlay visible and functional", async
       fullscreenLabel: "Fullscreen",
     });
 });
+
+test("video controls hide after idle even when pointermove repeats while playing", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await installHlsStub(page);
+  await openVideoPane(page);
+
+  const alphaSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
+  await playLibraryFile(page, "alpha.mkv");
+  await alphaSession;
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+  await expectPlayToggleState(page, "Pause");
+
+  const surface = page.locator("#video-playback-surface");
+  const box = await surface.boundingBox();
+  expect(box).not.toBeNull();
+
+  await page.mouse.move(box.x + (box.width / 2), box.y + (box.height / 2));
+  await expectControlsOverlayVisible(page);
+
+  try {
+    await startSyntheticControlsPointerStorm(page);
+    await page.waitForTimeout(3200);
+    await expectControlsOverlayHidden(page);
+  } finally {
+    await stopSyntheticControlsPointerStorm(page);
+  }
+});
+
 
 test("video track selections persist across reload and matching track layouts", async ({ page }) => {
   test.setTimeout(90000);
