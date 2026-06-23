@@ -1,8 +1,8 @@
-- anime player with switch audio/subtitles in browser
-	- video player: controls visible when mouse not on it, not sure of repro (fullscreen?)
-	- full screen, controls still visible after not moving for a while (fix)
-	
-	
+video player
+- http://localhost:8000/file?path=anime%2F%5BJudas%5D+Fairy+Tail+%282009-2014%29+%28Seasons+1-8+%2B+OVAs%29+%5BBD+1080p%5D%5BHEVC+x265+10bit%5D%5BDual-Audio%5D%5BEng-Subs%5D%2F%5BJudas%5D+Fairy+Tail+%282009%29%2F%5BJudas%5D+Fairy+Tail+%282009%29+-+001.mkv&source=remote
+	no subtitles or audio tracks - figure out why
+- more responsive load (time to end of loaded, smaller faster load smaller section)
+- clicking outside of loaded area should not clear loaded cache
 - library management
 - forward/backward playlist
 
@@ -15,15 +15,3 @@ plans\SPEC_RECURSIVE_FILE_SEARCH.md
 
 - music player:
 	intensity graph of song (if window focused)
-
-	- playback: use burn-in route for WebVTT (full screen + pip-mode)
-		The main complications are:
-
-		- The current ffmpeg burn-in path is set up for subtitle-stream overlay, which fits bitmap subtitles. Text subtitle burn-in is a different path.
-		- The HLS input is an HTTP /file URL, not a simple local media file: /E:/dev/dropbox_browser/dropbox_browser/video.py:582. That makes ffmpeg subtitle filter usage less
-			straightforward.
-
-		- Switching subtitle tracks or turning subtitles off would require restarting the HLS session for all subtitle types, not just bitmap ones.
-		- You lose native browser caption behavior: no ::cue, no browser caption preferences, no selectable text-track playback.
-		- CPU cost and startup latency go up, because every subtitled video becomes a full burn-in transcode path.
-		- You would want broader test coverage across seek/restart/audio-track changes and subtitle codecs.
