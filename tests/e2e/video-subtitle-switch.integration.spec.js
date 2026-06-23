@@ -341,6 +341,19 @@ async function waitForPlaybackSurfaceWithoutOverlay(page) {
     .toBe(true);
 }
 
+async function waitForLoadingOverlayHidden(page) {
+  await expect
+    .poll(async () => {
+      return page.evaluate(() => {
+        const loading = document.getElementById("video-loading-overlay");
+        if (!loading || loading.hidden) return true;
+        const style = window.getComputedStyle(loading);
+        return style.display === "none" || style.visibility === "hidden" || style.opacity === "0";
+      });
+    }, { timeout: 10000 })
+    .toBe(true);
+}
+
 async function startSyntheticControlsPointerStorm(page, {
   xOffset = 0,
   yOffset = 0,
@@ -1490,7 +1503,14 @@ test("scrub beyond tracked encoded range restarts when seekable overstates durat
 });
 
 test("displayed loaded seek band matches actual instant-seek range during real HLS playback", async ({ page }) => {
-  test.setTimeout(90000);
+  test.setTimeout(120000);
+
+  const sessionPosts = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/video/endpoints/session") && request.method() === "POST") {
+      sessionPosts.push(request.postData() || "");
+    }
+  });
 
   await page.route("**/video/endpoints/status**", async (route) => {
     const response = await route.fetch();
@@ -1555,6 +1575,35 @@ test("displayed loaded seek band matches actual instant-seek range during real H
 
   const targetSeconds = Math.max(1, displayedEndSeconds - 0.5);
   await scrubInSession(page, targetSeconds);
+
+  const beyondLoadedTarget = Number(loadedWindowState.sliderMax);
+  expect(beyondLoadedTarget).toBeGreaterThan(displayedEndSeconds + 0.5);
+
+  const postsBeforeBeyondScrub = sessionPosts.length;
+  const restartSession = waitForSessionPost(
+    page,
+    (body) => body.includes("path=Videos%2Fseek-window.mkv") && !body.includes("start_time_seconds=0"),
+  );
+  await page.locator("#video-progress-slider").evaluate((element, seconds) => {
+    element.value = String(seconds);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  }, beyondLoadedTarget);
+  await waitForLoadingOverlayWithoutPlaceholder(page);
+  await restartSession;
+
+  const postsAfterBeyondScrub = sessionPosts.slice(postsBeforeBeyondScrub);
+  const restartBody = postsAfterBeyondScrub.find((body) => body.includes("path=Videos%2Fseek-window.mkv")) || "";
+  const restartStartSeconds = Number(new URLSearchParams(restartBody).get("start_time_seconds"));
+  const expectedClampedRestartSeconds = Math.max(
+    0,
+    beyondLoadedTarget - Math.min(1, beyondLoadedTarget / 2),
+  );
+  expect(restartStartSeconds).toBeLessThan(beyondLoadedTarget);
+  expect(restartStartSeconds).toBeCloseTo(expectedClampedRestartSeconds, 0);
+  await waitForLoadingOverlayHidden(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+  await expectPlaybackNearSeconds(page, expectedClampedRestartSeconds, 1);
 });
 
 test("video play toggle keeps intended state during compatibility seek loading", async ({ page }) => {

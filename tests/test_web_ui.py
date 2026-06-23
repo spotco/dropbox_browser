@@ -39,7 +39,7 @@ class WebUiTests(AppTestCase):
         self.assertIn('data-client-render="1"', html)
         self.assertIn('data-client-log-enabled="1"', html)
         self.assertIn('data-client-log-subsystems=', html)
-        self.assertIn('&quot;video&quot;: false', html)
+        self.assertIn('&quot;video&quot;: true', html)
         self.assertIn('&quot;video-timing&quot;: true', html)
         self.assertIn('class="browse-table-shell"', html)
         self.assertIn('data-browse-table', html)

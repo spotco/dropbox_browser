@@ -74,6 +74,16 @@ export function playbackDurationSeconds(mediaDuration, probePayload, playbackMod
   return 0;
 }
 
+export function clampCompatibilityRestartTargetSeconds(targetSeconds, durationSeconds) {
+  var target = Math.max(0, Number(targetSeconds) || 0);
+  var duration = Number(durationSeconds);
+  if (!Number.isFinite(duration) || duration <= 0) return target;
+
+  var minimumTailSeconds = Math.min(1, duration / 2);
+  var maximumRestartTarget = Math.max(0, duration - minimumTailSeconds);
+  return Math.min(target, maximumRestartTarget);
+}
+
 function normalizeStreamIndex(value) {
   if (value === null || value === undefined || value === '') return null;
   var numeric = Number(value);

@@ -62,7 +62,7 @@ class ConfigDefaultsTests(unittest.TestCase):
 
         self.assertTrue(config["ClientLogEnabled"])
         self.assertFalse(config["LogVideoDebug"])
-        self.assertFalse(config["ClientLogSubsystems"]["video"])
+        self.assertTrue(config["ClientLogSubsystems"]["video"])
         self.assertTrue(config["ClientLogSubsystems"]["video-timing"])
         self.assertFalse(config["ClientLogSubsystems"]["video-subtitles"])
         self.assertFalse(config["ClientLogSubsystems"]["browse-reveal"])

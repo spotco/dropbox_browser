@@ -92,6 +92,17 @@ test("playbackDurationSeconds returns zero when duration is unavailable", async 
   assert.equal(mod.playbackDurationSeconds(NaN, null, "compatibility"), 0);
 });
 
+test("clampCompatibilityRestartTargetSeconds keeps restart sessions away from exact EOF", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
+
+  assert.equal(mod.clampCompatibilityRestartTargetSeconds(24, 24), 23);
+  assert.equal(mod.clampCompatibilityRestartTargetSeconds(30, 24), 23);
+  assert.equal(mod.clampCompatibilityRestartTargetSeconds(23.5, 24), 23);
+  assert.equal(mod.clampCompatibilityRestartTargetSeconds(22.5, 24), 22.5);
+  assert.equal(mod.clampCompatibilityRestartTargetSeconds(0.2, 0.2), 0.1);
+  assert.equal(mod.clampCompatibilityRestartTargetSeconds(5, NaN), 5);
+});
+
 function baseSeekDecisionInput(overrides = {}) {
   return {
     targetSeconds: 30,
