@@ -288,6 +288,15 @@
   line-height: calc(var(--video-subtitle-font-size, 28px) * 0.65 * 1.15);
 }
 
+.video-playback-stage:fullscreen .video-player-media::cue {
+  font-size: var(--video-subtitle-font-size, 28px);
+}
+
+.video-playback-stage:fullscreen .video-subtitle-overlay {
+  font-size: var(--video-subtitle-font-size, 28px);
+  line-height: calc(var(--video-subtitle-font-size, 28px) * 1.15);
+}
+
 .video-current-title {
   color: #eef5fb;
   font-size: 18px;
@@ -494,6 +503,8 @@
 }
 
 .video-progress-slider {
+  --video-progress-processed-start: 0%;
+  --video-progress-processed-end: 0%;
   -webkit-appearance: none;
   appearance: none;
   background: transparent;
@@ -524,9 +535,25 @@
 
 .video-progress-slider::-webkit-slider-runnable-track,
 .video-volume-slider::-webkit-slider-runnable-track {
-  background: rgba(255, 255, 255, 0.28);
   border-radius: 999px;
   height: 4px;
+}
+
+.video-progress-slider::-webkit-slider-runnable-track {
+  background:
+    linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.28) 0%,
+      rgba(255, 255, 255, 0.28) var(--video-progress-processed-start),
+      rgba(255, 255, 255, 0.92) var(--video-progress-processed-start),
+      rgba(255, 255, 255, 0.92) var(--video-progress-processed-end),
+      rgba(255, 255, 255, 0.28) var(--video-progress-processed-end),
+      rgba(255, 255, 255, 0.28) 100%
+    );
+}
+
+.video-volume-slider::-webkit-slider-runnable-track {
+  background: rgba(255, 255, 255, 0.28);
 }
 
 .video-progress-slider::-webkit-slider-thumb,
@@ -544,10 +571,26 @@
 
 .video-progress-slider::-moz-range-track,
 .video-volume-slider::-moz-range-track {
-  background: rgba(255, 255, 255, 0.28);
   border: 0;
   border-radius: 999px;
   height: 4px;
+}
+
+.video-progress-slider::-moz-range-track {
+  background:
+    linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.28) 0%,
+      rgba(255, 255, 255, 0.28) var(--video-progress-processed-start),
+      rgba(255, 255, 255, 0.92) var(--video-progress-processed-start),
+      rgba(255, 255, 255, 0.92) var(--video-progress-processed-end),
+      rgba(255, 255, 255, 0.28) var(--video-progress-processed-end),
+      rgba(255, 255, 255, 0.28) 100%
+    );
+}
+
+.video-volume-slider::-moz-range-track {
+  background: rgba(255, 255, 255, 0.28);
 }
 
 .video-progress-slider::-moz-range-thumb,

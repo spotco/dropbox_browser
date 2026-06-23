@@ -3,6 +3,7 @@ import {
   advanceQueueAfterPlaybackEnd,
   clearQueue,
   compatibilityInSessionSeekDecision,
+  compatibilitySeekableRange,
   enqueueAndPlay,
   enqueueSelected,
   HLS_SEGMENT_DURATION_SECONDS,
@@ -30,6 +31,7 @@ import {
     pipExit: '/assets/icons/material-icon-theme/video-pip-exit.svg',
   };
   var CONTROLS_IDLE_HIDE_MS = 2800;
+  var COMPATIBILITY_SESSION_STATUS_POLL_MS = 1000;
   var COMPATIBILITY_START_BUFFER_FRAGMENTS = 1;
   var COMPATIBILITY_RECOVERY_MIN_DELAY_MS = 1500;
   var COMPATIBILITY_RECOVERY_MAX_DELAY_MS = 30000;
@@ -107,6 +109,8 @@ import {
       compatibilityRecoveryScheduled: false,
       compatibilityStartSeconds: 0,
       compatibilityBufferedFragmentCount: 0,
+      compatibilitySessionStatusRequestInFlight: false,
+      compatibilitySessionStatusTimer: 0,
       compatibilityPlaybackRevealed: false,
       compatibilitySubtitleStreamIndex: null,
       requestedSeekSeconds: null,
@@ -356,6 +360,114 @@ import {
   function setPlaybackSummary(title, meta) {
     if (ctx.els.titleEl) ctx.els.titleEl.textContent = title;
     if (ctx.els.metaEl) ctx.els.metaEl.textContent = meta;
+  }
+
+  function resetProcessedProgressTrack() {
+    if (!ctx.els.progressSliderEl) return;
+    ctx.els.progressSliderEl.style.setProperty('--video-progress-processed-start', '0%');
+    ctx.els.progressSliderEl.style.setProperty('--video-progress-processed-end', '0%');
+  }
+
+  function syncProcessedProgressTrack(duration) {
+    if (!ctx.els.progressSliderEl) return;
+    var processedRange = compatibilitySeekableRange({
+      durationSeconds: duration,
+      sessionStartSeconds: ctx.state.compatibilityStartSeconds,
+      seekableRanges: compatibilitySeekableRanges(),
+    });
+    ctx.els.progressSliderEl.style.setProperty(
+      '--video-progress-processed-start',
+      processedRange.startPercent.toFixed(3) + '%'
+    );
+    ctx.els.progressSliderEl.style.setProperty(
+      '--video-progress-processed-end',
+      processedRange.endPercent.toFixed(3) + '%'
+    );
+  }
+
+  function currentProcessedRangeSnapshot(targetSeconds, durationOverride) {
+    var duration = Number(durationOverride);
+    if (!Number.isFinite(duration) || duration <= 0) {
+      duration = playbackDurationSeconds(
+        ctx.els.videoEl ? Number(ctx.els.videoEl.duration) : NaN,
+        null,
+        ctx.state.playbackMode
+      );
+    }
+    var processedRange = compatibilitySeekableRange({
+      durationSeconds: duration,
+      sessionStartSeconds: ctx.state.compatibilityStartSeconds,
+      seekableRanges: compatibilitySeekableRanges(),
+    });
+    var normalizedTarget = Number(targetSeconds);
+    var tolerance = 0.25;
+    var targetInProcessedRange = Number.isFinite(normalizedTarget)
+      && normalizedTarget >= (processedRange.startSeconds - tolerance)
+      && normalizedTarget <= (processedRange.endSeconds + tolerance);
+    return {
+      duration_seconds: Number.isFinite(duration) ? duration : '',
+      current_global_time: currentGlobalPlaybackSeconds(),
+      current_media_time: ctx.els.videoEl ? Number(ctx.els.videoEl.currentTime) || 0 : '',
+      session_start_seconds: ctx.state.compatibilityStartSeconds || 0,
+      encoded_media_end_seconds: ctx.state.compatibilityEncodedMediaEndSeconds || 0,
+      processed_range_start_seconds: processedRange.startSeconds,
+      processed_range_end_seconds: processedRange.endSeconds,
+      processed_target_in_range: targetInProcessedRange,
+      requested_time: Number.isFinite(normalizedTarget) ? normalizedTarget : '',
+      media_seekable: ctx.els.videoEl ? mediaRangesSummary(ctx.els.videoEl.seekable) : [],
+      media_buffered: ctx.els.videoEl ? mediaRangesSummary(ctx.els.videoEl.buffered) : [],
+    };
+  }
+
+  function clearCompatibilitySessionStatusPoll() {
+    if (!ctx.state.compatibilitySessionStatusTimer) return;
+    window.clearTimeout(ctx.state.compatibilitySessionStatusTimer);
+    ctx.state.compatibilitySessionStatusTimer = 0;
+  }
+
+  function scheduleCompatibilitySessionStatusPoll() {
+    clearCompatibilitySessionStatusPoll();
+    if (!ctx.state.paneActive || !ctx.state.compatibilitySessionId || ctx.state.playbackMode !== 'compatibility') return;
+    ctx.state.compatibilitySessionStatusTimer = window.setTimeout(function () {
+      ctx.state.compatibilitySessionStatusTimer = 0;
+      void pollCompatibilitySessionStatus();
+    }, COMPATIBILITY_SESSION_STATUS_POLL_MS);
+  }
+
+  async function pollCompatibilitySessionStatus() {
+    if (
+      !ctx.state.paneActive
+      || !ctx.state.compatibilitySessionId
+      || ctx.state.playbackMode !== 'compatibility'
+      || ctx.state.compatibilitySessionStatusRequestInFlight
+    ) {
+      return;
+    }
+    ctx.state.compatibilitySessionStatusRequestInFlight = true;
+    try {
+      var response = await fetch('/video/endpoints/status');
+      if (!response.ok) return;
+      var payload = await response.json();
+      var activeSession = payload && payload.active_session ? payload.active_session : null;
+      if (
+        activeSession
+        && activeSession.session_id === ctx.state.compatibilitySessionId
+        && activeSession.path === ctx.state.compatibilitySessionPath
+      ) {
+        ctx.state.compatibilityEncodedMediaEndSeconds = Math.max(
+          ctx.state.compatibilityEncodedMediaEndSeconds || 0,
+          Number(activeSession.encoded_media_end_seconds) || 0
+        );
+        syncPlaybackProgress();
+      }
+    }
+    catch (_error) {
+      return;
+    }
+    finally {
+      ctx.state.compatibilitySessionStatusRequestInFlight = false;
+      scheduleCompatibilitySessionStatusPoll();
+    }
   }
 
   function updateLoadingOverlay(visible, options) {
@@ -682,6 +794,7 @@ import {
       ctx.els.progressSliderEl.value = '0';
       ctx.els.progressSliderEl.disabled = true;
     }
+    resetProcessedProgressTrack();
     if (ctx.els.elapsedTimeEl) ctx.els.elapsedTimeEl.textContent = '0:00';
     if (ctx.els.totalTimeEl) ctx.els.totalTimeEl.textContent = '0:00';
     ctx.state.progressSliderActive = false;
@@ -797,6 +910,7 @@ import {
       ctx.els.elapsedTimeEl.textContent = formatNativePlaybackTime(elapsedValue);
     }
     if (ctx.els.totalTimeEl) ctx.els.totalTimeEl.textContent = formatNativePlaybackTime(duration);
+    syncProcessedProgressTrack(duration);
   }
 
   function failCompatibilityPlayback(item, meta, status) {
@@ -841,6 +955,7 @@ import {
   function resetPlaybackSurface() {
     if (!ctx.els.videoEl) return;
     clearCompatibilityRecoveryTimer();
+    clearCompatibilitySessionStatusPoll();
     hideLoadingOverlay();
     flushNativeSubtitleRenderSurface();
     resetCompatibilityRecoveryState();
@@ -1490,6 +1605,7 @@ import {
 
   async function stopCompatibilitySession() {
     var sessionId = ctx.state.compatibilitySessionId;
+    clearCompatibilitySessionStatusPoll();
     ctx.state.compatibilitySessionId = '';
     ctx.state.compatibilitySessionPath = '';
     ctx.state.compatibilityAudioStreamIndex = null;
@@ -1669,6 +1785,7 @@ import {
     ctx.els.videoEl.removeAttribute('controls');
     resetCompatibilityRecoveryState();
     ctx.state.playbackMode = 'compatibility';
+    scheduleCompatibilitySessionStatusPoll();
     if (Hls && typeof Hls.isSupported === 'function' && Hls.isSupported()) {
       ctx.state.hlsController = new Hls({
         autoStartLoad: false,
@@ -2603,7 +2720,7 @@ import {
     return response.json();
   }
 
-  function trySeekCompatibilityInSession(active, probePayload, clampedTarget, reason) {
+  function trySeekCompatibilityInSession(active, probePayload, clampedTarget, reason, phase) {
     if (!active || !ctx.els.videoEl) return false;
     var decision = compatibilityInSessionSeekDecision({
       targetSeconds: clampedTarget,
@@ -2620,6 +2737,20 @@ import {
       selectedBurnedInSubtitleStreamIndex: selectedBurnedInSubtitleStreamIndex(active, probePayload),
       sessionSubtitleStreamIndex: ctx.state.compatibilitySessionBurnedInSubtitleStreamIndex,
     });
+    reportVideoDiagnostic(Object.assign(
+      currentProcessedRangeSnapshot(clampedTarget),
+      {
+        level: 'info',
+        message: 'Compatibility seek evaluated',
+        seek_reason: reason || '',
+        evaluation_phase: phase || '',
+        decision_action: decision.action || '',
+        decision_reason: decision.reason || '',
+        decision_media_target_seconds: Number.isFinite(Number(decision.mediaTargetSeconds))
+          ? Number(decision.mediaTargetSeconds)
+          : '',
+      }
+    ));
     if (decision.action !== 'in-session' || !Number.isFinite(Number(decision.mediaTargetSeconds))) {
       return false;
     }
@@ -2630,16 +2761,17 @@ import {
       seek_reason: reason || '',
       encoded_media_end_seconds: ctx.state.compatibilityEncodedMediaEndSeconds || 0,
     });
-    reportVideoDiagnostic({
-      level: 'info',
-      message: 'Compatibility in-session seek',
-      seek_reason: reason || '',
-      requested_time: clampedTarget,
-      media_target_seconds: decision.mediaTargetSeconds,
-      source_start_seconds: ctx.state.compatibilityStartSeconds,
-      encoded_media_end_seconds: ctx.state.compatibilityEncodedMediaEndSeconds || 0,
-      session_id: ctx.state.compatibilitySessionId || '',
-    });
+    reportVideoDiagnostic(Object.assign(
+      {
+        level: 'info',
+        message: 'Compatibility in-session seek',
+        seek_reason: reason || '',
+        requested_time: clampedTarget,
+        media_target_seconds: decision.mediaTargetSeconds,
+        session_id: ctx.state.compatibilitySessionId || '',
+      },
+      currentProcessedRangeSnapshot(clampedTarget)
+    ));
     ctx.state.requestedSeekSeconds = clampedTarget;
     if (ctx.els.progressSliderEl) ctx.els.progressSliderEl.value = String(clampedTarget);
     if (ctx.els.elapsedTimeEl) ctx.els.elapsedTimeEl.textContent = formatNativePlaybackTime(clampedTarget);
@@ -2652,7 +2784,8 @@ import {
     );
     setStatus('Compatibility playback at ' + formatPlaybackTime(clampedTarget) + '.');
     if (probePayload) {
-      void applySubtitlesForSeek(active, probePayload, clampedTarget, {
+      void applySubtitlesForSeek(active, probePayload, ctx.state.compatibilityStartSeconds, {
+        playbackSyncToken: ctx.state.playbackSyncToken,
         reloadReason: reason || 'scrub-in-session',
       });
     }
@@ -2679,7 +2812,7 @@ import {
     if (Number.isFinite(duration) && duration > 0) {
       clampedTarget = Math.min(duration, clampedTarget);
     }
-    if (trySeekCompatibilityInSession(active, cachedProbePayload, clampedTarget, reason)) {
+    if (trySeekCompatibilityInSession(active, cachedProbePayload, clampedTarget, reason, 'before-probe')) {
       return;
     }
     resetPlaybackTiming(active.path || '', reason || 'seek-restart');
@@ -2696,7 +2829,7 @@ import {
     if (Number.isFinite(duration) && duration > 0) {
       clampedTarget = Math.min(duration, clampedTarget);
     }
-    if (trySeekCompatibilityInSession(active, probePayload, clampedTarget, reason)) {
+    if (trySeekCompatibilityInSession(active, probePayload, clampedTarget, reason, 'after-probe')) {
       return;
     }
     var wasPlaying = playbackShouldBeRunning();
@@ -2716,18 +2849,16 @@ import {
       0.48
     ));
     setStatus('Loading compatibility playback at ' + formatPlaybackTime(clampedTarget) + '.');
-    reportVideoDiagnostic({
-      level: 'info',
-      message: 'Compatibility seek restart requested',
-      seek_reason: reason || '',
-      requested_time: clampedTarget,
-      source_start_seconds: ctx.state.compatibilityStartSeconds,
-      actual_global_time_before: currentGlobalPlaybackSeconds(),
-      media_current_time_before: ctx.els.videoEl ? ctx.els.videoEl.currentTime || 0 : '',
-      media_buffered: ctx.els.videoEl ? mediaRangesSummary(ctx.els.videoEl.buffered) : [],
-      media_seekable: ctx.els.videoEl ? mediaRangesSummary(ctx.els.videoEl.seekable) : [],
-      duration: duration || '',
-    });
+    reportVideoDiagnostic(Object.assign(
+      {
+        level: 'info',
+        message: 'Compatibility seek restart requested',
+        seek_reason: reason || '',
+        actual_global_time_before: currentGlobalPlaybackSeconds(),
+        media_current_time_before: ctx.els.videoEl ? ctx.els.videoEl.currentTime || 0 : '',
+      },
+      currentProcessedRangeSnapshot(clampedTarget, duration)
+    ));
     renderSubtitleTrackSelector(active, probePayload);
     persistSubtitleSelectionFromUi(active);
     if (!probePayload) {
@@ -2782,18 +2913,28 @@ import {
       ctx.state.seekRestartInProgress = false;
       ctx.state.requestedSeekSeconds = null;
       if (shouldApplyDeferredCompatibilitySeek(deferredSeekSeconds, clampedTarget, 0.05)) {
+        reportVideoDiagnostic({
+          level: 'info',
+          message: 'Compatibility deferred seek requested after restart',
+          seek_reason: reason || '',
+          completed_requested_time: clampedTarget,
+          deferred_requested_time: Number(deferredSeekSeconds),
+          restart_session_start_seconds: Number(session.start_time_seconds) || clampedTarget,
+        });
         void restartCompatibilityAt(Number(deferredSeekSeconds), 'scrub-deferred');
         return;
       }
-      reportVideoDiagnostic({
-        level: 'info',
-        message: 'Compatibility seek restart ready',
-        seek_reason: reason || '',
-        requested_time: clampedTarget,
-        source_start_seconds: Number(session.start_time_seconds) || clampedTarget,
-        session_id: session.session_id || '',
-        subtitle_stream_index: session.subtitle_stream_index,
-      });
+      reportVideoDiagnostic(Object.assign(
+        {
+          level: 'info',
+          message: 'Compatibility seek restart ready',
+          seek_reason: reason || '',
+          requested_time: clampedTarget,
+          session_id: session.session_id || '',
+          subtitle_stream_index: session.subtitle_stream_index,
+        },
+        currentProcessedRangeSnapshot(clampedTarget, duration)
+      ));
       scheduleSubtitlesAfterPlaybackReady(
         active,
         probePayload,
@@ -3410,6 +3551,15 @@ import {
         ctx.state.controlsScrubReveal = true;
         revealControlsOverlay();
         if (ctx.state.seekRestartInProgress) {
+          reportVideoDiagnostic(Object.assign(
+            currentProcessedRangeSnapshot(nextTime),
+            {
+              level: 'info',
+              message: 'Compatibility seek queued during restart',
+              queued_requested_time: nextTime,
+              prior_requested_time: ctx.state.requestedSeekSeconds,
+            }
+          ));
           ctx.state.requestedSeekSeconds = nextTime;
           if (ctx.els.elapsedTimeEl) {
             ctx.els.elapsedTimeEl.textContent = formatNativePlaybackTime(nextTime);

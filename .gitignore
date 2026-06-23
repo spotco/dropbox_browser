@@ -14,3 +14,5 @@ playwright-report/
 test-results/
 agent-tools/
 mcps/
+misc/*.json
+terminals/
