@@ -221,8 +221,8 @@ test("multiline WebVTT subtitles stay smaller in embedded mode and full size in 
   await enterStageFullscreen(page);
   const fullscreenMetrics = await readSubtitleLayoutMetrics(page);
   expectEmbeddedSmallerThanFullscreenSubtitleLayout(
-    embeddedMetrics.screenshot,
-    fullscreenMetrics.screenshot,
+    embeddedMetrics,
+    fullscreenMetrics,
   );
 
   await exitStageFullscreen(page);

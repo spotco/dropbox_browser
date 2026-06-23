@@ -91,20 +91,23 @@ def generate_video_file(
     english_frequency: str,
     japanese_frequency: str,
     bitmap_sample_path: Path,
+    duration_seconds: str = "8",
+    english_cues: list[tuple[str, str]] | None = None,
+    french_cues: list[tuple[str, str]] | None = None,
 ) -> None:
     work_dir = output_path.parent
     english_srt = work_dir / f"{output_path.stem}.eng.srt"
     french_srt = work_dir / f"{output_path.stem}.fra.srt"
     write_srt(
         english_srt,
-        [
+        english_cues or [
             ("00:00:00,400 --> 00:00:02,000", english_cue_text),
             ("00:00:02,200 --> 00:00:04,500", english_cue_text + " AGAIN"),
         ],
     )
     write_srt(
         french_srt,
-        [
+        french_cues or [
             ("00:00:00,500 --> 00:00:02,100", french_cue_text),
             ("00:00:02,300 --> 00:00:04,600", french_cue_text + " ENCORE"),
         ],
@@ -116,15 +119,15 @@ def generate_video_file(
             "-f",
             "lavfi",
             "-i",
-            "color=c=black:s=640x360:d=8",
+            f"color=c=black:s=640x360:d={duration_seconds}",
             "-f",
             "lavfi",
             "-i",
-            f"sine=frequency={english_frequency}:duration=8",
+            f"sine=frequency={english_frequency}:duration={duration_seconds}",
             "-f",
             "lavfi",
             "-i",
-            f"sine=frequency={japanese_frequency}:duration=8",
+            f"sine=frequency={japanese_frequency}:duration={duration_seconds}",
             "-i",
             str(english_srt),
             "-i",
@@ -156,7 +159,7 @@ def generate_video_file(
             "-c:s:2",
             "copy",
             "-t",
-            "8",
+            str(duration_seconds),
             "-metadata:s:a:0",
             "language=eng",
             "-metadata:s:a:0",
@@ -284,6 +287,48 @@ def main() -> int:
             "english_frequency": "500",
             "japanese_frequency": "700",
         },
+        {
+            "filename": "offset.mkv",
+            "english_audio_title": "Offset English Audio",
+            "japanese_audio_title": "Offset Japanese Audio",
+            "english_subtitle_title": "Offset English Text",
+            "french_subtitle_title": "Offset French Text",
+            "bitmap_subtitle_title": "Offset English PGS",
+            "english_cue_text": "OFFSET-SUBTITLE-ENG",
+            "french_cue_text": "OFFSET-SUBTITLE-FRA",
+            "english_frequency": "520",
+            "japanese_frequency": "740",
+            "duration_seconds": "12",
+            "english_cues": [
+                ("00:00:04,400 --> 00:00:06,200", "OFFSET-SUBTITLE-ENG"),
+                ("00:00:06,600 --> 00:00:08,800", "OFFSET-SUBTITLE-ENG AGAIN"),
+            ],
+            "french_cues": [
+                ("00:00:04,500 --> 00:00:06,300", "OFFSET-SUBTITLE-FRA"),
+                ("00:00:06,700 --> 00:00:08,900", "OFFSET-SUBTITLE-FRA ENCORE"),
+            ],
+        },
+        {
+            "filename": "seek-window.mkv",
+            "english_audio_title": "Seek Window English Audio",
+            "japanese_audio_title": "Seek Window Japanese Audio",
+            "english_subtitle_title": "Seek Window English Text",
+            "french_subtitle_title": "Seek Window French Text",
+            "bitmap_subtitle_title": "Seek Window English PGS",
+            "english_cue_text": "SEEK-WINDOW-ENG",
+            "french_cue_text": "SEEK-WINDOW-FRA",
+            "english_frequency": "530",
+            "japanese_frequency": "750",
+            "duration_seconds": "24",
+            "english_cues": [
+                ("00:00:10,000 --> 00:00:12,000", "SEEK-WINDOW-ENG"),
+                ("00:00:16,000 --> 00:00:18,000", "SEEK-WINDOW-ENG AGAIN"),
+            ],
+            "french_cues": [
+                ("00:00:10,100 --> 00:00:12,100", "SEEK-WINDOW-FRA"),
+                ("00:00:16,100 --> 00:00:18,100", "SEEK-WINDOW-FRA ENCORE"),
+            ],
+        },
     ]
 
     for spec in video_specs:
@@ -300,6 +345,9 @@ def main() -> int:
             english_frequency=str(spec["english_frequency"]),
             japanese_frequency=str(spec["japanese_frequency"]),
             bitmap_sample_path=bitmap_sample_path,
+            duration_seconds=str(spec.get("duration_seconds", "8")),
+            english_cues=spec.get("english_cues"),
+            french_cues=spec.get("french_cues"),
         )
         validate_generated_file(output_path)
 

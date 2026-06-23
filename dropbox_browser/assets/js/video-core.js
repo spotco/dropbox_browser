@@ -88,6 +88,16 @@ export function mediaTimeFromGlobalTime(sessionStartSeconds, globalTimeSeconds) 
 
 export function compatibilityEncodedMediaEndSeconds(seekableRanges, trackedMediaEndSeconds) {
   var tracked = Number(trackedMediaEndSeconds);
+  var seekableEnd = compatibilitySeekableEndSeconds(seekableRanges);
+  if (seekableEnd > 0 && Number.isFinite(tracked) && tracked > 0) {
+    return Math.max(seekableEnd, tracked);
+  }
+  if (seekableEnd > 0) return seekableEnd;
+  if (Number.isFinite(tracked) && tracked > 0) return tracked;
+  return 0;
+}
+
+export function compatibilitySeekableEndSeconds(seekableRanges) {
   var seekableEnd = 0;
   if (Array.isArray(seekableRanges)) {
     for (var index = 0; index < seekableRanges.length; index += 1) {
@@ -96,12 +106,57 @@ export function compatibilityEncodedMediaEndSeconds(seekableRanges, trackedMedia
       if (Number.isFinite(end) && end > seekableEnd) seekableEnd = end;
     }
   }
-  if (seekableEnd > 0 && Number.isFinite(tracked) && tracked > 0) {
-    return Math.max(seekableEnd, tracked);
+  return seekableEnd;
+}
+
+export function compatibilityProcessedRange(input) {
+  var duration = Number(input && input.durationSeconds);
+  if (!Number.isFinite(duration) || duration <= 0) {
+    return {
+      startSeconds: 0,
+      endSeconds: 0,
+      startPercent: 0,
+      endPercent: 0,
+    };
   }
-  if (seekableEnd > 0) return seekableEnd;
-  if (Number.isFinite(tracked) && tracked > 0) return tracked;
-  return 0;
+
+  var sessionStart = Math.max(0, Number(input && input.sessionStartSeconds) || 0);
+  var encodedMediaEnd = Math.max(0, Number(input && input.encodedMediaEndSeconds) || 0);
+  var startSeconds = Math.min(duration, sessionStart);
+  var endSeconds = Math.min(duration, sessionStart + encodedMediaEnd);
+  if (endSeconds < startSeconds) endSeconds = startSeconds;
+
+  return {
+    startSeconds: startSeconds,
+    endSeconds: endSeconds,
+    startPercent: Math.max(0, Math.min(100, (startSeconds / duration) * 100)),
+    endPercent: Math.max(0, Math.min(100, (endSeconds / duration) * 100)),
+  };
+}
+
+export function compatibilitySeekableRange(input) {
+  var duration = Number(input && input.durationSeconds);
+  if (!Number.isFinite(duration) || duration <= 0) {
+    return {
+      startSeconds: 0,
+      endSeconds: 0,
+      startPercent: 0,
+      endPercent: 0,
+    };
+  }
+
+  var sessionStart = Math.max(0, Number(input && input.sessionStartSeconds) || 0);
+  var seekableEnd = compatibilitySeekableEndSeconds(input && input.seekableRanges);
+  var startSeconds = Math.min(duration, sessionStart);
+  var endSeconds = Math.min(duration, sessionStart + seekableEnd);
+  if (endSeconds < startSeconds) endSeconds = startSeconds;
+
+  return {
+    startSeconds: startSeconds,
+    endSeconds: endSeconds,
+    startPercent: Math.max(0, Math.min(100, (startSeconds / duration) * 100)),
+    endPercent: Math.max(0, Math.min(100, (endSeconds / duration) * 100)),
+  };
 }
 
 export function compatibilityInSessionSeekDecision(input) {
@@ -129,21 +184,18 @@ export function compatibilityInSessionSeekDecision(input) {
   }
 
   var trackedEncodedEnd = Number(input.encodedMediaEndSeconds);
-  var encodedMediaEnd = 0;
-  if (Number.isFinite(trackedEncodedEnd) && trackedEncodedEnd > 0) {
-    encodedMediaEnd = trackedEncodedEnd;
-  } else {
-    encodedMediaEnd = compatibilityEncodedMediaEndSeconds(
-      input.seekableRanges,
-      input.encodedMediaEndSeconds,
-    );
-  }
+  var encodedMediaEnd = Number.isFinite(trackedEncodedEnd) && trackedEncodedEnd > 0
+    ? trackedEncodedEnd
+    : 0;
+  var seekableMediaEnd = compatibilitySeekableEndSeconds(input.seekableRanges);
   if (!(encodedMediaEnd > 0)) {
-    return {action: 'restart', reason: 'no-encoded-range'};
+    encodedMediaEnd = seekableMediaEnd;
   }
-
   if (target < sessionStart - tolerance) {
     return {action: 'restart', reason: 'before-session-start'};
+  }
+  if (seekableMediaEnd > 0 && target > sessionStart + seekableMediaEnd + tolerance) {
+    return {action: 'restart', reason: 'beyond-seekable-range'};
   }
   if (target > sessionStart + encodedMediaEnd + tolerance) {
     return {action: 'restart', reason: 'beyond-encoded-range'};

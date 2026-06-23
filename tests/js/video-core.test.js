@@ -124,12 +124,37 @@ test("compatibilityInSessionSeekDecision uses in-session seek inside encoded ran
   assert.equal(backward.mediaTargetSeconds, 12);
 
   const forwardWithinRange = mod.compatibilityInSessionSeekDecision(baseSeekDecisionInput({
-    targetSeconds: 42,
+    targetSeconds: 24,
     encodedMediaEndSeconds: 48,
     seekableRanges: [{start: 0, end: 30}],
   }));
   assert.equal(forwardWithinRange.action, "in-session");
-  assert.equal(forwardWithinRange.mediaTargetSeconds, 42);
+  assert.equal(forwardWithinRange.mediaTargetSeconds, 24);
+});
+
+test("compatibilityInSessionSeekDecision restarts when target is beyond actual seekable range", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
+
+  const beyondSeekable = mod.compatibilityInSessionSeekDecision(baseSeekDecisionInput({
+    targetSeconds: 42,
+    encodedMediaEndSeconds: 48,
+    seekableRanges: [{start: 0, end: 30}],
+  }));
+  assert.equal(beyondSeekable.action, "restart");
+  assert.equal(beyondSeekable.reason, "beyond-seekable-range");
+});
+
+test("compatibilityInSessionSeekDecision falls back to encoded range when seekable is temporarily empty", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
+
+  const emptySeekable = mod.compatibilityInSessionSeekDecision(baseSeekDecisionInput({
+    targetSeconds: 24,
+    encodedMediaEndSeconds: 48,
+    seekableRanges: [],
+  }));
+  assert.equal(emptySeekable.action, "in-session");
+  assert.equal(emptySeekable.reason, "encoded-range");
+  assert.equal(emptySeekable.mediaTargetSeconds, 24);
 });
 
 test("compatibilityInSessionSeekDecision restarts when target is beyond encoded range", async () => {
@@ -138,7 +163,7 @@ test("compatibilityInSessionSeekDecision restarts when target is beyond encoded 
   const beyondEncoded = mod.compatibilityInSessionSeekDecision(baseSeekDecisionInput({
     targetSeconds: 55,
     encodedMediaEndSeconds: 48,
-    seekableRanges: [{start: 0, end: 48}],
+    seekableRanges: [{start: 0, end: 60}],
   }));
   assert.equal(beyondEncoded.action, "restart");
   assert.equal(beyondEncoded.reason, "beyond-encoded-range");
@@ -210,5 +235,83 @@ test("compatibilityEncodedMediaEndSeconds prefers the widest known encoded exten
   assert.equal(
     mod.compatibilityEncodedMediaEndSeconds([], 0),
     0,
+  );
+});
+
+test("compatibilityProcessedRange clamps the processed window to the full runtime", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
+
+  assert.deepEqual(
+    mod.compatibilityProcessedRange({
+      durationSeconds: 120,
+      sessionStartSeconds: 30,
+      encodedMediaEndSeconds: 42,
+    }),
+    {
+      startSeconds: 30,
+      endSeconds: 72,
+      startPercent: 25,
+      endPercent: 60,
+    },
+  );
+
+  assert.deepEqual(
+    mod.compatibilityProcessedRange({
+      durationSeconds: 120,
+      sessionStartSeconds: 110,
+      encodedMediaEndSeconds: 42,
+    }),
+    {
+      startSeconds: 110,
+      endSeconds: 120,
+      startPercent: 91.66666666666666,
+      endPercent: 100,
+    },
+  );
+
+  assert.deepEqual(
+    mod.compatibilityProcessedRange({
+      durationSeconds: 0,
+      sessionStartSeconds: 30,
+      encodedMediaEndSeconds: 42,
+    }),
+    {
+      startSeconds: 0,
+      endSeconds: 0,
+      startPercent: 0,
+      endPercent: 0,
+    },
+  );
+});
+
+test("compatibilitySeekableRange clamps the displayed seekable window to actual seekable media", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
+
+  assert.deepEqual(
+    mod.compatibilitySeekableRange({
+      durationSeconds: 120,
+      sessionStartSeconds: 30,
+      seekableRanges: [{start: 0, end: 18}],
+    }),
+    {
+      startSeconds: 30,
+      endSeconds: 48,
+      startPercent: 25,
+      endPercent: 40,
+    },
+  );
+
+  assert.deepEqual(
+    mod.compatibilitySeekableRange({
+      durationSeconds: 120,
+      sessionStartSeconds: 110,
+      seekableRanges: [{start: 0, end: 18}],
+    }),
+    {
+      startSeconds: 110,
+      endSeconds: 120,
+      startPercent: 91.66666666666666,
+      endPercent: 100,
+    },
   );
 });

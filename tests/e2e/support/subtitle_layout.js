@@ -239,6 +239,24 @@ async function readSubtitleLayoutMetrics(page, options = {}) {
   for (let index = 1; index < cueLayout.lineCenters.length; index += 1) {
     cueGaps.push(Math.abs(cueLayout.lineCenters[index] - cueLayout.lineCenters[index - 1]));
   }
+  const overlayLayout = await page.evaluate(() => {
+    const overlay = document.getElementById("video-subtitle-overlay");
+    if (!overlay) {
+      return {
+        text: "",
+        fontSizePx: 0,
+        lineHeightPx: 0,
+        display: "none",
+      };
+    }
+    const style = window.getComputedStyle(overlay);
+    return {
+      text: String(overlay.textContent || "").trim(),
+      fontSizePx: Number.parseFloat(style.fontSize) || 0,
+      lineHeightPx: Number.parseFloat(style.lineHeight) || 0,
+      display: style.display,
+    };
+  });
 
   return {
     screenshot: screenshotLayout,
@@ -249,6 +267,7 @@ async function readSubtitleLayoutMetrics(page, options = {}) {
         ? [...cueGaps].sort((left, right) => left - right)[Math.floor(cueGaps.length / 2)]
         : 0,
     },
+    overlay: overlayLayout,
   };
 }
 
@@ -275,18 +294,25 @@ function expectSimilarSubtitleVerticalPosition(embeddedLayout, fullscreenLayout,
   ).toBeLessThanOrEqual(tolerance);
 }
 
-function expectEmbeddedSmallerThanFullscreenSubtitleLayout(embeddedLayout, fullscreenLayout) {
+function expectEmbeddedSmallerThanFullscreenSubtitleLayout(embeddedMetrics, fullscreenMetrics) {
+  const embeddedLayout = embeddedMetrics.screenshot;
+  const fullscreenLayout = fullscreenMetrics.screenshot;
   expectStackedSubtitleLayout(embeddedLayout, "embedded");
   expectStackedSubtitleLayout(fullscreenLayout, "fullscreen");
   expectSimilarSubtitleVerticalPosition(embeddedLayout, fullscreenLayout);
 
-  expect(
-    embeddedLayout.medianGap,
-    "embedded subtitle line spacing should be smaller than fullscreen",
-  ).toBeLessThan(fullscreenLayout.medianGap);
+  expect(embeddedMetrics.overlay.display, "embedded subtitle overlay display").toBe("block");
+  expect(fullscreenMetrics.overlay.display, "fullscreen subtitle overlay display").toBe("block");
+  expect(embeddedMetrics.overlay.text, "embedded subtitle overlay text").not.toBe("");
+  expect(fullscreenMetrics.overlay.text, "fullscreen subtitle overlay text").not.toBe("");
 
-  if (embeddedLayout.medianGap > 0) {
-    const spacingRatio = fullscreenLayout.medianGap / embeddedLayout.medianGap;
+  expect(
+    embeddedMetrics.overlay.lineHeightPx,
+    "embedded subtitle line spacing should be smaller than fullscreen",
+  ).toBeLessThan(fullscreenMetrics.overlay.lineHeightPx);
+
+  if (embeddedMetrics.overlay.lineHeightPx > 0) {
+    const spacingRatio = fullscreenMetrics.overlay.lineHeightPx / embeddedMetrics.overlay.lineHeightPx;
     expect(
       spacingRatio,
       "fullscreen subtitles should remain larger than embedded subtitles",

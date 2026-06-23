@@ -908,7 +908,9 @@ async function openVideoPane(page) {
   await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
   await page.locator("#bottom-pane-mode").selectOption("video-player");
   await expect(page.locator("#video-player-pane")).toBeVisible();
-  await expect(page.locator("#video-library-list .video-library-row")).toHaveCount(4);
+  await expect
+    .poll(async () => page.locator("#video-library-list .video-library-row").count(), { timeout: 15000 })
+    .toBeGreaterThanOrEqual(5);
   await waitForCompatibilityReady(page);
 }
 
@@ -939,6 +941,38 @@ async function readPlaybackProgressState(page) {
   });
 }
 
+async function readLoadedSeekWindowState(page) {
+  return page.evaluate(() => {
+    const slider = document.getElementById("video-progress-slider");
+    const video = document.getElementById("video-player-media");
+    const style = slider ? window.getComputedStyle(slider) : null;
+    let seekableEnd = NaN;
+    if (video && video.seekable && video.seekable.length > 0) {
+      try {
+        seekableEnd = Number(video.seekable.end(video.seekable.length - 1));
+      } catch (_error) {
+        seekableEnd = NaN;
+      }
+    }
+    return {
+      displayedStartPercent: style ? Number.parseFloat(style.getPropertyValue("--video-progress-processed-start")) : NaN,
+      displayedEndPercent: style ? Number.parseFloat(style.getPropertyValue("--video-progress-processed-end")) : NaN,
+      sliderMax: slider ? Number(slider.max) : NaN,
+      sliderValue: slider ? Number(slider.value) : NaN,
+      seekableEnd,
+    };
+  });
+}
+
+function percentToSeconds(percent, maxSeconds) {
+  const normalizedPercent = Number(percent);
+  const normalizedMax = Number(maxSeconds);
+  if (!Number.isFinite(normalizedPercent) || !Number.isFinite(normalizedMax) || normalizedMax <= 0) {
+    return NaN;
+  }
+  return (normalizedPercent / 100) * normalizedMax;
+}
+
 async function expectPlaybackNearSeconds(page, targetSeconds, toleranceSeconds = 1) {
   await expect
     .poll(async () => {
@@ -950,6 +984,44 @@ async function expectPlaybackNearSeconds(page, targetSeconds, toleranceSeconds =
       return candidates.some(
         (seconds) => Math.abs(seconds - targetSeconds) <= toleranceSeconds,
       );
+    }, { timeout: 15000 })
+    .toBe(true);
+}
+
+async function readDisplayedSubtitleDebugState(page) {
+  return page.evaluate(() => {
+    const currentCue = document.getElementById("video-debug-current-cue");
+    const meta = document.getElementById("video-debug-meta");
+    return {
+      currentCueText: currentCue ? String(currentCue.textContent || "").trim() : "",
+      metaText: meta ? String(meta.textContent || "").trim() : "",
+    };
+  });
+}
+
+async function waitForDisplayedSubtitleDebugText(page, expectedText) {
+  await expect
+    .poll(async () => {
+      const state = await readDisplayedSubtitleDebugState(page);
+      return state.currentCueText;
+    }, { timeout: 15000 })
+    .toContain(expectedText);
+}
+
+async function expectDisplayedSubtitleDebugRangeNear(page, targetSeconds, toleranceSeconds = 1.5) {
+  await expect
+    .poll(async () => {
+      const state = await readDisplayedSubtitleDebugState(page);
+      const match = state.currentCueText.match(/^(\d{2}:\d{2}:\d{2}\.\d{3})\s+-->\s+(\d{2}:\d{2}:\d{2}\.\d{3})/);
+      if (!match) return false;
+      const parts = match[1].split(":");
+      const secondsParts = parts[2].split(".");
+      const cueStartSeconds =
+        (Number(parts[0]) * 3600)
+        + (Number(parts[1]) * 60)
+        + Number(secondsParts[0])
+        + (Number(secondsParts[1]) / 1000);
+      return Math.abs(cueStartSeconds - targetSeconds) <= toleranceSeconds;
     }, { timeout: 15000 })
     .toBe(true);
 }
@@ -1097,6 +1169,144 @@ test("video playback loads tracks, switches tracks, and hides video before subti
   await page.locator("#video-subtitle-track").selectOption("3");
   await waitForSubtitleStreamIndex(page, 3);
   await expectTrackSelectors(page, { subtitleValue: "3" });
+});
+
+test("WebVTT subtitle debug timing stays aligned after in-session scrub remount", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await openVideoPane(page);
+
+  const initialSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Foffset.mkv"));
+  await playLibraryFile(page, "offset.mkv");
+  await initialSession;
+
+  await expectTrackSelectors(page, {
+    audioOptionCount: 2,
+    subtitleOptionCount: 4,
+    audioValue: "1",
+    subtitleValue: "3",
+  });
+  await waitForSubtitleStreamIndex(page, 3);
+  await waitForMountedSubtitleTrackReady(page, 3);
+
+  await page.locator("#video-progress-slider").evaluate((element) => {
+    element.value = "4.8";
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+  await expectPlaybackNearSeconds(page, 4.8, 0.75);
+  await waitForDisplayedSubtitleDebugText(page, "OFFSET-SUBTITLE-ENG");
+  await waitForNativeSubtitleCueText(page, "OFFSET-SUBTITLE-ENG");
+  await expectDisplayedSubtitleDebugRangeNear(page, 4.8, 1.5);
+});
+
+test("WebVTT subtitle timing stays aligned after restart at offset and later in-session scrub", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await page.route("**/video/endpoints/session", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    const payload = await response.json();
+    const body = route.request().postData() || "";
+    if (body.includes("path=Videos%2Foffset.mkv") && body.includes("start_time_seconds=0")) {
+      payload.encoded_media_end_seconds = 2;
+    }
+    await route.fulfill({
+      status: response.status(),
+      headers: response.headers(),
+      contentType: "application/json",
+      body: JSON.stringify(payload),
+    });
+  });
+
+  await openVideoPane(page);
+
+  const initialSession = waitForSessionPost(
+    page,
+    (body) => body.includes("path=Videos%2Foffset.mkv") && body.includes("start_time_seconds=0"),
+  );
+  await playLibraryFile(page, "offset.mkv");
+  await initialSession;
+
+  await expectTrackSelectors(page, {
+    audioOptionCount: 2,
+    subtitleOptionCount: 4,
+    audioValue: "1",
+    subtitleValue: "3",
+  });
+  await waitForSubtitleStreamIndex(page, 3);
+  await waitForMountedSubtitleTrackReady(page, 3);
+
+  await scrubTo(
+    page,
+    7,
+    (body) => body.includes("path=Videos%2Foffset.mkv") && body.includes("start_time_seconds=7"),
+  );
+  await expectPlaybackNearSeconds(page, 7, 0.75);
+  await waitForDisplayedSubtitleDebugText(page, "OFFSET-SUBTITLE-ENG AGAIN");
+  await waitForNativeSubtitleCueText(page, "OFFSET-SUBTITLE-ENG AGAIN");
+  await expectDisplayedSubtitleDebugRangeNear(page, 7, 1.5);
+
+  await scrubInSession(page, 7.8);
+  await expectPlaybackNearSeconds(page, 7.8, 0.75);
+  await waitForDisplayedSubtitleDebugText(page, "OFFSET-SUBTITLE-ENG AGAIN");
+  await waitForNativeSubtitleCueText(page, "OFFSET-SUBTITLE-ENG AGAIN");
+  await expectDisplayedSubtitleDebugRangeNear(page, 7.8, 1.5);
+});
+
+test("automatic playlist next clears old subtitles and mounts the next video track", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await page.addInitScript(TRACK_REMOVAL_INSTRUMENTATION);
+  await installSubtitleStaleMonitor(page);
+  await openVideoPane(page);
+
+  const alphaSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
+  await playLibraryFile(page, "alpha.mkv");
+  await alphaSession;
+  await page.locator("#video-subtitle-track").selectOption("4");
+  await waitForSubtitleStreamIndex(page, 4);
+  await waitForMountedSubtitleTrackReady(page, 4);
+  await setPlaybackTimeForSubtitleChecks(page, 1);
+  await waitForDisplayedSubtitleText(page, "ALPHA-SUBTITLE-FRA");
+  await waitForNativeSubtitleCueText(page, "ALPHA-SUBTITLE-FRA");
+
+  const bravoRow = await libraryRow(page, "bravo.mkv");
+  await bravoRow.click();
+  await page.locator("#video-library-add-selected").click();
+  await expect(page.locator("#video-queue-list .video-queue-row")).toHaveCount(2);
+
+  await page.evaluate(() => {
+    window.__subtitleTeardownEvents = [];
+  });
+  const staleAlphaSubtitleTexts = ["ALPHA-SUBTITLE-FRA", "ALPHA-SUBTITLE-ENG"];
+  await armSubtitleStaleMonitor(page, staleAlphaSubtitleTexts);
+  const bravoSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fbravo.mkv"));
+  await page.evaluate(() => {
+    const video = document.getElementById("video-player-media");
+    if (!video) throw new Error("video element missing");
+    video.dispatchEvent(new Event("ended"));
+  });
+  await waitForLoadingOverlayWithoutPlaceholder(page);
+  await waitForDisplayedSubtitleToClear(page);
+  await expectNativeSubtitleSurfaceClearOf(page, staleAlphaSubtitleTexts);
+  await bravoSession;
+  await expectActiveQueueTitle(page, "bravo.mkv");
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+  await expectTrackSelectors(page, { subtitleValue: "4" });
+  await waitForSubtitleStreamIndex(page, 4);
+  await waitForMountedSubtitleTrackReady(page, 4);
+  await setPlaybackTimeForSubtitleChecks(page, 1);
+  await waitForDisplayedSubtitleText(page, "BRAVO-SUBTITLE-FRA");
+  await waitForNativeSubtitleCueText(page, "BRAVO-SUBTITLE-FRA");
+  await expectNoSubtitleStaleMonitorViolations(page);
 });
 
 test("video playback never shows loading or placeholder copy on top of active playback during real HLS switching", async ({ page }) => {
@@ -1277,6 +1487,74 @@ test("scrub beyond tracked encoded range restarts when seekable overstates durat
   const postsAfterScrub = sessionPosts.slice(postsBeforeScrub);
   expect(postsAfterScrub.some((body) => body.includes("start_time_seconds=7"))).toBe(true);
   expect(postsAfterScrub.some((body) => /start_time_seconds=0(?:&|$)/.test(body))).toBe(false);
+});
+
+test("displayed loaded seek band matches actual instant-seek range during real HLS playback", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await page.route("**/video/endpoints/status**", async (route) => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    if (
+      payload
+      && payload.active_session
+      && payload.active_session.path === "Videos/seek-window.mkv"
+    ) {
+      payload.active_session.encoded_media_end_seconds = 18;
+    }
+    await route.fulfill({
+      status: response.status(),
+      headers: response.headers(),
+      contentType: "application/json",
+      body: JSON.stringify(payload),
+    });
+  });
+
+  await openVideoPane(page);
+
+  const initialSession = waitForSessionPost(
+    page,
+    (body) => body.includes("path=Videos%2Fseek-window.mkv") && body.includes("start_time_seconds=0"),
+  );
+  const statusPoll = page.waitForRequest((request) => {
+    return request.method() === "GET" && request.url().includes("/video/endpoints/status");
+  }, { timeout: 15000 });
+  await playLibraryFile(page, "seek-window.mkv");
+  await initialSession;
+  await statusPoll;
+  await waitForScrubberReady(page);
+  await pausePlayback(page);
+
+  await expect
+    .poll(async () => {
+      const state = await readLoadedSeekWindowState(page);
+      return {
+        ...state,
+        displayedStartSeconds: percentToSeconds(state.displayedStartPercent, state.sliderMax),
+        displayedEndSeconds: percentToSeconds(state.displayedEndPercent, state.sliderMax),
+      };
+    }, { timeout: 15000 })
+    .toMatchObject({
+      sliderMax: expect.any(Number),
+      seekableEnd: expect.any(Number),
+      displayedEndSeconds: expect.any(Number),
+    });
+
+  const loadedWindowState = await readLoadedSeekWindowState(page);
+  const displayedStartSeconds = percentToSeconds(
+    loadedWindowState.displayedStartPercent,
+    loadedWindowState.sliderMax,
+  );
+  const displayedEndSeconds = percentToSeconds(
+    loadedWindowState.displayedEndPercent,
+    loadedWindowState.sliderMax,
+  );
+
+  expect(displayedStartSeconds).toBeCloseTo(0, 1);
+  expect(displayedEndSeconds).toBeCloseTo(loadedWindowState.seekableEnd, 0);
+
+  const targetSeconds = Math.max(1, displayedEndSeconds - 0.5);
+  await scrubInSession(page, targetSeconds);
 });
 
 test("video play toggle keeps intended state during compatibility seek loading", async ({ page }) => {
