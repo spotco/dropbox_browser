@@ -21,10 +21,20 @@ let server = null;
 
 test.describe.configure({ timeout: 90000 });
 
-async function installHlsStub(page, { fragmentCount = 2 } = {}) {
-  await page.addInitScript((count) => {
-    window.__HLS_STUB_FRAGMENT_COUNT = count;
-  }, fragmentCount);
+async function installHlsStub(page, {
+  fragmentCount = 2,
+  playlistFragmentCount = null,
+  simulateMissingOnSeek = false,
+} = {}) {
+  await page.addInitScript((options) => {
+    window.__HLS_STUB_FRAGMENT_COUNT = options.fragmentCount;
+    window.__HLS_STUB_PLAYLIST_FRAGMENT_COUNT = options.playlistFragmentCount ?? options.fragmentCount;
+    window.__HLS_STUB_SIMULATE_MISSING_ON_SEEK = options.simulateMissingOnSeek;
+  }, {
+    fragmentCount,
+    playlistFragmentCount: playlistFragmentCount ?? fragmentCount,
+    simulateMissingOnSeek,
+  });
   await page.route("**/assets/js/vendor/hls.js", async (route) => {
     await route.fulfill({
       status: 200,
@@ -527,6 +537,28 @@ async function waitForDisplayedSubtitleText(page, expectedText) {
       });
     }, { timeout: 10000 })
     .toContain(expectedText);
+}
+
+async function waitForSubtitleOverlayMarkup(page, { tagName, expectedText }) {
+  await expect
+    .poll(async () => {
+      return page.evaluate(({ expectedTagName, text }) => {
+        const overlay = document.getElementById("video-subtitle-overlay");
+        if (!overlay || overlay.hidden) {
+          return { found: false, html: "" };
+        }
+        const element = overlay.querySelector(expectedTagName);
+        return {
+          found: Boolean(element),
+          text: element ? String(element.textContent || "").trim() : "",
+          html: overlay.innerHTML,
+        };
+      }, { expectedTagName: tagName, text: expectedText });
+    }, { timeout: 10000 })
+    .toMatchObject({
+      found: true,
+      text: expectedText,
+    });
 }
 
 async function waitForNativeSubtitleCueText(page, expectedText) {
@@ -1184,6 +1216,38 @@ test("video playback loads tracks, switches tracks, and hides video before subti
   await expectTrackSelectors(page, { subtitleValue: "3" });
 });
 
+test("WebVTT formatting tags render in the subtitle overlay", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await openVideoPane(page);
+
+  const initialSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
+  await playLibraryFile(page, "alpha.mkv");
+  await initialSession;
+
+  await expectTrackSelectors(page, {
+    audioOptionCount: 2,
+    subtitleOptionCount: 4,
+    audioValue: "1",
+    subtitleValue: "3",
+  });
+  await waitForSubtitleStreamIndex(page, 3);
+  await waitForMountedSubtitleTrackReady(page, 3);
+  await waitForDisplayedSubtitleText(page, "ALPHA-SUBTITLE-ENG");
+  await waitForSubtitleOverlayMarkup(page, {
+    tagName: "i",
+    expectedText: "ALPHA-SUBTITLE-ENG",
+  });
+
+  await page.locator("#video-subtitle-track").selectOption("4");
+  await waitForSubtitleStreamIndex(page, 4);
+  await waitForDisplayedSubtitleText(page, "ALPHA-SUBTITLE-FRA");
+  await waitForSubtitleOverlayMarkup(page, {
+    tagName: "b",
+    expectedText: "ALPHA-SUBTITLE-FRA",
+  });
+});
+
 test("WebVTT subtitle debug timing stays aligned after in-session scrub remount", async ({ page }) => {
   test.setTimeout(90000);
 
@@ -1604,6 +1668,108 @@ test("displayed loaded seek band matches actual instant-seek range during real H
   await waitForLoadingOverlayHidden(page);
   await waitForPlaybackSurfaceWithoutOverlay(page);
   await expectPlaybackNearSeconds(page, expectedClampedRestartSeconds, 1);
+});
+
+test("missing HLS segment recovery restarts session instead of looping in-session seek", async ({ page }) => {
+  test.setTimeout(90000);
+
+  const sessionPosts = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/video/endpoints/session") && request.method() === "POST") {
+      sessionPosts.push(request.postData() || "");
+    }
+  });
+
+  const encodedMediaEndSeconds = 24;
+  const seekTargetSeconds = 18;
+  const expectedRestartSeconds = 18;
+
+  await page.route("**/video/endpoints/session", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    const payload = await response.json();
+    if ((route.request().postData() || "").includes("path=Videos%2Fseek-window.mkv")) {
+      payload.encoded_media_end_seconds = encodedMediaEndSeconds;
+    }
+    await route.fulfill({
+      status: response.status(),
+      headers: response.headers(),
+      contentType: "application/json",
+      body: JSON.stringify(payload),
+    });
+  });
+
+  await page.route("**/video/endpoints/status**", async (route) => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    if (
+      payload
+      && payload.active_session
+      && payload.active_session.path === "Videos/seek-window.mkv"
+    ) {
+      payload.active_session.encoded_media_end_seconds = encodedMediaEndSeconds;
+    }
+    await route.fulfill({
+      status: response.status(),
+      headers: response.headers(),
+      contentType: "application/json",
+      body: JSON.stringify(payload),
+    });
+  });
+
+  await installHlsStub(page, {
+    fragmentCount: 2,
+    playlistFragmentCount: 4,
+    simulateMissingOnSeek: true,
+  });
+  await openVideoPane(page);
+
+  const initialSession = waitForSessionPost(
+    page,
+    (body) => body.includes("path=Videos%2Fseek-window.mkv") && body.includes("start_time_seconds=0"),
+  );
+  await playLibraryFile(page, "seek-window.mkv");
+  await initialSession;
+  await waitForScrubberReady(page);
+  await pausePlayback(page);
+
+  const postsBeforeMissingSegmentSeek = sessionPosts.length;
+  const recoverySession = waitForSessionPost(
+    page,
+    (body) => {
+      if (!body.includes("path=Videos%2Fseek-window.mkv")) return false;
+      const startSeconds = Number(new URLSearchParams(body).get("start_time_seconds"));
+      return Number.isFinite(startSeconds) && startSeconds > 0;
+    },
+  );
+  await page.locator("#video-progress-slider").evaluate((element, seconds) => {
+    element.value = String(seconds);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  }, seekTargetSeconds);
+  await recoverySession;
+  await waitForLoadingOverlayHidden(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+  await expectPlaybackNearSeconds(page, expectedRestartSeconds, 1);
+
+  const postsAfterMissingSegmentSeek = sessionPosts.slice(postsBeforeMissingSegmentSeek);
+  expect(postsAfterMissingSegmentSeek.length).toBeGreaterThanOrEqual(1);
+  const restartBody = postsAfterMissingSegmentSeek.find((body) => body.includes("path=Videos%2Fseek-window.mkv")) || "";
+  const restartStartSeconds = Number(new URLSearchParams(restartBody).get("start_time_seconds"));
+  expect(restartStartSeconds).toBeCloseTo(expectedRestartSeconds, 0);
+
+  await expect
+    .poll(async () => {
+      return page.evaluate(() => {
+        const loading = document.getElementById("video-loading-overlay");
+        if (!loading || loading.hidden) return "";
+        return String(loading.textContent || "").trim();
+      });
+    }, { timeout: 3000 })
+    .not.toContain("Recovering compatibility playback");
 });
 
 test("video play toggle keeps intended state during compatibility seek loading", async ({ page }) => {
