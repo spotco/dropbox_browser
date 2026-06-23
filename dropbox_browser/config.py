@@ -37,7 +37,7 @@ _APP_CONFIG_DEFAULTS: dict = {
     "LogVideoDebug": False,
     "ClientLogEnabled": True,
     "ClientLogSubsystems": {
-        "video": False,
+        "video": True,
         "video-timing": True,
         "video-subtitles": False,
         "browse-reveal": False,

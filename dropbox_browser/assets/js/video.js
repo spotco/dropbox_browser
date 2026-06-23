@@ -1,6 +1,7 @@
 import Hls from './vendor/hls.js';
 import {
   advanceQueueAfterPlaybackEnd,
+  clampCompatibilityRestartTargetSeconds,
   clearQueue,
   compatibilityInSessionSeekDecision,
   compatibilitySeekableRange,
@@ -139,6 +140,8 @@ import {
       controlsIdleTimer: 0,
       controlsOverlayVisible: false,
       loadingOverlayVisible: false,
+      loadingOverlayMeta: '',
+      compatibilityManifestStallTimer: 0,
       playbackTiming: null,
       lastControlsRevealPointerKey: '',
       controlsScrubReveal: false,
@@ -499,6 +502,7 @@ import {
       ctx.els.playbackStageEl.setAttribute('data-loading-state', visible ? 'active' : 'idle');
     }
     ctx.state.loadingOverlayVisible = visible;
+    ctx.state.loadingOverlayMeta = visible ? meta : '';
   }
 
   function showLoadingOverlay(options) {
@@ -565,10 +569,29 @@ import {
   }
 
   function destroyHlsController() {
+    clearCompatibilityManifestStallTimer();
     if (ctx.state.hlsController && typeof ctx.state.hlsController.destroy === 'function') {
       ctx.state.hlsController.destroy();
     }
     ctx.state.hlsController = null;
+  }
+
+  function clearCompatibilityManifestStallTimer() {
+    if (!ctx.state.compatibilityManifestStallTimer) return;
+    window.clearTimeout(ctx.state.compatibilityManifestStallTimer);
+    ctx.state.compatibilityManifestStallTimer = 0;
+  }
+
+  function reportCompatibilitySeekTiming(milestone, fields) {
+    var snapshotTarget = fields
+      ? (fields.target_seconds ?? fields.requested_time ?? fields.raw_target_seconds)
+      : undefined;
+    var details = Object.assign({}, currentProcessedRangeSnapshot(snapshotTarget), fields || {});
+    reportPlaybackTiming(milestone, details);
+    reportVideoDiagnostic(Object.assign({
+      level: 'info',
+      message: 'Compatibility seek: ' + milestone,
+    }, details));
   }
 
   function clearCompatibilityRecoveryTimer() {
@@ -1779,8 +1802,16 @@ import {
     if (!ctx.els.videoEl) return;
     clearVideoSource();
     resetCompatibilityBufferState();
+    var normalizedStartSeconds = Math.max(0, Number(startSeconds) || 0);
+    reportCompatibilitySeekTiming('hls_attach_started', {
+      playlist_url: playlistUrl || '',
+      source_start_seconds: normalizedStartSeconds,
+      encoded_media_end_seconds: ctx.state.compatibilityEncodedMediaEndSeconds || 0,
+      seek_restart_in_progress: ctx.state.seekRestartInProgress,
+      playback_sync_token: surfaceSyncToken,
+    });
     reportPlaybackTiming('hls_attached');
-    ctx.state.compatibilityStartSeconds = Math.max(0, Number(startSeconds) || 0);
+    ctx.state.compatibilityStartSeconds = normalizedStartSeconds;
     ctx.els.videoEl.controls = false;
     ctx.els.videoEl.removeAttribute('controls');
     resetCompatibilityRecoveryState();
@@ -1811,6 +1842,7 @@ import {
       });
       ctx.state.hlsController.on(Hls.Events.MANIFEST_LOADED, function (_eventName, data) {
         if (!playbackSyncTokenIsCurrent(surfaceSyncToken)) return;
+        var hlsLevelCount = data && Array.isArray(data.levels) ? data.levels.length : 0;
         showLoadingOverlay({
           title: title,
           meta: 'Playlist is ready. Attaching the stream.',
@@ -1819,13 +1851,30 @@ import {
         reportVideoDiagnostic({
           level: 'debug',
           message: 'HLS manifest loaded',
-          hls_level_count: data && Array.isArray(data.levels) ? data.levels.length : '',
+          hls_level_count: hlsLevelCount,
         });
         reportPlaybackTiming('hls_manifest_loaded', {
-          hls_level_count: data && Array.isArray(data.levels) ? data.levels.length : '',
+          hls_level_count: hlsLevelCount,
+          playlist_url: playlistUrl || '',
+          source_start_seconds: ctx.state.compatibilityStartSeconds || 0,
+          encoded_media_end_seconds: ctx.state.compatibilityEncodedMediaEndSeconds || 0,
         });
+        clearCompatibilityManifestStallTimer();
+        ctx.state.compatibilityManifestStallTimer = window.setTimeout(function () {
+          if (!playbackSyncTokenIsCurrent(surfaceSyncToken)) return;
+          if (ctx.state.playbackMode !== 'compatibility') return;
+          reportCompatibilitySeekTiming('hls_manifest_parse_stall', {
+            stall_ms: 5000,
+            loading_overlay_meta: ctx.state.loadingOverlayMeta || '',
+            playlist_url: playlistUrl || '',
+            hls_level_count: hlsLevelCount,
+            playback_sync_token: surfaceSyncToken,
+            current_playback_sync_token: ctx.state.playbackSyncToken,
+          });
+        }, 5000);
       });
       ctx.state.hlsController.on(Hls.Events.MANIFEST_PARSED, function () {
+        clearCompatibilityManifestStallTimer();
         if (ctx.state.playbackMode !== 'compatibility' || !playbackSyncTokenIsCurrent(surfaceSyncToken)) return;
         showLoadingOverlay({
           title: title,
@@ -2737,20 +2786,16 @@ import {
       selectedBurnedInSubtitleStreamIndex: selectedBurnedInSubtitleStreamIndex(active, probePayload),
       sessionSubtitleStreamIndex: ctx.state.compatibilitySessionBurnedInSubtitleStreamIndex,
     });
-    reportVideoDiagnostic(Object.assign(
-      currentProcessedRangeSnapshot(clampedTarget),
-      {
-        level: 'info',
-        message: 'Compatibility seek evaluated',
-        seek_reason: reason || '',
-        evaluation_phase: phase || '',
-        decision_action: decision.action || '',
-        decision_reason: decision.reason || '',
-        decision_media_target_seconds: Number.isFinite(Number(decision.mediaTargetSeconds))
-          ? Number(decision.mediaTargetSeconds)
-          : '',
-      }
-    ));
+    reportCompatibilitySeekTiming('compatibility_seek_evaluated', {
+      seek_reason: reason || '',
+      evaluation_phase: phase || '',
+      decision_action: decision.action || '',
+      decision_reason: decision.reason || '',
+      target_seconds: clampedTarget,
+      decision_media_target_seconds: Number.isFinite(Number(decision.mediaTargetSeconds))
+        ? Number(decision.mediaTargetSeconds)
+        : '',
+    });
     if (decision.action !== 'in-session' || !Number.isFinite(Number(decision.mediaTargetSeconds))) {
       return false;
     }
@@ -2802,15 +2847,32 @@ import {
     if (!active || !ctx.state.compatibilityAvailable) return;
     clearCompatibilityRecoveryTimer();
     var syncToken = ++ctx.state.playbackSyncToken;
+    var rawTargetSeconds = Math.max(0, Number(targetSeconds) || 0);
+    reportCompatibilitySeekTiming('restart_seek_started', {
+      raw_target_seconds: rawTargetSeconds,
+      seek_reason: reason || '',
+      playback_sync_token: syncToken,
+    });
     var cachedProbePayload = ctx.state.probeCache[active.path || ''] || null;
     var duration = playbackDurationSeconds(
       ctx.els.videoEl ? Number(ctx.els.videoEl.duration) : NaN,
       cachedProbePayload,
       'compatibility'
     );
-    var clampedTarget = Math.max(0, Number(targetSeconds) || 0);
+    var clampedTarget = rawTargetSeconds;
     if (Number.isFinite(duration) && duration > 0) {
       clampedTarget = Math.min(duration, clampedTarget);
+      var preClampTarget = clampedTarget;
+      clampedTarget = clampCompatibilityRestartTargetSeconds(clampedTarget, duration);
+      if (clampedTarget !== preClampTarget || rawTargetSeconds !== clampedTarget) {
+        reportCompatibilitySeekTiming('restart_target_clamped', {
+          raw_target_seconds: rawTargetSeconds,
+          pre_clamp_target_seconds: preClampTarget,
+          clamped_target_seconds: clampedTarget,
+          duration_seconds: duration,
+          seek_reason: reason || '',
+        });
+      }
     }
     if (trySeekCompatibilityInSession(active, cachedProbePayload, clampedTarget, reason, 'before-probe')) {
       return;
@@ -2825,9 +2887,21 @@ import {
       probePayload,
       'compatibility'
     );
-    clampedTarget = Math.max(0, Number(targetSeconds) || 0);
+    clampedTarget = rawTargetSeconds;
     if (Number.isFinite(duration) && duration > 0) {
       clampedTarget = Math.min(duration, clampedTarget);
+      var postProbePreClampTarget = clampedTarget;
+      clampedTarget = clampCompatibilityRestartTargetSeconds(clampedTarget, duration);
+      if (clampedTarget !== postProbePreClampTarget || rawTargetSeconds !== clampedTarget) {
+        reportCompatibilitySeekTiming('restart_target_clamped', {
+          raw_target_seconds: rawTargetSeconds,
+          pre_clamp_target_seconds: postProbePreClampTarget,
+          clamped_target_seconds: clampedTarget,
+          duration_seconds: duration,
+          seek_reason: reason || '',
+          evaluation_phase: 'after-probe',
+        });
+      }
     }
     if (trySeekCompatibilityInSession(active, probePayload, clampedTarget, reason, 'after-probe')) {
       return;
@@ -2891,6 +2965,13 @@ import {
       reportPlaybackTiming('session_create_complete', {
         requested_time: clampedTarget,
         server_session_create_elapsed_ms: session.session_create_elapsed_ms,
+      });
+      reportCompatibilitySeekTiming('session_create_response', {
+        requested_time: clampedTarget,
+        server_start_time_seconds: Number(session.start_time_seconds) || 0,
+        encoded_media_end_seconds: Number(session.encoded_media_end_seconds) || 0,
+        session_id: session.session_id || '',
+        seek_reason: reason || '',
       });
       showLoadingOverlay(loadingOverlayCopy(
         active,
@@ -3551,15 +3632,10 @@ import {
         ctx.state.controlsScrubReveal = true;
         revealControlsOverlay();
         if (ctx.state.seekRestartInProgress) {
-          reportVideoDiagnostic(Object.assign(
-            currentProcessedRangeSnapshot(nextTime),
-            {
-              level: 'info',
-              message: 'Compatibility seek queued during restart',
-              queued_requested_time: nextTime,
-              prior_requested_time: ctx.state.requestedSeekSeconds,
-            }
-          ));
+          reportCompatibilitySeekTiming('seek_queued_during_restart', {
+            queued_requested_time: nextTime,
+            prior_requested_time: ctx.state.requestedSeekSeconds,
+          });
           ctx.state.requestedSeekSeconds = nextTime;
           if (ctx.els.elapsedTimeEl) {
             ctx.els.elapsedTimeEl.textContent = formatNativePlaybackTime(nextTime);
@@ -3567,6 +3643,9 @@ import {
           syncPlaybackProgress();
           return;
         }
+        reportCompatibilitySeekTiming('scrub_restart_requested', {
+          target_seconds: nextTime,
+        });
         void restartCompatibilityAt(nextTime, 'scrub');
         return;
       }
