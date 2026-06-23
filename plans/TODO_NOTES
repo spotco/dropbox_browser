@@ -1,6 +1,9 @@
 video player
-- http://localhost:8000/file?path=anime%2F%5BJudas%5D+Fairy+Tail+%282009-2014%29+%28Seasons+1-8+%2B+OVAs%29+%5BBD+1080p%5D%5BHEVC+x265+10bit%5D%5BDual-Audio%5D%5BEng-Subs%5D%2F%5BJudas%5D+Fairy+Tail+%282009%29%2F%5BJudas%5D+Fairy+Tail+%282009%29+-+001.mkv&source=remote
-	no subtitles or audio tracks - figure out why
+- no subtitles or audio tracks - figure out why
+	http://localhost:8000/file?path=anime%2F%5BJudas%5D+Fairy+Tail+%282009-2014%29+%28Seasons+1-8+%2B+OVAs%29+%5BBD+1080p%5D%5BHEVC+x265+10bit%5D%5BDual-Audio%5D%5BEng-Subs%5D%2F%5BJudas%5D+Fairy+Tail+%282009%29%2F%5BJudas%5D+Fairy+Tail+%282009%29+-+001.mkv&source=remote
+	
+- subtitles not working
+	http://localhost:8000/file?path=anime%2Fconan_24%2F%5BAh-le-le%5D+Detective+Conan+Movie+24v0+-+The+Scarlet+Bullet+%28BDRip+1080p+HEVC+FLAC+TrueHD%29+%5B12A80FEC%5D.mkv&source=remote
 - more responsive load (time to end of loaded, smaller faster load smaller section)
 - clicking outside of loaded area should not clear loaded cache
 - library management
