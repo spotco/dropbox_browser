@@ -255,6 +255,30 @@
     0 0 6px rgba(0, 0, 0, 0.7);
 }
 
+.video-subtitle-overlay b {
+  font-weight: 900;
+}
+
+.video-subtitle-overlay i {
+  font-style: italic;
+}
+
+.video-subtitle-overlay u {
+  text-decoration: underline;
+}
+
+.video-subtitle-overlay ruby {
+  ruby-position: over;
+}
+
+.video-subtitle-overlay rt {
+  font-size: 0.65em;
+}
+
+.video-subtitle-overlay .vtt-v {
+  font-style: italic;
+}
+
 .video-subtitle-overlay {
   bottom: 8%;
   color: #f8fbff;

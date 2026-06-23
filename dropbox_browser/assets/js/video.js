@@ -4,6 +4,7 @@ import {
   clampCompatibilityRestartTargetSeconds,
   clearQueue,
   compatibilityInSessionSeekDecision,
+  compatibilityRecoveryRequiresSessionRestart,
   compatibilitySeekableRange,
   enqueueAndPlay,
   enqueueSelected,
@@ -13,6 +14,9 @@ import {
   playQueueIndex,
   removeQueueIndex,
   shouldApplyDeferredCompatibilitySeek,
+  findActiveParsedCues,
+  stripWebVttMarkup,
+  webvttCueTextToHtml,
 } from './video-core.js';
 
 (function () {
@@ -1116,20 +1120,42 @@ import {
 
   function clearSubtitleOverlay() {
     if (!ctx.els.subtitleOverlayEl) return;
-    ctx.els.subtitleOverlayEl.textContent = '';
+    ctx.els.subtitleOverlayEl.replaceChildren();
     ctx.els.subtitleOverlayEl.hidden = true;
     ctx.els.subtitleOverlayEl.classList.add('hidden');
   }
 
+  function buildSubtitleOverlayHtml(textTrack, parsedCues, mediaTime) {
+    if (Array.isArray(parsedCues) && parsedCues.length && Number.isFinite(mediaTime)) {
+      var parsedHtmlParts = [];
+      var activeParsedCues = findActiveParsedCues(parsedCues, mediaTime);
+      for (var parsedIndex = 0; parsedIndex < activeParsedCues.length; parsedIndex += 1) {
+        var parsedHtml = webvttCueTextToHtml(activeParsedCues[parsedIndex].rawText);
+        if (parsedHtml) parsedHtmlParts.push(parsedHtml);
+      }
+      return parsedHtmlParts.join('<br>');
+    }
+    var texts = collectActiveSubtitleTexts(textTrack);
+    if (!texts.length) return '';
+    return texts.map(function (text) {
+      return webvttCueTextToHtml(text);
+    }).join('<br>');
+  }
+
   function syncSubtitleOverlayDisplay() {
     if (!ctx.els.subtitleOverlayEl) return;
+    var mediaTime = ctx.els.videoEl ? Number(ctx.els.videoEl.currentTime) : NaN;
     var textTrack = managedSubtitleTextTrack();
-    var texts = collectActiveSubtitleTexts(textTrack);
-    if (!texts.length) {
+    var overlayHtml = buildSubtitleOverlayHtml(
+      textTrack,
+      ctx.state.subtitleDebug.cues,
+      mediaTime
+    );
+    if (!overlayHtml) {
       clearSubtitleOverlay();
       return;
     }
-    ctx.els.subtitleOverlayEl.textContent = texts.join('\n');
+    ctx.els.subtitleOverlayEl.innerHTML = overlayHtml;
     ctx.els.subtitleOverlayEl.hidden = false;
     ctx.els.subtitleOverlayEl.classList.remove('hidden');
   }
@@ -1236,7 +1262,7 @@ import {
 
   function previewSubtitleText(text, maxChars) {
     var limit = Number.isFinite(maxChars) && maxChars > 0 ? maxChars : SUBTITLE_PREVIEW_MAX_CHARS;
-    var normalized = String(text || '').replace(/\s+/g, ' ').trim();
+    var normalized = stripWebVttMarkup(text).replace(/\s+/g, ' ').trim();
     if (!normalized) return '';
     if (normalized.length <= limit) return normalized;
     return normalized.slice(0, limit - 1) + '…';
@@ -2874,7 +2900,8 @@ import {
         });
       }
     }
-    if (trySeekCompatibilityInSession(active, cachedProbePayload, clampedTarget, reason, 'before-probe')) {
+    var forceSessionRestart = compatibilityRecoveryRequiresSessionRestart(reason || '');
+    if (!forceSessionRestart && trySeekCompatibilityInSession(active, cachedProbePayload, clampedTarget, reason, 'before-probe')) {
       return;
     }
     resetPlaybackTiming(active.path || '', reason || 'seek-restart');
@@ -2903,7 +2930,7 @@ import {
         });
       }
     }
-    if (trySeekCompatibilityInSession(active, probePayload, clampedTarget, reason, 'after-probe')) {
+    if (!forceSessionRestart && trySeekCompatibilityInSession(active, probePayload, clampedTarget, reason, 'after-probe')) {
       return;
     }
     var wasPlaying = playbackShouldBeRunning();

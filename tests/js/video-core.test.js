@@ -222,6 +222,19 @@ test("compatibilityInSessionSeekDecision restarts when tracks or session context
   assert.equal(noSession.reason, "no-session");
 });
 
+test("compatibilityRecoveryRequiresSessionRestart forces a new session for recovery reasons", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
+
+  assert.equal(mod.compatibilityRecoveryRequiresSessionRestart("hls-missing-segment"), true);
+  assert.equal(mod.compatibilityRecoveryRequiresSessionRestart("hls-fatal-error"), true);
+  assert.equal(mod.compatibilityRecoveryRequiresSessionRestart("media-element-error"), true);
+  assert.equal(mod.compatibilityRecoveryRequiresSessionRestart("restart-failed"), true);
+  assert.equal(mod.compatibilityRecoveryRequiresSessionRestart("initial-start-failed"), true);
+  assert.equal(mod.compatibilityRecoveryRequiresSessionRestart("scrub"), false);
+  assert.equal(mod.compatibilityRecoveryRequiresSessionRestart("audio-track-change"), false);
+  assert.equal(mod.compatibilityRecoveryRequiresSessionRestart(""), false);
+});
+
 test("shouldApplyDeferredCompatibilitySeek ignores cleared null seek state", async () => {
   const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
 
@@ -293,6 +306,58 @@ test("compatibilityProcessedRange clamps the processed window to the full runtim
       endPercent: 0,
     },
   );
+});
+
+test("webvttCueTextToHtml renders common WebVTT formatting tags", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
+
+  assert.equal(mod.webvttCueTextToHtml("plain text"), "plain text");
+  assert.equal(mod.webvttCueTextToHtml("<i>italic</i>"), "<i>italic</i>");
+  assert.equal(mod.webvttCueTextToHtml("<b>bold</b>"), "<b>bold</b>");
+  assert.equal(mod.webvttCueTextToHtml("<u>underline</u>"), "<u>underline</u>");
+  assert.equal(
+    mod.webvttCueTextToHtml("<i>mixed <b>styles</b></i>"),
+    "<i>mixed <b>styles</b></i>",
+  );
+  assert.equal(
+    mod.webvttCueTextToHtml('<c.red>classed</c>'),
+    '<span class="vtt-c red">classed</span>',
+  );
+  assert.equal(
+    mod.webvttCueTextToHtml("<v John>hello</v>"),
+    '<span class="vtt-v" data-voice="John">hello</span>',
+  );
+  assert.equal(
+    mod.webvttCueTextToHtml("<lang en>colour</lang>"),
+    '<span lang="en">colour</span>',
+  );
+  assert.equal(
+    mod.webvttCueTextToHtml("<ruby>漢<rt>kan</rt></ruby>"),
+    "<ruby>漢<rt>kan</rt></ruby>",
+  );
+  assert.equal(mod.webvttCueTextToHtml("a &amp; b"), "a &amp; b");
+  assert.equal(mod.webvttCueTextToHtml("a <not-a-tag> b"), "a &lt;not-a-tag&gt; b");
+  assert.equal(mod.webvttCueTextToHtml("cue<00:00:01.000> text"), "cue text");
+});
+
+test("stripWebVttMarkup removes tags and timestamp annotations", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
+
+  assert.equal(mod.stripWebVttMarkup("<i>ALPHA-SUBTITLE-ENG</i>"), "ALPHA-SUBTITLE-ENG");
+  assert.equal(mod.stripWebVttMarkup("line<00:00:01.000> two"), "line two");
+});
+
+test("findActiveParsedCues returns every cue active at the media time", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
+  const cues = [
+    { start: 0, end: 2, rawText: "one" },
+    { start: 1, end: 3, rawText: "two" },
+    { start: 4, end: 6, rawText: "three" },
+  ];
+
+  assert.deepEqual(mod.findActiveParsedCues(cues, 1.5).map((cue) => cue.rawText), ["one", "two"]);
+  assert.deepEqual(mod.findActiveParsedCues(cues, 4.5).map((cue) => cue.rawText), ["three"]);
+  assert.deepEqual(mod.findActiveParsedCues(cues, 3.5), []);
 });
 
 test("compatibilitySeekableRange clamps the displayed seekable window to actual seekable media", async () => {
