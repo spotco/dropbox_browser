@@ -1432,12 +1432,9 @@ def extract_remote_subtitles_to_webvtt(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,
-            timeout=30,
         )
     except FileNotFoundError as exc:
         raise BrowserError(HTTPStatus.SERVICE_UNAVAILABLE, f"ffmpeg was not found: {exc}") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise BrowserError(HTTPStatus.BAD_GATEWAY, "ffmpeg timed out while converting subtitles.") from exc
     if proc.returncode != 0:
         message = proc.stderr.decode("utf-8", "replace").strip() or "ffmpeg failed to convert subtitles to WebVTT."
         raise BrowserError(HTTPStatus.BAD_GATEWAY, message)
@@ -1472,8 +1469,6 @@ def _run_ffmpeg_single_webvtt(
     ffmpeg_exe: Path,
     input_url: str,
     subtitle_stream_index: int,
-    *,
-    timeout_seconds: int = 30,
 ) -> bytes | None:
     command = build_ffmpeg_webvtt_command(
         ffmpeg_exe,
@@ -1486,9 +1481,8 @@ def _run_ffmpeg_single_webvtt(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,
-            timeout=timeout_seconds,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except FileNotFoundError:
         return None
     if proc.returncode != 0:
         return None
@@ -1499,8 +1493,6 @@ def _run_ffmpeg_batch_webvtt(
     ffmpeg_exe: Path,
     input_url: str,
     missing_rows: list[dict[str, object]],
-    *,
-    timeout_seconds: int,
 ) -> dict[int, bytes] | None:
     if not missing_rows:
         return {}
@@ -1525,9 +1517,8 @@ def _run_ffmpeg_batch_webvtt(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 check=False,
-                timeout=timeout_seconds,
             )
-        except (FileNotFoundError, subprocess.TimeoutExpired):
+        except FileNotFoundError:
             return None
         if proc.returncode != 0:
             return None
@@ -1601,12 +1592,10 @@ def extract_all_remote_subtitles_to_webvtt(
 
     if missing_rows:
         input_url = base_url + "/file?" + urlencode({"path": rel_path, "source": "remote"})
-        timeout_seconds = max(30, 15 * len(missing_rows))
         batch_results = _run_ffmpeg_batch_webvtt(
             ffmpeg_exe,
             input_url,
             missing_rows,
-            timeout_seconds=timeout_seconds,
         )
         if batch_results is None:
             log_video_debug(
@@ -1621,7 +1610,6 @@ def extract_all_remote_subtitles_to_webvtt(
                     ffmpeg_exe,
                     input_url,
                     subtitle_stream_index,
-                    timeout_seconds=timeout_seconds,
                 )
                 if body is None:
                     log_video_debug(
