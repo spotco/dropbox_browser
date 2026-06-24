@@ -40,6 +40,7 @@ import {
   var COMPATIBILITY_START_BUFFER_FRAGMENTS = 1;
   var COMPATIBILITY_RECOVERY_MIN_DELAY_MS = 1500;
   var COMPATIBILITY_RECOVERY_MAX_DELAY_MS = 30000;
+  var COMPATIBILITY_SUBTITLE_WAIT_META = 'Waiting for subtitles to finish loading before playback starts.';
   var PROBE_STORAGE_KEY = 'dropbox-browser:video-probe-v1';
   var PROBE_STORAGE_TTL_MS = 60 * 60 * 1000;
   var PROBE_STORAGE_MAX_BYTES = 2 * 1024 * 1024;
@@ -117,6 +118,8 @@ import {
       compatibilitySessionStatusRequestInFlight: false,
       compatibilitySessionStatusTimer: 0,
       compatibilityPlaybackRevealed: false,
+      compatibilityPlaybackRevealPending: false,
+      compatibilitySubtitleWaitStageActive: false,
       compatibilitySubtitleStreamIndex: null,
       requestedSeekSeconds: null,
       seekRestartInProgress: false,
@@ -481,6 +484,15 @@ import {
     var title = options && typeof options.title === 'string' ? options.title : 'Preparing playback';
     var meta = options && typeof options.meta === 'string' ? options.meta : '';
     var progressValue = options ? Number(options.progress) : NaN;
+    if (
+      visible
+      && compatibilityStartupShouldWaitForSubtitles()
+    ) {
+      title = activeItemTitle(activeQueueItem());
+      meta = COMPATIBILITY_SUBTITLE_WAIT_META;
+      progressValue = 0.84;
+      ctx.state.compatibilitySubtitleWaitStageActive = true;
+    }
     var progressPercent = Number.isFinite(progressValue)
       ? Math.max(0, Math.min(100, Math.round(progressValue * 100)))
       : 0;
@@ -507,6 +519,21 @@ import {
     }
     ctx.state.loadingOverlayVisible = visible;
     ctx.state.loadingOverlayMeta = visible ? meta : '';
+    if (!visible) ctx.state.compatibilitySubtitleWaitStageActive = false;
+  }
+
+  function compatibilityStartupShouldWaitForSubtitles() {
+    if (ctx.state.playbackMode !== 'compatibility') return false;
+    if (ctx.state.compatibilityPlaybackRevealed) return false;
+    var active = activeQueueItem();
+    if (!active) return false;
+    var probePayload = ctx.state.probeCache[active.path || ''] || null;
+    if (!probePayload) return false;
+    if (!subtitlesEnabledForItem(active, probePayload)) return false;
+    if (selectedBurnedInSubtitleStreamIndex(active, probePayload) !== null) return false;
+    var streamIndex = resolvedSubtitleStreamIndex(active, probePayload);
+    if (streamIndex === '') return false;
+    return !subtitlesAreMounted(active, streamIndex, ctx.state.compatibilityStartSeconds || 0);
   }
 
   function showLoadingOverlay(options) {
@@ -701,6 +728,8 @@ import {
   function resetCompatibilityBufferState() {
     ctx.state.compatibilityBufferedFragmentCount = 0;
     ctx.state.compatibilityPlaybackRevealed = false;
+    ctx.state.compatibilityPlaybackRevealPending = false;
+    ctx.state.compatibilitySubtitleWaitStageActive = false;
   }
 
   function compatibilitySeekableRanges() {
@@ -734,10 +763,50 @@ import {
     }
   }
 
-  function maybeRevealCompatibilityPlayback(title, surfaceSyncToken, reason) {
+  async function waitForCompatibilityStartupSubtitles(surfaceSyncToken, reason) {
+    var active = activeQueueItem();
+    if (!active || ctx.state.playbackMode !== 'compatibility') return;
+    if (!playbackSyncTokenIsCurrent(surfaceSyncToken)) return;
+    if (ctx.state.seekRestartInProgress) return;
+    var probePayload = ctx.state.probeCache[active.path || ''] || null;
+    if (!subtitlesEnabledForItem(active, probePayload)) return;
+    if (selectedBurnedInSubtitleStreamIndex(active, probePayload) !== null) return;
+    var fetchStartSeconds = Math.max(0, ctx.state.compatibilityStartSeconds || 0);
+    var streamIndex = resolvedSubtitleStreamIndex(active, probePayload);
+    if (subtitlesAreMounted(active, streamIndex, fetchStartSeconds)) return;
+    showCompatibilitySubtitleWaitStage(active);
+    await applySubtitlesForSeek(active, probePayload, fetchStartSeconds, {
+      reloadReason: reason || 'playback-ready',
+      playbackSyncToken: surfaceSyncToken,
+    });
+  }
+
+  function showCompatibilitySubtitleWaitStage(item) {
+    if (!item) return;
+    ctx.state.compatibilitySubtitleWaitStageActive = true;
+    showLoadingOverlay(loadingOverlayCopy(
+      item,
+      COMPATIBILITY_SUBTITLE_WAIT_META,
+      0.84
+    ));
+    setPlaybackSummary(
+      activeItemTitle(item),
+      COMPATIBILITY_SUBTITLE_WAIT_META
+    );
+    setStatus('Waiting for subtitles to finish loading.');
+  }
+
+  async function revealCompatibilityPlaybackWhenReady(title, surfaceSyncToken, reason) {
+    try {
+      await waitForCompatibilityStartupSubtitles(surfaceSyncToken, reason || 'hls-buffer-ready');
+    }
+    finally {
+      if (playbackSyncTokenIsCurrent(surfaceSyncToken)) {
+        ctx.state.compatibilityPlaybackRevealPending = false;
+      }
+    }
     if (ctx.state.playbackMode !== 'compatibility' || !playbackSyncTokenIsCurrent(surfaceSyncToken)) return;
     if (ctx.state.compatibilityPlaybackRevealed) return;
-    if (!compatibilityStartBufferReady()) return;
     ctx.state.compatibilityPlaybackRevealed = true;
     hideLoadingOverlay();
     setStatus('Compatibility playback session is ready.');
@@ -759,6 +828,14 @@ import {
     });
     if (ctx.state.pendingAutoplay) requestVideoPlay();
     ensureSubtitlesAfterPlaybackReady(reason || 'hls-buffer-ready');
+  }
+
+  function maybeRevealCompatibilityPlayback(title, surfaceSyncToken, reason) {
+    if (ctx.state.playbackMode !== 'compatibility' || !playbackSyncTokenIsCurrent(surfaceSyncToken)) return;
+    if (ctx.state.compatibilityPlaybackRevealed || ctx.state.compatibilityPlaybackRevealPending) return;
+    if (!compatibilityStartBufferReady()) return;
+    ctx.state.compatibilityPlaybackRevealPending = true;
+    void revealCompatibilityPlaybackWhenReady(title, surfaceSyncToken, reason);
   }
 
   function noteCompatibilityFragmentBuffered(data, title, surfaceSyncToken) {
@@ -2701,6 +2778,10 @@ import {
   function scheduleSubtitlesAfterPlaybackReady(item, probePayload, seekSeconds, syncToken, reloadReason) {
     if (!item || !probePayload) return;
     if (selectedBurnedInSubtitleStreamIndex(item, probePayload) !== null) return;
+    var streamIndex = resolvedSubtitleStreamIndex(item, probePayload);
+    if (streamIndex !== '' && !subtitlesAreMounted(item, streamIndex, seekSeconds)) {
+      showCompatibilitySubtitleWaitStage(item);
+    }
     void preloadAllSubtitleVttsForItem(item, probePayload).then(function () {
       if (syncToken !== ctx.state.playbackSyncToken) return;
       return applySubtitlesForSeek(item, probePayload, seekSeconds, {
@@ -2973,6 +3054,8 @@ import {
     if (syncToken !== ctx.state.playbackSyncToken) return;
     var audioStreamIndex = selectedAudioStreamIndex(active, probePayload);
     var burnedInSubtitleStreamIndex = selectedBurnedInSubtitleStreamIndex(active, probePayload);
+    var waitingForSelectedSubtitles = subtitlesEnabledForItem(active, probePayload)
+      && burnedInSubtitleStreamIndex === null;
     try {
       reportPlaybackTiming('session_create_requested', {requested_time: clampedTarget});
       var session = await createCompatibilitySession(
@@ -3043,6 +3126,7 @@ import {
         },
         currentProcessedRangeSnapshot(clampedTarget, duration)
       ));
+      if (waitingForSelectedSubtitles) showCompatibilitySubtitleWaitStage(active);
       scheduleSubtitlesAfterPlaybackReady(
         active,
         probePayload,
@@ -3140,6 +3224,8 @@ import {
     }
     var audioStreamIndex = selectedAudioStreamIndex(active, probePayload);
     var burnedInSubtitleStreamIndex = selectedBurnedInSubtitleStreamIndex(active, probePayload);
+    var waitingForSelectedSubtitles = subtitlesEnabledForItem(active, probePayload)
+      && burnedInSubtitleStreamIndex === null;
     try {
       showLoadingOverlay(loadingOverlayCopy(active, 'Creating the local HLS compatibility session.', 0.48));
       reportPlaybackTiming('session_create_requested');
@@ -3172,6 +3258,7 @@ import {
         syncToken
       );
       ctx.state.compatibilitySubtitleStreamIndex = normalizeSubtitleStreamIndex(session.subtitle_stream_index);
+      if (waitingForSelectedSubtitles) showCompatibilitySubtitleWaitStage(active);
       scheduleSubtitlesAfterPlaybackReady(
         active,
         probePayload,
