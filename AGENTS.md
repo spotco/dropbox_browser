@@ -25,6 +25,8 @@ Load only the doc that matches the work:
   `docs/windows-name-matching.md`.
 - Regression workflow and test groups: `docs/testing.md`.
 - High-level behavior and ownership map: `docs/architecture.md`.
+- Video player server endpoints, HLS sessions, and client modules:
+  `docs/video-player.md`.
 
 ## Repository Map
 

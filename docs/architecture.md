@@ -79,6 +79,8 @@ Rules:
   `dropbox_browser/views.py`.
 - Config evolution and path locations:
   `dropbox_browser/config.py`.
+- Video player endpoints, HLS sessions, and browser modules:
+  `docs/video-player.md`.
 
 ## Current Known Issues
 
