@@ -1,12 +1,11 @@
-const fs = require("node:fs/promises");
 const path = require("node:path");
+const {pathToFileURL} = require("node:url");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
 async function importModuleFromWorkspace(relativePath) {
   const absolutePath = path.resolve(__dirname, "..", "..", relativePath);
-  const source = await fs.readFile(absolutePath, "utf8");
-  return import(`data:text/javascript;base64,${Buffer.from(source, "utf8").toString("base64")}`);
+  return import(pathToFileURL(absolutePath).href);
 }
 
 function video(pathname) {
