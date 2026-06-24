@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 
+from . import config as config_module
 from .config import TEMP_DIR
 from .errors import BrowserError
 from .namekeys import filename_compare_key
@@ -325,7 +326,7 @@ def subtitle_cache_path(
 
 
 def _subtitle_cache_store(app: Any, *, cache_dir: Path | None = None) -> DiskCacheStore:
-    cache_root = SUBTITLE_CACHE_DIR if cache_dir is None else cache_dir
+    cache_root = (_active_temp_dir() / "subtitle_cache") if cache_dir is None else cache_dir
     return DiskCacheStore(
         cache_root,
         ttl_seconds=_subtitle_cache_ttl_seconds(app),
@@ -1066,8 +1067,12 @@ def _probe_limits(app: Any) -> tuple[int, int]:
     return max(32, probe_size_bytes), max(0, analyze_duration_us)
 
 
+def _active_temp_dir() -> Path:
+    return config_module.TEMP_DIR
+
+
 def probe_cache_path(cache_key: str) -> Path:
-    return TEMP_DIR / PROBE_CACHE_SUBDIR / "files" / f"{cache_key}.json"
+    return _active_temp_dir() / PROBE_CACHE_SUBDIR / "files" / f"{cache_key}.json"
 
 
 def _probe_cache_ttl_seconds(app: Any) -> float:
@@ -1135,7 +1140,7 @@ def _header_cache_bytes(app: Any) -> int:
 
 def _probe_cache_store(app: Any) -> DiskCacheStore:
     return DiskCacheStore(
-        TEMP_DIR / PROBE_CACHE_SUBDIR,
+        _active_temp_dir() / PROBE_CACHE_SUBDIR,
         ttl_seconds=_probe_cache_ttl_seconds(app),
         max_bytes=_probe_cache_max_bytes(app),
     )
@@ -1143,21 +1148,58 @@ def _probe_cache_store(app: Any) -> DiskCacheStore:
 
 def _header_cache_store(app: Any) -> DiskCacheStore:
     return DiskCacheStore(
-        TEMP_DIR / HEADER_CACHE_SUBDIR,
+        _active_temp_dir() / HEADER_CACHE_SUBDIR,
         ttl_seconds=_header_cache_ttl_seconds(app),
         max_bytes=_header_cache_max_bytes(app),
     )
 
 
+def probe_payload_is_incomplete(payload: dict[str, object]) -> bool:
+    duration = payload.get("duration_seconds")
+    if duration in (None, ""):
+        return False
+    try:
+        duration_seconds = float(duration)
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(duration_seconds) or duration_seconds <= 0:
+        return False
+    stream_groups = (
+        payload.get("video_streams"),
+        payload.get("audio_streams"),
+        payload.get("subtitle_streams"),
+    )
+    for streams in stream_groups:
+        if isinstance(streams, list) and streams:
+            return False
+    return True
+
+
 def _read_probe_cache(app: Any, cache_key: str) -> dict[str, object] | None:
     payload = _probe_cache_store(app).read_json(cache_key, suffix=".json")
-    return payload if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    if probe_payload_is_incomplete(payload):
+        _probe_cache_store(app).remove(cache_key)
+        return None
+    return payload
 
 
 def _write_probe_cache(app: Any, cache_key: str, payload: dict[str, object]) -> None:
-    if _probe_cache_ttl_seconds(app) <= 0:
+    if _probe_cache_ttl_seconds(app) <= 0 or probe_payload_is_incomplete(payload):
         return
     _probe_cache_store(app).write_json(cache_key, payload, suffix=".json")
+
+
+def clear_video_disk_caches(app: Any) -> dict[str, bool]:
+    _probe_cache_store(app).clear()
+    _header_cache_store(app).clear()
+    _subtitle_cache_store(app).clear()
+    return {
+        "probe_cache": True,
+        "header_cache": True,
+        "subtitle_cache": True,
+    }
 
 
 def ensure_remote_header_cache(
@@ -1189,6 +1231,10 @@ def ensure_remote_header_cache(
     return store.write_bytes(cache_key, data, suffix=".bin")
 
 
+def build_remote_file_probe_url(base_url: str, rel_path: str) -> str:
+    return base_url + "/file?" + urlencode({"path": rel_path, "source": "remote"})
+
+
 def resolve_probe_input_url(
     app: Any,
     *,
@@ -1200,7 +1246,44 @@ def resolve_probe_input_url(
         header_path = ensure_remote_header_cache(app, rel_path=rel_path, file_size=file_size)
         if header_path is not None and header_path.is_file():
             return str(header_path.resolve())
-    return base_url + "/file?" + urlencode({"path": rel_path, "source": "remote"})
+    return build_remote_file_probe_url(base_url, rel_path)
+
+
+def _run_ffprobe_json(
+    ffprobe_exe: Path,
+    input_url: str,
+    *,
+    probe_size_bytes: int,
+    analyze_duration_us: int,
+) -> dict[str, object]:
+    cmd = build_ffprobe_command(
+        ffprobe_exe,
+        input_url,
+        probe_size_bytes=probe_size_bytes,
+        analyze_duration_us=analyze_duration_us,
+    )
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=30,
+        )
+    except FileNotFoundError as exc:
+        raise BrowserError(HTTPStatus.SERVICE_UNAVAILABLE, f"ffprobe was not found: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise BrowserError(HTTPStatus.BAD_GATEWAY, "ffprobe timed out while probing the remote file.") from exc
+    if proc.returncode != 0:
+        message = proc.stderr.decode("utf-8", "replace").strip() or "ffprobe failed to inspect the remote file."
+        raise BrowserError(HTTPStatus.BAD_GATEWAY, message)
+    try:
+        raw_payload = json.loads(proc.stdout.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise BrowserError(HTTPStatus.BAD_GATEWAY, "ffprobe returned invalid JSON.") from exc
+    if not isinstance(raw_payload, dict):
+        raise BrowserError(HTTPStatus.BAD_GATEWAY, "ffprobe returned invalid JSON.")
+    return raw_payload
 
 
 def _probe_payload_from_ffprobe_output(
@@ -1264,44 +1347,36 @@ def probe_remote_media(
     cached_payload = _read_probe_cache(app, cache_key)
     if cached_payload is not None:
         return dict(cached_payload)
-    input_url = resolve_probe_input_url(
+    header_input_url = resolve_probe_input_url(
         app,
         rel_path=rel_path,
         base_url=base_url,
         file_size=file_size,
     )
-    cmd = build_ffprobe_command(
+    file_input_url = build_remote_file_probe_url(base_url, rel_path)
+    raw_payload = _run_ffprobe_json(
         ffprobe_exe,
-        input_url,
+        header_input_url,
         probe_size_bytes=probe_size_bytes,
         analyze_duration_us=analyze_duration_us,
     )
-    try:
-        proc = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=30,
-        )
-    except FileNotFoundError as exc:
-        raise BrowserError(HTTPStatus.SERVICE_UNAVAILABLE, f"ffprobe was not found: {exc}") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise BrowserError(HTTPStatus.BAD_GATEWAY, "ffprobe timed out while probing the remote file.") from exc
-    if proc.returncode != 0:
-        message = proc.stderr.decode("utf-8", "replace").strip() or "ffprobe failed to inspect the remote file."
-        raise BrowserError(HTTPStatus.BAD_GATEWAY, message)
-    try:
-        raw_payload = json.loads(proc.stdout.decode("utf-8"))
-    except json.JSONDecodeError as exc:
-        raise BrowserError(HTTPStatus.BAD_GATEWAY, "ffprobe returned invalid JSON.") from exc
-    if not isinstance(raw_payload, dict):
-        raise BrowserError(HTTPStatus.BAD_GATEWAY, "ffprobe returned invalid JSON.")
     response_payload = _probe_payload_from_ffprobe_output(
         rel_path,
-        input_url=input_url,
+        input_url=header_input_url,
         raw_payload=raw_payload,
     )
+    if probe_payload_is_incomplete(response_payload) and header_input_url != file_input_url:
+        raw_payload = _run_ffprobe_json(
+            ffprobe_exe,
+            file_input_url,
+            probe_size_bytes=probe_size_bytes,
+            analyze_duration_us=analyze_duration_us,
+        )
+        response_payload = _probe_payload_from_ffprobe_output(
+            rel_path,
+            input_url=file_input_url,
+            raw_payload=raw_payload,
+        )
     _write_probe_cache(app, cache_key, response_payload)
     return response_payload
 

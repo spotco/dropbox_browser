@@ -170,6 +170,7 @@ function createVideoCtx() {
 const MODULES = [
   ["dropbox_browser/assets/js/video/constants.js", null],
   ["dropbox_browser/assets/js/video/shared.js", "initShared"],
+  ["dropbox_browser/assets/js/video/cache.js", "initCache"],
   ["dropbox_browser/assets/js/video/diagnostics.js", "initDiagnostics"],
   ["dropbox_browser/assets/js/video/library.js", "initLibrary"],
   ["dropbox_browser/assets/js/video/queue.js", "initQueue"],

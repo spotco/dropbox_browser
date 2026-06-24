@@ -105,6 +105,34 @@ function setProbeInSessionStorage(path, payload) {
   writeProbeStorageIndex(index);
 }
 
+function removeProbeStorageEntry(path) {
+  var index = readProbeStorageIndex();
+  if (index.entries[path]) {
+    index.totalBytes = Math.max(
+      0,
+      (index.totalBytes || 0) - probeStorageEntrySize(path, index.entries[path])
+    );
+    delete index.entries[path];
+    writeProbeStorageIndex(index);
+  }
+}
+
+async function fetchProbeMetadata(path, options) {
+  var forceReload = Boolean(options && options.forceReload);
+  var url = '/video/endpoints/probe?path=' + encodeURIComponent(path) + '&source=remote';
+  if (forceReload) {
+    url += '&reload=' + String(Date.now());
+  }
+  var response = await fetch(url);
+  if (!response.ok) throw new Error('Failed to probe video metadata.');
+  var payload = await response.json();
+  ctx.state.probeCache[path] = payload;
+  setProbeInSessionStorage(path, payload);
+  delete ctx.state.probeFailures[path];
+  ctx.syncPlaybackProgress();
+  return payload;
+}
+
 async function loadProbeMetadata(item) {
   if (!item || !item.path) return null;
   var path = item.path;
@@ -116,14 +144,22 @@ async function loadProbeMetadata(item) {
   }
   if (ctx.state.probeFailures[path]) return null;
   try {
-    var response = await fetch('/video/endpoints/probe?path=' + encodeURIComponent(path) + '&source=remote');
-    if (!response.ok) throw new Error('Failed to probe video metadata.');
-    var payload = await response.json();
-    ctx.state.probeCache[path] = payload;
-    setProbeInSessionStorage(path, payload);
-    delete ctx.state.probeFailures[path];
-    ctx.syncPlaybackProgress();
-    return payload;
+    return await fetchProbeMetadata(path);
+  }
+  catch (_error) {
+    ctx.state.probeFailures[path] = true;
+    return null;
+  }
+}
+
+async function reloadProbeMetadata(item) {
+  if (!item || !item.path) return null;
+  var path = item.path;
+  delete ctx.state.probeCache[path];
+  delete ctx.state.probeFailures[path];
+  removeProbeStorageEntry(path);
+  try {
+    return await fetchProbeMetadata(path, {forceReload: true});
   }
   catch (_error) {
     ctx.state.probeFailures[path] = true;
@@ -162,7 +198,10 @@ async function ensureSubtitleTracksForItem(item) {
   ctx.pruneExpiredProbeStorage = pruneExpiredProbeStorage;
   ctx.getProbeFromSessionStorage = getProbeFromSessionStorage;
   ctx.setProbeInSessionStorage = setProbeInSessionStorage;
+  ctx.removeProbeStorageEntry = removeProbeStorageEntry;
+  ctx.fetchProbeMetadata = fetchProbeMetadata;
   ctx.loadProbeMetadata = loadProbeMetadata;
+  ctx.reloadProbeMetadata = reloadProbeMetadata;
   ctx.ensureAudioTracksForItem = ensureAudioTracksForItem;
   ctx.ensureSubtitleTracksForItem = ensureSubtitleTracksForItem;
 }

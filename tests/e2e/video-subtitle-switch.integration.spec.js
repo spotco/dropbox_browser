@@ -1933,6 +1933,162 @@ test("video controls hide after idle even when pointermove repeats while playing
 });
 
 
+async function seedIncompleteProbeCache(request, relPath) {
+  const response = await request.post("/__integration/seed-probe-cache", {
+    form: {
+      path: relPath,
+      variant: "incomplete",
+    },
+  });
+  expect(response.ok()).toBe(true);
+  const payload = await response.json();
+  expect(payload.status).toBe("seeded");
+  expect(payload.cache_file_exists).toBe(true);
+  return payload;
+}
+
+test("clear cache button recovers track selectors from stale server and client probe cache", async ({ page }) => {
+  test.setTimeout(60000);
+
+  await installHlsStub(page);
+  const clearResponse = await page.request.post("/video/endpoints/cache/clear");
+  expect(clearResponse.ok()).toBe(true);
+  await seedIncompleteProbeCache(page.request, "Videos/alpha.mkv");
+  await page.evaluate(() => {
+    const path = "Videos/alpha.mkv";
+    const stalePayload = {
+      status: "ok",
+      source: "remote",
+      path,
+      stream_path: path,
+      duration_seconds: 8,
+      video_streams: [],
+      audio_streams: [],
+      subtitle_streams: [],
+      default_audio_stream_index: null,
+      default_subtitle_stream_index: null,
+      subtitle_off_default: true,
+    };
+    window.sessionStorage.setItem(
+      "dropbox-browser:video-probe-v1",
+      JSON.stringify({
+        entries: {
+          [path]: {
+            payload: stalePayload,
+            cachedAt: Date.now(),
+            accessedAt: Date.now(),
+          },
+        },
+        totalBytes: 512,
+      }),
+    );
+  });
+  await openVideoPane(page);
+  await playLibraryFile(page, "alpha.mkv");
+  await expectTrackSelectors(page, {
+    audioEnabled: false,
+    subtitleEnabled: false,
+  });
+
+  await page.locator("#video-debug-panel").evaluate((panel) => {
+    panel.open = true;
+  });
+  await page.locator("#video-clear-cache-button").click();
+  await expect(page.locator("#video-player-status")).toContainText("Video caches cleared.");
+  await expectTrackSelectors(page, {
+    audioOptionCount: 2,
+    subtitleOptionCount: 4,
+  });
+});
+
+test("clear cache button reloads track selectors after stale client probe cache", async ({ page }) => {
+  test.setTimeout(60000);
+
+  await installHlsStub(page);
+  await openVideoPane(page);
+  await playLibraryFile(page, "alpha.mkv");
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+  await expectTrackSelectors(page, {
+    audioOptionCount: 2,
+    subtitleOptionCount: 4,
+  });
+
+  await page.evaluate(() => {
+    const path = "Videos/alpha.mkv";
+    const stalePayload = {
+      status: "ok",
+      source: "remote",
+      path,
+      stream_path: path,
+      duration_seconds: 8,
+      video_streams: [],
+      audio_streams: [],
+      subtitle_streams: [],
+      default_audio_stream_index: null,
+      default_subtitle_stream_index: null,
+      subtitle_off_default: true,
+    };
+    window.sessionStorage.setItem(
+      "dropbox-browser:video-probe-v1",
+      JSON.stringify({
+        entries: {
+          [path]: {
+            payload: stalePayload,
+            cachedAt: Date.now(),
+            accessedAt: Date.now(),
+          },
+        },
+        totalBytes: 512,
+      }),
+    );
+  });
+
+  await page.reload();
+  await openVideoPane(page);
+  await playLibraryFile(page, "alpha.mkv");
+  await expectTrackSelectors(page, {
+    audioEnabled: false,
+    subtitleEnabled: false,
+  });
+
+  await page.locator("#video-debug-panel").evaluate((panel) => {
+    panel.open = true;
+  });
+  await page.locator("#video-clear-cache-button").click();
+  await expect(page.locator("#video-player-status")).toContainText("Video caches cleared.");
+  await expectTrackSelectors(page, {
+    audioOptionCount: 2,
+    subtitleOptionCount: 4,
+  });
+});
+
+test("ignores incomplete probe disk cache and still loads track selectors", async ({ page }) => {
+  test.setTimeout(60000);
+
+  await installHlsStub(page);
+  const clearResponse = await page.request.post("/video/endpoints/cache/clear");
+  expect(clearResponse.ok()).toBe(true);
+  await seedIncompleteProbeCache(page.request, "Videos/alpha.mkv");
+  await openVideoPane(page);
+
+  const probeResponse = await page.request.get("/video/endpoints/probe?path=Videos%2Falpha.mkv&source=remote");
+  expect(probeResponse.ok()).toBe(true);
+  const probePayload = await probeResponse.json();
+  expect(probePayload.audio_streams).toHaveLength(2);
+  expect(probePayload.subtitle_streams).toHaveLength(3);
+
+  await playLibraryFile(page, "alpha.mkv");
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+  await expectTrackSelectors(page, {
+    audioOptionCount: 2,
+    subtitleOptionCount: 4,
+    audioValue: "1",
+    subtitleValue: "3",
+  });
+});
+
 test("video track selections persist across reload and matching track layouts", async ({ page }) => {
   test.setTimeout(90000);
 
