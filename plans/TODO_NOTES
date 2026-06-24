@@ -1,13 +1,41 @@
-video player
-- no subtitles or audio tracks - figure out why
-	http://localhost:8000/file?path=anime%2F%5BJudas%5D+Fairy+Tail+%282009-2014%29+%28Seasons+1-8+%2B+OVAs%29+%5BBD+1080p%5D%5BHEVC+x265+10bit%5D%5BDual-Audio%5D%5BEng-Subs%5D%2F%5BJudas%5D+Fairy+Tail+%282009%29%2F%5BJudas%5D+Fairy+Tail+%282009%29+-+001.mkv&source=remote
-	
+plans\subtitle_performance_improvement.md
+plans\subtitle_timeout_analysis.md
+
 - subtitles not working
 	http://localhost:8000/file?path=anime%2Fconan_24%2F%5BAh-le-le%5D+Detective+Conan+Movie+24v0+-+The+Scarlet+Bullet+%28BDRip+1080p+HEVC+FLAC+TrueHD%29+%5B12A80FEC%5D.mkv&source=remote
-- more responsive load (time to end of loaded, smaller faster load smaller section)
-- clicking outside of loaded area should not clear loaded cache
-- library management
-- forward/backward playlist
+	
+- http://localhost:8000/file?path=anime%2Fconan_24%2F%5BAh-le-le%5D+Detective+Conan+Movie+24v0+-+The+Scarlet+Bullet+%28BDRip+1080p+HEVC+FLAC+TrueHD%29+%5B12A80FEC%5D.mkv&source=remote
+	subtitles take a long time to load
+
+- mp4 compat
+	http://localhost:8000/?path=spotco_game_archive%2FSwitchScreenshots
+
+- handle error:
+Traceback (most recent call last):
+  File "socketserver.py", line 697, in process_request_thread
+  File "socketserver.py", line 362, in finish_request
+  File "socketserver.py", line 766, in __init__
+  File "http\server.py", line 485, in handle
+  File "http\server.py", line 473, in handle_one_request
+  File "F:\dev\dropbox_browser\.\dropbox_browser\handlers.py", line 124, in do_GET
+    self.render_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\dev\dropbox_browser\.\dropbox_browser\handlers.py", line 1316, in render_error
+    self.send_html(status, error_html(status, message), head_only=head_only)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\dev\dropbox_browser\.\dropbox_browser\handlers.py", line 1306, in send_html
+    self.end_headers()
+[01:20:58] [0.47s 0/0] 'F:\dev\dropbox_browser\rclone.exe' lsjson --stat --no-modtime --no-mimetype -- 'dropbox:anime/[Judas] Fairy Tail (2009-2014) (Seasons 1-8 + OVAs) [BD 1080p][HEVC x265 10bit][Dual-Audio][Eng-Subs]/[Judas] Fairy Tail (2009)/[Judas] Fairy Tail (2009) - 001.mkv'
+  File "http\server.py", line 591, in flush_headers
+  File "socketserver.py", line 845, in write
+ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host
+	
+- more responsive load (time to end of loaded, smaller faster load smaller section), display time to end of buffer
+- cpu load too high on surface - only high at small buffer time (more responsive)
+
+- scrubbing outside of loaded area should not clear loaded cache
+- forward/backward playlist + at end, loop
+- video player: library management
 
 ---
 
