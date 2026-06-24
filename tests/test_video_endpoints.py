@@ -26,7 +26,10 @@ from dropbox_browser.video import (
     _playlist_ready_for_playback,
     _playlist_segment_names,
     probe_cache_path,
+    probe_payload_is_incomplete,
     rebase_webvtt_text,
+    _probe_cache_store,
+    _write_probe_cache,
     subtitle_cache_path,
     subtitle_codec_supports_webvtt,
 )
@@ -453,6 +456,187 @@ class VideoEndpointTests(AppTestCase):
             build_probe_cache_key("movie.mp4", file_size=10),
             build_probe_cache_key("movie.mp4", file_size=11),
         )
+
+    def test_probe_payload_is_incomplete_detects_duration_without_streams(self) -> None:
+        self.assertTrue(
+            probe_payload_is_incomplete({
+                "duration_seconds": 120.0,
+                "video_streams": [],
+                "audio_streams": [],
+                "subtitle_streams": [],
+            })
+        )
+        self.assertFalse(
+            probe_payload_is_incomplete({
+                "duration_seconds": 120.0,
+                "video_streams": [{"index": 0}],
+                "audio_streams": [],
+                "subtitle_streams": [],
+            })
+        )
+
+    def test_probe_endpoint_skips_incomplete_disk_cache(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        app.video_probe_cache_ttl_seconds = 3600
+        cache_key = build_probe_cache_key("movie.mp4", file_size=10)
+        _probe_cache_store(app).write_json(
+            cache_key,
+            {
+                "status": "ok",
+                "source": "remote",
+                "path": "movie.mp4",
+                "stream_path": "movie.mp4",
+                "probe_url": "cache://incomplete",
+                "duration_seconds": 120.0,
+                "video_streams": [],
+                "audio_streams": [],
+                "subtitle_streams": [],
+                "default_audio_stream_index": None,
+                "default_subtitle_stream_index": None,
+                "subtitle_off_default": True,
+            },
+        )
+        ffprobe_payload = {
+            "streams": [
+                {"index": 0, "codec_type": "video", "codec_name": "h264"},
+                {"index": 1, "codec_type": "audio", "codec_name": "aac", "tags": {"language": "eng"}},
+            ],
+            "format": {"duration": "120.0"},
+        }
+        run_calls: list[list[str]] = []
+
+        def fake_run(cmd, stdout=None, stderr=None, check=False, timeout=None):
+            run_calls.append(list(cmd))
+            return CompletedProcess(cmd, 0, json.dumps(ffprobe_payload).encode("utf-8"), b"")
+
+        with (
+            TestServer(app) as server,
+            patch("dropbox_browser.video.subprocess.run", side_effect=fake_run),
+        ):
+            payload = server.get_json("/video/endpoints/probe?path=movie.mp4&source=remote")
+
+        self.assertEqual(len(run_calls), 1)
+        self.assertEqual(len(payload["audio_streams"]), 1)
+        cached_payload = json.loads(probe_cache_path(cache_key).read_text(encoding="utf-8"))
+        self.assertEqual(len(cached_payload["audio_streams"]), 1)
+        self.assertFalse(probe_payload_is_incomplete(cached_payload))
+
+    def test_probe_endpoint_does_not_cache_incomplete_probe(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        app.video_probe_cache_ttl_seconds = 3600
+        ffprobe_payload = {
+            "streams": [],
+            "format": {"duration": "120.0"},
+        }
+
+        def fake_run(cmd, stdout=None, stderr=None, check=False, timeout=None):
+            return CompletedProcess(cmd, 0, json.dumps(ffprobe_payload).encode("utf-8"), b"")
+
+        with (
+            TestServer(app) as server,
+            patch("dropbox_browser.video.subprocess.run", side_effect=fake_run),
+        ):
+            payload = server.get_json("/video/endpoints/probe?path=movie.mp4&source=remote")
+
+        cache_path = probe_cache_path(build_probe_cache_key("movie.mp4", file_size=10))
+        self.assertFalse(cache_path.is_file())
+        self.assertEqual(payload["audio_streams"], [])
+
+    def test_cache_clear_endpoint_clears_video_disk_caches(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        cache_key = build_probe_cache_key("movie.mp4", file_size=10)
+        _write_probe_cache(
+            app,
+            cache_key,
+            {
+                "status": "ok",
+                "source": "remote",
+                "path": "movie.mp4",
+                "stream_path": "movie.mp4",
+                "probe_url": "cache://complete",
+                "duration_seconds": 120.0,
+                "video_streams": [{"index": 0}],
+                "audio_streams": [],
+                "subtitle_streams": [],
+                "default_audio_stream_index": None,
+                "default_subtitle_stream_index": None,
+                "subtitle_off_default": True,
+            },
+        )
+        self.assertTrue(probe_cache_path(cache_key).is_file())
+
+        with TestServer(app) as server:
+            payload = server.post_json("/video/endpoints/cache/clear", {})
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(payload["cleared"]["probe_cache"])
+        self.assertFalse(probe_cache_path(cache_key).is_file())
+
+    def test_probe_endpoint_falls_back_to_remote_file_when_header_probe_is_incomplete(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        app.video_probe_cache_ttl_seconds = 3600
+        app.video_header_cache_bytes = 8
+        incomplete_payload = {
+            "streams": [],
+            "format": {"duration": "120.0"},
+        }
+        complete_payload = {
+            "streams": [
+                {"index": 0, "codec_type": "video", "codec_name": "h264"},
+                {"index": 1, "codec_type": "audio", "codec_name": "aac", "tags": {"language": "eng"}},
+            ],
+            "format": {"duration": "120.0"},
+        }
+        run_calls: list[list[str]] = []
+
+        def fake_run(cmd, stdout=None, stderr=None, check=False, timeout=None):
+            run_calls.append(list(cmd))
+            input_url = cmd[-1]
+            payload = incomplete_payload if input_url.endswith(".bin") else complete_payload
+            return CompletedProcess(cmd, 0, json.dumps(payload).encode("utf-8"), b"")
+
+        with (
+            TestServer(app) as server,
+            patch("dropbox_browser.video.subprocess.run", side_effect=fake_run),
+        ):
+            payload = server.get_json("/video/endpoints/probe?path=movie.mp4&source=remote")
+
+        self.assertEqual(len(run_calls), 2)
+        self.assertTrue(run_calls[0][-1].endswith(".bin"), run_calls[0][-1])
+        self.assertIn("path=movie.mp4", run_calls[1][-1])
+        self.assertEqual(len(payload["audio_streams"]), 1)
 
     def test_probe_endpoint_uses_header_cache_for_ffprobe_input(self) -> None:
         rclone = self._remote_media_rclone()

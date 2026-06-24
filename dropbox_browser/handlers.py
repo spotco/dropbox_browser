@@ -33,6 +33,7 @@ from .thumbnails import ThumbnailResult, is_thumbnailable_image, thumbnail_sourc
 from .video import (
     HLS_INIT_SEGMENT_NAME,
     VIDEO_ENDPOINT_PREFIX,
+    clear_video_disk_caches,
     extract_all_remote_subtitles_to_webvtt,
     extract_remote_subtitles_to_webvtt,
     handle_video_get,
@@ -1083,6 +1084,12 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif endpoint == "session/stop":
             session_id = params.get("id", [""])[0].strip() or None
             payload = video_session_manager(self.app).stop_active_session(session_id)
+            status = HTTPStatus.OK
+        elif endpoint == "cache/clear":
+            payload = {
+                "status": "ok",
+                "cleared": clear_video_disk_caches(self.app),
+            }
             status = HTTPStatus.OK
         else:
             raise BrowserError(HTTPStatus.NOT_FOUND, "Video endpoint not found.")

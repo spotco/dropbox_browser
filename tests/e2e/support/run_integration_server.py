@@ -29,7 +29,16 @@ from dropbox_browser.foldercache import FolderCacheManager
 from dropbox_browser.handlers import RequestHandler
 from dropbox_browser.listingcache import ListingCacheManager
 from dropbox_browser.services import DropboxBrowser
+from dropbox_browser.paths import clean_rel_path, remote_target
 from dropbox_browser.syncjobs import SyncJobManager
+from dropbox_browser.video import (
+    DEFAULT_PROBE_ANALYZE_DURATION_US,
+    DEFAULT_PROBE_PROBE_SIZE_BYTES,
+    _probe_cache_store,
+    _probe_limits,
+    build_probe_cache_key,
+    probe_payload_is_incomplete,
+)
 from tests.e2e.support.video_mocks import build_video_mock_patches
 from tests.support import SimulatedLsjsonResponse, SimulatedRclone
 
@@ -145,6 +154,7 @@ class IntegrationState:
         run_dir: Path,
         gate_events: dict[str, threading.Event],
         rclone: SimulatedRclone,
+        tree: FixtureRemoteTree,
     ) -> None:
         self.fixture = fixture
         self.fixture_path = fixture_path
@@ -154,6 +164,7 @@ class IntegrationState:
         self.trace_log_path = run_dir / "foldercache_threads.jsonl"
         self.gate_events = gate_events
         self.rclone = rclone
+        self.tree = tree
 
     def trace_events(self) -> list[dict[str, Any]]:
         if not self.trace_log_path.exists():
@@ -222,6 +233,9 @@ class IntegrationRequestHandler(RequestHandler):
         if parsed.path == "/__integration/release-gate":
             self._handle_release_gate()
             return
+        if parsed.path == "/__integration/seed-probe-cache":
+            self._handle_seed_probe_cache()
+            return
         super().do_POST()
 
     def _handle_release_gate(self) -> None:
@@ -236,6 +250,67 @@ class IntegrationRequestHandler(RequestHandler):
             return
         self.integration_state.gate_events[gate_name].set()
         self._send_json(HTTPStatus.OK, {"status": "released", "name": gate_name})
+
+    def _handle_seed_probe_cache(self) -> None:
+        length = int(self.headers.get("Content-Length") or "0")
+        params = parse_qs(self.rfile.read(length).decode("utf-8") if length > 0 else "", keep_blank_values=True)
+        rel_path = clean_rel_path(params.get("path", [""])[0])
+        variant = params.get("variant", ["incomplete"])[0].strip().casefold() or "incomplete"
+        entry = self.integration_state.tree.entries.get(rel_path)
+        if entry is None or entry.get("type") != "file":
+            self._send_json(
+                HTTPStatus.NOT_FOUND,
+                {"status": "error", "message": f"Unknown integration fixture file: {rel_path}"},
+            )
+            return
+        if variant != "incomplete":
+            self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"status": "error", "message": f"Unsupported probe cache variant: {variant}"},
+            )
+            return
+        stat_item = self.app.rclone.stat(remote_target(self.app.remote, rel_path))
+        file_size = int(stat_item.get("Size") or len(entry.get("content") or b""))
+        probe_size_bytes, analyze_duration_us = _probe_limits(self.app)
+        cache_key = build_probe_cache_key(
+            rel_path,
+            file_size=file_size,
+            probe_size_bytes=probe_size_bytes,
+            analyze_duration_us=analyze_duration_us,
+        )
+        payload = {
+            "status": "ok",
+            "source": "remote",
+            "path": rel_path,
+            "stream_path": rel_path,
+            "probe_url": "integration://incomplete-probe-cache",
+            "duration_seconds": 8.0,
+            "video_streams": [],
+            "audio_streams": [],
+            "subtitle_streams": [],
+            "default_audio_stream_index": None,
+            "default_subtitle_stream_index": None,
+            "subtitle_off_default": True,
+        }
+        if not probe_payload_is_incomplete(payload):
+            self._send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"status": "error", "message": "Integration incomplete probe payload was not incomplete."},
+            )
+            return
+        store = _probe_cache_store(self.app)
+        cache_path = store.write_json(cache_key, payload)
+        self._send_json(
+            HTTPStatus.OK,
+            {
+                "status": "seeded",
+                "path": rel_path,
+                "variant": variant,
+                "cache_key": cache_key,
+                "file_size": file_size,
+                "cache_file_exists": cache_path.is_file(),
+            },
+        )
 
     def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
@@ -445,6 +520,7 @@ def _build_app(fixture_path: Path, port: int) -> tuple[DropboxBrowser, Integrati
         run_dir=run_dir,
         gate_events=gate_events,
         rclone=rclone,
+        tree=tree,
     )
     return app, integration_state
 

@@ -747,7 +747,36 @@
 .video-debug-body {
   display: grid;
   gap: 10px;
-  padding: 0 12px 12px;
+  padding: 12px 12px 12px;
+}
+
+.video-debug-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.video-debug-action-button {
+  background: rgba(36, 52, 74, 0.95);
+  border: 1px solid #3f5672;
+  border-radius: 4px;
+  color: #d8e4f0;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 6px 10px;
+}
+
+.video-debug-action-button:hover {
+  background: rgba(52, 74, 102, 0.98);
+  border-color: #5a7698;
+}
+
+.video-debug-action-button:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .video-debug-meta {

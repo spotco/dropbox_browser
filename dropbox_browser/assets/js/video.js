@@ -1,5 +1,6 @@
 import {advanceQueueAfterPlaybackEnd} from './video-core.js';
 import {initShared} from './video/shared.js';
+import {initCache} from './video/cache.js';
 import {initDiagnostics} from './video/diagnostics.js';
 import {initLibrary} from './video/library.js';
 import {initQueue} from './video/queue.js';
@@ -44,6 +45,8 @@ import {initPane} from './video/pane.js';
       audioTrackSelectEl: document.getElementById('video-audio-track'),
       subtitleTrackSelectEl: document.getElementById('video-subtitle-track'),
       debugPanelEl: document.getElementById('video-debug-panel'),
+      debugActionsEl: document.getElementById('video-debug-actions'),
+      clearCacheButtonEl: document.getElementById('video-clear-cache-button'),
       debugMetaEl: document.getElementById('video-debug-meta'),
       debugCurrentCueEl: document.getElementById('video-debug-current-cue'),
       debugNextCueEl: document.getElementById('video-debug-next-cue'),
@@ -130,6 +133,7 @@ import {initPane} from './video/pane.js';
   };
 
   initShared(ctx);
+  initCache(ctx);
   initDiagnostics(ctx);
   initLibrary(ctx);
   initQueue(ctx);
