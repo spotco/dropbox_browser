@@ -35,8 +35,11 @@ from .video import (
     VIDEO_ENDPOINT_PREFIX,
     clear_video_disk_caches,
     extract_all_remote_subtitles_to_webvtt,
+    extract_remote_subtitle_window_to_webvtt,
     extract_remote_subtitles_to_webvtt,
     handle_video_get,
+    parse_playback_sync_token,
+    parse_subtitle_window_duration_seconds,
     parse_video_start_seconds,
     probe_remote_media,
     video_session_manager,
@@ -1012,6 +1015,45 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             if language:
                 self.send_header("Content-Language", language)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        elif endpoint == "subtitles/window":
+            params = parse_qs(query, keep_blank_values=True)
+            source = params.get("source", ["remote"])[0]
+            if source != "remote":
+                raise BrowserError(HTTPStatus.BAD_REQUEST, "Only remote subtitle extraction is supported.")
+            rel_path = clean_rel_path(params.get("path", [""])[0])
+            resolved_rel_path, file_size = self._resolve_remote_file(rel_path)
+            track_raw = params.get("track", [""])[0].strip()
+            if not track_raw:
+                raise BrowserError(HTTPStatus.BAD_REQUEST, "Subtitle track is required.")
+            try:
+                subtitle_stream_index = int(track_raw)
+            except ValueError as exc:
+                raise BrowserError(HTTPStatus.BAD_REQUEST, "Subtitle track must be an integer stream index.") from exc
+            window_start_seconds = parse_video_start_seconds(params.get("start", [""])[0])
+            window_duration_seconds = parse_subtitle_window_duration_seconds(params.get("duration", [""])[0])
+            window_status = params.get("window_status", ["requested"])[0].strip() or "requested"
+            playback_sync_token = parse_playback_sync_token(params.get("playback_sync_token", [""])[0])
+            port = int(self.server.server_address[1])  # type: ignore[attr-defined]
+            base_url = f"http://127.0.0.1:{port}"
+            payload = extract_remote_subtitle_window_to_webvtt(
+                self.app,
+                rel_path=resolved_rel_path,
+                subtitle_stream_index=subtitle_stream_index,
+                base_url=base_url,
+                file_size=file_size,
+                window_start_seconds=window_start_seconds,
+                window_duration_seconds=window_duration_seconds,
+                window_status=window_status,
+                playback_sync_token=playback_sync_token,
+            )
+            body = _json.dumps(payload).encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)

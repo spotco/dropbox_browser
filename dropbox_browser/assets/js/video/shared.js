@@ -88,6 +88,20 @@ function resetProcessedProgressTrack() {
   ctx.els.progressSliderEl.style.setProperty('--video-progress-processed-end', '0%');
 }
 
+function selectedSubtitleCoverageRangeForPlaybackTarget(targetSeconds) {
+  if (ctx.state.playbackMode !== 'compatibility') return null;
+  var active = activeQueueItem();
+  if (!active || !active.path) return null;
+  var probePayload = ctx.state.probeCache[active.path || ''] || null;
+  if (!probePayload) return null;
+  if (!ctx.subtitlesEnabledForItem(active, probePayload)) return null;
+  if (ctx.selectedBurnedInSubtitleStreamIndex(active, probePayload) !== null) return null;
+  var streamIndex = ctx.resolvedSubtitleStreamIndex(active, probePayload);
+  if (streamIndex === '') return null;
+  if (typeof ctx.subtitleCoverageRangeForTarget !== 'function') return null;
+  return ctx.subtitleCoverageRangeForTarget(active.path || '', streamIndex, targetSeconds);
+}
+
 function syncProcessedProgressTrack(duration) {
   if (!ctx.els.progressSliderEl) return;
   var processedRange = compatibilitySeekableRange({
@@ -95,6 +109,25 @@ function syncProcessedProgressTrack(duration) {
     sessionStartSeconds: ctx.state.compatibilityStartSeconds,
     seekableRanges: ctx.compatibilitySeekableRanges(),
   });
+  var focusSeconds = Number.isFinite(Number(ctx.state.requestedSeekSeconds))
+    ? Number(ctx.state.requestedSeekSeconds)
+    : currentGlobalPlaybackSeconds();
+  var subtitleCoverageRange = selectedSubtitleCoverageRangeForPlaybackTarget(focusSeconds);
+  if (subtitleCoverageRange) {
+    processedRange.startSeconds = Math.max(
+      processedRange.startSeconds,
+      Math.max(0, Number(subtitleCoverageRange.start_seconds) || 0)
+    );
+    processedRange.endSeconds = Math.min(
+      processedRange.endSeconds,
+      Math.max(0, Number(subtitleCoverageRange.end_seconds) || 0)
+    );
+    if (processedRange.endSeconds < processedRange.startSeconds) {
+      processedRange.endSeconds = processedRange.startSeconds;
+    }
+    processedRange.startPercent = duration > 0 ? (processedRange.startSeconds / duration) * 100 : 0;
+    processedRange.endPercent = duration > 0 ? (processedRange.endSeconds / duration) * 100 : 0;
+  }
   ctx.els.progressSliderEl.style.setProperty(
     '--video-progress-processed-start',
     processedRange.startPercent.toFixed(3) + '%'

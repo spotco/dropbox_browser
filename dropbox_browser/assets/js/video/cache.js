@@ -15,6 +15,11 @@ export function initCache(ctx) {
   function clearClientSubtitleCaches() {
     ctx.state.subtitleFullVttCacheByPath = Object.create(null);
     ctx.state.subtitleWarmInFlightByPath = Object.create(null);
+    ctx.state.subtitleWindowCacheByPath = Object.create(null);
+    ctx.state.subtitleWindowInFlightByPath = Object.create(null);
+    ctx.state.subtitleCoverageByPath = Object.create(null);
+    ctx.state.subtitleBackgroundCoverageByPath = Object.create(null);
+    ctx.state.subtitleMountedWindowByPath = Object.create(null);
     if (typeof ctx.clearSubtitleTrack === 'function') {
       ctx.clearSubtitleTrack();
     }
