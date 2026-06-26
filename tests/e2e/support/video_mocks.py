@@ -79,6 +79,36 @@ def _write_batch_webvtt_outputs(
     return wrote
 
 
+def _write_batch_subtitle_copy_outputs(
+    command: list[Any],
+    rel_path: str | None,
+    vtt_by_path: dict[str, dict[str, str]],
+) -> bool:
+    wrote = False
+    index = 0
+    while index < len(command):
+        if command[index] == "-map" and index + 7 < len(command):
+            map_arg = command[index + 1]
+            if (
+                command[index + 2] == "-vn"
+                and command[index + 3] == "-an"
+                and command[index + 4] == "-dn"
+                and command[index + 5] == "-c:s"
+                and command[index + 6] == "copy"
+            ):
+                match = re.search(r"0:(\d+)", str(map_arg))
+                output_path = command[index + 7]
+                if match and isinstance(output_path, str) and not output_path.startswith("-"):
+                    stream_index = match.group(1)
+                    vtt_text = _vtt_text_for_stream(rel_path, stream_index, vtt_by_path)
+                    Path(output_path).write_text(vtt_text, encoding="utf-8")
+                    wrote = True
+                index += 8
+                continue
+        index += 1
+    return wrote
+
+
 def _extract_stream_index_from_command(command: list[Any]) -> str | None:
     for part in command:
         if not isinstance(part, str):
@@ -138,8 +168,11 @@ def build_video_mock_patches(fixture: dict[str, Any], temp_dir: Path) -> list[An
         def delayed_real_run(command, stdout=None, stderr=None, check=False, timeout=None):
             executable = Path(str(command[0])).name.lower() if command else ""
             rel_path = _extract_rel_path_from_command(command)
-            is_webvtt_extract = any(str(part).casefold() == "webvtt" for part in command)
-            if "ffmpeg" in executable and is_webvtt_extract:
+            is_subtitle_extract = (
+                "-hls_segment_filename" not in command
+                and ("-c:s" in command or any(str(part).casefold() == "webvtt" for part in command))
+            )
+            if "ffmpeg" in executable and rel_path and is_subtitle_extract:
                 delay_seconds = _subtitle_delay_seconds_for_path(rel_path, subtitle_delay_seconds_by_path)
                 if delay_seconds > 0:
                     time.sleep(delay_seconds)
@@ -164,6 +197,8 @@ def build_video_mock_patches(fixture: dict[str, Any], temp_dir: Path) -> list[An
             delay_seconds = _subtitle_delay_seconds_for_path(resolved_path, subtitle_delay_seconds_by_path)
             if delay_seconds > 0:
                 time.sleep(delay_seconds)
+            if _write_batch_subtitle_copy_outputs(command, resolved_path, vtt_by_path):
+                return CompletedProcess(command, 0, b"", b"")
             if _write_batch_webvtt_outputs(command, resolved_path, vtt_by_path):
                 return CompletedProcess(command, 0, b"", b"")
             stream_index = _extract_stream_index_from_command(command)
@@ -174,10 +209,18 @@ def build_video_mock_patches(fixture: dict[str, Any], temp_dir: Path) -> list[An
                 track_map = vtt_by_path.get(resolved_path) or {}
                 if len(track_map) == 1:
                     vtt_text = next(iter(track_map.values()))
+            if "-c:s" in command and "copy" in command:
+                output_path = Path(str(command[-1]))
+                output_path.write_text(vtt_text or "WEBVTT\n\n", encoding="utf-8")
+                return CompletedProcess(command, 0, b"", b"")
             for index, arg in enumerate(command):
                 if arg == "webvtt" and index + 1 < len(command) and command[index + 1] != "-":
                     Path(command[index + 1]).write_text(vtt_text or "WEBVTT\n\n", encoding="utf-8")
                     return CompletedProcess(command, 0, b"", b"")
+            if command and command[-1] == "-" and not rel_path:
+                input_path = Path(str(command[command.index("-i") + 1]))
+                if input_path.is_file():
+                    return CompletedProcess(command, 0, input_path.read_bytes(), b"")
             if command and command[-1] == "-":
                 body = (vtt_text or "WEBVTT\n\n").encode("utf-8")
                 return CompletedProcess(command, 0, body, b"")

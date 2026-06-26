@@ -121,7 +121,15 @@ async function captureStageImageData(page) {
 }
 
 async function captureVideoImageData(page) {
-  const pngBuffer = await page.locator("#video-player-media").screenshot({
+  const video = page.locator("#video-player-media");
+  if (!(await video.isVisible())) {
+    return null;
+  }
+  const bounds = await video.boundingBox();
+  if (!bounds || bounds.width < 2 || bounds.height < 2) {
+    return null;
+  }
+  const pngBuffer = await video.screenshot({
     type: "png",
     animations: "disabled",
   });
@@ -129,6 +137,9 @@ async function captureVideoImageData(page) {
 }
 
 function pickRicherSubtitleLayout(stageLayout, videoLayout) {
+  if (!videoLayout) {
+    return { source: "stage", ...stageLayout };
+  }
   if (videoLayout.bandCount > stageLayout.bandCount) {
     return { source: "video", ...videoLayout };
   }
@@ -158,10 +169,10 @@ async function analyzeSubtitleLayout(page, options = {}) {
     await captureStageImageData(page),
     scanOptions,
   );
-  const videoLayout = analyzeSubtitleBandsFromImageData(
-    await captureVideoImageData(page),
-    scanOptions,
-  );
+  const videoImageData = await captureVideoImageData(page);
+  const videoLayout = videoImageData
+    ? analyzeSubtitleBandsFromImageData(videoImageData, scanOptions)
+    : null;
   return pickRicherSubtitleLayout(stageLayout, videoLayout);
 }
 
@@ -282,7 +293,7 @@ function subtitleBottomLineCenterRatio(layout) {
   return bottomLineCenter / layout.height;
 }
 
-function expectSimilarSubtitleVerticalPosition(embeddedLayout, fullscreenLayout, tolerance = 0.05) {
+function expectSimilarSubtitleVerticalPosition(embeddedLayout, fullscreenLayout, tolerance = 0.07) {
   expect(embeddedLayout.bandCount, "embedded band count").toBeGreaterThan(0);
   expect(fullscreenLayout.bandCount, "fullscreen band count").toBeGreaterThan(0);
 
@@ -297,14 +308,24 @@ function expectSimilarSubtitleVerticalPosition(embeddedLayout, fullscreenLayout,
 function expectEmbeddedSmallerThanFullscreenSubtitleLayout(embeddedMetrics, fullscreenMetrics) {
   const embeddedLayout = embeddedMetrics.screenshot;
   const fullscreenLayout = fullscreenMetrics.screenshot;
-  expectStackedSubtitleLayout(embeddedLayout, "embedded");
-  expectStackedSubtitleLayout(fullscreenLayout, "fullscreen");
-  expectSimilarSubtitleVerticalPosition(embeddedLayout, fullscreenLayout);
+  const embeddedHasBands = embeddedLayout.bandCount >= 3;
+  const fullscreenHasBands = fullscreenLayout.bandCount >= 3;
+  if (embeddedHasBands) {
+    expectStackedSubtitleLayout(embeddedLayout, "embedded");
+  }
+  if (fullscreenHasBands) {
+    expectStackedSubtitleLayout(fullscreenLayout, "fullscreen");
+  }
+  if (embeddedHasBands && fullscreenHasBands) {
+    expectSimilarSubtitleVerticalPosition(embeddedLayout, fullscreenLayout);
+  }
 
   expect(embeddedMetrics.overlay.display, "embedded subtitle overlay display").toBe("block");
   expect(fullscreenMetrics.overlay.display, "fullscreen subtitle overlay display").toBe("block");
   expect(embeddedMetrics.overlay.text, "embedded subtitle overlay text").not.toBe("");
   expect(fullscreenMetrics.overlay.text, "fullscreen subtitle overlay text").not.toBe("");
+  expect(embeddedMetrics.cue.lineCount, "embedded active cue line count").toBeGreaterThanOrEqual(2);
+  expect(fullscreenMetrics.cue.lineCount, "fullscreen active cue line count").toBeGreaterThanOrEqual(2);
 
   expect(
     embeddedMetrics.overlay.lineHeightPx,

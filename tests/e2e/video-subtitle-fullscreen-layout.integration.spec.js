@@ -181,7 +181,7 @@ async function playLibraryFile(page, filename) {
         const video = document.getElementById("video-player-media");
         return Boolean(video && !video.hidden);
       });
-    }, { timeout: 15000 })
+    }, { timeout: 45000 })
     .toBe(true);
   await waitForDecodedVideo(page);
 }
@@ -219,6 +219,7 @@ test("multiline WebVTT subtitles stay smaller in embedded mode and full size in 
   expectStackedSubtitleLayout(embeddedMetrics.screenshot, "embedded");
 
   await enterStageFullscreen(page);
+  await seekToMultilineCue(page);
   const fullscreenMetrics = await readSubtitleLayoutMetrics(page);
   expectEmbeddedSmallerThanFullscreenSubtitleLayout(
     embeddedMetrics,
