@@ -592,6 +592,21 @@ async function preloadAllSubtitleVttsForItem(item, probePayload) {
           if (!entry || typeof entry.vtt !== 'string') return;
           storeFullSubtitleVtt(path, Number(key), entry.vtt);
         });
+        var stillMissingStreams = subtitleStreams.filter(function (stream) {
+          return !isSubtitleVttCachedForStream(path, stream.index);
+        });
+        if (stillMissingStreams.length) {
+          batchFailed = true;
+          ctx.reportSubtitleSyncDiagnostic({
+            level: 'warn',
+            message: 'Subtitle batch preload returned incomplete tracks',
+            expected_track_count: subtitleStreams.length,
+            received_track_count: Object.keys(tracks).length,
+            missing_track_indices: stillMissingStreams.map(function (stream) {
+              return stream.index;
+            }),
+          });
+        }
       }
     }
     catch (error) {

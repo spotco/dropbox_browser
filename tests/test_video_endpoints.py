@@ -15,8 +15,10 @@ from dropbox_browser.config import VideoToolsConfig
 from dropbox_browser.video import (
     HLS_MIN_READY_SEGMENTS,
     VideoHlsSession,
+    build_ffmpeg_batch_subtitle_copy_command,
     build_ffmpeg_batch_webvtt_command,
     build_ffmpeg_hls_command,
+    build_ffmpeg_subtitle_copy_command,
     build_ffmpeg_webvtt_command,
     build_ffprobe_command,
     build_probe_cache_key,
@@ -703,7 +705,9 @@ class VideoEndpointTests(AppTestCase):
                 side_effect=lambda cmd, stdout=None, stderr=None, check=False, timeout=None: CompletedProcess(
                     cmd,
                     0,
-                    json.dumps(ffprobe_payload).encode("utf-8") if "ffprobe" in Path(cmd[0]).name.lower() else vtt_body,
+                    json.dumps(ffprobe_payload).encode("utf-8")
+                    if "ffprobe" in Path(cmd[0]).name.lower()
+                    else (vtt_body if cmd and cmd[-1] == "-" else b""),
                     b"",
                 ),
             ) as mock_run,
@@ -715,7 +719,7 @@ class VideoEndpointTests(AppTestCase):
             time.sleep(0.02)
             with urlopen(url, timeout=5) as response:
                 self.assertEqual(response.read(), vtt_body)
-            self.assertEqual(mock_run.call_count, 3)
+            self.assertEqual(mock_run.call_count, 5)
 
     def test_session_endpoint_creates_hls_session_and_returns_playlist_url(self) -> None:
         rclone = self._remote_media_rclone()
@@ -1138,6 +1142,7 @@ class VideoEndpointTests(AppTestCase):
                 "dropbox_browser.video.subprocess.run",
                 side_effect=[
                     CompletedProcess(["ffprobe"], 0, json.dumps(ffprobe_payload).encode("utf-8"), b""),
+                    CompletedProcess(["ffmpeg"], 0, b"", b""),
                     CompletedProcess(["ffmpeg"], 0, b"WEBVTT\n\n00:00.000 --> 00:01.000\nHello\n", b""),
                 ],
             ),
@@ -1184,6 +1189,7 @@ class VideoEndpointTests(AppTestCase):
                 "dropbox_browser.video.subprocess.run",
                 side_effect=[
                     CompletedProcess(["ffprobe"], 0, json.dumps(ffprobe_payload).encode("utf-8"), b""),
+                    CompletedProcess(["ffmpeg"], 0, b"", b""),
                     CompletedProcess(["ffmpeg"], 0, vtt_body, b""),
                 ],
             ) as mock_run,
@@ -1197,7 +1203,7 @@ class VideoEndpointTests(AppTestCase):
             with urlopen(url, timeout=5) as response:
                 second_body = response.read()
             self.assertEqual(second_body, vtt_body)
-            self.assertEqual(mock_run.call_count, 2)
+            self.assertEqual(mock_run.call_count, 3)
 
     def test_subtitles_all_endpoint_returns_all_tracks_in_one_ffmpeg_pass(self) -> None:
         rclone = self._remote_media_rclone()
@@ -1233,12 +1239,17 @@ class VideoEndpointTests(AppTestCase):
         def fake_subprocess(command, stdout=None, stderr=None, check=False, timeout=None):
             if "ffprobe" in command[0]:
                 return CompletedProcess(command, 0, json.dumps(ffprobe_payload).encode("utf-8"), b"")
-            for index, arg in enumerate(command):
-                if arg == "webvtt" and index + 1 < len(command) and command[index + 1] != "-":
-                    Path(command[index + 1]).write_text(
-                        f"WEBVTT\n\n00:00.000 --> 00:01.000\nTrack {index}\n",
-                        encoding="utf-8",
-                    )
+            if "-c:s" in command and "copy" in command:
+                for index, arg in enumerate(command):
+                    if arg == "copy" and index + 1 < len(command):
+                        Path(command[index + 1]).write_text(
+                            f"WEBVTT\n\n00:00.000 --> 00:01.000\nTrack {index}\n",
+                            encoding="utf-8",
+                        )
+                return CompletedProcess(command, 0, b"", b"")
+            if command and command[-1] == "-":
+                input_path = Path(command[command.index("-i") + 1])
+                return CompletedProcess(command, 0, input_path.read_bytes(), b"")
             return CompletedProcess(command, 0, b"", b"")
 
         with (
@@ -1260,15 +1271,19 @@ class VideoEndpointTests(AppTestCase):
         self.assertIn("WEBVTT", payload["tracks"]["3"]["vtt"])
         self.assertEqual(payload["tracks"]["3"]["language"], "eng")
         self.assertEqual(payload["tracks"]["4"]["language"], "jpn")
-        self.assertEqual(mock_run.call_count, 2)
+        self.assertEqual(mock_run.call_count, 4)
         ffmpeg_calls = [
             call.args[0]
             for call in mock_run.call_args_list
             if Path(call.args[0][0]).name.lower().startswith("ffmpeg")
         ]
-        self.assertEqual(len(ffmpeg_calls), 1)
+        self.assertEqual(len(ffmpeg_calls), 3)
         self.assertIn("0:3", ffmpeg_calls[0])
         self.assertIn("0:4", ffmpeg_calls[0])
+        self.assertIn("-c:s", ffmpeg_calls[0])
+        self.assertIn("copy", ffmpeg_calls[0])
+        self.assertEqual(ffmpeg_calls[1][-3:], ["-f", "webvtt", "-"])
+        self.assertEqual(ffmpeg_calls[2][-3:], ["-f", "webvtt", "-"])
 
     def test_subtitle_codec_supports_webvtt_rejects_bitmap_codecs(self) -> None:
         self.assertTrue(subtitle_codec_supports_webvtt("ass"))
@@ -1315,16 +1330,17 @@ class VideoEndpointTests(AppTestCase):
         def fake_subprocess(command, stdout=None, stderr=None, check=False, timeout=None):
             if "ffprobe" in command[0]:
                 return CompletedProcess(command, 0, json.dumps(ffprobe_payload).encode("utf-8"), b"")
-            for index, arg in enumerate(command):
-                if arg == "webvtt" and index + 1 < len(command) and command[index + 1] != "-":
-                    Path(command[index + 1]).write_text(
-                        "WEBVTT\n\n00:00.000 --> 00:01.000\nTrack\n",
-                        encoding="utf-8",
-                    )
-            if "-map" in command and "0:6" in command:
-                return CompletedProcess(command, 1, b"", b"bitmap to bitmap only")
+            if "-c:s" in command and "copy" in command:
+                for index, arg in enumerate(command):
+                    if arg == "copy" and index + 1 < len(command):
+                        Path(command[index + 1]).write_text(
+                            "WEBVTT\n\n00:00.000 --> 00:01.000\nTrack\n",
+                            encoding="utf-8",
+                        )
+                return CompletedProcess(command, 0, b"", b"")
             if command[-1] == "-":
-                return CompletedProcess(command, 0, b"WEBVTT\n\n00:00.000 --> 00:01.000\nTrack\n", b"")
+                input_path = Path(command[command.index("-i") + 1])
+                return CompletedProcess(command, 0, input_path.read_bytes(), b"")
             return CompletedProcess(command, 0, b"", b"")
 
         with (
@@ -1362,6 +1378,38 @@ class VideoEndpointTests(AppTestCase):
         self.assertIn("0:4", command)
         self.assertIn(str(Path("C:/temp/track3.vtt")), command)
         self.assertIn(str(Path("C:/temp/track4.vtt")), command)
+
+    def test_build_ffmpeg_subtitle_copy_command_maps_selected_stream(self) -> None:
+        command = build_ffmpeg_subtitle_copy_command(
+            Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+            "http://127.0.0.1:8000/file?path=movie.mkv&source=remote",
+            7,
+            Path("C:/temp/track7.ass"),
+            start_time_seconds=42,
+        )
+
+        self.assertLess(command.index("-ss"), command.index("-i"))
+        self.assertEqual(command[command.index("-ss") + 1], "42")
+        self.assertIn("0:7", command)
+        self.assertIn("-c:s", command)
+        self.assertIn("copy", command)
+        self.assertEqual(command[-1], str(Path("C:/temp/track7.ass")))
+
+    def test_build_ffmpeg_batch_subtitle_copy_command_maps_each_stream(self) -> None:
+        command = build_ffmpeg_batch_subtitle_copy_command(
+            Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+            "http://127.0.0.1:8000/file?path=movie.mkv&source=remote",
+            [3, 4],
+            [Path("C:/temp/track3.ass"), Path("C:/temp/track4.srt")],
+        )
+
+        self.assertIn("-map", command)
+        self.assertIn("0:3", command)
+        self.assertIn("0:4", command)
+        self.assertIn("-c:s", command)
+        self.assertIn("copy", command)
+        self.assertIn(str(Path("C:/temp/track3.ass")), command)
+        self.assertIn(str(Path("C:/temp/track4.srt")), command)
 
     def test_subtitles_endpoint_rejects_invalid_track(self) -> None:
         rclone = self._remote_media_rclone()

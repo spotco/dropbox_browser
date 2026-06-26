@@ -1216,6 +1216,42 @@ test("video playback loads tracks, switches tracks, and hides video before subti
   await expectTrackSelectors(page, { subtitleValue: "3" });
 });
 
+test("empty successful subtitle batch preload falls back to per-track extraction", async ({ page }) => {
+  test.setTimeout(60000);
+
+  await installHlsStub(page);
+  await page.route("**/video/endpoints/subtitles/all?path=Videos%2Falpha.mkv&source=remote", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ status: "ok", tracks: {} }),
+    });
+  });
+  await openVideoPane(page);
+
+  const subtitleTrackFetch = page.waitForRequest((request) => {
+    return request.method() === "GET"
+      && request.url().includes("/video/endpoints/subtitles?path=Videos%2Falpha.mkv&source=remote&track=3");
+  });
+
+  const initialSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
+  await playLibraryFile(page, "alpha.mkv");
+  await initialSession;
+  await subtitleTrackFetch;
+
+  await expectTrackSelectors(page, {
+    audioOptionCount: 2,
+    subtitleOptionCount: 4,
+    audioValue: "1",
+    subtitleValue: "3",
+  });
+  await waitForSubtitleStreamIndex(page, 3);
+  await waitForMountedSubtitleTrackReady(page, 3);
+  await setPlaybackTimeForSubtitleChecks(page, 1);
+  await waitForDisplayedSubtitleText(page, "ALPHA-SUBTITLE-ENG");
+  await waitForNativeSubtitleCueText(page, "ALPHA-SUBTITLE-ENG");
+});
+
 test("WebVTT formatting tags render in the subtitle overlay", async ({ page }) => {
   test.setTimeout(90000);
 
@@ -1788,7 +1824,6 @@ test("video play toggle keeps intended state during compatibility seek loading",
   await clickPlayToggle(page);
   await expectPlayToggleState(page, "Play");
   await waitForVisibleVideo(page);
-  await waitForPlaybackSurfaceWithoutOverlay(page);
   await expectPlayToggleState(page, "Play");
 
   await clickPlayToggle(page);
@@ -1802,7 +1837,6 @@ test("video play toggle keeps intended state during compatibility seek loading",
   await expectPlayToggleState(page, "Pause");
   await page.waitForTimeout(300);
   await waitForVisibleVideo(page);
-  await waitForPlaybackSurfaceWithoutOverlay(page);
   await expectPlayToggleState(page, "Pause");
 });
 

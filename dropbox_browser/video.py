@@ -141,6 +141,14 @@ _WEBVTT_INCOMPATIBLE_SUBTITLE_CODECS = frozenset({
     "xsub",
 })
 
+_COPYABLE_TEXT_SUBTITLE_SUFFIXES = {
+    "ass": ".ass",
+    "ssa": ".ass",
+    "subrip": ".srt",
+    "srt": ".srt",
+    "webvtt": ".vtt",
+}
+
 
 def subtitle_codec_supports_webvtt(codec_name: object) -> bool:
     if not isinstance(codec_name, str) or not codec_name.strip():
@@ -399,6 +407,71 @@ def build_ffmpeg_webvtt_command(
         "webvtt",
         "-",
     ])
+    return command
+
+
+def subtitle_codec_copy_suffix(codec_name: object) -> str | None:
+    if not isinstance(codec_name, str):
+        return None
+    return _COPYABLE_TEXT_SUBTITLE_SUFFIXES.get(codec_name.casefold())
+
+
+def build_ffmpeg_subtitle_copy_command(
+    ffmpeg_exe: Path,
+    input_url: str,
+    subtitle_stream_index: int,
+    output_path: Path,
+    *,
+    start_time_seconds: float = 0.0,
+) -> list[str]:
+    command = [
+        str(ffmpeg_exe),
+        "-v",
+        "error",
+    ]
+    if start_time_seconds > 0:
+        command.extend(["-ss", _format_ffmpeg_seconds(start_time_seconds)])
+    command.extend([
+        "-i",
+        input_url,
+        "-map",
+        f"0:{subtitle_stream_index}",
+        "-vn",
+        "-an",
+        "-dn",
+        "-c:s",
+        "copy",
+        str(output_path),
+    ])
+    return command
+
+
+def build_ffmpeg_batch_subtitle_copy_command(
+    ffmpeg_exe: Path,
+    input_url: str,
+    subtitle_stream_indices: list[int],
+    output_paths: list[Path],
+) -> list[str]:
+    if len(subtitle_stream_indices) != len(output_paths):
+        raise ValueError("subtitle stream indices and output paths must match.")
+    command = [
+        str(ffmpeg_exe),
+        "-v",
+        "error",
+        "-i",
+        input_url,
+    ]
+    for subtitle_stream_index, output_path in zip(subtitle_stream_indices, output_paths):
+        command.extend([
+            "-map",
+            f"0:{subtitle_stream_index}",
+            "-vn",
+            "-an",
+            "-dn",
+            "-c:s",
+            "copy",
+            str(output_path),
+        ])
     return command
 
 
@@ -1421,25 +1494,14 @@ def extract_remote_subtitles_to_webvtt(
     if cached_body is not None:
         return cached_body, str(track_info.get("language") or "")
     input_url = base_url + "/file?" + urlencode({"path": rel_path, "source": "remote"})
-    command = build_ffmpeg_webvtt_command(
+    body = _run_ffmpeg_single_webvtt(
         ffmpeg_exe,
         input_url,
         subtitle_stream_index,
+        codec_name=track_info.get("codec_name"),
     )
-    try:
-        proc = subprocess.run(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
-    except FileNotFoundError as exc:
-        raise BrowserError(HTTPStatus.SERVICE_UNAVAILABLE, f"ffmpeg was not found: {exc}") from exc
-    if proc.returncode != 0:
-        message = proc.stderr.decode("utf-8", "replace").strip() or "ffmpeg failed to convert subtitles to WebVTT."
-        raise BrowserError(HTTPStatus.BAD_GATEWAY, message)
-    vtt_text = proc.stdout.decode("utf-8", "replace")
-    body = vtt_text.encode("utf-8")
+    if body is None:
+        raise BrowserError(HTTPStatus.BAD_GATEWAY, "ffmpeg failed to convert subtitles to WebVTT.")
     _write_subtitle_cache(app, cache_key, body)
     return body, str(track_info.get("language") or "")
 
@@ -1465,11 +1527,96 @@ def _store_extracted_subtitle_track(
     }
 
 
+def _run_subprocess_capture(
+    command: list[str],
+    *,
+    not_found_message: str,
+    failure_message: str,
+) -> bytes:
+    try:
+        proc = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise BrowserError(HTTPStatus.SERVICE_UNAVAILABLE, f"{not_found_message}: {exc}") from exc
+    if proc.returncode != 0:
+        message = proc.stderr.decode("utf-8", "replace").strip() or failure_message
+        raise BrowserError(HTTPStatus.BAD_GATEWAY, message)
+    return proc.stdout
+
+
+def _convert_subtitle_file_to_webvtt(
+    ffmpeg_exe: Path,
+    subtitle_path: Path,
+) -> bytes:
+    if subtitle_path.suffix.casefold() == ".vtt":
+        return subtitle_path.read_bytes()
+    command = [
+        str(ffmpeg_exe),
+        "-v",
+        "error",
+        "-i",
+        str(subtitle_path),
+        "-f",
+        "webvtt",
+        "-",
+    ]
+    return _run_subprocess_capture(
+        command,
+        not_found_message="ffmpeg was not found",
+        failure_message="ffmpeg failed to convert subtitles to WebVTT.",
+    )
+
+
+def _extract_subtitle_via_copy_then_convert(
+    ffmpeg_exe: Path,
+    input_url: str,
+    subtitle_stream_index: int,
+    codec_name: object,
+) -> bytes | None:
+    suffix = subtitle_codec_copy_suffix(codec_name)
+    if suffix is None:
+        return None
+    temp_path = SUBTITLE_CACHE_DIR / f"copy_{uuid.uuid4().hex}_{subtitle_stream_index}{suffix}"
+    temp_path.parent.mkdir(parents=True, exist_ok=True)
+    command = build_ffmpeg_subtitle_copy_command(
+        ffmpeg_exe,
+        input_url,
+        subtitle_stream_index,
+        temp_path,
+    )
+    try:
+        _run_subprocess_capture(
+            command,
+            not_found_message="ffmpeg was not found",
+            failure_message="ffmpeg failed to copy subtitle track.",
+        )
+        return _convert_subtitle_file_to_webvtt(ffmpeg_exe, temp_path)
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _run_ffmpeg_single_webvtt(
     ffmpeg_exe: Path,
     input_url: str,
     subtitle_stream_index: int,
+    *,
+    codec_name: object = None,
 ) -> bytes | None:
+    copied_body = _extract_subtitle_via_copy_then_convert(
+        ffmpeg_exe,
+        input_url,
+        subtitle_stream_index,
+        codec_name,
+    )
+    if copied_body is not None:
+        return copied_body
     command = build_ffmpeg_webvtt_command(
         ffmpeg_exe,
         input_url,
@@ -1498,14 +1645,19 @@ def _run_ffmpeg_batch_webvtt(
         return {}
     temp_paths: list[Path] = []
     missing_indices: list[int] = []
+    copyable_rows: list[dict[str, object]] = []
     try:
         for row in missing_rows:
             subtitle_stream_index = int(row.get("index") or -1)
-            temp_path = SUBTITLE_CACHE_DIR / f"batch_{uuid.uuid4().hex}_{subtitle_stream_index}.vtt"
+            suffix = subtitle_codec_copy_suffix(row.get("codec_name"))
+            if suffix is None:
+                return None
+            temp_path = SUBTITLE_CACHE_DIR / f"batch_{uuid.uuid4().hex}_{subtitle_stream_index}{suffix}"
             temp_path.parent.mkdir(parents=True, exist_ok=True)
             temp_paths.append(temp_path)
             missing_indices.append(subtitle_stream_index)
-        command = build_ffmpeg_batch_webvtt_command(
+            copyable_rows.append(row)
+        command = build_ffmpeg_batch_subtitle_copy_command(
             ffmpeg_exe,
             input_url,
             missing_indices,
@@ -1523,11 +1675,11 @@ def _run_ffmpeg_batch_webvtt(
         if proc.returncode != 0:
             return None
         results: dict[int, bytes] = {}
-        for row, temp_path in zip(missing_rows, temp_paths):
+        for row, temp_path in zip(copyable_rows, temp_paths):
             subtitle_stream_index = int(row.get("index") or -1)
             try:
-                body = temp_path.read_bytes()
-            except OSError:
+                body = _convert_subtitle_file_to_webvtt(ffmpeg_exe, temp_path)
+            except (BrowserError, OSError):
                 return None
             if body:
                 results[subtitle_stream_index] = body
@@ -1610,6 +1762,7 @@ def extract_all_remote_subtitles_to_webvtt(
                     ffmpeg_exe,
                     input_url,
                     subtitle_stream_index,
+                    codec_name=row.get("codec_name"),
                 )
                 if body is None:
                     log_video_debug(
