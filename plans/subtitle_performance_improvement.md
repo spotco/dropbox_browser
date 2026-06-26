@@ -45,11 +45,25 @@ rclone cat --remote:path  |  ffmpeg -i pipe:0 ...
 
 Removes the HTTP server middleman, buffering layers, and extra copies. Same bits, less overhead — noticeable on slow machines.
 
-### 3. Use local file when it exists
+### Remote-Only Constraint
+
+The video player must stream from **remote Dropbox content only**. Even when the
+same file exists locally under `--local-root` or a synced Dropbox folder,
+subtitle extraction for the video player should **not** switch over to the
+local file path as an optimization.
+
+That rules out the previously-considered "use local file when it exists"
+approach for this feature. Any performance work here must keep the subtitle
+input on the remote streaming path.
+
+### 3. Use local file when it exists (Rejected)
 
 If the video is synced under `--local-root`, subtitle extraction should read the **local path** first via `safe_join_local`. Local disk random access is dramatically faster than streaming 110 minutes from Dropbox, especially when ffmpeg revisits earlier clusters.
 
 Probably the single largest real-world win for users who sync anime folders.
+
+This would be fast, but it conflicts with the remote-only behavior requirement
+for the video player, so it should not be implemented here.
 
 ---
 
@@ -151,11 +165,11 @@ Bitmap codecs (`hdmv_pgs_subtitle`, etc.) cannot be WebVTT sidecars. Offer burn-
 
 | Priority | Item | Who benefits |
 |----------|------|--------------|
-| 1 | Local-file-first input | Synced content users |
-| 2 | rclone pipe → ffmpeg | Everyone (remote) |
-| 3 | Demux copy + local ASS→VTT | ASS/SRT-heavy anime |
-| 4 | Async job + preload on queue/library select | Perceived latency |
-| 5 | Selected-track-only + progressive cues | Long movies, weak CPUs |
+| 1 | rclone pipe → ffmpeg | Everyone (remote) |
+| 2 | Demux copy + local ASS→VTT | ASS/SRT-heavy anime |
+| 3 | Async job + preload on queue/library select | Perceived latency |
+| 4 | Selected-track-only + progressive/windowed cues | Long movies, weak CPUs |
+| 5 | ffmpeg startup/demux tuning | Smaller remote wins |
 
 ---
 
@@ -165,11 +179,47 @@ Bitmap codecs (`hdmv_pgs_subtitle`, etc.) cannot be WebVTT sidecars. Offer burn-
 |----------|---------------------|
 | Current: full remote ffmpeg → WebVTT | ~78 s |
 | Remote + pipe + copy demux + local convert | ~30–40 s (I/O bound) |
-| Local file + copy demux + local convert | **< 10 s** |
 
-Gap vs current full transcode is **larger on slow PCs** because ffmpeg WebVTT conversion is CPU-heavy; copy demux is mostly I/O-bound.
+Gap vs current full transcode is **larger on slow PCs** because ffmpeg WebVTT
+conversion is CPU-heavy; copy demux is mostly I/O-bound.
 
 After first successful extraction, `Temp/subtitle_cache/` makes repeat plays instant regardless of approach.
+
+## Remote-Only Best Bets
+
+With local-file reads off the table, the highest-value remaining improvements
+are:
+
+1. **Pipe `rclone cat` directly into ffmpeg**
+   - Cuts out `/file` HTTP proxy overhead while keeping the source remote-only.
+   - Best pure throughput win still compatible with the product constraint.
+
+2. **Keep copy-demux for ASS/SRT-like tracks and expand it where possible**
+   - Already the right direction.
+   - The expensive part becomes remote container traversal rather than subtitle
+     conversion CPU time.
+
+3. **Progressive / window-first extraction**
+   - Extract a startup window first (for example around `0` or
+     `start_time_seconds`) so the first visible subtitle can mount quickly.
+   - Backfill the full VTT in the background afterward.
+   - This is likely the biggest improvement to perceived subtitle startup time
+     for long remote movies.
+
+4. **Async subtitle jobs instead of blocking long HTTP requests**
+   - Does not reduce total extraction time by itself, but avoids making the UI
+     wait on a multi-minute request.
+   - Lets playback proceed while subtitles become available later.
+
+5. **Only block on the selected/default track**
+   - For files with multiple text tracks, avoid warming every compatible track
+     before mount.
+   - Warm alternates after playback starts or only when selected.
+
+6. **Server-side in-flight dedupe**
+   - If multiple requests ask for the same uncached subtitle track, run one
+     extraction job and share the result.
+   - Prevents redundant multi-minute remote scans.
 
 ---
 
@@ -191,3 +241,14 @@ After first successful extraction, `Temp/subtitle_cache/` makes repeat plays ins
 - Return an error from `/subtitles/all` when batch extraction fails instead of `{"tracks":{}}`
 - Treat empty batch `tracks` as failure in `preloadAllSubtitleVttsForItem()`
 - Reintroduce a **scaled** timeout (duration/file-size based) if indefinite waits need an upper bound for hung jobs
+
+---
+
+## Next Step
+
+The next implementation step should follow
+`plans/WINDOWED_SUBTITLE_EXTRACTION_PLAN.md`.
+
+That plan takes the highest-value remaining remote-only improvement here
+(window-first / progressive subtitle extraction) and breaks it into the
+step-by-step checkbox work needed to ship it safely.

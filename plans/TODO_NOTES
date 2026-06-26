@@ -1,11 +1,12 @@
-plans\subtitle_performance_improvement.md
-plans\subtitle_timeout_analysis.md
+plans\WINDOWED_SUBTITLE_EXTRACTION_PLAN.md
 
 - subtitles not working
 	http://localhost:8000/file?path=anime%2Fconan_24%2F%5BAh-le-le%5D+Detective+Conan+Movie+24v0+-+The+Scarlet+Bullet+%28BDRip+1080p+HEVC+FLAC+TrueHD%29+%5B12A80FEC%5D.mkv&source=remote
 	
 - http://localhost:8000/file?path=anime%2Fconan_24%2F%5BAh-le-le%5D+Detective+Conan+Movie+24v0+-+The+Scarlet+Bullet+%28BDRip+1080p+HEVC+FLAC+TrueHD%29+%5B12A80FEC%5D.mkv&source=remote
 	subtitles take a long time to load
+
+---
 
 - mp4 compat
 	http://localhost:8000/?path=spotco_game_archive%2FSwitchScreenshots
