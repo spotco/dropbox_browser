@@ -231,8 +231,8 @@ async function waitForCompatibilityStartupSubtitles(surfaceSyncToken, reason) {
   var streamIndex = ctx.resolvedSubtitleStreamIndex(active, probePayload);
   if (ctx.subtitlesAreMounted(active, streamIndex, fetchStartSeconds)) return;
   showCompatibilitySubtitleWaitStage(active);
-  await ctx.applySubtitlesForSeek(active, probePayload, fetchStartSeconds, {
-    reloadReason: reason || 'playback-ready',
+  await ctx.ensureStartupSubtitleWindowForPlayback(active, probePayload, fetchStartSeconds, {
+    windowStatus: fetchStartSeconds > 0 ? 'seek' : 'startup',
     playbackSyncToken: surfaceSyncToken,
   });
 }
@@ -644,6 +644,7 @@ function trySeekCompatibilityInSession(active, probePayload, clampedTarget, reas
     void ctx.applySubtitlesForSeek(active, probePayload, ctx.state.compatibilityStartSeconds, {
       playbackSyncToken: ctx.state.playbackSyncToken,
       reloadReason: reason || 'scrub-in-session',
+      coverageTargetSeconds: clampedTarget,
     });
   }
   if (wasPlaying) ctx.requestVideoPlay();

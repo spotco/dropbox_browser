@@ -34,6 +34,8 @@ SUBTITLE_CACHE_DIR = TEMP_DIR / "subtitle_cache"
 HEADER_CACHE_SUBDIR = "video_header_cache"
 PROBE_CACHE_SUBDIR = "probe_cache"
 SUBTITLE_CACHE_VERSION = "webvtt-v1"
+SUBTITLE_WINDOW_CACHE_VERSION = "webvtt-window-v1"
+SUBTITLE_WINDOW_MANIFEST_VERSION = "webvtt-window-manifest-v1"
 PROBE_CACHE_VERSION = "ffprobe-v3"
 HEADER_CACHE_VERSION = "header-v1"
 DEFAULT_PROBE_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60.0
@@ -55,8 +57,120 @@ HLS_READY_TIMEOUT_SECONDS = 20.0
 HLS_ASSET_READY_TIMEOUT_SECONDS = 30.0
 HLS_ASSET_READY_TIMEOUT_PROCESS_ALIVE_SECONDS = 120.0
 HLS_READY_TIMEOUT_BURN_IN_SECONDS = 30.0
+SUBTITLE_WINDOW_DURATION_SECONDS = 300.0
+SUBTITLE_WINDOW_SEEK_LEAD_SECONDS = 15.0
+SUBTITLE_WINDOW_SEEK_LAG_SECONDS = SUBTITLE_WINDOW_DURATION_SECONDS - SUBTITLE_WINDOW_SEEK_LEAD_SECONDS
+SUBTITLE_WINDOW_OVERLAP_SECONDS = 1.0
+SUBTITLE_WINDOW_GAP_ACTION = "pause-until-ready"
 VIDEO_DEBUG_LOG_PATH = TEMP_DIR / "video_debug.jsonl"
 _VIDEO_DEBUG_LOG_LOCK = threading.Lock()
+_THREAD_LOCK_TYPE = type(threading.Lock())
+_THREAD_EVENT_TYPE = type(threading.Event())
+
+
+def _subtitle_window_inflight_guard(app: Any) -> threading.Lock:
+    guard = getattr(app, "_subtitle_window_inflight_guard", None)
+    if isinstance(guard, _THREAD_LOCK_TYPE):
+        return guard
+    guard = threading.Lock()
+    setattr(app, "_subtitle_window_inflight_guard", guard)
+    return guard
+
+
+def _subtitle_window_inflight_map(app: Any) -> dict[str, dict[str, object]]:
+    inflight = getattr(app, "_subtitle_window_inflight", None)
+    if isinstance(inflight, dict):
+        return inflight
+    inflight = {}
+    setattr(app, "_subtitle_window_inflight", inflight)
+    return inflight
+
+
+def _acquire_subtitle_window_inflight(app: Any, cache_key: str) -> tuple[bool, dict[str, object]]:
+    with _subtitle_window_inflight_guard(app):
+        inflight = _subtitle_window_inflight_map(app)
+        entry = inflight.get(cache_key)
+        if entry is None:
+            entry = {"event": threading.Event(), "error": None}
+            inflight[cache_key] = entry
+            return True, entry
+        return False, entry
+
+
+def _release_subtitle_window_inflight(app: Any, cache_key: str, entry: dict[str, object]) -> None:
+    event = entry.get("event")
+    if isinstance(event, _THREAD_EVENT_TYPE):
+        event.set()
+    with _subtitle_window_inflight_guard(app):
+        inflight = _subtitle_window_inflight_map(app)
+        current = inflight.get(cache_key)
+        if current is entry:
+            inflight.pop(cache_key, None)
+
+
+def _subtitle_backfill_guard(app: Any) -> threading.Lock:
+    guard = getattr(app, "_subtitle_backfill_guard", None)
+    if isinstance(guard, _THREAD_LOCK_TYPE):
+        return guard
+    guard = threading.Lock()
+    setattr(app, "_subtitle_backfill_guard", guard)
+    return guard
+
+
+def _subtitle_backfill_jobs(app: Any) -> dict[str, threading.Thread]:
+    jobs = getattr(app, "_subtitle_backfill_jobs", None)
+    if isinstance(jobs, dict):
+        return jobs
+    jobs = {}
+    setattr(app, "_subtitle_backfill_jobs", jobs)
+    return jobs
+
+
+def _subtitle_backfill_context_guard(app: Any) -> threading.Lock:
+    guard = getattr(app, "_subtitle_backfill_context_guard", None)
+    if isinstance(guard, _THREAD_LOCK_TYPE):
+        return guard
+    guard = threading.Lock()
+    setattr(app, "_subtitle_backfill_context_guard", guard)
+    return guard
+
+
+def _subtitle_backfill_context(app: Any) -> dict[str, object] | None:
+    context = getattr(app, "_subtitle_backfill_context", None)
+    return context if isinstance(context, dict) else None
+
+
+def _register_subtitle_backfill_context(
+    app: Any,
+    *,
+    rel_path: str,
+    subtitle_stream_index: int,
+    playback_sync_token: int | None,
+) -> None:
+    with _subtitle_backfill_context_guard(app):
+        setattr(app, "_subtitle_backfill_context", {
+            "rel_path": clean_rel_path(rel_path),
+            "subtitle_stream_index": int(subtitle_stream_index),
+            "playback_sync_token": playback_sync_token,
+        })
+
+
+def _subtitle_backfill_request_is_current(
+    app: Any,
+    *,
+    rel_path: str,
+    subtitle_stream_index: int,
+    playback_sync_token: int | None,
+) -> bool:
+    with _subtitle_backfill_context_guard(app):
+        context = _subtitle_backfill_context(app)
+        if context is None:
+            return True
+        return (
+            context.get("rel_path") == clean_rel_path(rel_path)
+            and int(context.get("subtitle_stream_index") or -1) == int(subtitle_stream_index)
+            and context.get("playback_sync_token") == playback_sync_token
+        )
 
 
 def log_video_debug(app: Any, event: str, **fields: object) -> None:
@@ -209,6 +323,204 @@ def parse_video_start_seconds(raw: str) -> float:
     return value
 
 
+def parse_playback_sync_token(raw: object) -> int | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        value = int(text)
+    except (TypeError, ValueError) as exc:
+        raise BrowserError(HTTPStatus.BAD_REQUEST, "Playback sync token must be an integer.") from exc
+    if value < 0:
+        raise BrowserError(HTTPStatus.BAD_REQUEST, "Playback sync token must not be negative.")
+    return value
+
+
+def _require_finite_non_negative_seconds(value: float, field_name: str) -> float:
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be numeric.") from exc
+    if not math.isfinite(normalized):
+        raise ValueError(f"{field_name} must be finite.")
+    if normalized < 0:
+        raise ValueError(f"{field_name} must not be negative.")
+    return normalized
+
+
+def subtitle_window_end_seconds(window_start_seconds: float, window_duration_seconds: float) -> float:
+    start = _require_finite_non_negative_seconds(window_start_seconds, "window_start_seconds")
+    duration = _require_finite_non_negative_seconds(window_duration_seconds, "window_duration_seconds")
+    return start + duration
+
+
+def clamp_subtitle_window(
+    window_start_seconds: float,
+    window_duration_seconds: float,
+    *,
+    media_duration_seconds: float | None = None,
+) -> dict[str, float]:
+    start = _require_finite_non_negative_seconds(window_start_seconds, "window_start_seconds")
+    duration = _require_finite_non_negative_seconds(window_duration_seconds, "window_duration_seconds")
+    end = start + duration
+    if media_duration_seconds is None:
+        return {
+            "window_start_seconds": start,
+            "window_duration_seconds": duration,
+            "window_end_seconds": end,
+        }
+    media_duration = _require_finite_non_negative_seconds(media_duration_seconds, "media_duration_seconds")
+    if start > media_duration:
+        start = media_duration
+    end = min(end, media_duration)
+    return {
+        "window_start_seconds": start,
+        "window_duration_seconds": max(0.0, end - start),
+        "window_end_seconds": end,
+    }
+
+
+def expand_subtitle_window_for_extraction(
+    window_start_seconds: float,
+    window_duration_seconds: float,
+    *,
+    overlap_seconds: float = SUBTITLE_WINDOW_OVERLAP_SECONDS,
+    media_duration_seconds: float | None = None,
+) -> dict[str, float]:
+    requested = clamp_subtitle_window(
+        window_start_seconds,
+        window_duration_seconds,
+        media_duration_seconds=media_duration_seconds,
+    )
+    overlap = _require_finite_non_negative_seconds(overlap_seconds, "overlap_seconds")
+    expanded_start = max(0.0, requested["window_start_seconds"] - overlap)
+    expanded_end = requested["window_end_seconds"] + overlap
+    if media_duration_seconds is not None:
+        expanded_end = min(expanded_end, _require_finite_non_negative_seconds(media_duration_seconds, "media_duration_seconds"))
+    return {
+        "window_start_seconds": expanded_start,
+        "window_duration_seconds": max(0.0, expanded_end - expanded_start),
+        "window_end_seconds": expanded_end,
+    }
+
+
+def build_subtitle_window_request(
+    *,
+    rel_path: str,
+    subtitle_stream_index: int,
+    file_size: int | None,
+    window_start_seconds: float,
+    window_duration_seconds: float,
+    window_status: str,
+    playback_sync_token: int | None = None,
+    media_duration_seconds: float | None = None,
+) -> dict[str, object]:
+    window = clamp_subtitle_window(
+        window_start_seconds,
+        window_duration_seconds,
+        media_duration_seconds=media_duration_seconds,
+    )
+    return {
+        "path": clean_rel_path(rel_path),
+        "track": int(subtitle_stream_index),
+        "file_size": None if file_size is None else int(file_size),
+        "window_start_seconds": window["window_start_seconds"],
+        "window_duration_seconds": window["window_duration_seconds"],
+        "window_end_seconds": window["window_end_seconds"],
+        "window_status": str(window_status or "requested"),
+        **({"playback_sync_token": int(playback_sync_token)} if playback_sync_token is not None else {}),
+    }
+
+
+def build_startup_subtitle_window_request(
+    *,
+    rel_path: str,
+    subtitle_stream_index: int,
+    file_size: int | None,
+    playback_sync_token: int | None = None,
+    media_duration_seconds: float | None = None,
+) -> dict[str, object]:
+    return build_subtitle_window_request(
+        rel_path=rel_path,
+        subtitle_stream_index=subtitle_stream_index,
+        file_size=file_size,
+        window_start_seconds=0.0,
+        window_duration_seconds=SUBTITLE_WINDOW_DURATION_SECONDS,
+        window_status="startup",
+        playback_sync_token=playback_sync_token,
+        media_duration_seconds=media_duration_seconds,
+    )
+
+
+def build_seek_subtitle_window_request(
+    *,
+    rel_path: str,
+    subtitle_stream_index: int,
+    file_size: int | None,
+    seek_target_seconds: float,
+    playback_sync_token: int | None = None,
+    media_duration_seconds: float | None = None,
+) -> dict[str, object]:
+    seek_target = _require_finite_non_negative_seconds(seek_target_seconds, "seek_target_seconds")
+    return build_subtitle_window_request(
+        rel_path=rel_path,
+        subtitle_stream_index=subtitle_stream_index,
+        file_size=file_size,
+        window_start_seconds=max(0.0, seek_target - SUBTITLE_WINDOW_SEEK_LEAD_SECONDS),
+        window_duration_seconds=SUBTITLE_WINDOW_DURATION_SECONDS,
+        window_status="seek",
+        playback_sync_token=playback_sync_token,
+        media_duration_seconds=media_duration_seconds,
+    )
+
+
+def build_subtitle_window_response(
+    *,
+    track: int,
+    window_start_seconds: float,
+    window_duration_seconds: float,
+    vtt: str,
+    coverage_complete: bool,
+    loaded_ranges: list[dict[str, float]] | None = None,
+    status: str = "ok",
+    window_status: str = "ready",
+    media_duration_seconds: float | None = None,
+) -> dict[str, object]:
+    window = clamp_subtitle_window(
+        window_start_seconds,
+        window_duration_seconds,
+        media_duration_seconds=media_duration_seconds,
+    )
+    normalized_ranges: list[dict[str, float]] = []
+    for item in loaded_ranges or []:
+        if not isinstance(item, dict):
+            continue
+        start = item.get("start_seconds")
+        end = item.get("end_seconds")
+        if start is None or end is None:
+            continue
+        clamped = clamp_subtitle_window(
+            float(start),
+            max(0.0, float(end) - float(start)),
+            media_duration_seconds=media_duration_seconds,
+        )
+        normalized_ranges.append({
+            "start_seconds": clamped["window_start_seconds"],
+            "end_seconds": clamped["window_end_seconds"],
+        })
+    return {
+        "status": str(status or "ok"),
+        "track": int(track),
+        "window_status": str(window_status or "ready"),
+        "window_start_seconds": window["window_start_seconds"],
+        "window_end_seconds": window["window_end_seconds"],
+        "coverage_complete": bool(coverage_complete),
+        "loaded_ranges": normalized_ranges,
+        "gap_action": SUBTITLE_WINDOW_GAP_ACTION,
+        "vtt": str(vtt or ""),
+    }
+
+
 def build_ffprobe_command(
     ffprobe_exe: Path,
     input_url: str,
@@ -307,11 +619,61 @@ def _shift_vtt_timing_match(match: re.Match[str], shift_seconds: float) -> str |
     )
 
 
+def _webvtt_interval_overlaps_window(
+    cue_start_seconds: float,
+    cue_end_seconds: float,
+    window_start_seconds: float,
+    window_end_seconds: float,
+) -> bool:
+    return cue_end_seconds > window_start_seconds and cue_start_seconds < window_end_seconds
+
+
+def slice_webvtt_text_to_window(
+    body: str,
+    *,
+    window_start_seconds: float,
+    window_end_seconds: float,
+) -> str:
+    start = _require_finite_non_negative_seconds(window_start_seconds, "window_start_seconds")
+    end = _require_finite_non_negative_seconds(window_end_seconds, "window_end_seconds")
+    if end < start:
+        raise ValueError("window_end_seconds must be greater than or equal to window_start_seconds.")
+    normalized = str(body or "").replace("\r\n", "\n")
+    blocks = re.split(r"\n\n+", normalized.strip())
+    out_blocks: list[str] = []
+    for block in blocks:
+        trimmed = block.strip()
+        if not trimmed:
+            continue
+        if trimmed.startswith("WEBVTT"):
+            out_blocks.append(trimmed)
+            continue
+        lines = trimmed.split("\n")
+        timing_idx = 0
+        if len(lines) > 1 and "-->" not in lines[0] and "-->" in lines[1]:
+            timing_idx = 1
+        timing_match = _VTT_TIMING_LINE_RE.match(lines[timing_idx].strip())
+        if timing_match is None:
+            if lines[0].startswith(("STYLE", "REGION")):
+                out_blocks.append(trimmed)
+            continue
+        cue_start = _parse_vtt_timestamp(timing_match.group("start"))
+        cue_end = _parse_vtt_timestamp(timing_match.group("end"))
+        if not _webvtt_interval_overlaps_window(cue_start, cue_end, start, end):
+            continue
+        out_blocks.append(trimmed)
+    if not out_blocks:
+        return "WEBVTT\n\n"
+    return "\n\n".join(out_blocks) + "\n"
+
+
 def build_subtitle_cache_key(
     *,
     rel_path: str,
     subtitle_stream_index: int,
     file_size: int | None = None,
+    window_start_seconds: float | None = None,
+    window_duration_seconds: float | None = None,
     cache_version: str = SUBTITLE_CACHE_VERSION,
 ) -> str:
     payload = {
@@ -319,9 +681,34 @@ def build_subtitle_cache_key(
         "file_size": None if file_size is None else int(file_size),
         "rel_path": clean_rel_path(rel_path),
         "subtitle_stream_index": int(subtitle_stream_index),
+        "window_duration_seconds": (
+            None
+            if window_duration_seconds is None
+            else _require_finite_non_negative_seconds(window_duration_seconds, "window_duration_seconds")
+        ),
+        "window_start_seconds": (
+            None
+            if window_start_seconds is None
+            else _require_finite_non_negative_seconds(window_start_seconds, "window_start_seconds")
+        ),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def build_subtitle_window_manifest_key(
+    *,
+    rel_path: str,
+    subtitle_stream_index: int,
+    file_size: int | None = None,
+    cache_version: str = SUBTITLE_WINDOW_MANIFEST_VERSION,
+) -> str:
+    return build_subtitle_cache_key(
+        rel_path=rel_path,
+        subtitle_stream_index=subtitle_stream_index,
+        file_size=file_size,
+        cache_version=cache_version,
+    )
 
 
 def subtitle_cache_path(
@@ -348,6 +735,210 @@ def _read_subtitle_cache(app: Any, cache_key: str, *, cache_dir: Path | None = N
 
 def _write_subtitle_cache(app: Any, cache_key: str, body: bytes, *, cache_dir: Path | None = None) -> None:
     _subtitle_cache_store(app, cache_dir=cache_dir).write_bytes(cache_key, body, suffix=".vtt")
+
+
+def _read_subtitle_cache_json(app: Any, cache_key: str, *, cache_dir: Path | None = None) -> Any | None:
+    return _subtitle_cache_store(app, cache_dir=cache_dir).read_json(cache_key, suffix=".json")
+
+
+def _write_subtitle_cache_json(app: Any, cache_key: str, payload: Any, *, cache_dir: Path | None = None) -> None:
+    _subtitle_cache_store(app, cache_dir=cache_dir).write_json(cache_key, payload, suffix=".json")
+
+
+def merge_subtitle_coverage_ranges(
+    ranges: list[dict[str, float]] | None,
+    *,
+    overlap_seconds: float = SUBTITLE_WINDOW_OVERLAP_SECONDS,
+) -> list[dict[str, float]]:
+    normalized_overlap = _require_finite_non_negative_seconds(overlap_seconds, "overlap_seconds")
+    normalized: list[tuple[float, float]] = []
+    for item in ranges or []:
+        if not isinstance(item, dict):
+            continue
+        start = item.get("start_seconds")
+        end = item.get("end_seconds")
+        if start is None or end is None:
+            continue
+        start_value = _require_finite_non_negative_seconds(float(start), "start_seconds")
+        end_value = _require_finite_non_negative_seconds(float(end), "end_seconds")
+        if end_value < start_value:
+            continue
+        normalized.append((start_value, end_value))
+    if not normalized:
+        return []
+    normalized.sort(key=lambda item: (item[0], item[1]))
+    merged: list[dict[str, float]] = []
+    current_start, current_end = normalized[0]
+    for start_value, end_value in normalized[1:]:
+        if start_value <= current_end + normalized_overlap:
+            current_end = max(current_end, end_value)
+            continue
+        merged.append({
+            "start_seconds": current_start,
+            "end_seconds": current_end,
+        })
+        current_start, current_end = start_value, end_value
+    merged.append({
+        "start_seconds": current_start,
+        "end_seconds": current_end,
+    })
+    return merged
+
+
+def subtitle_window_is_covered(
+    coverage_ranges: list[dict[str, float]] | None,
+    *,
+    window_start_seconds: float,
+    window_end_seconds: float,
+    overlap_seconds: float = SUBTITLE_WINDOW_OVERLAP_SECONDS,
+) -> bool:
+    start = _require_finite_non_negative_seconds(window_start_seconds, "window_start_seconds")
+    end = _require_finite_non_negative_seconds(window_end_seconds, "window_end_seconds")
+    if end < start:
+        return False
+    for item in merge_subtitle_coverage_ranges(coverage_ranges, overlap_seconds=overlap_seconds):
+        range_start = float(item["start_seconds"])
+        range_end = float(item["end_seconds"])
+        if start >= range_start and end <= range_end + overlap_seconds:
+            return True
+    return False
+
+
+def _normalize_subtitle_window_manifest(
+    payload: Any,
+    *,
+    rel_path: str,
+    subtitle_stream_index: int,
+    file_size: int | None,
+) -> dict[str, object]:
+    windows_raw = payload.get("windows") if isinstance(payload, dict) else None
+    windows: list[dict[str, object]] = []
+    for item in windows_raw if isinstance(windows_raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        cache_key = item.get("cache_key")
+        start = item.get("start_seconds")
+        end = item.get("end_seconds")
+        if not isinstance(cache_key, str) or start is None or end is None:
+            continue
+        start_value = _require_finite_non_negative_seconds(float(start), "start_seconds")
+        end_value = _require_finite_non_negative_seconds(float(end), "end_seconds")
+        if end_value < start_value:
+            continue
+        windows.append({
+            "cache_key": cache_key,
+            "start_seconds": start_value,
+            "end_seconds": end_value,
+        })
+    merged_ranges = merge_subtitle_coverage_ranges([
+        {
+            "start_seconds": float(item["start_seconds"]),
+            "end_seconds": float(item["end_seconds"]),
+        }
+        for item in windows
+    ])
+    return {
+        "cache_version": SUBTITLE_WINDOW_MANIFEST_VERSION,
+        "file_size": None if file_size is None else int(file_size),
+        "path": clean_rel_path(rel_path),
+        "track": int(subtitle_stream_index),
+        "coverage_ranges": merged_ranges,
+        "windows": windows,
+    }
+
+
+def read_subtitle_window_manifest(
+    app: Any,
+    *,
+    rel_path: str,
+    subtitle_stream_index: int,
+    file_size: int | None = None,
+    cache_dir: Path | None = None,
+) -> dict[str, object]:
+    manifest_key = build_subtitle_window_manifest_key(
+        rel_path=rel_path,
+        subtitle_stream_index=subtitle_stream_index,
+        file_size=file_size,
+    )
+    cached_payload = _read_subtitle_cache_json(app, manifest_key, cache_dir=cache_dir)
+    return _normalize_subtitle_window_manifest(
+        cached_payload,
+        rel_path=rel_path,
+        subtitle_stream_index=subtitle_stream_index,
+        file_size=file_size,
+    )
+
+
+def write_subtitle_window_manifest(
+    app: Any,
+    *,
+    rel_path: str,
+    subtitle_stream_index: int,
+    file_size: int | None = None,
+    windows: list[dict[str, object]] | None = None,
+    cache_dir: Path | None = None,
+) -> dict[str, object]:
+    manifest = _normalize_subtitle_window_manifest(
+        {"windows": windows or []},
+        rel_path=rel_path,
+        subtitle_stream_index=subtitle_stream_index,
+        file_size=file_size,
+    )
+    manifest_key = build_subtitle_window_manifest_key(
+        rel_path=rel_path,
+        subtitle_stream_index=subtitle_stream_index,
+        file_size=file_size,
+    )
+    _write_subtitle_cache_json(app, manifest_key, manifest, cache_dir=cache_dir)
+    return manifest
+
+
+def store_subtitle_window_cache_entry(
+    app: Any,
+    *,
+    rel_path: str,
+    subtitle_stream_index: int,
+    file_size: int | None,
+    window_start_seconds: float,
+    window_duration_seconds: float,
+    body: bytes,
+    cache_dir: Path | None = None,
+) -> tuple[str, dict[str, object]]:
+    window = clamp_subtitle_window(window_start_seconds, window_duration_seconds)
+    cache_key = build_subtitle_cache_key(
+        rel_path=rel_path,
+        subtitle_stream_index=subtitle_stream_index,
+        file_size=file_size,
+        window_start_seconds=window["window_start_seconds"],
+        window_duration_seconds=window["window_duration_seconds"],
+        cache_version=SUBTITLE_WINDOW_CACHE_VERSION,
+    )
+    _write_subtitle_cache(app, cache_key, body, cache_dir=cache_dir)
+    manifest = read_subtitle_window_manifest(
+        app,
+        rel_path=rel_path,
+        subtitle_stream_index=subtitle_stream_index,
+        file_size=file_size,
+        cache_dir=cache_dir,
+    )
+    windows = [
+        item for item in manifest.get("windows", [])
+        if isinstance(item, dict) and item.get("cache_key") != cache_key
+    ]
+    windows.append({
+        "cache_key": cache_key,
+        "start_seconds": window["window_start_seconds"],
+        "end_seconds": window["window_end_seconds"],
+    })
+    updated_manifest = write_subtitle_window_manifest(
+        app,
+        rel_path=rel_path,
+        subtitle_stream_index=subtitle_stream_index,
+        file_size=file_size,
+        windows=windows,
+        cache_dir=cache_dir,
+    )
+    return cache_key, updated_manifest
 
 
 def rebase_webvtt_text(body: str, start_time_seconds: float) -> str:
@@ -384,20 +975,88 @@ def rebase_webvtt_text(body: str, start_time_seconds: float) -> str:
     return "\n\n".join(out_blocks) + "\n"
 
 
+def offset_webvtt_text(body: str, offset_seconds: float) -> str:
+    if offset_seconds == 0:
+        return body
+    normalized = str(body or "").replace("\r\n", "\n")
+    blocks = re.split(r"\n\n+", normalized.strip())
+    out_blocks: list[str] = []
+    for block in blocks:
+        trimmed = block.strip()
+        if not trimmed:
+            continue
+        if trimmed.startswith("WEBVTT"):
+            out_blocks.append(trimmed)
+            continue
+        lines = trimmed.split("\n")
+        timing_idx = 0
+        if len(lines) > 1 and "-->" not in lines[0] and "-->" in lines[1]:
+            timing_idx = 1
+        timing_match = _VTT_TIMING_LINE_RE.match(lines[timing_idx].strip())
+        if timing_match is None:
+            out_blocks.append(trimmed)
+            continue
+        shifted_timing = _shift_vtt_timing_match(timing_match, -offset_seconds)
+        if shifted_timing is None:
+            continue
+        lines[timing_idx] = shifted_timing
+        out_blocks.append("\n".join(lines))
+    if not out_blocks:
+        return "WEBVTT\n\n"
+    return "\n\n".join(out_blocks) + "\n"
+
+
+def extracted_webvtt_needs_absolute_offset(
+    body: str,
+    *,
+    start_time_seconds: float,
+    window_duration_seconds: float | None = None,
+) -> bool:
+    if start_time_seconds <= 0:
+        return False
+    cue_starts = _webvtt_cue_start_times(body)
+    if not cue_starts:
+        return False
+    min_start = min(cue_starts)
+    max_start = max(cue_starts)
+    if min_start >= max(2.0, start_time_seconds - 5.0):
+        return False
+    if window_duration_seconds is None:
+        return min_start < 5.0
+    window_duration = _require_finite_non_negative_seconds(window_duration_seconds, "window_duration_seconds")
+    return min_start < 5.0 and max_start <= window_duration + 5.0
+
+
+def _append_ffmpeg_time_bounds(
+    command: list[str],
+    *,
+    start_time_seconds: float = 0.0,
+    duration_seconds: float | None = None,
+) -> None:
+    if start_time_seconds > 0:
+        command.extend(["-ss", _format_ffmpeg_seconds(start_time_seconds)])
+    if duration_seconds is not None and duration_seconds > 0:
+        command.extend(["-t", _format_ffmpeg_seconds(duration_seconds)])
+
+
 def build_ffmpeg_webvtt_command(
     ffmpeg_exe: Path,
     input_url: str,
     subtitle_stream_index: int,
     *,
     start_time_seconds: float = 0.0,
+    duration_seconds: float | None = None,
 ) -> list[str]:
     command = [
         str(ffmpeg_exe),
         "-v",
         "error",
     ]
-    if start_time_seconds > 0:
-        command.extend(["-ss", _format_ffmpeg_seconds(start_time_seconds)])
+    _append_ffmpeg_time_bounds(
+        command,
+        start_time_seconds=start_time_seconds,
+        duration_seconds=duration_seconds,
+    )
     command.extend([
         "-i",
         input_url,
@@ -408,6 +1067,21 @@ def build_ffmpeg_webvtt_command(
         "-",
     ])
     return command
+
+
+def parse_subtitle_window_duration_seconds(raw: str) -> float:
+    text = str(raw or "").strip()
+    if not text:
+        return SUBTITLE_WINDOW_DURATION_SECONDS
+    try:
+        value = float(text)
+    except ValueError as exc:
+        raise BrowserError(HTTPStatus.BAD_REQUEST, "Subtitle window duration must be a number of seconds.") from exc
+    if not math.isfinite(value):
+        raise BrowserError(HTTPStatus.BAD_REQUEST, "Subtitle window duration must be finite.")
+    if value <= 0:
+        raise BrowserError(HTTPStatus.BAD_REQUEST, "Subtitle window duration must be greater than zero.")
+    return value
 
 
 def subtitle_codec_copy_suffix(codec_name: object) -> str | None:
@@ -423,14 +1097,18 @@ def build_ffmpeg_subtitle_copy_command(
     output_path: Path,
     *,
     start_time_seconds: float = 0.0,
+    duration_seconds: float | None = None,
 ) -> list[str]:
     command = [
         str(ffmpeg_exe),
         "-v",
         "error",
     ]
-    if start_time_seconds > 0:
-        command.extend(["-ss", _format_ffmpeg_seconds(start_time_seconds)])
+    _append_ffmpeg_time_bounds(
+        command,
+        start_time_seconds=start_time_seconds,
+        duration_seconds=duration_seconds,
+    )
     command.extend([
         "-i",
         input_url,
@@ -1506,6 +2184,246 @@ def extract_remote_subtitles_to_webvtt(
     return body, str(track_info.get("language") or "")
 
 
+def extract_remote_subtitle_window_to_webvtt(
+    app: Any,
+    *,
+    rel_path: str,
+    subtitle_stream_index: int,
+    base_url: str,
+    file_size: int | None = None,
+    window_start_seconds: float = 0.0,
+    window_duration_seconds: float = SUBTITLE_WINDOW_DURATION_SECONDS,
+    window_status: str = "requested",
+    playback_sync_token: int | None = None,
+) -> dict[str, object]:
+    video_config = getattr(app, "video_tools_config", None)
+    ffmpeg_exe = getattr(video_config, "ffmpeg_exe", None)
+    ffprobe_exe = getattr(video_config, "ffprobe_exe", None)
+    if ffmpeg_exe is None:
+        raise BrowserError(HTTPStatus.SERVICE_UNAVAILABLE, "ffmpeg is not available.")
+    if ffprobe_exe is None:
+        raise BrowserError(HTTPStatus.SERVICE_UNAVAILABLE, "ffprobe is not available.")
+    probe_payload = probe_remote_media(
+        app,
+        rel_path=rel_path,
+        base_url=base_url,
+        file_size=file_size,
+    )
+    media_duration_seconds = (
+        float(probe_payload.get("duration_seconds"))
+        if isinstance(probe_payload, dict) and probe_payload.get("duration_seconds") is not None
+        else None
+    )
+    subtitle_streams = probe_payload.get("subtitle_streams") if isinstance(probe_payload, dict) else None
+    subtitle_rows = subtitle_streams if isinstance(subtitle_streams, list) else []
+    track_info = next(
+        (row for row in subtitle_rows if isinstance(row, dict) and int(row.get("index") or -1) == subtitle_stream_index),
+        None,
+    )
+    if track_info is None:
+        raise BrowserError(HTTPStatus.BAD_REQUEST, "Subtitle track was not found in probe metadata.")
+    if not subtitle_codec_supports_webvtt(track_info.get("codec_name")):
+        raise BrowserError(HTTPStatus.BAD_REQUEST, "Subtitle track cannot be converted to WebVTT.")
+    language = str(track_info.get("language") or "")
+    window_request = build_subtitle_window_request(
+        rel_path=rel_path,
+        subtitle_stream_index=subtitle_stream_index,
+        file_size=file_size,
+        window_start_seconds=window_start_seconds,
+        window_duration_seconds=window_duration_seconds,
+        window_status=window_status,
+        playback_sync_token=playback_sync_token,
+        media_duration_seconds=media_duration_seconds,
+    )
+    if str(window_request.get("window_status") or "").strip().casefold() != "backfill":
+        _register_subtitle_backfill_context(
+            app,
+            rel_path=rel_path,
+            subtitle_stream_index=subtitle_stream_index,
+            playback_sync_token=(
+                int(window_request["playback_sync_token"])
+                if window_request.get("playback_sync_token") is not None
+                else None
+            ),
+        )
+    extraction_window = expand_subtitle_window_for_extraction(
+        float(window_request["window_start_seconds"]),
+        float(window_request["window_duration_seconds"]),
+        media_duration_seconds=media_duration_seconds,
+    )
+    cached_window_key = build_subtitle_cache_key(
+        rel_path=rel_path,
+        subtitle_stream_index=subtitle_stream_index,
+        file_size=file_size,
+        window_start_seconds=float(window_request["window_start_seconds"]),
+        window_duration_seconds=float(window_request["window_duration_seconds"]),
+        cache_version=SUBTITLE_WINDOW_CACHE_VERSION,
+    )
+    cached_window_body = _read_subtitle_cache(app, cached_window_key)
+    manifest = read_subtitle_window_manifest(
+        app,
+        rel_path=rel_path,
+        subtitle_stream_index=subtitle_stream_index,
+        file_size=file_size,
+    )
+    if cached_window_body is not None:
+        cached_window_text = cached_window_body.decode("utf-8", "replace")
+        coverage_ranges = manifest.get("coverage_ranges", [])
+        return_payload = build_subtitle_window_response(
+            track=subtitle_stream_index,
+            window_start_seconds=float(window_request["window_start_seconds"]),
+            window_duration_seconds=float(window_request["window_duration_seconds"]),
+            coverage_complete=subtitle_window_is_covered(
+                coverage_ranges if isinstance(coverage_ranges, list) else [],
+                window_start_seconds=float(window_request["window_start_seconds"]),
+                window_end_seconds=float(window_request["window_end_seconds"]),
+            ),
+            loaded_ranges=coverage_ranges if isinstance(coverage_ranges, list) else [],
+            vtt=cached_window_text,
+            window_status="ready",
+            media_duration_seconds=media_duration_seconds,
+        )
+        if language:
+            return_payload["language"] = language
+        return_payload["cache_hit"] = True
+        return_payload["path"] = clean_rel_path(rel_path)
+        return_payload["file_size"] = None if file_size is None else int(file_size)
+        _maybe_schedule_subtitle_window_backfill(
+            app,
+            rel_path=rel_path,
+            subtitle_stream_index=subtitle_stream_index,
+            base_url=base_url,
+            file_size=file_size,
+            media_duration_seconds=media_duration_seconds,
+            window_request=window_request,
+            response_payload=return_payload,
+            window_status=str(window_request.get("window_status") or ""),
+        )
+        return return_payload
+    owner, inflight_entry = _acquire_subtitle_window_inflight(app, cached_window_key)
+    if not owner:
+        event = inflight_entry.get("event")
+        if isinstance(event, _THREAD_EVENT_TYPE):
+            event.wait()
+        cached_window_body = _read_subtitle_cache(app, cached_window_key)
+        manifest = read_subtitle_window_manifest(
+            app,
+            rel_path=rel_path,
+            subtitle_stream_index=subtitle_stream_index,
+            file_size=file_size,
+        )
+        if cached_window_body is not None:
+            cached_window_text = cached_window_body.decode("utf-8", "replace")
+            coverage_ranges = manifest.get("coverage_ranges", [])
+            return_payload = build_subtitle_window_response(
+                track=subtitle_stream_index,
+                window_start_seconds=float(window_request["window_start_seconds"]),
+                window_duration_seconds=float(window_request["window_duration_seconds"]),
+                coverage_complete=subtitle_window_is_covered(
+                    coverage_ranges if isinstance(coverage_ranges, list) else [],
+                    window_start_seconds=float(window_request["window_start_seconds"]),
+                    window_end_seconds=float(window_request["window_end_seconds"]),
+                ),
+                loaded_ranges=coverage_ranges if isinstance(coverage_ranges, list) else [],
+                vtt=cached_window_text,
+                window_status="ready",
+                media_duration_seconds=media_duration_seconds,
+            )
+            if language:
+                return_payload["language"] = language
+            return_payload["cache_hit"] = True
+            return_payload["path"] = clean_rel_path(rel_path)
+            return_payload["file_size"] = None if file_size is None else int(file_size)
+            _maybe_schedule_subtitle_window_backfill(
+                app,
+                rel_path=rel_path,
+                subtitle_stream_index=subtitle_stream_index,
+                base_url=base_url,
+                file_size=file_size,
+                media_duration_seconds=media_duration_seconds,
+                window_request=window_request,
+                response_payload=return_payload,
+                window_status=str(window_request.get("window_status") or ""),
+            )
+            return return_payload
+        error = inflight_entry.get("error")
+        if isinstance(error, BaseException):
+            raise error
+        raise BrowserError(HTTPStatus.BAD_GATEWAY, "Subtitle window extraction did not produce a cache entry.")
+    input_url = base_url + "/file?" + urlencode({"path": rel_path, "source": "remote"})
+    try:
+        extracted_body = _run_ffmpeg_single_webvtt(
+            ffmpeg_exe,
+            input_url,
+            subtitle_stream_index,
+            codec_name=track_info.get("codec_name"),
+            start_time_seconds=float(extraction_window["window_start_seconds"]),
+            duration_seconds=float(extraction_window["window_duration_seconds"]),
+        )
+        if extracted_body is None:
+            raise BrowserError(HTTPStatus.BAD_GATEWAY, "ffmpeg failed to convert subtitles to WebVTT.")
+        extracted_text = extracted_body.decode("utf-8", "replace")
+        if extracted_webvtt_needs_absolute_offset(
+            extracted_text,
+            start_time_seconds=float(extraction_window["window_start_seconds"]),
+            window_duration_seconds=float(extraction_window["window_duration_seconds"]),
+        ):
+            extracted_text = offset_webvtt_text(
+                extracted_text,
+                float(extraction_window["window_start_seconds"]),
+            )
+        windowed_text = slice_webvtt_text_to_window(
+            extracted_text,
+            window_start_seconds=float(window_request["window_start_seconds"]),
+            window_end_seconds=float(window_request["window_end_seconds"]),
+        )
+        _, manifest = store_subtitle_window_cache_entry(
+            app,
+            rel_path=rel_path,
+            subtitle_stream_index=subtitle_stream_index,
+            file_size=file_size,
+            window_start_seconds=float(window_request["window_start_seconds"]),
+            window_duration_seconds=float(window_request["window_duration_seconds"]),
+            body=windowed_text.encode("utf-8"),
+        )
+        response_payload = build_subtitle_window_response(
+            track=subtitle_stream_index,
+            window_start_seconds=float(window_request["window_start_seconds"]),
+            window_duration_seconds=float(window_request["window_duration_seconds"]),
+            coverage_complete=subtitle_window_is_covered(
+                manifest.get("coverage_ranges", []) if isinstance(manifest.get("coverage_ranges"), list) else [],
+                window_start_seconds=float(window_request["window_start_seconds"]),
+                window_end_seconds=float(window_request["window_end_seconds"]),
+            ),
+            loaded_ranges=manifest.get("coverage_ranges", []) if isinstance(manifest.get("coverage_ranges"), list) else [],
+            vtt=windowed_text,
+            window_status="ready",
+            media_duration_seconds=media_duration_seconds,
+        )
+        if language:
+            response_payload["language"] = language
+        response_payload["cache_hit"] = False
+        response_payload["path"] = clean_rel_path(rel_path)
+        response_payload["file_size"] = None if file_size is None else int(file_size)
+        _maybe_schedule_subtitle_window_backfill(
+            app,
+            rel_path=rel_path,
+            subtitle_stream_index=subtitle_stream_index,
+            base_url=base_url,
+            file_size=file_size,
+            media_duration_seconds=media_duration_seconds,
+            window_request=window_request,
+            response_payload=response_payload,
+            window_status=str(window_request.get("window_status") or ""),
+        )
+        return response_payload
+    except BaseException as exc:
+        inflight_entry["error"] = exc
+        raise
+    finally:
+        _release_subtitle_window_inflight(app, cached_window_key, inflight_entry)
+
+
 def _store_extracted_subtitle_track(
     app: Any,
     *,
@@ -1525,6 +2443,149 @@ def _store_extracted_subtitle_track(
         "vtt": body.decode("utf-8", "replace"),
         "language": str(row.get("language") or ""),
     }
+
+
+def _subtitle_backfill_job_key(
+    *,
+    rel_path: str,
+    subtitle_stream_index: int,
+    file_size: int | None,
+    playback_sync_token: int | None = None,
+) -> str:
+    return json.dumps(
+        {
+            "rel_path": clean_rel_path(rel_path),
+            "subtitle_stream_index": int(subtitle_stream_index),
+            "file_size": None if file_size is None else int(file_size),
+            "playback_sync_token": playback_sync_token,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+
+def _run_subtitle_window_backfill(
+    app: Any,
+    *,
+    rel_path: str,
+    subtitle_stream_index: int,
+    base_url: str,
+    file_size: int | None,
+    next_window_start_seconds: float,
+    window_duration_seconds: float,
+    media_duration_seconds: float | None,
+    playback_sync_token: int | None,
+    job_key: str,
+) -> None:
+    try:
+        cursor = max(0.0, float(next_window_start_seconds))
+        while media_duration_seconds is None or cursor < media_duration_seconds:
+            if not _subtitle_backfill_request_is_current(
+                app,
+                rel_path=rel_path,
+                subtitle_stream_index=subtitle_stream_index,
+                playback_sync_token=playback_sync_token,
+            ):
+                break
+            payload = extract_remote_subtitle_window_to_webvtt(
+                app,
+                rel_path=rel_path,
+                subtitle_stream_index=subtitle_stream_index,
+                base_url=base_url,
+                file_size=file_size,
+                window_start_seconds=cursor,
+                window_duration_seconds=window_duration_seconds,
+                window_status="backfill",
+                playback_sync_token=playback_sync_token,
+            )
+            window_end_seconds = float(payload.get("window_end_seconds") or cursor)
+            if window_end_seconds <= cursor:
+                break
+            cursor = window_end_seconds
+            if media_duration_seconds is not None and cursor >= media_duration_seconds:
+                break
+    except Exception as exc:
+        log_video_debug(
+            app,
+            "subtitle_window_backfill_failed",
+            rel_path=clean_rel_path(rel_path),
+            subtitle_stream_index=int(subtitle_stream_index),
+            error=str(exc),
+        )
+    finally:
+        with _subtitle_backfill_guard(app):
+            jobs = _subtitle_backfill_jobs(app)
+            current = jobs.get(job_key)
+            if current is threading.current_thread():
+                jobs.pop(job_key, None)
+
+
+def _maybe_schedule_subtitle_window_backfill(
+    app: Any,
+    *,
+    rel_path: str,
+    subtitle_stream_index: int,
+    base_url: str,
+    file_size: int | None,
+    media_duration_seconds: float | None,
+    window_request: dict[str, object],
+    response_payload: dict[str, object],
+    window_status: str,
+) -> None:
+    if str(window_status or "").strip().casefold() != "startup":
+        return
+    next_window_start_seconds = float(response_payload.get("window_end_seconds") or 0.0)
+    if media_duration_seconds is not None and next_window_start_seconds >= media_duration_seconds:
+        return
+    coverage_ranges = response_payload.get("loaded_ranges")
+    if (
+        isinstance(coverage_ranges, list)
+        and subtitle_window_is_covered(
+            coverage_ranges,
+            window_start_seconds=next_window_start_seconds,
+            window_end_seconds=next_window_start_seconds + float(window_request["window_duration_seconds"]),
+        )
+    ):
+        return
+    job_key = _subtitle_backfill_job_key(
+        rel_path=rel_path,
+        subtitle_stream_index=subtitle_stream_index,
+        file_size=file_size,
+        playback_sync_token=(
+            int(window_request["playback_sync_token"])
+            if window_request.get("playback_sync_token") is not None
+            else None
+        ),
+    )
+    with _subtitle_backfill_guard(app):
+        jobs = _subtitle_backfill_jobs(app)
+        existing = jobs.get(job_key)
+        if existing is not None and existing.is_alive():
+            return
+        thread = threading.Thread(
+            target=_run_subtitle_window_backfill,
+            kwargs={
+                "app": app,
+                "rel_path": rel_path,
+                "subtitle_stream_index": subtitle_stream_index,
+                "base_url": base_url,
+                "file_size": file_size,
+                "next_window_start_seconds": next_window_start_seconds,
+                "window_duration_seconds": float(window_request["window_duration_seconds"]),
+                "media_duration_seconds": media_duration_seconds,
+                "playback_sync_token": (
+                    int(window_request["playback_sync_token"])
+                    if window_request.get("playback_sync_token") is not None
+                    else None
+                ),
+                "job_key": job_key,
+            },
+            daemon=True,
+            name=f"subtitle-window-backfill-{subtitle_stream_index}",
+        )
+        jobs[job_key] = thread
+    thread.start()
 
 
 def _run_subprocess_capture(
@@ -1576,6 +2637,9 @@ def _extract_subtitle_via_copy_then_convert(
     input_url: str,
     subtitle_stream_index: int,
     codec_name: object,
+    *,
+    start_time_seconds: float = 0.0,
+    duration_seconds: float | None = None,
 ) -> bytes | None:
     suffix = subtitle_codec_copy_suffix(codec_name)
     if suffix is None:
@@ -1587,6 +2651,8 @@ def _extract_subtitle_via_copy_then_convert(
         input_url,
         subtitle_stream_index,
         temp_path,
+        start_time_seconds=start_time_seconds,
+        duration_seconds=duration_seconds,
     )
     try:
         _run_subprocess_capture(
@@ -1608,12 +2674,16 @@ def _run_ffmpeg_single_webvtt(
     subtitle_stream_index: int,
     *,
     codec_name: object = None,
+    start_time_seconds: float = 0.0,
+    duration_seconds: float | None = None,
 ) -> bytes | None:
     copied_body = _extract_subtitle_via_copy_then_convert(
         ffmpeg_exe,
         input_url,
         subtitle_stream_index,
         codec_name,
+        start_time_seconds=start_time_seconds,
+        duration_seconds=duration_seconds,
     )
     if copied_body is not None:
         return copied_body
@@ -1621,6 +2691,8 @@ def _run_ffmpeg_single_webvtt(
         ffmpeg_exe,
         input_url,
         subtitle_stream_index,
+        start_time_seconds=start_time_seconds,
+        duration_seconds=duration_seconds,
     )
     try:
         proc = subprocess.run(

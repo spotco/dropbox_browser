@@ -14,6 +14,11 @@ from unittest.mock import patch
 from dropbox_browser.config import VideoToolsConfig
 from dropbox_browser.video import (
     HLS_MIN_READY_SEGMENTS,
+    SUBTITLE_WINDOW_DURATION_SECONDS,
+    SUBTITLE_WINDOW_GAP_ACTION,
+    SUBTITLE_WINDOW_OVERLAP_SECONDS,
+    SUBTITLE_WINDOW_SEEK_LAG_SECONDS,
+    SUBTITLE_WINDOW_SEEK_LEAD_SECONDS,
     VideoHlsSession,
     build_ffmpeg_batch_subtitle_copy_command,
     build_ffmpeg_batch_webvtt_command,
@@ -22,18 +27,35 @@ from dropbox_browser.video import (
     build_ffmpeg_webvtt_command,
     build_ffprobe_command,
     build_probe_cache_key,
+    build_seek_subtitle_window_request,
+    build_startup_subtitle_window_request,
     DEFAULT_PROBE_ANALYZE_DURATION_US,
     DEFAULT_PROBE_PROBE_SIZE_BYTES,
+    build_subtitle_window_request,
+    build_subtitle_window_response,
     build_subtitle_cache_key,
+    build_subtitle_window_manifest_key,
+    clamp_subtitle_window,
+    expand_subtitle_window_for_extraction,
+    extracted_webvtt_needs_absolute_offset,
+    extract_remote_subtitle_window_to_webvtt,
+    merge_subtitle_coverage_ranges,
+    offset_webvtt_text,
     _playlist_ready_for_playback,
     _playlist_segment_names,
+    parse_subtitle_window_duration_seconds,
     probe_cache_path,
     probe_payload_is_incomplete,
     rebase_webvtt_text,
+    slice_webvtt_text_to_window,
+    store_subtitle_window_cache_entry,
     _probe_cache_store,
     _write_probe_cache,
+    subtitle_window_is_covered,
     subtitle_cache_path,
     subtitle_codec_supports_webvtt,
+    subtitle_window_end_seconds,
+    read_subtitle_window_manifest,
 )
 
 try:
@@ -1112,6 +1134,962 @@ class VideoEndpointTests(AppTestCase):
         self.assertIn("0:5?", command)
         self.assertIn("-sn", command)
 
+    def test_subtitle_window_end_seconds_adds_start_and_duration(self) -> None:
+        self.assertEqual(subtitle_window_end_seconds(12.5, 30.0), 42.5)
+
+    def test_clamp_subtitle_window_limits_end_to_media_duration(self) -> None:
+        self.assertEqual(
+            clamp_subtitle_window(290.0, 30.0, media_duration_seconds=300.0),
+            {
+                "window_start_seconds": 290.0,
+                "window_duration_seconds": 10.0,
+                "window_end_seconds": 300.0,
+            },
+        )
+
+    def test_build_subtitle_window_request_normalizes_path_and_shape(self) -> None:
+        payload = build_subtitle_window_request(
+            rel_path="Videos//movie.mkv",
+            subtitle_stream_index=4,
+            file_size=123,
+            window_start_seconds=25.0,
+            window_duration_seconds=SUBTITLE_WINDOW_DURATION_SECONDS,
+            window_status="startup",
+            media_duration_seconds=250.0,
+        )
+
+        self.assertEqual(payload, {
+            "path": "Videos/movie.mkv",
+            "track": 4,
+            "file_size": 123,
+            "window_start_seconds": 25.0,
+            "window_duration_seconds": 225.0,
+            "window_end_seconds": 250.0,
+            "window_status": "startup",
+        })
+
+    def test_build_startup_subtitle_window_request_uses_initial_policy(self) -> None:
+        payload = build_startup_subtitle_window_request(
+            rel_path="movie.mkv",
+            subtitle_stream_index=3,
+            file_size=999,
+            media_duration_seconds=120.0,
+        )
+
+        self.assertEqual(payload, {
+            "path": "movie.mkv",
+            "track": 3,
+            "file_size": 999,
+            "window_start_seconds": 0.0,
+            "window_duration_seconds": 120.0,
+            "window_end_seconds": 120.0,
+            "window_status": "startup",
+        })
+
+    def test_build_seek_subtitle_window_request_uses_lead_lag_policy(self) -> None:
+        payload = build_seek_subtitle_window_request(
+            rel_path="movie.mkv",
+            subtitle_stream_index=7,
+            file_size=500,
+            seek_target_seconds=200.0,
+            media_duration_seconds=1000.0,
+        )
+
+        self.assertEqual(payload["window_start_seconds"], 200.0 - SUBTITLE_WINDOW_SEEK_LEAD_SECONDS)
+        self.assertEqual(payload["window_duration_seconds"], SUBTITLE_WINDOW_DURATION_SECONDS)
+        self.assertEqual(payload["window_end_seconds"], 200.0 + SUBTITLE_WINDOW_SEEK_LAG_SECONDS)
+        self.assertEqual(payload["window_status"], "seek")
+
+    def test_build_seek_subtitle_window_request_clamps_near_media_end(self) -> None:
+        payload = build_seek_subtitle_window_request(
+            rel_path="movie.mkv",
+            subtitle_stream_index=7,
+            file_size=500,
+            seek_target_seconds=995.0,
+            media_duration_seconds=1000.0,
+        )
+
+        self.assertEqual(payload["window_start_seconds"], 995.0 - SUBTITLE_WINDOW_SEEK_LEAD_SECONDS)
+        self.assertEqual(payload["window_end_seconds"], 1000.0)
+        self.assertEqual(payload["window_duration_seconds"], 20.0)
+
+    def test_build_subtitle_window_response_includes_loaded_ranges_and_gap_action(self) -> None:
+        payload = build_subtitle_window_response(
+            track=4,
+            window_start_seconds=15.0,
+            window_duration_seconds=SUBTITLE_WINDOW_DURATION_SECONDS,
+            coverage_complete=False,
+            loaded_ranges=[
+                {"start_seconds": 15.0, "end_seconds": 315.0},
+                {"start_seconds": 314.0, "end_seconds": 400.0},
+            ],
+            vtt="WEBVTT\n\n00:00.000 --> 00:01.000\nHello\n",
+            window_status="ready",
+            media_duration_seconds=350.0,
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["track"], 4)
+        self.assertEqual(payload["window_status"], "ready")
+        self.assertEqual(payload["window_start_seconds"], 15.0)
+        self.assertEqual(payload["window_end_seconds"], 315.0)
+        self.assertFalse(payload["coverage_complete"])
+        self.assertEqual(payload["loaded_ranges"], [
+            {"start_seconds": 15.0, "end_seconds": 315.0},
+            {"start_seconds": 314.0, "end_seconds": 350.0},
+        ])
+        self.assertEqual(payload["gap_action"], SUBTITLE_WINDOW_GAP_ACTION)
+        self.assertIn("WEBVTT", payload["vtt"])
+        self.assertEqual(SUBTITLE_WINDOW_OVERLAP_SECONDS, 1.0)
+
+    def test_expand_subtitle_window_for_extraction_adds_overlap_and_clamps_to_media(self) -> None:
+        self.assertEqual(
+            expand_subtitle_window_for_extraction(4.0, 4.0, media_duration_seconds=15.0),
+            {
+                "window_start_seconds": 3.0,
+                "window_duration_seconds": 6.0,
+                "window_end_seconds": 9.0,
+            },
+        )
+        self.assertEqual(
+            expand_subtitle_window_for_extraction(0.0, 4.0, media_duration_seconds=4.5),
+            {
+                "window_start_seconds": 0.0,
+                "window_duration_seconds": 4.5,
+                "window_end_seconds": 4.5,
+            },
+        )
+
+    def test_parse_subtitle_window_duration_seconds_defaults_and_rejects_non_positive_values(self) -> None:
+        self.assertEqual(parse_subtitle_window_duration_seconds(""), SUBTITLE_WINDOW_DURATION_SECONDS)
+        self.assertEqual(parse_subtitle_window_duration_seconds("12.5"), 12.5)
+        with self.assertRaisesRegex(Exception, "greater than zero"):
+            parse_subtitle_window_duration_seconds("0")
+
+    def test_slice_webvtt_text_to_window_keeps_only_overlapping_cues(self) -> None:
+        body = (
+            "WEBVTT\n\n"
+            "00:00.000 --> 00:02.000\n"
+            "Before\n\n"
+            "1\n"
+            "00:09.500 --> 00:11.000\n"
+            "Overlap start\n\n"
+            "00:12.000 --> 00:13.000\n"
+            "Inside\n\n"
+            "00:20.000 --> 00:21.000\n"
+            "After\n"
+        )
+
+        sliced = slice_webvtt_text_to_window(
+            body,
+            window_start_seconds=10.0,
+            window_end_seconds=15.0,
+        )
+
+        self.assertIn("WEBVTT", sliced)
+        self.assertIn("Overlap start", sliced)
+        self.assertIn("Inside", sliced)
+        self.assertNotIn("Before", sliced)
+        self.assertNotIn("After", sliced)
+
+    def test_offset_webvtt_text_shifts_relative_window_forward(self) -> None:
+        body = (
+            "WEBVTT\n\n"
+            "00:00.500 --> 00:02.000\n"
+            "Hello\n"
+        )
+
+        shifted = offset_webvtt_text(body, 120.0)
+
+        self.assertIn("02:00.500 --> 02:02.000", shifted)
+
+    def test_extracted_webvtt_needs_absolute_offset_detects_relative_window_output(self) -> None:
+        self.assertTrue(
+            extracted_webvtt_needs_absolute_offset(
+                "WEBVTT\n\n00:00.500 --> 00:02.000\nHello\n",
+                start_time_seconds=120.0,
+                window_duration_seconds=10.0,
+            )
+        )
+        self.assertFalse(
+            extracted_webvtt_needs_absolute_offset(
+                "WEBVTT\n\n02:00.500 --> 02:02.000\nHello\n",
+                start_time_seconds=120.0,
+                window_duration_seconds=10.0,
+            )
+        )
+
+    def test_build_subtitle_cache_key_changes_for_window_requests(self) -> None:
+        full_key = build_subtitle_cache_key(
+            rel_path="movie.mp4",
+            subtitle_stream_index=3,
+            file_size=10,
+        )
+        window_key = build_subtitle_cache_key(
+            rel_path="movie.mp4",
+            subtitle_stream_index=3,
+            file_size=10,
+            window_start_seconds=0.0,
+            window_duration_seconds=300.0,
+        )
+        other_window_key = build_subtitle_cache_key(
+            rel_path="movie.mp4",
+            subtitle_stream_index=3,
+            file_size=10,
+            window_start_seconds=300.0,
+            window_duration_seconds=300.0,
+        )
+
+        self.assertNotEqual(full_key, window_key)
+        self.assertNotEqual(window_key, other_window_key)
+
+    def test_merge_subtitle_coverage_ranges_combines_adjacent_windows(self) -> None:
+        merged = merge_subtitle_coverage_ranges([
+            {"start_seconds": 0.0, "end_seconds": 300.0},
+            {"start_seconds": 300.5, "end_seconds": 600.0},
+            {"start_seconds": 700.0, "end_seconds": 750.0},
+        ])
+
+        self.assertEqual(merged, [
+            {"start_seconds": 0.0, "end_seconds": 600.0},
+            {"start_seconds": 700.0, "end_seconds": 750.0},
+        ])
+
+    def test_subtitle_window_is_covered_uses_merged_ranges(self) -> None:
+        coverage_ranges = [
+            {"start_seconds": 0.0, "end_seconds": 300.0},
+            {"start_seconds": 300.5, "end_seconds": 600.0},
+        ]
+
+        self.assertTrue(
+            subtitle_window_is_covered(
+                coverage_ranges,
+                window_start_seconds=10.0,
+                window_end_seconds=590.0,
+            )
+        )
+        self.assertFalse(
+            subtitle_window_is_covered(
+                coverage_ranges,
+                window_start_seconds=10.0,
+                window_end_seconds=650.0,
+            )
+        )
+
+    def test_store_subtitle_window_cache_entry_persists_manifest(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(rclone, local_root=None)
+        cache_dir = self.temp_dir / "subtitle_cache"
+
+        cache_key, manifest = store_subtitle_window_cache_entry(
+            app,
+            rel_path="movie.mp4",
+            subtitle_stream_index=3,
+            file_size=10,
+            window_start_seconds=0.0,
+            window_duration_seconds=300.0,
+            body=b"WEBVTT\n\n",
+            cache_dir=cache_dir,
+        )
+
+        manifest_key = build_subtitle_window_manifest_key(
+            rel_path="movie.mp4",
+            subtitle_stream_index=3,
+            file_size=10,
+        )
+        cache_path = subtitle_cache_path(cache_key, cache_dir=cache_dir)
+        manifest_path = subtitle_cache_path(manifest_key, cache_dir=cache_dir).with_suffix(".json")
+        loaded_manifest = read_subtitle_window_manifest(
+            app,
+            rel_path="movie.mp4",
+            subtitle_stream_index=3,
+            file_size=10,
+            cache_dir=cache_dir,
+        )
+
+        self.assertTrue(cache_path.exists())
+        self.assertTrue(manifest_path.exists())
+        self.assertEqual(manifest["coverage_ranges"], [{"start_seconds": 0.0, "end_seconds": 300.0}])
+        self.assertEqual(loaded_manifest["coverage_ranges"], [{"start_seconds": 0.0, "end_seconds": 300.0}])
+        self.assertEqual(len(loaded_manifest["windows"]), 1)
+
+    def test_subtitles_window_endpoint_rejects_invalid_duration(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(rclone, local_root=None)
+
+        with TestServer(app) as server:
+            with self.assertRaises(HTTPError) as ctx:
+                urlopen(
+                    server.base_url
+                    + "/video/endpoints/subtitles/window?path=movie.mp4&source=remote&track=3&start=0&duration=0",
+                    timeout=5,
+                )
+
+        self.assertEqual(ctx.exception.code, 400)
+        ctx.exception.close()
+
+    def test_extract_remote_subtitle_window_to_webvtt_slices_full_track_to_requested_window(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        ffprobe_payload = {
+            "streams": [
+                {"index": 0, "codec_type": "video", "codec_name": "h264"},
+                {
+                    "index": 3,
+                    "codec_type": "subtitle",
+                    "codec_name": "ass",
+                    "tags": {"language": "eng", "title": "English"},
+                    "disposition": {"default": 1, "forced": 0},
+                },
+            ],
+            "format": {"duration": "15.0"},
+        }
+        ffmpeg_copy_commands: list[list[str]] = []
+
+        def fake_subprocess(command, stdout=None, stderr=None, check=False, timeout=None):
+            if "ffprobe" in command[0]:
+                return CompletedProcess(command, 0, json.dumps(ffprobe_payload).encode("utf-8"), b"")
+            if "-c:s" in command and "copy" in command:
+                ffmpeg_copy_commands.append(list(command))
+                output_path = Path(command[-1])
+                output_path.write_text(
+                    "WEBVTT\n\n"
+                    "00:00.500 --> 00:01.500\nEdge overlap\n\n"
+                    "00:01.500 --> 00:03.000\nInside one\n\n"
+                    "00:03.000 --> 00:04.000\nInside two\n",
+                    encoding="utf-8",
+                )
+                return CompletedProcess(command, 0, b"", b"")
+            if command and command[-1] == "-":
+                input_path = Path(command[command.index("-i") + 1])
+                return CompletedProcess(command, 0, input_path.read_bytes(), b"")
+            return CompletedProcess(command, 0, b"", b"")
+
+        with patch("dropbox_browser.video.subprocess.run", side_effect=fake_subprocess):
+            payload = extract_remote_subtitle_window_to_webvtt(
+                app,
+                rel_path="movie.mp4",
+                subtitle_stream_index=3,
+                base_url="http://127.0.0.1:8000",
+                file_size=10,
+                window_start_seconds=4.0,
+                window_duration_seconds=4.0,
+            )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["track"], 3)
+        self.assertEqual(payload["window_start_seconds"], 4.0)
+        self.assertEqual(payload["window_end_seconds"], 8.0)
+        self.assertTrue(payload["coverage_complete"])
+        self.assertEqual(payload["loaded_ranges"], [{"start_seconds": 4.0, "end_seconds": 8.0}])
+        self.assertEqual(payload["language"], "eng")
+        self.assertFalse(payload["cache_hit"])
+        self.assertEqual(len(ffmpeg_copy_commands), 1)
+        self.assertIn("-ss", ffmpeg_copy_commands[0])
+        self.assertEqual(ffmpeg_copy_commands[0][ffmpeg_copy_commands[0].index("-ss") + 1], "3")
+        self.assertIn("-t", ffmpeg_copy_commands[0])
+        self.assertEqual(ffmpeg_copy_commands[0][ffmpeg_copy_commands[0].index("-t") + 1], "6")
+        self.assertIn("Edge overlap", payload["vtt"])
+        self.assertIn("Inside one", payload["vtt"])
+        self.assertIn("Inside two", payload["vtt"])
+        self.assertIn("00:03.500 --> 00:04.500", payload["vtt"])
+        self.assertIn("00:04.500 --> 00:06.000", payload["vtt"])
+        self.assertIn("00:06.000 --> 00:07.000", payload["vtt"])
+
+    def test_subtitles_window_endpoint_returns_clamped_json_window_payload(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        ffprobe_payload = {
+            "streams": [
+                {"index": 0, "codec_type": "video", "codec_name": "h264"},
+                {
+                    "index": 3,
+                    "codec_type": "subtitle",
+                    "codec_name": "ass",
+                    "tags": {"language": "eng", "title": "English"},
+                    "disposition": {"default": 1, "forced": 0},
+                },
+            ],
+            "format": {"duration": "15.0"},
+        }
+
+        def fake_subprocess(command, stdout=None, stderr=None, check=False, timeout=None):
+            if "ffprobe" in command[0]:
+                return CompletedProcess(command, 0, json.dumps(ffprobe_payload).encode("utf-8"), b"")
+            if "-c:s" in command and "copy" in command:
+                output_path = Path(command[-1])
+                output_path.write_text(
+                    "WEBVTT\n\n"
+                    "00:01.000 --> 00:02.000\nBefore\n\n"
+                    "00:13.000 --> 00:14.500\nNear end\n\n"
+                    "00:14.800 --> 00:15.000\nLast cue\n",
+                    encoding="utf-8",
+                )
+                return CompletedProcess(command, 0, b"", b"")
+            if command and command[-1] == "-":
+                input_path = Path(command[command.index("-i") + 1])
+                return CompletedProcess(command, 0, input_path.read_bytes(), b"")
+            return CompletedProcess(command, 0, b"", b"")
+
+        with (
+            TestServer(app) as server,
+            patch("dropbox_browser.video.subprocess.run", side_effect=fake_subprocess),
+        ):
+            with urlopen(
+                server.base_url
+                + "/video/endpoints/subtitles/window?path=movie.mp4&source=remote&track=3&start=13&duration=10",
+                timeout=5,
+            ) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+                content_type = response.headers["Content-Type"]
+
+        self.assertEqual(content_type, "application/json; charset=utf-8")
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["track"], 3)
+        self.assertEqual(payload["window_start_seconds"], 13.0)
+        self.assertEqual(payload["window_end_seconds"], 15.0)
+        self.assertEqual(payload["loaded_ranges"], [{"start_seconds": 13.0, "end_seconds": 15.0}])
+        self.assertTrue(payload["coverage_complete"])
+        self.assertEqual(payload["gap_action"], SUBTITLE_WINDOW_GAP_ACTION)
+        self.assertFalse(payload["cache_hit"])
+        self.assertIn("Near end", payload["vtt"])
+        self.assertIn("Last cue", payload["vtt"])
+        self.assertNotIn("Before", payload["vtt"])
+
+    def test_subtitles_window_endpoint_uses_window_cache_on_repeat_request(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        ffprobe_payload = {
+            "streams": [
+                {"index": 0, "codec_type": "video", "codec_name": "h264"},
+                {
+                    "index": 3,
+                    "codec_type": "subtitle",
+                    "codec_name": "ass",
+                    "tags": {"language": "eng", "title": "English"},
+                    "disposition": {"default": 1, "forced": 0},
+                },
+            ],
+            "format": {"duration": "15.0"},
+        }
+
+        def fake_subprocess(command, stdout=None, stderr=None, check=False, timeout=None):
+            if "ffprobe" in command[0]:
+                return CompletedProcess(command, 0, json.dumps(ffprobe_payload).encode("utf-8"), b"")
+            if "-c:s" in command and "copy" in command:
+                output_path = Path(command[-1])
+                output_path.write_text(
+                    "WEBVTT\n\n"
+                    "00:04.500 --> 00:06.000\nInside one\n\n"
+                    "00:07.000 --> 00:08.000\nInside two\n",
+                    encoding="utf-8",
+                )
+                return CompletedProcess(command, 0, b"", b"")
+            if command and command[-1] == "-":
+                input_path = Path(command[command.index("-i") + 1])
+                return CompletedProcess(command, 0, input_path.read_bytes(), b"")
+            return CompletedProcess(command, 0, b"", b"")
+
+        with (
+            TestServer(app) as server,
+            patch("dropbox_browser.video.subprocess.run", side_effect=fake_subprocess) as run_mock,
+            patch("dropbox_browser.video.SUBTITLE_CACHE_DIR", self.temp_dir / "subtitle_cache"),
+        ):
+            url = server.base_url + "/video/endpoints/subtitles/window?path=movie.mp4&source=remote&track=3&start=4&duration=4"
+            with urlopen(url, timeout=5) as response:
+                first_payload = json.loads(response.read().decode("utf-8"))
+            with urlopen(url, timeout=5) as response:
+                second_payload = json.loads(response.read().decode("utf-8"))
+
+        self.assertFalse(first_payload["cache_hit"])
+        self.assertTrue(second_payload["cache_hit"])
+        self.assertEqual(first_payload["loaded_ranges"], [{"start_seconds": 4.0, "end_seconds": 8.0}])
+        self.assertEqual(second_payload["loaded_ranges"], [{"start_seconds": 4.0, "end_seconds": 8.0}])
+        self.assertEqual(run_mock.call_count, 3)
+
+    def test_subtitle_window_extraction_keeps_startup_to_first_window_and_requests_later_window_independently(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        ffprobe_payload = {
+            "streams": [
+                {"index": 0, "codec_type": "video", "codec_name": "h264"},
+                {
+                    "index": 3,
+                    "codec_type": "subtitle",
+                    "codec_name": "ass",
+                    "tags": {"language": "eng", "title": "English"},
+                    "disposition": {"default": 1, "forced": 0},
+                },
+            ],
+            "format": {"duration": "900.0"},
+        }
+        ffmpeg_copy_commands: list[list[str]] = []
+
+        def fake_subprocess(command, stdout=None, stderr=None, check=False, timeout=None):
+            if "ffprobe" in command[0]:
+                return CompletedProcess(command, 0, json.dumps(ffprobe_payload).encode("utf-8"), b"")
+            if "-c:s" in command and "copy" in command:
+                ffmpeg_copy_commands.append(list(command))
+                start_seconds = float(command[command.index("-ss") + 1]) if "-ss" in command else 0.0
+                output_path = Path(command[-1])
+                if start_seconds < 1.0:
+                    output_path.write_text(
+                        "WEBVTT\n\n"
+                        "00:00.500 --> 00:01.500\nStartup overlap\n\n"
+                        "04:59.000 --> 05:00.000\nStartup tail\n\n"
+                        "05:01.000 --> 05:02.000\nShould be trimmed\n",
+                        encoding="utf-8",
+                    )
+                else:
+                    output_path.write_text(
+                        "WEBVTT\n\n"
+                        "00:00.500 --> 00:01.500\nLater overlap\n\n"
+                        "00:02.000 --> 00:03.000\nLater inside\n\n",
+                        encoding="utf-8",
+                    )
+                return CompletedProcess(command, 0, b"", b"")
+            if command and command[-1] == "-":
+                input_path = Path(command[command.index("-i") + 1])
+                return CompletedProcess(command, 0, input_path.read_bytes(), b"")
+            return CompletedProcess(command, 0, b"", b"")
+
+        with (
+            patch("dropbox_browser.video.subprocess.run", side_effect=fake_subprocess),
+            patch("dropbox_browser.video.SUBTITLE_CACHE_DIR", self.temp_dir / "subtitle_cache"),
+        ):
+            startup_request = build_startup_subtitle_window_request(
+                rel_path="movie.mp4",
+                subtitle_stream_index=3,
+                file_size=10,
+                media_duration_seconds=900.0,
+            )
+            startup_payload = extract_remote_subtitle_window_to_webvtt(
+                app,
+                rel_path="movie.mp4",
+                subtitle_stream_index=3,
+                base_url="http://127.0.0.1:8000",
+                file_size=10,
+                window_start_seconds=float(startup_request["window_start_seconds"]),
+                window_duration_seconds=float(startup_request["window_duration_seconds"]),
+            )
+            later_payload = extract_remote_subtitle_window_to_webvtt(
+                app,
+                rel_path="movie.mp4",
+                subtitle_stream_index=3,
+                base_url="http://127.0.0.1:8000",
+                file_size=10,
+                window_start_seconds=300.0,
+                window_duration_seconds=300.0,
+            )
+
+        self.assertEqual(len(ffmpeg_copy_commands), 2)
+        self.assertNotIn("-ss", ffmpeg_copy_commands[0])
+        self.assertEqual(ffmpeg_copy_commands[0][ffmpeg_copy_commands[0].index("-t") + 1], "301")
+        self.assertEqual(ffmpeg_copy_commands[1][ffmpeg_copy_commands[1].index("-ss") + 1], "299")
+        self.assertEqual(ffmpeg_copy_commands[1][ffmpeg_copy_commands[1].index("-t") + 1], "302")
+
+        self.assertEqual(startup_payload["window_start_seconds"], 0.0)
+        self.assertEqual(startup_payload["window_end_seconds"], 300.0)
+        self.assertEqual(startup_payload["loaded_ranges"], [{"start_seconds": 0.0, "end_seconds": 300.0}])
+        self.assertIn("Startup overlap", startup_payload["vtt"])
+        self.assertIn("Startup tail", startup_payload["vtt"])
+        self.assertNotIn("Should be trimmed", startup_payload["vtt"])
+
+        self.assertEqual(later_payload["window_start_seconds"], 300.0)
+        self.assertEqual(later_payload["window_end_seconds"], 600.0)
+        self.assertEqual(later_payload["loaded_ranges"], [{"start_seconds": 0.0, "end_seconds": 600.0}])
+        self.assertIn("Later overlap", later_payload["vtt"])
+        self.assertIn("Later inside", later_payload["vtt"])
+
+    def test_subtitle_window_extraction_dedupes_duplicate_inflight_requests(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        ffprobe_payload = {
+            "streams": [
+                {"index": 0, "codec_type": "video", "codec_name": "h264"},
+                {
+                    "index": 3,
+                    "codec_type": "subtitle",
+                    "codec_name": "ass",
+                    "tags": {"language": "eng", "title": "English"},
+                    "disposition": {"default": 1, "forced": 0},
+                },
+            ],
+            "format": {"duration": "900.0"},
+        }
+        started = threading.Event()
+        release = threading.Event()
+        ffmpeg_copy_call_count = 0
+        ffmpeg_copy_call_guard = threading.Lock()
+        results: list[object] = [None, None]
+
+        def fake_subprocess(command, stdout=None, stderr=None, check=False, timeout=None):
+            nonlocal ffmpeg_copy_call_count
+            if "ffprobe" in command[0]:
+                return CompletedProcess(command, 0, json.dumps(ffprobe_payload).encode("utf-8"), b"")
+            if "-c:s" in command and "copy" in command:
+                with ffmpeg_copy_call_guard:
+                    ffmpeg_copy_call_count += 1
+                started.set()
+                release.wait(5)
+                output_path = Path(command[-1])
+                output_path.write_text(
+                    "WEBVTT\n\n"
+                    "00:00.500 --> 00:01.500\nOverlap\n\n"
+                    "00:02.000 --> 00:03.000\nInside\n",
+                    encoding="utf-8",
+                )
+                return CompletedProcess(command, 0, b"", b"")
+            if command and command[-1] == "-":
+                input_path = Path(command[command.index("-i") + 1])
+                return CompletedProcess(command, 0, input_path.read_bytes(), b"")
+            return CompletedProcess(command, 0, b"", b"")
+
+        def run_request(index: int) -> None:
+            results[index] = extract_remote_subtitle_window_to_webvtt(
+                app,
+                rel_path="movie.mp4",
+                subtitle_stream_index=3,
+                base_url="http://127.0.0.1:8000",
+                file_size=10,
+                window_start_seconds=4.0,
+                window_duration_seconds=4.0,
+            )
+
+        with (
+            patch("dropbox_browser.video.subprocess.run", side_effect=fake_subprocess),
+            patch("dropbox_browser.video.SUBTITLE_CACHE_DIR", self.temp_dir / "subtitle_cache"),
+        ):
+            first = threading.Thread(target=run_request, args=(0,))
+            second = threading.Thread(target=run_request, args=(1,))
+            first.start()
+            self.assertTrue(started.wait(1))
+            second.start()
+            release.set()
+            first.join(timeout=5)
+            second.join(timeout=5)
+
+        self.assertEqual(ffmpeg_copy_call_count, 1)
+        self.assertIsInstance(results[0], dict)
+        self.assertIsInstance(results[1], dict)
+        self.assertFalse(results[0]["cache_hit"])
+        self.assertTrue(results[1]["cache_hit"])
+        self.assertEqual(results[0]["vtt"], results[1]["vtt"])
+        self.assertEqual(results[0]["loaded_ranges"], [{"start_seconds": 4.0, "end_seconds": 8.0}])
+        self.assertEqual(results[1]["loaded_ranges"], [{"start_seconds": 4.0, "end_seconds": 8.0}])
+
+    def test_startup_subtitle_window_request_triggers_background_backfill_for_future_windows(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        ffprobe_payload = {
+            "streams": [
+                {"index": 0, "codec_type": "video", "codec_name": "h264"},
+                {
+                    "index": 3,
+                    "codec_type": "subtitle",
+                    "codec_name": "ass",
+                    "tags": {"language": "eng", "title": "English"},
+                    "disposition": {"default": 1, "forced": 0},
+                },
+            ],
+            "format": {"duration": "600.0"},
+        }
+        ffmpeg_copy_commands: list[list[str]] = []
+
+        def fake_subprocess(command, stdout=None, stderr=None, check=False, timeout=None):
+            if "ffprobe" in command[0]:
+                return CompletedProcess(command, 0, json.dumps(ffprobe_payload).encode("utf-8"), b"")
+            if "-c:s" in command and "copy" in command:
+                ffmpeg_copy_commands.append(list(command))
+                output_path = Path(command[-1])
+                start_seconds = float(command[command.index("-ss") + 1]) if "-ss" in command else 0.0
+                if start_seconds < 1.0:
+                    output_path.write_text(
+                        "WEBVTT\n\n"
+                        "00:00.500 --> 00:01.500\nStartup overlap\n\n"
+                        "04:59.000 --> 05:00.000\nStartup tail\n",
+                        encoding="utf-8",
+                    )
+                else:
+                    output_path.write_text(
+                        "WEBVTT\n\n"
+                        "00:00.500 --> 00:01.500\nBackfill overlap\n\n"
+                        "00:02.000 --> 00:03.000\nBackfill inside\n",
+                        encoding="utf-8",
+                    )
+                return CompletedProcess(command, 0, b"", b"")
+            if command and command[-1] == "-":
+                input_path = Path(command[command.index("-i") + 1])
+                return CompletedProcess(command, 0, input_path.read_bytes(), b"")
+            return CompletedProcess(command, 0, b"", b"")
+
+        with patch("dropbox_browser.video.subprocess.run", side_effect=fake_subprocess):
+            startup_payload = extract_remote_subtitle_window_to_webvtt(
+                app,
+                rel_path="movie.mp4",
+                subtitle_stream_index=3,
+                base_url="http://127.0.0.1:8000",
+                file_size=10,
+                window_start_seconds=0.0,
+                window_duration_seconds=300.0,
+                window_status="startup",
+            )
+            deadline = time.time() + 2.0
+            while time.time() < deadline:
+                jobs = list(getattr(app, "_subtitle_backfill_jobs", {}).values())
+                if jobs:
+                    for job in jobs:
+                        job.join(timeout=0.1)
+                if len(ffmpeg_copy_commands) >= 2 and not getattr(app, "_subtitle_backfill_jobs", {}):
+                    break
+                time.sleep(0.01)
+            later_payload = extract_remote_subtitle_window_to_webvtt(
+                app,
+                rel_path="movie.mp4",
+                subtitle_stream_index=3,
+                base_url="http://127.0.0.1:8000",
+                file_size=10,
+                window_start_seconds=300.0,
+                window_duration_seconds=300.0,
+            )
+
+        self.assertEqual(startup_payload["window_start_seconds"], 0.0)
+        self.assertEqual(startup_payload["window_end_seconds"], 300.0)
+        self.assertEqual(startup_payload["loaded_ranges"], [{"start_seconds": 0.0, "end_seconds": 300.0}])
+        self.assertEqual(len(ffmpeg_copy_commands), 2)
+        self.assertNotIn("-ss", ffmpeg_copy_commands[0])
+        self.assertEqual(ffmpeg_copy_commands[0][ffmpeg_copy_commands[0].index("-t") + 1], "301")
+        self.assertEqual(ffmpeg_copy_commands[1][ffmpeg_copy_commands[1].index("-ss") + 1], "299")
+        self.assertEqual(ffmpeg_copy_commands[1][ffmpeg_copy_commands[1].index("-t") + 1], "301")
+        self.assertTrue(later_payload["cache_hit"])
+
+    def test_startup_backfill_stops_when_playback_sync_token_changes(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        ffprobe_payload = {
+            "streams": [
+                {"index": 0, "codec_type": "video", "codec_name": "h264"},
+                {
+                    "index": 3,
+                    "codec_type": "subtitle",
+                    "codec_name": "ass",
+                    "tags": {"language": "eng", "title": "English"},
+                    "disposition": {"default": 1, "forced": 0},
+                },
+            ],
+            "format": {"duration": "900.0"},
+        }
+        ffmpeg_copy_commands: list[list[str]] = []
+        backfill_started = threading.Event()
+        release_backfill = threading.Event()
+
+        def fake_subprocess(command, stdout=None, stderr=None, check=False, timeout=None):
+            if "ffprobe" in command[0]:
+                return CompletedProcess(command, 0, json.dumps(ffprobe_payload).encode("utf-8"), b"")
+            if "-c:s" in command and "copy" in command:
+                ffmpeg_copy_commands.append(list(command))
+                output_path = Path(command[-1])
+                start_seconds = float(command[command.index("-ss") + 1]) if "-ss" in command else 0.0
+                if abs(start_seconds - 299.0) < 0.001:
+                    backfill_started.set()
+                    release_backfill.wait(5)
+                output_path.write_text(
+                    "WEBVTT\n\n"
+                    "00:00.500 --> 00:01.500\nCue\n\n"
+                    "00:02.000 --> 00:03.000\nInside\n",
+                    encoding="utf-8",
+                )
+                return CompletedProcess(command, 0, b"", b"")
+            if command and command[-1] == "-":
+                input_path = Path(command[command.index("-i") + 1])
+                return CompletedProcess(command, 0, input_path.read_bytes(), b"")
+            return CompletedProcess(command, 0, b"", b"")
+
+        with patch("dropbox_browser.video.subprocess.run", side_effect=fake_subprocess):
+            extract_remote_subtitle_window_to_webvtt(
+                app,
+                rel_path="movie.mp4",
+                subtitle_stream_index=3,
+                base_url="http://127.0.0.1:8000",
+                file_size=10,
+                window_start_seconds=0.0,
+                window_duration_seconds=300.0,
+                window_status="startup",
+                playback_sync_token=1,
+            )
+            self.assertTrue(backfill_started.wait(1))
+            extract_remote_subtitle_window_to_webvtt(
+                app,
+                rel_path="movie.mp4",
+                subtitle_stream_index=3,
+                base_url="http://127.0.0.1:8000",
+                file_size=10,
+                window_start_seconds=4.0,
+                window_duration_seconds=4.0,
+                window_status="requested",
+                playback_sync_token=2,
+            )
+            release_backfill.set()
+            deadline = time.time() + 2.0
+            while time.time() < deadline and getattr(app, "_subtitle_backfill_jobs", {}):
+                for job in list(getattr(app, "_subtitle_backfill_jobs", {}).values()):
+                    job.join(timeout=0.1)
+                time.sleep(0.01)
+
+        self.assertEqual(len(ffmpeg_copy_commands), 3)
+        self.assertEqual(ffmpeg_copy_commands[1][ffmpeg_copy_commands[1].index("-ss") + 1], "299")
+        self.assertEqual(ffmpeg_copy_commands[2][ffmpeg_copy_commands[2].index("-ss") + 1], "3")
+        self.assertFalse(any("-ss" in command and command[command.index("-ss") + 1] == "599" for command in ffmpeg_copy_commands))
+
+    def test_startup_backfill_stops_when_subtitle_track_changes(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        ffprobe_payload = {
+            "streams": [
+                {"index": 0, "codec_type": "video", "codec_name": "h264"},
+                {
+                    "index": 3,
+                    "codec_type": "subtitle",
+                    "codec_name": "ass",
+                    "tags": {"language": "eng", "title": "English"},
+                    "disposition": {"default": 1, "forced": 0},
+                },
+                {
+                    "index": 4,
+                    "codec_type": "subtitle",
+                    "codec_name": "ass",
+                    "tags": {"language": "spa", "title": "Spanish"},
+                    "disposition": {"default": 0, "forced": 0},
+                },
+            ],
+            "format": {"duration": "900.0"},
+        }
+        ffmpeg_copy_commands: list[list[str]] = []
+        backfill_started = threading.Event()
+        release_backfill = threading.Event()
+
+        def fake_subprocess(command, stdout=None, stderr=None, check=False, timeout=None):
+            if "ffprobe" in command[0]:
+                return CompletedProcess(command, 0, json.dumps(ffprobe_payload).encode("utf-8"), b"")
+            if "-c:s" in command and "copy" in command:
+                ffmpeg_copy_commands.append(list(command))
+                output_path = Path(command[-1])
+                start_seconds = float(command[command.index("-ss") + 1]) if "-ss" in command else 0.0
+                mapped_track = command[command.index("-map") + 1]
+                if mapped_track == "0:3" and abs(start_seconds - 299.0) < 0.001:
+                    backfill_started.set()
+                    release_backfill.wait(5)
+                output_path.write_text(
+                    "WEBVTT\n\n"
+                    "00:00.500 --> 00:01.500\nCue\n\n"
+                    "00:02.000 --> 00:03.000\nInside\n",
+                    encoding="utf-8",
+                )
+                return CompletedProcess(command, 0, b"", b"")
+            if command and command[-1] == "-":
+                input_path = Path(command[command.index("-i") + 1])
+                return CompletedProcess(command, 0, input_path.read_bytes(), b"")
+            return CompletedProcess(command, 0, b"", b"")
+
+        with patch("dropbox_browser.video.subprocess.run", side_effect=fake_subprocess):
+            extract_remote_subtitle_window_to_webvtt(
+                app,
+                rel_path="movie.mp4",
+                subtitle_stream_index=3,
+                base_url="http://127.0.0.1:8000",
+                file_size=10,
+                window_start_seconds=0.0,
+                window_duration_seconds=300.0,
+                window_status="startup",
+                playback_sync_token=1,
+            )
+            self.assertTrue(backfill_started.wait(1))
+            extract_remote_subtitle_window_to_webvtt(
+                app,
+                rel_path="movie.mp4",
+                subtitle_stream_index=4,
+                base_url="http://127.0.0.1:8000",
+                file_size=10,
+                window_start_seconds=4.0,
+                window_duration_seconds=4.0,
+                window_status="requested",
+                playback_sync_token=1,
+            )
+            release_backfill.set()
+            deadline = time.time() + 2.0
+            while time.time() < deadline and getattr(app, "_subtitle_backfill_jobs", {}):
+                for job in list(getattr(app, "_subtitle_backfill_jobs", {}).values()):
+                    job.join(timeout=0.1)
+                time.sleep(0.01)
+
+        self.assertEqual(len(ffmpeg_copy_commands), 3)
+        self.assertEqual(ffmpeg_copy_commands[1][ffmpeg_copy_commands[1].index("-map") + 1], "0:3")
+        self.assertEqual(ffmpeg_copy_commands[1][ffmpeg_copy_commands[1].index("-ss") + 1], "299")
+        self.assertEqual(ffmpeg_copy_commands[2][ffmpeg_copy_commands[2].index("-map") + 1], "0:4")
+        self.assertEqual(ffmpeg_copy_commands[2][ffmpeg_copy_commands[2].index("-ss") + 1], "3")
+        self.assertFalse(any(
+            command[command.index("-map") + 1] == "0:3"
+            and "-ss" in command
+            and command[command.index("-ss") + 1] == "599"
+            for command in ffmpeg_copy_commands
+        ))
+
     def test_subtitles_endpoint_returns_webvtt_with_content_type(self) -> None:
         rclone = self._remote_media_rclone()
         app = self._build_app(
@@ -1386,10 +2364,13 @@ class VideoEndpointTests(AppTestCase):
             7,
             Path("C:/temp/track7.ass"),
             start_time_seconds=42,
+            duration_seconds=12.5,
         )
 
         self.assertLess(command.index("-ss"), command.index("-i"))
         self.assertEqual(command[command.index("-ss") + 1], "42")
+        self.assertLess(command.index("-t"), command.index("-i"))
+        self.assertEqual(command[command.index("-t") + 1], "12.5")
         self.assertIn("0:7", command)
         self.assertIn("-c:s", command)
         self.assertIn("copy", command)
@@ -1487,10 +2468,13 @@ class VideoEndpointTests(AppTestCase):
             "http://127.0.0.1:8000/file?path=movie.mkv&source=remote",
             7,
             start_time_seconds=42,
+            duration_seconds=12.5,
         )
 
         self.assertLess(command.index("-ss"), command.index("-i"))
         self.assertEqual(command[command.index("-ss") + 1], "42")
+        self.assertLess(command.index("-t"), command.index("-i"))
+        self.assertEqual(command[command.index("-t") + 1], "12.5")
         self.assertEqual(command[-3:], ["-f", "webvtt", "-"])
         self.assertIn("0:7", command)
 
