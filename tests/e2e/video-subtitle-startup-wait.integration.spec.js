@@ -344,7 +344,7 @@ test("compatibility playback waits for delayed subtitle extraction before starti
   await expectPlayToggleState(page, "Pause");
 });
 
-test("startup scrubber shows separate media and subtitle-ready coverage when subtitle extraction lags behind video", async ({ page }) => {
+test("startup scrubber reflects full cached subtitle coverage after delayed extraction finishes", async ({ page }) => {
   test.setTimeout(90000);
 
   await page.route("**/video/endpoints/subtitles/window?**path=Videos%2Falpha.mkv**", async (route) => {
@@ -378,12 +378,12 @@ test("startup scrubber shows separate media and subtitle-ready coverage when sub
       mediaEnd: "100.000%",
       subtitleStart: "0.000%",
       processedStart: "0.000%",
-      subtitleCoverageState: "limited",
+      subtitleCoverageState: "full",
     });
 
   const coverage = await readProgressCoverageState(page);
-  expect(Number.parseFloat(coverage.subtitleEnd)).toBeLessThan(Number.parseFloat(coverage.mediaEnd));
-  expect(Number.parseFloat(coverage.processedEnd)).toBeCloseTo(Number.parseFloat(coverage.subtitleEnd), 3);
+  expect(Number.parseFloat(coverage.subtitleEnd)).toBeCloseTo(Number.parseFloat(coverage.mediaEnd), 3);
+  expect(Number.parseFloat(coverage.processedEnd)).toBeCloseTo(Number.parseFloat(coverage.mediaEnd), 3);
   expect(coverage.title).toContain("Loaded video:");
   expect(coverage.title).toContain("Subtitle-ready:");
 });

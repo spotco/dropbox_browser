@@ -237,6 +237,12 @@ function subtitleRangesCoverWindow(ranges, windowStartSeconds, windowEndSeconds)
   });
 }
 
+function mergeSubtitleCoverageRanges(existingRanges, incomingRanges) {
+  return mergedSubtitleRanges([]
+    .concat(Array.isArray(existingRanges) ? existingRanges : [])
+    .concat(Array.isArray(incomingRanges) ? incomingRanges : []));
+}
+
 function storeSubtitleWindowPayload(path, subtitleStreamIndex, payload, options) {
   var cache = subtitleWindowCacheForPath(path);
   if (!cache || !payload) return;
@@ -248,12 +254,18 @@ function storeSubtitleWindowPayload(path, subtitleStreamIndex, payload, options)
   cache[requestKey] = payload;
   var coverage = subtitleCoverageForPath(path);
   if (coverage) {
-    coverage[String(subtitleStreamIndex)] = Array.isArray(payload.loaded_ranges) ? payload.loaded_ranges.slice() : [];
+    coverage[String(subtitleStreamIndex)] = mergeSubtitleCoverageRanges(
+      coverage[String(subtitleStreamIndex)],
+      payload.loaded_ranges
+    );
   }
   if (options && options.background) {
     var backgroundCoverage = subtitleBackgroundCoverageForPath(path);
     if (backgroundCoverage) {
-      backgroundCoverage[String(subtitleStreamIndex)] = Array.isArray(payload.loaded_ranges) ? payload.loaded_ranges.slice() : [];
+      backgroundCoverage[String(subtitleStreamIndex)] = mergeSubtitleCoverageRanges(
+        backgroundCoverage[String(subtitleStreamIndex)],
+        payload.loaded_ranges
+      );
     }
   }
   if (options && options.mounted) {

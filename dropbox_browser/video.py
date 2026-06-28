@@ -2105,17 +2105,32 @@ def probe_remote_media(
         file_size=file_size,
     )
     file_input_url = build_remote_file_probe_url(base_url, rel_path)
-    raw_payload = _run_ffprobe_json(
-        ffprobe_exe,
-        header_input_url,
-        probe_size_bytes=probe_size_bytes,
-        analyze_duration_us=analyze_duration_us,
-    )
-    response_payload = _probe_payload_from_ffprobe_output(
-        rel_path,
-        input_url=header_input_url,
-        raw_payload=raw_payload,
-    )
+    try:
+        raw_payload = _run_ffprobe_json(
+            ffprobe_exe,
+            header_input_url,
+            probe_size_bytes=probe_size_bytes,
+            analyze_duration_us=analyze_duration_us,
+        )
+        response_payload = _probe_payload_from_ffprobe_output(
+            rel_path,
+            input_url=header_input_url,
+            raw_payload=raw_payload,
+        )
+    except BrowserError:
+        if header_input_url == file_input_url:
+            raise
+        raw_payload = _run_ffprobe_json(
+            ffprobe_exe,
+            file_input_url,
+            probe_size_bytes=probe_size_bytes,
+            analyze_duration_us=analyze_duration_us,
+        )
+        response_payload = _probe_payload_from_ffprobe_output(
+            rel_path,
+            input_url=file_input_url,
+            raw_payload=raw_payload,
+        )
     if probe_payload_is_incomplete(response_payload) and header_input_url != file_input_url:
         raw_payload = _run_ffprobe_json(
             ffprobe_exe,
