@@ -2196,6 +2196,8 @@ def extract_remote_subtitle_window_to_webvtt(
     window_status: str = "requested",
     playback_sync_token: int | None = None,
 ) -> dict[str, object]:
+    request_started_at = time.perf_counter()
+    requested_window_status = str(window_status or "requested")
     video_config = getattr(app, "video_tools_config", None)
     ffmpeg_exe = getattr(video_config, "ffmpeg_exe", None)
     ffprobe_exe = getattr(video_config, "ffprobe_exe", None)
@@ -2288,7 +2290,7 @@ def extract_remote_subtitle_window_to_webvtt(
         return_payload["cache_hit"] = True
         return_payload["path"] = clean_rel_path(rel_path)
         return_payload["file_size"] = None if file_size is None else int(file_size)
-        _maybe_schedule_subtitle_window_backfill(
+        backfill_scheduled = _maybe_schedule_subtitle_window_backfill(
             app,
             rel_path=rel_path,
             subtitle_stream_index=subtitle_stream_index,
@@ -2298,6 +2300,21 @@ def extract_remote_subtitle_window_to_webvtt(
             window_request=window_request,
             response_payload=return_payload,
             window_status=str(window_request.get("window_status") or ""),
+        )
+        log_video_debug(
+            app,
+            "subtitle_window_request",
+            rel_path=clean_rel_path(rel_path),
+            subtitle_stream_index=int(subtitle_stream_index),
+            window_status=requested_window_status,
+            request_window_start_seconds=float(window_request["window_start_seconds"]),
+            request_window_end_seconds=float(window_request["window_end_seconds"]),
+            cache_hit=True,
+            inflight_waited=False,
+            extraction_duration_ms=round((time.perf_counter() - request_started_at) * 1000, 3),
+            loaded_range_count=len(coverage_ranges) if isinstance(coverage_ranges, list) else 0,
+            coverage_complete=bool(return_payload.get("coverage_complete")),
+            background_backfill_scheduled=bool(backfill_scheduled),
         )
         return return_payload
     owner, inflight_entry = _acquire_subtitle_window_inflight(app, cached_window_key)
@@ -2334,7 +2351,7 @@ def extract_remote_subtitle_window_to_webvtt(
             return_payload["cache_hit"] = True
             return_payload["path"] = clean_rel_path(rel_path)
             return_payload["file_size"] = None if file_size is None else int(file_size)
-            _maybe_schedule_subtitle_window_backfill(
+            backfill_scheduled = _maybe_schedule_subtitle_window_backfill(
                 app,
                 rel_path=rel_path,
                 subtitle_stream_index=subtitle_stream_index,
@@ -2344,6 +2361,21 @@ def extract_remote_subtitle_window_to_webvtt(
                 window_request=window_request,
                 response_payload=return_payload,
                 window_status=str(window_request.get("window_status") or ""),
+            )
+            log_video_debug(
+                app,
+                "subtitle_window_request",
+                rel_path=clean_rel_path(rel_path),
+                subtitle_stream_index=int(subtitle_stream_index),
+                window_status=requested_window_status,
+                request_window_start_seconds=float(window_request["window_start_seconds"]),
+                request_window_end_seconds=float(window_request["window_end_seconds"]),
+                cache_hit=True,
+                inflight_waited=True,
+                extraction_duration_ms=round((time.perf_counter() - request_started_at) * 1000, 3),
+                loaded_range_count=len(coverage_ranges) if isinstance(coverage_ranges, list) else 0,
+                coverage_complete=bool(return_payload.get("coverage_complete")),
+                background_backfill_scheduled=bool(backfill_scheduled),
             )
             return return_payload
         error = inflight_entry.get("error")
@@ -2405,7 +2437,7 @@ def extract_remote_subtitle_window_to_webvtt(
         response_payload["cache_hit"] = False
         response_payload["path"] = clean_rel_path(rel_path)
         response_payload["file_size"] = None if file_size is None else int(file_size)
-        _maybe_schedule_subtitle_window_backfill(
+        backfill_scheduled = _maybe_schedule_subtitle_window_backfill(
             app,
             rel_path=rel_path,
             subtitle_stream_index=subtitle_stream_index,
@@ -2415,6 +2447,21 @@ def extract_remote_subtitle_window_to_webvtt(
             window_request=window_request,
             response_payload=response_payload,
             window_status=str(window_request.get("window_status") or ""),
+        )
+        log_video_debug(
+            app,
+            "subtitle_window_request",
+            rel_path=clean_rel_path(rel_path),
+            subtitle_stream_index=int(subtitle_stream_index),
+            window_status=requested_window_status,
+            request_window_start_seconds=float(window_request["window_start_seconds"]),
+            request_window_end_seconds=float(window_request["window_end_seconds"]),
+            cache_hit=False,
+            inflight_waited=False,
+            extraction_duration_ms=round((time.perf_counter() - request_started_at) * 1000, 3),
+            loaded_range_count=len(response_payload.get("loaded_ranges") or []),
+            coverage_complete=bool(response_payload.get("coverage_complete")),
+            background_backfill_scheduled=bool(backfill_scheduled),
         )
         return response_payload
     except BaseException as exc:
@@ -2532,12 +2579,12 @@ def _maybe_schedule_subtitle_window_backfill(
     window_request: dict[str, object],
     response_payload: dict[str, object],
     window_status: str,
-) -> None:
+) -> bool:
     if str(window_status or "").strip().casefold() != "startup":
-        return
+        return False
     next_window_start_seconds = float(response_payload.get("window_end_seconds") or 0.0)
     if media_duration_seconds is not None and next_window_start_seconds >= media_duration_seconds:
-        return
+        return False
     coverage_ranges = response_payload.get("loaded_ranges")
     if (
         isinstance(coverage_ranges, list)
@@ -2547,7 +2594,7 @@ def _maybe_schedule_subtitle_window_backfill(
             window_end_seconds=next_window_start_seconds + float(window_request["window_duration_seconds"]),
         )
     ):
-        return
+        return False
     job_key = _subtitle_backfill_job_key(
         rel_path=rel_path,
         subtitle_stream_index=subtitle_stream_index,
@@ -2562,7 +2609,7 @@ def _maybe_schedule_subtitle_window_backfill(
         jobs = _subtitle_backfill_jobs(app)
         existing = jobs.get(job_key)
         if existing is not None and existing.is_alive():
-            return
+            return False
         thread = threading.Thread(
             target=_run_subtitle_window_backfill,
             kwargs={
@@ -2585,7 +2632,21 @@ def _maybe_schedule_subtitle_window_backfill(
             name=f"subtitle-window-backfill-{subtitle_stream_index}",
         )
         jobs[job_key] = thread
+    log_video_debug(
+        app,
+        "subtitle_window_backfill_scheduled",
+        rel_path=clean_rel_path(rel_path),
+        subtitle_stream_index=int(subtitle_stream_index),
+        next_window_start_seconds=next_window_start_seconds,
+        window_duration_seconds=float(window_request["window_duration_seconds"]),
+        playback_sync_token=(
+            int(window_request["playback_sync_token"])
+            if window_request.get("playback_sync_token") is not None
+            else None
+        ),
+    )
     thread.start()
+    return True
 
 
 def _run_subprocess_capture(

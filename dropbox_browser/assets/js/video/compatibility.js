@@ -231,20 +231,43 @@ async function waitForCompatibilityStartupSubtitles(surfaceSyncToken, reason) {
   var streamIndex = ctx.resolvedSubtitleStreamIndex(active, probePayload);
   if (ctx.subtitlesAreMounted(active, streamIndex, fetchStartSeconds)) return;
   showCompatibilitySubtitleWaitStage(active);
-  await ctx.ensureStartupSubtitleWindowForPlayback(active, probePayload, fetchStartSeconds, {
-    windowStatus: fetchStartSeconds > 0 ? 'seek' : 'startup',
-    playbackSyncToken: surfaceSyncToken,
-  });
+  try {
+    await ctx.ensureStartupSubtitleWindowForPlayback(active, probePayload, fetchStartSeconds, {
+      windowStatus: fetchStartSeconds > 0 ? 'seek' : 'startup',
+      playbackSyncToken: surfaceSyncToken,
+    });
+  }
+  catch (error) {
+    ctx.reportVideoDiagnostic({
+      level: 'error',
+      message: 'Startup subtitle extraction failed',
+      error_message: error && error.message ? String(error.message) : 'unknown',
+      subtitle_stream_index: streamIndex,
+      playback_sync_token: surfaceSyncToken,
+    });
+    if (typeof ctx.showSubtitleFailureState === 'function') {
+      ctx.showSubtitleFailureState({
+        title: 'Subtitle loading failed',
+        meta: 'The selected subtitle track could not be extracted for the startup playback window.',
+      });
+    }
+    ctx.setStatus('Subtitle extraction failed.');
+    ctx.setPlaybackSummary(ctx.activeItemTitle(active), 'Selected subtitle track could not be converted to WebVTT.');
+  }
 }
 
 function showCompatibilitySubtitleWaitStage(item) {
   if (!item) return;
+  if (typeof ctx.clearSubtitleFailureState === 'function') ctx.clearSubtitleFailureState();
   ctx.state.compatibilitySubtitleWaitStageActive = true;
-  ctx.showLoadingOverlay(ctx.loadingOverlayCopy(
+  var overlay = ctx.loadingOverlayCopy(
     item,
     COMPATIBILITY_SUBTITLE_WAIT_META,
     0.84
-  ));
+  );
+  overlay.title = 'Waiting for subtitles';
+  overlay.reason = 'subtitle-wait';
+  ctx.showLoadingOverlay(overlay);
   ctx.setPlaybackSummary(
     ctx.activeItemTitle(item),
     COMPATIBILITY_SUBTITLE_WAIT_META
