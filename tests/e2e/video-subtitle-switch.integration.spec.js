@@ -19,6 +19,11 @@ const hlsStubSource = fs.readFileSync(
 
 let server = null;
 
+function isClosedRouteError(error) {
+  const message = error && error.message ? String(error.message) : "";
+  return message.includes("Target page, context or browser has been closed");
+}
+
 test.describe.configure({ timeout: 90000 });
 
 async function installHlsStub(page, {
@@ -1123,6 +1128,10 @@ test.beforeEach(async ({ page }) => {
   await clearStoredTrackPreferences(page);
 });
 
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});
+
 test.afterAll(async () => {
   await stopIntegrationServer(server);
   server = null;
@@ -1985,7 +1994,13 @@ test("subtitle track switch and audio restart keep windowed subtitles correct at
       start: Number(url.searchParams.get("start") || "0"),
       windowStatus: String(url.searchParams.get("window_status") || ""),
     });
-    const response = await route.fetch();
+    let response;
+    try {
+      response = await route.fetch();
+    } catch (error) {
+      if (isClosedRouteError(error)) return;
+      throw error;
+    }
     const payload = await response.json();
     if (url.searchParams.get("window_status") === "seek") {
       payload.loaded_ranges = [{ start_seconds: 0, end_seconds: 24 }];
