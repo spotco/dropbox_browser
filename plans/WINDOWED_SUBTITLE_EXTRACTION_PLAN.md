@@ -220,62 +220,62 @@ Important constraint:
 
 ## Phase 9 - Wire Subtitle Coverage Into The Scrubber / Loaded Range UI
 
-- [ ] Extend the current processed-range display so subtitle coverage can be
+- [x] Extend the current processed-range display so subtitle coverage can be
       shown distinctly from HLS media seekability if needed.
-- [ ] Decide whether to show:
+- [x] Decide whether to show:
       video processed range only, subtitle range only, or a combined “fully
       ready” range for the selected subtitle track.
-- [ ] Ensure the user can tell when playback video is ready but subtitle
+- [x] Ensure the user can tell when playback video is ready but subtitle
       coverage is still catching up.
-- [ ] Keep the UI quiet and utilitarian; avoid adding new decorative controls.
-- [ ] Add browser tests for subtitle-loaded-range updates during startup,
+- [x] Keep the UI quiet and utilitarian; avoid adding new decorative controls.
+- [x] Add browser tests for subtitle-loaded-range updates during startup,
       backfill, and seek-triggered extraction.
 
 ## Phase 10 - Keep Track Switching Behavior Correct
 
-- [ ] Subtitle track switch:
+- [x] Subtitle track switch:
       request the startup/seek window for the newly selected track immediately.
-- [ ] Audio track switch:
+- [x] Audio track switch:
       keep existing HLS restart behavior and ensure subtitle window state is
       preserved or re-requested correctly for the active subtitle track.
-- [ ] Subtitle Off:
+- [x] Subtitle Off:
       clear mounted subtitle state without destroying cached subtitle windows.
-- [ ] Bitmap subtitle selection:
+- [x] Bitmap subtitle selection:
       leave current burn-in compatibility restart behavior unchanged.
-- [ ] Add E2E coverage for subtitle-track switch and audio-track restart while
+- [x] Add E2E coverage for subtitle-track switch and audio-track restart while
       selected subtitles continue to behave correctly.
 
 ## Phase 11 - Observability And Failure Handling
 
-- [ ] Add server diagnostics for subtitle window requests:
+- [x] Add server diagnostics for subtitle window requests:
       path, track, window start/end, cache hit/miss, extraction duration,
       background-backfill scheduling.
-- [ ] Add client diagnostics for subtitle coverage state:
+- [x] Add client diagnostics for subtitle coverage state:
       startup window requested, seek window requested, mount from cache,
       waiting on missing coverage.
-- [ ] Make partial extraction failures visible without silently falling back to
+- [x] Make partial extraction failures visible without silently falling back to
       “no subtitles.”
-- [ ] Ensure the UI makes it clear whether playback is waiting on subtitle
+- [x] Ensure the UI makes it clear whether playback is waiting on subtitle
       extraction versus general video buffering.
 
 ## Phase 12 - Test Matrix
 
-- [ ] Python tests:
+- [x] Python tests:
       window endpoint validation, cache keys, coverage manifests, in-flight
       dedupe, and background backfill behavior.
-- [ ] JS tests:
+- [x] JS tests:
       window cache state, selected-track-first preload, partial mount, seek
       remount, scrubber loaded-range updates.
-- [ ] Video endpoint tests:
+- [x] Video endpoint tests:
       startup window extraction for large text subtitles and seek-window
       extraction at non-zero start times.
-- [ ] E2E tests:
+- [x] E2E tests:
       large-file startup with selected subtitles,
       seek into uncovered subtitle range,
       subtitle-track switch,
       audio-track switch with subtitles preserved,
       bitmap-subtitle behavior unchanged.
-- [ ] Regression check:
+- [x] Regression check:
       current small test fixtures should still behave like “instant startup”
       while large-file fixtures prove that full-track blocking is gone.
 

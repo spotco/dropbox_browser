@@ -588,6 +588,7 @@ function disableNativeSubtitleTracks() {
 }
 
 function clearSubtitleTrack() {
+  if (typeof ctx.clearSubtitleFailureState === 'function') ctx.clearSubtitleFailureState();
   clearSubtitleOverlay();
   if (ctx.els.videoEl) {
     disableNativeSubtitleTracks();
@@ -602,6 +603,7 @@ function clearSubtitleTrack() {
 }
 
 function resetSubtitlesForActiveItemChange(item) {
+  if (typeof ctx.clearSubtitleFailureState === 'function') ctx.clearSubtitleFailureState();
   ctx.renderSubtitleTrackSelector(item, null);
   ctx.reportSubtitleSyncDiagnostic({
     level: 'info',
@@ -695,6 +697,7 @@ function ensureSubtitlesAfterPlaybackReady(reason) {
   var active = ctx.activeQueueItem();
   if (!active || ctx.state.playbackMode !== 'compatibility') return;
   if (ctx.state.seekRestartInProgress) return;
+  if (ctx.state.subtitleFailureState === 'error') return;
   var probePayload = ctx.state.probeCache[active.path || ''] || null;
   if (!subtitlesEnabledForItem(active, probePayload)) return;
   if (selectedBurnedInSubtitleStreamIndex(active, probePayload) !== null) return;
@@ -837,7 +840,18 @@ async function preloadSubtitleWindowForStream(item, subtitleStreamIndex, seekSec
         request.windowStartSeconds,
         request.windowDurationSeconds
       );
-      if (cachedWindows[exactKey]) return cachedWindows[exactKey];
+      if (cachedWindows[exactKey]) {
+        ctx.reportSubtitleSyncDiagnostic({
+          level: 'info',
+          message: 'Subtitle window cache hit',
+          subtitle_stream_index: subtitleStreamIndex,
+          request_window_start_seconds: request.windowStartSeconds,
+          request_window_end_seconds: windowEndSeconds,
+          request_window_status: request.windowStatus,
+          cache_hit: true,
+        });
+        return cachedWindows[exactKey];
+      }
     }
   }
   var inflight = subtitleWindowInFlightForPath(path);
@@ -849,8 +863,30 @@ async function preloadSubtitleWindowForStream(item, subtitleStreamIndex, seekSec
     request.windowStatus,
     request.playbackSyncToken
   );
-  if (inflight[inflightKey]) return inflight[inflightKey];
+  if (inflight[inflightKey]) {
+    ctx.reportSubtitleSyncDiagnostic({
+      level: 'info',
+      message: 'Subtitle window request reused in-flight work',
+      subtitle_stream_index: subtitleStreamIndex,
+      request_window_start_seconds: request.windowStartSeconds,
+      request_window_end_seconds: windowEndSeconds,
+      request_window_status: request.windowStatus,
+      cache_hit: false,
+      inflight_waited: true,
+    });
+    return inflight[inflightKey];
+  }
   var work = (async function () {
+    ctx.reportSubtitleSyncDiagnostic({
+      level: 'info',
+      message: 'Subtitle window request started',
+      subtitle_stream_index: subtitleStreamIndex,
+      request_window_start_seconds: request.windowStartSeconds,
+      request_window_end_seconds: windowEndSeconds,
+      request_window_status: request.windowStatus,
+      cache_hit: false,
+      inflight_waited: false,
+    });
     var response = await fetch(subtitleWindowUrl(item, subtitleStreamIndex, request));
     if (!response.ok) {
       throw new Error('Subtitle window extraction failed for track ' + String(subtitleStreamIndex) + '.');
@@ -861,6 +897,18 @@ async function preloadSubtitleWindowForStream(item, subtitleStreamIndex, seekSec
     }
     storeSubtitleWindowPayload(path, subtitleStreamIndex, payload, {
       background: true,
+    });
+    ctx.reportSubtitleSyncDiagnostic({
+      level: 'info',
+      message: 'Subtitle window request ready',
+      subtitle_stream_index: subtitleStreamIndex,
+      request_window_start_seconds: request.windowStartSeconds,
+      request_window_end_seconds: windowEndSeconds,
+      request_window_status: request.windowStatus,
+      response_window_end_seconds: Number(payload.window_end_seconds) || 0,
+      loaded_range_count: Array.isArray(payload.loaded_ranges) ? payload.loaded_ranges.length : 0,
+      coverage_complete: Boolean(payload.coverage_complete),
+      cache_hit: false,
     });
     return payload;
   })().finally(function () {
@@ -1016,6 +1064,14 @@ function mountSubtitleTrackForItem(item, probePayload, streamIndex, seekSeconds,
     : Math.max(0, Number(options.coverageTargetSeconds) || 0);
   var cachedSource = cachedSubtitleSourceForSeek(item.path || '', normalized, coverageTargetSeconds);
   if (!cachedSource) return false;
+  ctx.reportSubtitleSyncDiagnostic({
+    level: 'info',
+    message: 'Subtitle mount from cache',
+    subtitle_stream_index: normalized,
+    subtitle_fetch_start_seconds: requestedSeek,
+    coverage_target_seconds: coverageTargetSeconds,
+    subtitle_cache_source: cachedSource.sourceType,
+  });
   var rebasedText = rebaseWebVttText(cachedSource.subtitleText, requestedSeek);
   clearSubtitleTrack();
   var subtitleStreams = subtitleStreamsForPayload(payload);
@@ -1112,6 +1168,7 @@ async function applySubtitlesForSeek(item, probePayload, seekSeconds, options) {
     reload_reason: options.reloadReason || '',
     fetch_start_seconds: fetchStartSeconds,
   });
+  if (typeof ctx.clearSubtitleFailureState === 'function') ctx.clearSubtitleFailureState();
   try {
     if (!cachedPayload) {
       cachedPayload = await ctx.ensureSubtitleTracksForItem(item);
@@ -1134,6 +1191,13 @@ async function applySubtitlesForSeek(item, probePayload, seekSeconds, options) {
       if (ctx.state.playbackMode === 'compatibility') {
         ctx.showCompatibilitySubtitleWaitStage(item);
       }
+      ctx.reportSubtitleSyncDiagnostic({
+        level: 'info',
+        message: 'Subtitle waiting on missing coverage',
+        subtitle_stream_index: streamIndex,
+        coverage_target_seconds: coverageTargetSeconds,
+        request_window_status: coverageTargetSeconds > 0 ? 'seek' : 'startup',
+      });
       ctx.setStatus('Loading subtitle track.');
       await preloadSubtitleWindowForStream(item, streamIndex, coverageTargetSeconds, {
         windowStatus: coverageTargetSeconds > 0 ? 'seek' : 'startup',
@@ -1160,6 +1224,23 @@ async function applySubtitlesForSeek(item, probePayload, seekSeconds, options) {
       error_message: error && error.message ? String(error.message) : 'unknown',
       subtitle_stream_index: streamIndex,
     });
+    if (ctx.state.playbackMode === 'compatibility' && typeof ctx.hideLoadingOverlay === 'function') {
+      ctx.hideLoadingOverlay();
+    }
+    if (typeof ctx.showSubtitleFailureState === 'function') {
+      if (!subtitlesAlreadyActive()) {
+        ctx.showSubtitleFailureState({
+          title: 'Subtitle loading failed',
+          meta: 'The selected subtitle track could not be extracted for the requested playback window.',
+        });
+      }
+      else {
+        ctx.showSubtitleFailureState({
+          title: 'Subtitle refresh failed',
+          meta: 'Keeping the previous subtitle window because the requested subtitle range could not be extracted.',
+        });
+      }
+    }
     if (!subtitlesAlreadyActive()) {
       ctx.setStatus('Subtitle extraction failed.');
       ctx.setPlaybackSummary(ctx.activeItemTitle(item), 'Selected subtitle track could not be converted to WebVTT.');

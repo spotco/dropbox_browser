@@ -1905,6 +1905,114 @@ class VideoEndpointTests(AppTestCase):
         self.assertEqual(ffmpeg_copy_commands[1][ffmpeg_copy_commands[1].index("-t") + 1], "301")
         self.assertTrue(later_payload["cache_hit"])
 
+    def test_subtitle_window_request_logs_cache_and_backfill_diagnostics(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        app.video_debug_logs = True
+        ffprobe_payload = {
+            "streams": [
+                {"index": 0, "codec_type": "video", "codec_name": "h264"},
+                {
+                    "index": 3,
+                    "codec_type": "subtitle",
+                    "codec_name": "ass",
+                    "tags": {"language": "eng", "title": "English"},
+                    "disposition": {"default": 1, "forced": 0},
+                },
+            ],
+            "format": {"duration": "600.0"},
+        }
+
+        def fake_subprocess(command, stdout=None, stderr=None, check=False, timeout=None):
+            if "ffprobe" in command[0]:
+                return CompletedProcess(command, 0, json.dumps(ffprobe_payload).encode("utf-8"), b"")
+            if "-c:s" in command and "copy" in command:
+                output_path = Path(command[-1])
+                start_seconds = float(command[command.index("-ss") + 1]) if "-ss" in command else 0.0
+                if start_seconds < 1.0:
+                    output_path.write_text(
+                        "WEBVTT\n\n"
+                        "00:00.500 --> 00:01.500\nStartup overlap\n\n"
+                        "04:59.000 --> 05:00.000\nStartup tail\n",
+                        encoding="utf-8",
+                    )
+                else:
+                    output_path.write_text(
+                        "WEBVTT\n\n"
+                        "00:00.500 --> 00:01.500\nBackfill overlap\n\n"
+                        "00:02.000 --> 00:03.000\nBackfill inside\n",
+                        encoding="utf-8",
+                    )
+                return CompletedProcess(command, 0, b"", b"")
+            if command and command[-1] == "-":
+                input_path = Path(command[command.index("-i") + 1])
+                return CompletedProcess(command, 0, input_path.read_bytes(), b"")
+            return CompletedProcess(command, 0, b"", b"")
+
+        debug_path = self.temp_dir / "video_debug.jsonl"
+        with (
+            patch("dropbox_browser.video.subprocess.run", side_effect=fake_subprocess),
+            patch("dropbox_browser.video.VIDEO_DEBUG_LOG_PATH", debug_path),
+        ):
+            extract_remote_subtitle_window_to_webvtt(
+                app,
+                rel_path="movie.mp4",
+                subtitle_stream_index=3,
+                base_url="http://127.0.0.1:8000",
+                file_size=10,
+                window_start_seconds=0.0,
+                window_duration_seconds=300.0,
+                window_status="startup",
+                playback_sync_token=7,
+            )
+            deadline = time.time() + 2.0
+            while time.time() < deadline and getattr(app, "_subtitle_backfill_jobs", {}):
+                for job in list(getattr(app, "_subtitle_backfill_jobs", {}).values()):
+                    job.join(timeout=0.1)
+                time.sleep(0.01)
+            extract_remote_subtitle_window_to_webvtt(
+                app,
+                rel_path="movie.mp4",
+                subtitle_stream_index=3,
+                base_url="http://127.0.0.1:8000",
+                file_size=10,
+                window_start_seconds=300.0,
+                window_duration_seconds=300.0,
+                window_status="requested",
+                playback_sync_token=7,
+            )
+
+        records = [
+            json.loads(line)
+            for line in debug_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        request_events = [row for row in records if row.get("event") == "subtitle_window_request"]
+        self.assertGreaterEqual(len(request_events), 2)
+        startup_event = next(row for row in request_events if row.get("window_status") == "startup")
+        self.assertFalse(startup_event["cache_hit"])
+        self.assertFalse(startup_event["inflight_waited"])
+        self.assertTrue(startup_event["background_backfill_scheduled"])
+        self.assertEqual(startup_event["request_window_start_seconds"], 0.0)
+        self.assertEqual(startup_event["request_window_end_seconds"], 300.0)
+        self.assertGreaterEqual(startup_event["loaded_range_count"], 1)
+        self.assertIn("extraction_duration_ms", startup_event)
+        cached_event = next(row for row in request_events if row.get("window_status") == "requested")
+        self.assertTrue(cached_event["cache_hit"])
+        self.assertEqual(cached_event["request_window_start_seconds"], 300.0)
+        self.assertEqual(cached_event["request_window_end_seconds"], 600.0)
+        backfill_events = [row for row in records if row.get("event") == "subtitle_window_backfill_scheduled"]
+        self.assertEqual(len(backfill_events), 1)
+        self.assertEqual(backfill_events[0]["subtitle_stream_index"], 3)
+        self.assertEqual(backfill_events[0]["playback_sync_token"], 7)
+
     def test_startup_backfill_stops_when_playback_sync_token_changes(self) -> None:
         rclone = self._remote_media_rclone()
         app = self._build_app(

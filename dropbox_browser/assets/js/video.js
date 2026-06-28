@@ -31,6 +31,9 @@ import {initPane} from './video/pane.js';
       loadingMetaEl: document.getElementById('video-loading-meta'),
       loadingProgressEl: document.getElementById('video-loading-progress-fill'),
       loadingProgressLabelEl: document.getElementById('video-loading-progress-label'),
+      subtitleStatusBannerEl: document.getElementById('video-subtitle-status-banner'),
+      subtitleStatusTitleEl: document.getElementById('video-subtitle-status-title'),
+      subtitleStatusMetaEl: document.getElementById('video-subtitle-status-meta'),
       controlsOverlayEl: document.getElementById('video-controls-overlay'),
       videoEl: document.getElementById('video-player-media'),
       subtitleOverlayEl: document.getElementById('video-subtitle-overlay'),
@@ -131,6 +134,7 @@ import {initPane} from './video/pane.js';
       playbackTiming: null,
       lastControlsRevealPointerKey: '',
       controlsScrubReveal: false,
+      subtitleFailureState: 'idle',
     },
     setStatus: function (text) {
       if (ctx.els.statusEl) ctx.els.statusEl.textContent = text;

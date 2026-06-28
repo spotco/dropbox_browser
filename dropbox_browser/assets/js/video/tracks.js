@@ -398,19 +398,23 @@ async function handleSubtitleTrackChange() {
     return;
   }
   var fetchStartSeconds = Math.max(0, ctx.state.compatibilityStartSeconds || 0);
+  var coverageTargetSeconds = Math.max(0, ctx.currentGlobalPlaybackSeconds() || 0);
   var streamIndex = Number(nextValue);
-  if (ctx.subtitlesAreMounted(active, streamIndex, fetchStartSeconds)) {
+  if (ctx.subtitlesAreMounted(active, streamIndex, fetchStartSeconds, coverageTargetSeconds)) {
     ctx.setStatus('Subtitle track is ready.');
     return;
   }
-  if (ctx.getCachedFullSubtitleVtt(active.path || '', streamIndex)
-    && ctx.mountSubtitleTrackForItem(active, probePayload, streamIndex, fetchStartSeconds, {silent: true})) {
+  if (ctx.mountSubtitleTrackForItem(active, probePayload, streamIndex, fetchStartSeconds, {
+    silent: true,
+    coverageTargetSeconds: coverageTargetSeconds,
+  })) {
     ctx.setStatus('Subtitle track is ready.');
     return;
   }
   ctx.setStatus('Loading subtitle track.');
   await ctx.applySubtitlesForSeek(active, probePayload, fetchStartSeconds, {
     reloadReason: 'subtitle-track-change',
+    coverageTargetSeconds: coverageTargetSeconds,
   });
 }
 

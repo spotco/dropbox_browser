@@ -303,6 +303,34 @@
   z-index: 2;
 }
 
+.video-subtitle-status-banner {
+  background: linear-gradient(180deg, rgba(92, 24, 24, 0.94) 0%, rgba(63, 14, 14, 0.96) 100%);
+  border: 1px solid rgba(206, 110, 110, 0.9);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.34);
+  color: #ffe6e6;
+  left: 16px;
+  max-width: min(480px, calc(100% - 32px));
+  padding: 10px 12px;
+  pointer-events: none;
+  position: absolute;
+  top: 16px;
+  z-index: 4;
+}
+
+.video-subtitle-status-title {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.video-subtitle-status-meta {
+  color: #ffd4d4;
+  font-size: 12px;
+  line-height: 1.35;
+  margin-top: 4px;
+}
+
 .video-playback-stage:not(:fullscreen) .video-player-media::cue {
   font-size: calc(var(--video-subtitle-font-size, 28px) * 0.65);
 }
@@ -527,6 +555,10 @@
 }
 
 .video-progress-slider {
+  --video-progress-media-start: 0%;
+  --video-progress-media-end: 0%;
+  --video-progress-subtitle-start: 0%;
+  --video-progress-subtitle-end: 0%;
   --video-progress-processed-start: 0%;
   --video-progress-processed-end: 0%;
   -webkit-appearance: none;
@@ -568,11 +600,29 @@
     linear-gradient(
       90deg,
       rgba(255, 255, 255, 0.28) 0%,
+      rgba(255, 255, 255, 0.28) var(--video-progress-media-start),
+      rgba(148, 163, 184, 0.52) var(--video-progress-media-start),
+      rgba(148, 163, 184, 0.52) var(--video-progress-media-end),
+      rgba(255, 255, 255, 0.28) var(--video-progress-media-end),
+      rgba(255, 255, 255, 0.28) 100%
+    ),
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      transparent var(--video-progress-subtitle-start),
+      rgba(245, 158, 11, 0.45) var(--video-progress-subtitle-start),
+      rgba(245, 158, 11, 0.45) var(--video-progress-subtitle-end),
+      transparent var(--video-progress-subtitle-end),
+      transparent 100%
+    ),
+    linear-gradient(
+      90deg,
+      transparent 0%,
       rgba(255, 255, 255, 0.28) var(--video-progress-processed-start),
       rgba(255, 255, 255, 0.92) var(--video-progress-processed-start),
       rgba(255, 255, 255, 0.92) var(--video-progress-processed-end),
       rgba(255, 255, 255, 0.28) var(--video-progress-processed-end),
-      rgba(255, 255, 255, 0.28) 100%
+      transparent 100%
     );
 }
 
@@ -605,11 +655,29 @@
     linear-gradient(
       90deg,
       rgba(255, 255, 255, 0.28) 0%,
+      rgba(255, 255, 255, 0.28) var(--video-progress-media-start),
+      rgba(148, 163, 184, 0.52) var(--video-progress-media-start),
+      rgba(148, 163, 184, 0.52) var(--video-progress-media-end),
+      rgba(255, 255, 255, 0.28) var(--video-progress-media-end),
+      rgba(255, 255, 255, 0.28) 100%
+    ),
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      transparent var(--video-progress-subtitle-start),
+      rgba(245, 158, 11, 0.45) var(--video-progress-subtitle-start),
+      rgba(245, 158, 11, 0.45) var(--video-progress-subtitle-end),
+      transparent var(--video-progress-subtitle-end),
+      transparent 100%
+    ),
+    linear-gradient(
+      90deg,
+      transparent 0%,
       rgba(255, 255, 255, 0.28) var(--video-progress-processed-start),
       rgba(255, 255, 255, 0.92) var(--video-progress-processed-start),
       rgba(255, 255, 255, 0.92) var(--video-progress-processed-end),
       rgba(255, 255, 255, 0.28) var(--video-progress-processed-end),
-      rgba(255, 255, 255, 0.28) 100%
+      transparent 100%
     );
 }
 
