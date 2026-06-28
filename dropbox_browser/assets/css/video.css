@@ -599,29 +599,29 @@
   background:
     linear-gradient(
       90deg,
-      rgba(255, 255, 255, 0.28) 0%,
-      rgba(255, 255, 255, 0.28) var(--video-progress-media-start),
-      rgba(148, 163, 184, 0.52) var(--video-progress-media-start),
-      rgba(148, 163, 184, 0.52) var(--video-progress-media-end),
-      rgba(255, 255, 255, 0.28) var(--video-progress-media-end),
-      rgba(255, 255, 255, 0.28) 100%
+      rgba(255, 255, 255, 0.16) 0%,
+      rgba(255, 255, 255, 0.16) var(--video-progress-media-start),
+      rgba(170, 186, 208, 0.6) var(--video-progress-media-start),
+      rgba(170, 186, 208, 0.6) var(--video-progress-media-end),
+      rgba(255, 255, 255, 0.16) var(--video-progress-media-end),
+      rgba(255, 255, 255, 0.16) 100%
     ),
     linear-gradient(
       90deg,
       transparent 0%,
       transparent var(--video-progress-subtitle-start),
-      rgba(245, 158, 11, 0.45) var(--video-progress-subtitle-start),
-      rgba(245, 158, 11, 0.45) var(--video-progress-subtitle-end),
+      rgba(120, 72, 10, 0.78) var(--video-progress-subtitle-start),
+      rgba(120, 72, 10, 0.78) var(--video-progress-subtitle-end),
       transparent var(--video-progress-subtitle-end),
       transparent 100%
     ),
     linear-gradient(
       90deg,
       transparent 0%,
-      rgba(255, 255, 255, 0.28) var(--video-progress-processed-start),
-      rgba(255, 255, 255, 0.92) var(--video-progress-processed-start),
-      rgba(255, 255, 255, 0.92) var(--video-progress-processed-end),
-      rgba(255, 255, 255, 0.28) var(--video-progress-processed-end),
+      rgba(255, 255, 255, 0.52) var(--video-progress-processed-start),
+      rgba(255, 255, 255, 0.98) var(--video-progress-processed-start),
+      rgba(255, 255, 255, 0.98) var(--video-progress-processed-end),
+      rgba(255, 255, 255, 0.52) var(--video-progress-processed-end),
       transparent 100%
     );
 }
@@ -654,29 +654,29 @@
   background:
     linear-gradient(
       90deg,
-      rgba(255, 255, 255, 0.28) 0%,
-      rgba(255, 255, 255, 0.28) var(--video-progress-media-start),
-      rgba(148, 163, 184, 0.52) var(--video-progress-media-start),
-      rgba(148, 163, 184, 0.52) var(--video-progress-media-end),
-      rgba(255, 255, 255, 0.28) var(--video-progress-media-end),
-      rgba(255, 255, 255, 0.28) 100%
+      rgba(255, 255, 255, 0.16) 0%,
+      rgba(255, 255, 255, 0.16) var(--video-progress-media-start),
+      rgba(170, 186, 208, 0.6) var(--video-progress-media-start),
+      rgba(170, 186, 208, 0.6) var(--video-progress-media-end),
+      rgba(255, 255, 255, 0.16) var(--video-progress-media-end),
+      rgba(255, 255, 255, 0.16) 100%
     ),
     linear-gradient(
       90deg,
       transparent 0%,
       transparent var(--video-progress-subtitle-start),
-      rgba(245, 158, 11, 0.45) var(--video-progress-subtitle-start),
-      rgba(245, 158, 11, 0.45) var(--video-progress-subtitle-end),
+      rgba(120, 72, 10, 0.78) var(--video-progress-subtitle-start),
+      rgba(120, 72, 10, 0.78) var(--video-progress-subtitle-end),
       transparent var(--video-progress-subtitle-end),
       transparent 100%
     ),
     linear-gradient(
       90deg,
       transparent 0%,
-      rgba(255, 255, 255, 0.28) var(--video-progress-processed-start),
-      rgba(255, 255, 255, 0.92) var(--video-progress-processed-start),
-      rgba(255, 255, 255, 0.92) var(--video-progress-processed-end),
-      rgba(255, 255, 255, 0.28) var(--video-progress-processed-end),
+      rgba(255, 255, 255, 0.52) var(--video-progress-processed-start),
+      rgba(255, 255, 255, 0.98) var(--video-progress-processed-start),
+      rgba(255, 255, 255, 0.98) var(--video-progress-processed-end),
+      rgba(255, 255, 255, 0.52) var(--video-progress-processed-end),
       transparent 100%
     );
 }

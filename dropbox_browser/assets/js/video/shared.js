@@ -124,7 +124,7 @@ function resetProcessedProgressTrack() {
   ctx.els.progressSliderEl.title = '';
 }
 
-function selectedSubtitleCoverageRangeForPlaybackTarget(targetSeconds) {
+function selectedSubtitleCoverageRangeForPlaybackTarget(duration, targetSeconds) {
   if (ctx.state.playbackMode !== 'compatibility') return null;
   var active = activeQueueItem();
   if (!active || !active.path) return null;
@@ -134,6 +134,17 @@ function selectedSubtitleCoverageRangeForPlaybackTarget(targetSeconds) {
   if (ctx.selectedBurnedInSubtitleStreamIndex(active, probePayload) !== null) return null;
   var streamIndex = ctx.resolvedSubtitleStreamIndex(active, probePayload);
   if (streamIndex === '') return null;
+  if (
+    Number.isFinite(Number(duration))
+    && Number(duration) > 0
+    && typeof ctx.getCachedFullSubtitleVtt === 'function'
+    && ctx.getCachedFullSubtitleVtt(active.path || '', streamIndex)
+  ) {
+    return {
+      start_seconds: 0,
+      end_seconds: Number(duration),
+    };
+  }
   if (typeof ctx.subtitleCoverageRangeForTarget !== 'function') return null;
   return ctx.subtitleCoverageRangeForTarget(active.path || '', streamIndex, targetSeconds);
 }
@@ -154,7 +165,7 @@ function syncProcessedProgressTrack(duration) {
   var focusSeconds = Number.isFinite(Number(ctx.state.requestedSeekSeconds))
     ? Number(ctx.state.requestedSeekSeconds)
     : currentGlobalPlaybackSeconds();
-  var subtitleCoverageRange = selectedSubtitleCoverageRangeForPlaybackTarget(focusSeconds);
+  var subtitleCoverageRange = selectedSubtitleCoverageRangeForPlaybackTarget(duration, focusSeconds);
   var subtitleCoverageState = 'off';
   var subtitleStartPercent = 0;
   var subtitleEndPercent = 0;

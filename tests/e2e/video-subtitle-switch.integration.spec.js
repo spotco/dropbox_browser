@@ -2432,6 +2432,20 @@ async function seedIncompleteProbeCache(request, relPath) {
   return payload;
 }
 
+async function seedCorruptHeaderCache(request, relPath) {
+  const response = await request.post("/__integration/seed-header-cache", {
+    form: {
+      path: relPath,
+      variant: "corrupt",
+    },
+  });
+  expect(response.ok()).toBe(true);
+  const payload = await response.json();
+  expect(payload.status).toBe("seeded");
+  expect(payload.cache_file_exists).toBe(true);
+  return payload;
+}
+
 test("clear cache button recovers track selectors from stale server and client probe cache", async ({ page }) => {
   test.setTimeout(60000);
 
@@ -2572,6 +2586,69 @@ test("ignores incomplete probe disk cache and still loads track selectors", asyn
     audioValue: "1",
     subtitleValue: "3",
   });
+});
+
+test("falls back to probing the remote file when cached header bytes are corrupt", async ({ page }) => {
+  test.setTimeout(60000);
+
+  await installHlsStub(page);
+  const clearResponse = await page.request.post("/video/endpoints/cache/clear");
+  expect(clearResponse.ok()).toBe(true);
+  await seedCorruptHeaderCache(page.request, "Videos/alpha.mkv");
+  await openVideoPane(page);
+
+  const probeResponse = await page.request.get("/video/endpoints/probe?path=Videos%2Falpha.mkv&source=remote");
+  expect(probeResponse.ok()).toBe(true);
+  const probePayload = await probeResponse.json();
+  expect(probePayload.audio_streams).toHaveLength(2);
+  expect(probePayload.subtitle_streams).toHaveLength(3);
+
+  await playLibraryFile(page, "alpha.mkv");
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+  await expectTrackSelectors(page, {
+    audioOptionCount: 2,
+    subtitleOptionCount: 4,
+    audioValue: "1",
+    subtitleValue: "3",
+  });
+});
+
+test("subtitle-ready scrubber tooltip reflects full cached subtitle coverage after reload", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await page.route("**/video/endpoints/probe?path=Videos%2Falpha.mkv&source=remote*", async (route) => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    payload.duration_seconds = 360;
+    await route.fulfill({
+      status: response.status(),
+      headers: response.headers(),
+      contentType: "application/json",
+      body: JSON.stringify(payload),
+    });
+  });
+
+  await installHlsStub(page, { fragmentCount: 60, playlistFragmentCount: 60 });
+  await openVideoPane(page);
+  await playLibraryFile(page, "alpha.mkv");
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+  await waitForMountedSubtitleTrackReady(page, 3);
+
+  await page.reload();
+  await openVideoPane(page);
+  await playLibraryFile(page, "alpha.mkv");
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+  await waitForMountedSubtitleTrackReady(page, 3);
+
+  await expect
+    .poll(async () => {
+      const coverage = await readProgressCoverageState(page);
+      return coverage.title;
+    }, { timeout: 10000 })
+    .toContain("Loaded video: 0:00 - 6:00. Subtitle-ready: 0:00 - 6:00.");
 });
 
 test("video track selections persist across reload and matching track layouts", async ({ page }) => {
