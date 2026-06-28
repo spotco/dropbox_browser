@@ -34,8 +34,11 @@ from dropbox_browser.syncjobs import SyncJobManager
 from dropbox_browser.video import (
     DEFAULT_PROBE_ANALYZE_DURATION_US,
     DEFAULT_PROBE_PROBE_SIZE_BYTES,
+    _header_cache_bytes,
+    _header_cache_store,
     _probe_cache_store,
     _probe_limits,
+    build_header_cache_key,
     build_probe_cache_key,
     probe_payload_is_incomplete,
 )
@@ -236,6 +239,9 @@ class IntegrationRequestHandler(RequestHandler):
         if parsed.path == "/__integration/seed-probe-cache":
             self._handle_seed_probe_cache()
             return
+        if parsed.path == "/__integration/seed-header-cache":
+            self._handle_seed_header_cache()
+            return
         super().do_POST()
 
     def _handle_release_gate(self) -> None:
@@ -309,6 +315,45 @@ class IntegrationRequestHandler(RequestHandler):
                 "cache_key": cache_key,
                 "file_size": file_size,
                 "cache_file_exists": cache_path.is_file(),
+            },
+        )
+
+    def _handle_seed_header_cache(self) -> None:
+        length = int(self.headers.get("Content-Length") or "0")
+        params = parse_qs(self.rfile.read(length).decode("utf-8") if length > 0 else "", keep_blank_values=True)
+        rel_path = clean_rel_path(params.get("path", [""])[0])
+        variant = params.get("variant", ["corrupt"])[0].strip().casefold() or "corrupt"
+        entry = self.integration_state.tree.entries.get(rel_path)
+        if entry is None or entry.get("type") != "file":
+            self._send_json(
+                HTTPStatus.NOT_FOUND,
+                {"status": "error", "message": f"Unknown integration fixture file: {rel_path}"},
+            )
+            return
+        if variant != "corrupt":
+            self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"status": "error", "message": f"Unsupported header cache variant: {variant}"},
+            )
+            return
+        stat_item = self.app.rclone.stat(remote_target(self.app.remote, rel_path))
+        file_size = int(stat_item.get("Size") or len(entry.get("content") or b""))
+        header_bytes = _header_cache_bytes(self.app)
+        cache_key = build_header_cache_key(rel_path, file_size, header_bytes=header_bytes)
+        payload = (b"\x1a\x45\xdf\xa3" + (b"\x00" * 252)) * 64
+        store = _header_cache_store(self.app)
+        cache_path = store.write_bytes(cache_key, payload, suffix=".bin")
+        self._send_json(
+            HTTPStatus.OK,
+            {
+                "status": "seeded",
+                "path": rel_path,
+                "variant": variant,
+                "cache_key": cache_key,
+                "file_size": file_size,
+                "header_bytes": header_bytes,
+                "cache_file_exists": cache_path.is_file(),
+                "cache_size_bytes": cache_path.stat().st_size if cache_path.is_file() else 0,
             },
         )
 

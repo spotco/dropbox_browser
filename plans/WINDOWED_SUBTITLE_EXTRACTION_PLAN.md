@@ -88,184 +88,194 @@ Important constraint:
 
 ## Phase 1 - Define The Windowed Subtitle Contract
 
-- [ ] Define a server-side subtitle window contract:
-      `path`, `track`, `window_start_seconds`, `window_duration_seconds`,
-      `file_size`, `window_status`.
-- [ ] Define client-side subtitle window state:
-      cached windows, in-flight windows, mounted window, loaded subtitle ranges,
-      pending background coverage.
-- [ ] Define exact startup window policy, for example:
-      `0-300s` for initial play and `seek_target +/- small lead/lag` for seeks.
-- [ ] Decide whether windows should overlap slightly to avoid cue-edge gaps
+- [x] Define a server-side subtitle window contract:
+      request payload includes `path`, `track`, `window_start_seconds`,
+      `window_duration_seconds`, `window_end_seconds`, `file_size`,
+      `window_status`; response payload includes `track`,
+      `window_start_seconds`, `window_end_seconds`, `coverage_complete`,
+      `loaded_ranges`, `gap_action`, `window_status`, and `vtt`.
+- [x] Define client-side subtitle window state:
+      `subtitleWindowCacheByPath`, `subtitleWindowInFlightByPath`,
+      `subtitleCoverageByPath`, `subtitleBackgroundCoverageByPath`, and
+      `subtitleMountedWindowByPath`, alongside the existing full-VTT cache.
+- [x] Define exact startup window policy:
+      initial play requests `0-300s`; seek requests use a 300-second window with
+      a 15-second lead and 285-second forward span from the seek target.
+- [x] Decide whether windows should overlap slightly to avoid cue-edge gaps
       across window boundaries.
-- [ ] Decide how subtitle-loaded scrubber state maps onto the existing
+      Use a 1-second overlap when adjacent windows are expanded or merged.
+- [x] Decide how subtitle-loaded scrubber state maps onto the existing
       compatibility processed-range UI.
-- [ ] Document fallback behavior when playback reaches a subtitle gap:
-      wait overlay, keep playing without subtitles briefly, or pause-until-ready.
-- [ ] Keep the invariant explicit: selected subtitles must remain correct, even
+      Keep subtitle coverage as a separate tracked range and later render the
+      scrubber's "fully ready" state as the intersection of HLS processed media
+      and selected-track subtitle coverage.
+- [x] Document fallback behavior when playback reaches a subtitle gap:
+      pause-until-ready, using the existing compatibility loading overlay so
+      selected subtitles stay correct instead of silently disappearing.
+- [x] Keep the invariant explicit: selected subtitles must remain correct, even
       if that means showing a load state while the next window is extracted.
 
 ## Phase 2 - Add Server Window Extraction Endpoints
 
-- [ ] Add a text-subtitle window endpoint, for example:
+- [x] Add a text-subtitle window endpoint, for example:
       `/video/endpoints/subtitles/window?path=...&track=...&start=...&duration=...`.
-- [ ] Validate window parameters and clamp them against media duration.
-- [ ] Reuse probe metadata already used by video/subtitle extraction to resolve
+- [x] Validate window parameters and clamp them against media duration.
+- [x] Reuse probe metadata already used by video/subtitle extraction to resolve
       subtitle track codec, compatibility, and duration.
-- [ ] Reuse the same remote input strategy as current video/subtitle extraction;
+- [x] Reuse the same remote input strategy as current video/subtitle extraction;
       do not add a separate subtitle-only Dropbox listing path.
-- [ ] Add a response payload that includes:
+- [x] Add a response payload that includes:
       `status`, `track`, `window_start_seconds`, `window_end_seconds`,
       `coverage_complete`, `vtt`, and optional loaded-range metadata.
 - [ ] Make the endpoint return partial success cleanly when the requested window
       is valid but full-track extraction is not yet complete.
-- [ ] Add tests for path validation, window clamping, and response structure.
+- [x] Add tests for path validation, window clamping, and response structure.
 
 ## Phase 3 - Add Window-Aware Server Cache
 
-- [ ] Replace the implicit full-track-only subtitle cache assumption with a
+- [x] Replace the implicit full-track-only subtitle cache assumption with a
       window-aware cache design.
-- [ ] Define subtitle cache keys that include:
+- [x] Define subtitle cache keys that include:
       `rel_path`, `subtitle_stream_index`, `file_size`, `window_start_seconds`,
       `window_duration_seconds`, and cache version.
-- [ ] Add a small manifest/index per subtitle track that records which time
+- [x] Add a small manifest/index per subtitle track that records which time
       windows are already cached.
-- [ ] Add helpers to query whether a requested subtitle window is fully covered.
-- [ ] Add helpers to merge adjacent cached coverage ranges for scrubber display.
-- [ ] Preserve the existing disk-cache TTL / max-bytes behavior for subtitle
+- [x] Add helpers to query whether a requested subtitle window is fully covered.
+- [x] Add helpers to merge adjacent cached coverage ranges for scrubber display.
+- [x] Preserve the existing disk-cache TTL / max-bytes behavior for subtitle
       windows.
-- [ ] Add tests for cache-key stability, coverage-range merging, and manifest
+- [x] Add tests for cache-key stability, coverage-range merging, and manifest
       persistence.
 
 ## Phase 4 - Add Windowed Extraction Implementation
 
-- [ ] Add ffmpeg command builders for subtitle window extraction using the same
+- [x] Add ffmpeg command builders for subtitle window extraction using the same
       remote input path as current extraction.
-- [ ] Pass `start_time_seconds` through the actual subtitle extraction path
+- [x] Pass `start_time_seconds` through the actual subtitle extraction path
       instead of only supporting it in helper signatures.
-- [ ] Add an end/window bound strategy so extraction does not materialize the
+- [x] Add an end/window bound strategy so extraction does not materialize the
       full subtitle track for startup windows.
-- [ ] Keep copy-demux-first behavior for ASS / SRT / WebVTT-compatible text
+- [x] Keep copy-demux-first behavior for ASS / SRT / WebVTT-compatible text
       subtitle codecs where possible.
-- [ ] Ensure the extracted WebVTT timestamps remain valid for mounting at the
+- [x] Ensure the extracted WebVTT timestamps remain valid for mounting at the
       requested playback window.
-- [ ] Verify that requested windows include the first needed visible cues at
+- [x] Verify that requested windows include the first needed visible cues at
       startup and around seeks.
-- [ ] Add tests that confirm a startup request extracts only the first window
+- [x] Add tests that confirm a startup request extracts only the first window
       and that later windows can be requested independently.
 
 ## Phase 5 - Add Server In-Flight Dedupe And Background Backfill
 
-- [ ] Add in-flight dedupe keyed by subtitle track + window so duplicate
+- [x] Add in-flight dedupe keyed by subtitle track + window so duplicate
       requests do not trigger duplicate remote scans.
-- [ ] Add a background backfill mechanism to continue extracting future windows
+- [x] Add a background backfill mechanism to continue extracting future windows
       after startup window extraction succeeds.
-- [ ] Ensure background work can be canceled or ignored safely when the active
+- [x] Ensure background work can be canceled or ignored safely when the active
       item, subtitle track, or playback sync token changes.
-- [ ] Ensure audio-track restarts and subtitle-track changes do not reuse stale
+- [x] Ensure audio-track restarts and subtitle-track changes do not reuse stale
       subtitle-window jobs from a different track selection.
-- [ ] Add tests covering duplicate requests, cancellation/staleness, and
+- [x] Add tests covering duplicate requests, cancellation/staleness, and
       background backfill sequencing.
 
 ## Phase 6 - Change Client Startup From Full-Track Warmup To Windowed Warmup
 
-- [ ] Replace `preloadAllSubtitleVttsForItem()` startup dependence with a
+- [x] Replace `preloadAllSubtitleVttsForItem()` startup dependence with a
       selected/default-track window preload path.
-- [ ] Keep all-track warmup off the critical startup path.
-- [ ] Add client state for subtitle windows in flight, cached subtitle coverage,
+- [x] Keep all-track warmup off the critical startup path.
+- [x] Add client state for subtitle windows in flight, cached subtitle coverage,
       and mounted coverage for the active track.
-- [ ] Request only the initial subtitle window before first mount.
-- [ ] Keep `waitForCompatibilityStartupSubtitles()` blocking only on the first
+- [x] Request only the initial subtitle window before first mount.
+- [x] Keep `waitForCompatibilityStartupSubtitles()` blocking only on the first
       required startup window, not the entire track or all compatible tracks.
-- [ ] Keep the current subtitle loading overlay/status behavior, but scope it to
+- [x] Keep the current subtitle loading overlay/status behavior, but scope it to
       “startup window not ready yet” instead of “full subtitle track missing.”
-- [ ] Add focused JS tests for startup window fetch and reduced preload scope.
+- [x] Add focused JS tests for startup window fetch and reduced preload scope.
 
 ## Phase 7 - Teach Mounting And Debug Logic To Work With Partial Tracks
 
-- [ ] Update `mountSubtitleTrackForItem()` so it can mount a partial/windowed
+- [x] Update `mountSubtitleTrackForItem()` so it can mount a partial/windowed
       VTT, not only a full-track blob.
-- [ ] Update browser subtitle cache helpers so they store windowed VTT text and
+- [x] Update browser subtitle cache helpers so they store windowed VTT text and
       coverage metadata instead of only one full VTT string per track.
-- [ ] Update `updateSubtitleDebugForStream()` and related debug helpers so they
+- [x] Update `updateSubtitleDebugForStream()` and related debug helpers so they
       tolerate partial subtitle coverage.
-- [ ] Preserve correct subtitle cue timing after rebasing windowed VTT text for
+- [x] Preserve correct subtitle cue timing after rebasing windowed VTT text for
       the current seek start.
-- [ ] Add tests covering mount success from a partial window and cue/debug
+- [x] Add tests covering mount success from a partial window and cue/debug
       behavior inside and outside the covered range.
 
 ## Phase 8 - Add Seek-Time Window Fetch And Coverage Expansion
 
-- [ ] When playback seeks, detect whether subtitle coverage already exists for
+- [x] When playback seeks, detect whether subtitle coverage already exists for
       the target time.
-- [ ] If covered, remount immediately from cached subtitle windows.
-- [ ] If not covered, request the needed subtitle window for the seek target.
-- [ ] Reflect missing subtitle coverage in the scrubber loaded-range UI before
+- [x] If covered, remount immediately from cached subtitle windows.
+- [x] If not covered, request the needed subtitle window for the seek target.
+- [x] Reflect missing subtitle coverage in the scrubber loaded-range UI before
       the new window is ready.
-- [ ] Show a subtitle loading state when the user scrubs into an uncovered range
+- [x] Show a subtitle loading state when the user scrubs into an uncovered range
       and the selected subtitle track must still be honored.
-- [ ] Resume normal subtitle display automatically once the new window arrives.
-- [ ] Add tests covering in-range seek, out-of-range seek, and repeated seeks
+- [x] Resume normal subtitle display automatically once the new window arrives.
+- [x] Add tests covering in-range seek, out-of-range seek, and repeated seeks
       into already-cached windows.
 
 ## Phase 9 - Wire Subtitle Coverage Into The Scrubber / Loaded Range UI
 
-- [ ] Extend the current processed-range display so subtitle coverage can be
+- [x] Extend the current processed-range display so subtitle coverage can be
       shown distinctly from HLS media seekability if needed.
-- [ ] Decide whether to show:
+- [x] Decide whether to show:
       video processed range only, subtitle range only, or a combined “fully
       ready” range for the selected subtitle track.
-- [ ] Ensure the user can tell when playback video is ready but subtitle
+- [x] Ensure the user can tell when playback video is ready but subtitle
       coverage is still catching up.
-- [ ] Keep the UI quiet and utilitarian; avoid adding new decorative controls.
-- [ ] Add browser tests for subtitle-loaded-range updates during startup,
+- [x] Keep the UI quiet and utilitarian; avoid adding new decorative controls.
+- [x] Add browser tests for subtitle-loaded-range updates during startup,
       backfill, and seek-triggered extraction.
 
 ## Phase 10 - Keep Track Switching Behavior Correct
 
-- [ ] Subtitle track switch:
+- [x] Subtitle track switch:
       request the startup/seek window for the newly selected track immediately.
-- [ ] Audio track switch:
+- [x] Audio track switch:
       keep existing HLS restart behavior and ensure subtitle window state is
       preserved or re-requested correctly for the active subtitle track.
-- [ ] Subtitle Off:
+- [x] Subtitle Off:
       clear mounted subtitle state without destroying cached subtitle windows.
-- [ ] Bitmap subtitle selection:
+- [x] Bitmap subtitle selection:
       leave current burn-in compatibility restart behavior unchanged.
-- [ ] Add E2E coverage for subtitle-track switch and audio-track restart while
+- [x] Add E2E coverage for subtitle-track switch and audio-track restart while
       selected subtitles continue to behave correctly.
 
 ## Phase 11 - Observability And Failure Handling
 
-- [ ] Add server diagnostics for subtitle window requests:
+- [x] Add server diagnostics for subtitle window requests:
       path, track, window start/end, cache hit/miss, extraction duration,
       background-backfill scheduling.
-- [ ] Add client diagnostics for subtitle coverage state:
+- [x] Add client diagnostics for subtitle coverage state:
       startup window requested, seek window requested, mount from cache,
       waiting on missing coverage.
-- [ ] Make partial extraction failures visible without silently falling back to
+- [x] Make partial extraction failures visible without silently falling back to
       “no subtitles.”
-- [ ] Ensure the UI makes it clear whether playback is waiting on subtitle
+- [x] Ensure the UI makes it clear whether playback is waiting on subtitle
       extraction versus general video buffering.
 
 ## Phase 12 - Test Matrix
 
-- [ ] Python tests:
+- [x] Python tests:
       window endpoint validation, cache keys, coverage manifests, in-flight
       dedupe, and background backfill behavior.
-- [ ] JS tests:
+- [x] JS tests:
       window cache state, selected-track-first preload, partial mount, seek
       remount, scrubber loaded-range updates.
-- [ ] Video endpoint tests:
+- [x] Video endpoint tests:
       startup window extraction for large text subtitles and seek-window
       extraction at non-zero start times.
-- [ ] E2E tests:
+- [x] E2E tests:
       large-file startup with selected subtitles,
       seek into uncovered subtitle range,
       subtitle-track switch,
       audio-track switch with subtitles preserved,
       bitmap-subtitle behavior unchanged.
-- [ ] Regression check:
+- [x] Regression check:
       current small test fixtures should still behave like “instant startup”
       while large-file fixtures prove that full-track blocking is gone.
 

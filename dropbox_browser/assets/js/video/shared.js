@@ -82,19 +82,134 @@ function setPlaybackSummary(title, meta) {
   if (ctx.els.metaEl) ctx.els.metaEl.textContent = meta;
 }
 
+function clearSubtitleFailureState() {
+  ctx.state.subtitleFailureState = 'idle';
+  if (ctx.els.subtitleStatusTitleEl) ctx.els.subtitleStatusTitleEl.textContent = '';
+  if (ctx.els.subtitleStatusMetaEl) ctx.els.subtitleStatusMetaEl.textContent = '';
+  if (ctx.els.subtitleStatusBannerEl) setStageLayerVisibility(ctx.els.subtitleStatusBannerEl, false);
+  if (ctx.els.playbackStageEl) ctx.els.playbackStageEl.setAttribute('data-subtitle-state', 'idle');
+  if (ctx.els.subtitleTrackSelectEl) {
+    ctx.els.subtitleTrackSelectEl.setAttribute('data-subtitle-state', 'idle');
+    ctx.els.subtitleTrackSelectEl.removeAttribute('title');
+  }
+}
+
+function showSubtitleFailureState(options) {
+  var title = options && typeof options.title === 'string'
+    ? options.title
+    : 'Subtitle loading failed';
+  var meta = options && typeof options.meta === 'string'
+    ? options.meta
+    : 'The selected subtitle window could not be extracted.';
+  ctx.state.subtitleFailureState = 'error';
+  if (ctx.els.subtitleStatusTitleEl) ctx.els.subtitleStatusTitleEl.textContent = title;
+  if (ctx.els.subtitleStatusMetaEl) ctx.els.subtitleStatusMetaEl.textContent = meta;
+  if (ctx.els.subtitleStatusBannerEl) setStageLayerVisibility(ctx.els.subtitleStatusBannerEl, true);
+  if (ctx.els.playbackStageEl) ctx.els.playbackStageEl.setAttribute('data-subtitle-state', 'error');
+  if (ctx.els.subtitleTrackSelectEl) {
+    ctx.els.subtitleTrackSelectEl.setAttribute('data-subtitle-state', 'error');
+    ctx.els.subtitleTrackSelectEl.title = meta;
+  }
+}
+
 function resetProcessedProgressTrack() {
   if (!ctx.els.progressSliderEl) return;
+  ctx.els.progressSliderEl.style.setProperty('--video-progress-media-start', '0%');
+  ctx.els.progressSliderEl.style.setProperty('--video-progress-media-end', '0%');
+  ctx.els.progressSliderEl.style.setProperty('--video-progress-subtitle-start', '0%');
+  ctx.els.progressSliderEl.style.setProperty('--video-progress-subtitle-end', '0%');
   ctx.els.progressSliderEl.style.setProperty('--video-progress-processed-start', '0%');
   ctx.els.progressSliderEl.style.setProperty('--video-progress-processed-end', '0%');
+  ctx.els.progressSliderEl.removeAttribute('data-subtitle-coverage-state');
+  ctx.els.progressSliderEl.title = '';
+}
+
+function selectedSubtitleCoverageRangeForPlaybackTarget(duration, targetSeconds) {
+  if (ctx.state.playbackMode !== 'compatibility') return null;
+  var active = activeQueueItem();
+  if (!active || !active.path) return null;
+  var probePayload = ctx.state.probeCache[active.path || ''] || null;
+  if (!probePayload) return null;
+  if (!ctx.subtitlesEnabledForItem(active, probePayload)) return null;
+  if (ctx.selectedBurnedInSubtitleStreamIndex(active, probePayload) !== null) return null;
+  var streamIndex = ctx.resolvedSubtitleStreamIndex(active, probePayload);
+  if (streamIndex === '') return null;
+  if (
+    Number.isFinite(Number(duration))
+    && Number(duration) > 0
+    && typeof ctx.getCachedFullSubtitleVtt === 'function'
+    && ctx.getCachedFullSubtitleVtt(active.path || '', streamIndex)
+  ) {
+    return {
+      start_seconds: 0,
+      end_seconds: Number(duration),
+    };
+  }
+  if (typeof ctx.subtitleCoverageRangeForTarget !== 'function') return null;
+  return ctx.subtitleCoverageRangeForTarget(active.path || '', streamIndex, targetSeconds);
 }
 
 function syncProcessedProgressTrack(duration) {
   if (!ctx.els.progressSliderEl) return;
-  var processedRange = compatibilitySeekableRange({
+  var mediaRange = compatibilitySeekableRange({
     durationSeconds: duration,
     sessionStartSeconds: ctx.state.compatibilityStartSeconds,
     seekableRanges: ctx.compatibilitySeekableRanges(),
   });
+  var processedRange = {
+    startSeconds: mediaRange.startSeconds,
+    endSeconds: mediaRange.endSeconds,
+    startPercent: mediaRange.startPercent,
+    endPercent: mediaRange.endPercent,
+  };
+  var focusSeconds = Number.isFinite(Number(ctx.state.requestedSeekSeconds))
+    ? Number(ctx.state.requestedSeekSeconds)
+    : currentGlobalPlaybackSeconds();
+  var subtitleCoverageRange = selectedSubtitleCoverageRangeForPlaybackTarget(duration, focusSeconds);
+  var subtitleCoverageState = 'off';
+  var subtitleStartPercent = 0;
+  var subtitleEndPercent = 0;
+  if (subtitleCoverageRange) {
+    var subtitleStartSeconds = Math.max(0, Number(subtitleCoverageRange.start_seconds) || 0);
+    var subtitleEndSeconds = Math.max(0, Number(subtitleCoverageRange.end_seconds) || 0);
+    subtitleStartPercent = duration > 0 ? (subtitleStartSeconds / duration) * 100 : 0;
+    subtitleEndPercent = duration > 0 ? (subtitleEndSeconds / duration) * 100 : 0;
+    subtitleCoverageState = (
+      Math.abs(subtitleStartSeconds - mediaRange.startSeconds) <= 0.25
+      && Math.abs(subtitleEndSeconds - mediaRange.endSeconds) <= 0.25
+    )
+      ? 'full'
+      : 'limited';
+    processedRange.startSeconds = Math.max(
+      processedRange.startSeconds,
+      subtitleStartSeconds
+    );
+    processedRange.endSeconds = Math.min(
+      processedRange.endSeconds,
+      subtitleEndSeconds
+    );
+    if (processedRange.endSeconds < processedRange.startSeconds) {
+      processedRange.endSeconds = processedRange.startSeconds;
+    }
+    processedRange.startPercent = duration > 0 ? (processedRange.startSeconds / duration) * 100 : 0;
+    processedRange.endPercent = duration > 0 ? (processedRange.endSeconds / duration) * 100 : 0;
+  }
+  ctx.els.progressSliderEl.style.setProperty(
+    '--video-progress-media-start',
+    mediaRange.startPercent.toFixed(3) + '%'
+  );
+  ctx.els.progressSliderEl.style.setProperty(
+    '--video-progress-media-end',
+    mediaRange.endPercent.toFixed(3) + '%'
+  );
+  ctx.els.progressSliderEl.style.setProperty(
+    '--video-progress-subtitle-start',
+    subtitleStartPercent.toFixed(3) + '%'
+  );
+  ctx.els.progressSliderEl.style.setProperty(
+    '--video-progress-subtitle-end',
+    subtitleEndPercent.toFixed(3) + '%'
+  );
   ctx.els.progressSliderEl.style.setProperty(
     '--video-progress-processed-start',
     processedRange.startPercent.toFixed(3) + '%'
@@ -103,6 +218,28 @@ function syncProcessedProgressTrack(duration) {
     '--video-progress-processed-end',
     processedRange.endPercent.toFixed(3) + '%'
   );
+  ctx.els.progressSliderEl.setAttribute('data-subtitle-coverage-state', subtitleCoverageState);
+  if (subtitleCoverageRange) {
+    ctx.els.progressSliderEl.title = 'Loaded video: '
+      + formatNativePlaybackTime(mediaRange.startSeconds)
+      + ' - '
+      + formatNativePlaybackTime(mediaRange.endSeconds)
+      + '. Subtitle-ready: '
+      + formatNativePlaybackTime(Math.max(0, Number(subtitleCoverageRange.start_seconds) || 0))
+      + ' - '
+      + formatNativePlaybackTime(Math.max(0, Number(subtitleCoverageRange.end_seconds) || 0))
+      + '.';
+  }
+  else if (ctx.state.playbackMode === 'compatibility') {
+    ctx.els.progressSliderEl.title = 'Loaded video: '
+      + formatNativePlaybackTime(mediaRange.startSeconds)
+      + ' - '
+      + formatNativePlaybackTime(mediaRange.endSeconds)
+      + '.';
+  }
+  else {
+    ctx.els.progressSliderEl.title = '';
+  }
 }
 
 function currentProcessedRangeSnapshot(targetSeconds, durationOverride) {
@@ -142,6 +279,7 @@ function currentProcessedRangeSnapshot(targetSeconds, durationOverride) {
 function updateLoadingOverlay(visible, options) {
   var title = options && typeof options.title === 'string' ? options.title : 'Preparing playback';
   var meta = options && typeof options.meta === 'string' ? options.meta : '';
+  var reason = options && typeof options.reason === 'string' ? options.reason : 'general';
   var progressValue = options ? Number(options.progress) : NaN;
   if (
     visible
@@ -149,6 +287,7 @@ function updateLoadingOverlay(visible, options) {
   ) {
     title = activeItemTitle(activeQueueItem());
     meta = COMPATIBILITY_SUBTITLE_WAIT_META;
+    reason = 'subtitle-wait';
     progressValue = 0.84;
     ctx.state.compatibilitySubtitleWaitStageActive = true;
   }
@@ -170,11 +309,13 @@ function updateLoadingOverlay(visible, options) {
       setStageLayerVisibility(ctx.els.loadingOverlayEl, false);
     }
     ctx.els.loadingOverlayEl.setAttribute('aria-busy', visible ? 'true' : 'false');
+    ctx.els.loadingOverlayEl.setAttribute('data-loading-reason', visible ? reason : 'idle');
     var progressHost = ctx.els.loadingOverlayEl.querySelector('.video-loading-progress');
     if (progressHost) progressHost.setAttribute('aria-valuenow', String(progressPercent));
   }
   if (ctx.els.playbackStageEl) {
     ctx.els.playbackStageEl.setAttribute('data-loading-state', visible ? 'active' : 'idle');
+    ctx.els.playbackStageEl.setAttribute('data-loading-reason', visible ? reason : 'idle');
   }
   ctx.state.loadingOverlayVisible = visible;
   ctx.state.loadingOverlayMeta = visible ? meta : '';
@@ -274,6 +415,7 @@ function formatPlaybackTime(totalSeconds) {
 
 function showPlaybackPlaceholder(title, meta) {
   hideLoadingOverlay();
+  clearSubtitleFailureState();
   hideVideoElement();
   showPlaceholderElement();
   setPlaybackSummary(title, meta);
@@ -310,6 +452,7 @@ function loadingOverlayCopy(item, meta, progress) {
     title: activeItemTitle(item),
     meta: meta,
     progress: progress,
+    reason: 'general',
   };
 }
 
@@ -361,4 +504,6 @@ function escapeHtml(value) {
   ctx.loadingOverlayCopy = loadingOverlayCopy;
   ctx.playbackSyncTokenIsCurrent = playbackSyncTokenIsCurrent;
   ctx.escapeHtml = escapeHtml;
+  ctx.clearSubtitleFailureState = clearSubtitleFailureState;
+  ctx.showSubtitleFailureState = showSubtitleFailureState;
 }
