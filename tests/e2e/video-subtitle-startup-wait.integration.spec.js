@@ -33,6 +33,7 @@ const LOADING_OVERLAY_MONITOR = () => {
     const entry = {
       reason,
       visible: isVisible(overlay),
+      loadingReason: overlay ? String(overlay.getAttribute("data-loading-reason") || "") : "",
       title: title ? String(title.textContent || "").trim() : "",
       meta: meta ? String(meta.textContent || "").trim() : "",
     };
@@ -41,6 +42,7 @@ const LOADING_OVERLAY_MONITOR = () => {
     if (
       !previous
       || previous.visible !== entry.visible
+      || previous.loadingReason !== entry.loadingReason
       || previous.title !== entry.title
       || previous.meta !== entry.meta
     ) {
@@ -213,6 +215,23 @@ async function readPlaybackState(page) {
   });
 }
 
+async function readProgressCoverageState(page) {
+  return page.evaluate(() => {
+    const slider = document.getElementById("video-progress-slider");
+    const style = slider ? window.getComputedStyle(slider) : null;
+    return {
+      mediaStart: style ? String(style.getPropertyValue("--video-progress-media-start") || "").trim() : "",
+      mediaEnd: style ? String(style.getPropertyValue("--video-progress-media-end") || "").trim() : "",
+      subtitleStart: style ? String(style.getPropertyValue("--video-progress-subtitle-start") || "").trim() : "",
+      subtitleEnd: style ? String(style.getPropertyValue("--video-progress-subtitle-end") || "").trim() : "",
+      processedStart: style ? String(style.getPropertyValue("--video-progress-processed-start") || "").trim() : "",
+      processedEnd: style ? String(style.getPropertyValue("--video-progress-processed-end") || "").trim() : "",
+      subtitleCoverageState: slider ? String(slider.getAttribute("data-subtitle-coverage-state") || "") : "",
+      title: slider ? String(slider.getAttribute("title") || "") : "",
+    };
+  });
+}
+
 async function readPlayToggleState(page) {
   return page.evaluate(() => {
     const button = document.getElementById("video-play-toggle");
@@ -304,12 +323,15 @@ test("compatibility playback waits for delayed subtitle extraction before starti
       const history = await readOverlayHistory(page);
       return history.some((entry) => {
         return entry.visible && (
-          String(entry.title || "").includes("Waiting for subtitles")
+          String(entry.loadingReason || "") === "subtitle-wait"
+          || String(entry.title || "").includes("Waiting for subtitles")
           || String(entry.meta || "").includes("Waiting for subtitles")
         );
       });
     }, { timeout: 10000 })
     .toBe(true);
+  const overlayHistory = await readOverlayHistory(page);
+  expect(overlayHistory.some((entry) => entry.visible && entry.loadingReason === "subtitle-wait")).toBe(true);
   const duringWaitPlayback = await readPlaybackState(page);
   expect(duringWaitPlayback).toMatchObject({
     paused: true,
@@ -320,4 +342,48 @@ test("compatibility playback waits for delayed subtitle extraction before starti
   await waitForLoadingOverlayHidden(page);
   await waitForVisibleVideo(page);
   await expectPlayToggleState(page, "Pause");
+});
+
+test("startup scrubber reflects full cached subtitle coverage after delayed extraction finishes", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await page.route("**/video/endpoints/subtitles/window?**path=Videos%2Falpha.mkv**", async (route) => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    payload.loaded_ranges = [{ start_seconds: 0, end_seconds: 3 }];
+    payload.window_end_seconds = 3;
+    await route.fulfill({
+      status: response.status(),
+      headers: response.headers(),
+      contentType: "application/json",
+      body: JSON.stringify(payload),
+    });
+  });
+
+  await installHlsStub(page);
+  await openVideoPane(page);
+  const clearResponse = await page.request.post("/video/endpoints/cache/clear");
+  expect(clearResponse.ok()).toBe(true);
+
+  const initialSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
+  await (await libraryRow(page, "alpha.mkv")).dblclick();
+  await initialSession;
+  await waitForMountedSubtitleTrack(page, 3);
+  await waitForLoadingOverlayHidden(page);
+
+  await expect
+    .poll(async () => readProgressCoverageState(page), { timeout: 10000 })
+    .toMatchObject({
+      mediaStart: "0.000%",
+      mediaEnd: "100.000%",
+      subtitleStart: "0.000%",
+      processedStart: "0.000%",
+      subtitleCoverageState: "full",
+    });
+
+  const coverage = await readProgressCoverageState(page);
+  expect(Number.parseFloat(coverage.subtitleEnd)).toBeCloseTo(Number.parseFloat(coverage.mediaEnd), 3);
+  expect(Number.parseFloat(coverage.processedEnd)).toBeCloseTo(Number.parseFloat(coverage.mediaEnd), 3);
+  expect(coverage.title).toContain("Loaded video:");
+  expect(coverage.title).toContain("Subtitle-ready:");
 });

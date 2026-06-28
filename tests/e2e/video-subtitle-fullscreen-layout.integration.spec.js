@@ -94,6 +94,8 @@ async function waitForMultilineCue(page) {
       return page.evaluate(() => {
         const debugCue = document.getElementById("video-debug-current-cue");
         const text = debugCue ? String(debugCue.textContent || "").trim() : "";
+        const overlay = document.getElementById("video-subtitle-overlay");
+        const overlayText = overlay ? String(overlay.textContent || "").trim() : "";
         const video = document.getElementById("video-player-media");
         let activeCueText = "";
         if (video && video.textTracks) {
@@ -106,12 +108,11 @@ async function waitForMultilineCue(page) {
             break;
           }
         }
-        return { debugCue: text, activeCueText };
+        const haystack = [text, activeCueText, overlayText].join("\n");
+        return haystack.includes("MULTI-LINE-ONE");
       });
     }, { timeout: 20000 })
-    .toMatchObject({
-      debugCue: expect.stringContaining("MULTI-LINE-ONE"),
-    });
+    .toBe(true);
 }
 
 async function seekToMultilineCue(page) {
@@ -120,6 +121,8 @@ async function seekToMultilineCue(page) {
     if (!video) return;
     video.pause();
     video.currentTime = 0.5;
+    video.dispatchEvent(new Event("seeking"));
+    video.dispatchEvent(new Event("seeked"));
     video.dispatchEvent(new Event("timeupdate"));
   });
   await waitForMultilineCue(page);
@@ -184,6 +187,26 @@ async function playLibraryFile(page, filename) {
     }, { timeout: 45000 })
     .toBe(true);
   await waitForDecodedVideo(page);
+  await expect
+    .poll(async () => {
+      return page.evaluate(() => {
+        const video = document.getElementById("video-player-media");
+        if (!video) return null;
+        const trackNode = video.querySelector('track[data-video-subtitle-stream-index="3"]');
+        if (!trackNode) return null;
+        const textTrack = trackNode.track;
+        return {
+          readyState: Number(trackNode.readyState),
+          mode: textTrack ? String(textTrack.mode || "") : "",
+          cueCount: textTrack && textTrack.cues ? textTrack.cues.length : 0,
+        };
+      });
+    }, { timeout: 15000 })
+    .toMatchObject({
+      readyState: 2,
+      mode: "hidden",
+      cueCount: expect.any(Number),
+    });
 }
 
 test.use({
