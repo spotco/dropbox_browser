@@ -64,11 +64,17 @@ Video-related config in `config.json` / `config_local.json`:
 - `VideoFFmpegProcessPriority` — Windows-only ffmpeg process priority:
   `below_normal` by default, with `idle` and `normal` also accepted.
 
+Current shipped defaults are tuned from the checked-in CPU benchmark matrix:
+`readrate=1.1`, `initial_burst=18`, `catchup=1.3`, `threads=2`,
+`filter_threads=1`, and Windows priority `below_normal`.
+
 Pacing values are clamped conservatively in config loading. A read rate of `0`
 or blank disables ffmpeg input pacing entirely and omits the related flags.
 Thread values of `0` or blank keep ffmpeg's automatic thread behavior. Lower
 fixed thread counts can reduce peak CPU use, but may make realtime encoding
-impossible on slower machines or more complex files.
+impossible on slower machines or more complex files. The shipped `2 / 1`
+thread defaults were chosen because they kept the Surface Book 3 HEVC transcode
+case above realtime while reducing CPU compared with auto-thread pacing.
 On Windows, process priority can make the desktop more responsive while ffmpeg
 runs. It does not reduce total encode work; it only changes scheduling priority.
 
