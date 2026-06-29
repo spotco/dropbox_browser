@@ -157,7 +157,11 @@ export function compatibilityRecoveryRequiresSessionRestart(reason) {
   var normalized = String(reason || '');
   return normalized === 'hls-missing-segment'
     || normalized === 'hls-fatal-error'
+    || normalized === 'hls-media-copy-fallback'
+    || normalized === 'hls-media-audio-copy-fallback'
     || normalized === 'media-element-error'
+    || normalized === 'media-element-copy-fallback'
+    || normalized === 'media-element-audio-copy-fallback'
     || normalized === 'restart-failed'
     || normalized === 'initial-start-failed';
 }

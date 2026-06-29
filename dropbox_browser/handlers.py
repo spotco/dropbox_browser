@@ -1107,20 +1107,25 @@ class RequestHandler(BaseHTTPRequestHandler):
             if source != "remote":
                 raise BrowserError(HTTPStatus.BAD_REQUEST, "Only remote video compatibility playback is supported.")
             rel_path = clean_rel_path(params.get("path", [""])[0])
-            resolved_rel_path, _file_size = self._resolve_remote_file(rel_path)
+            resolved_rel_path, file_size = self._resolve_remote_file(rel_path)
             audio_stream_index_raw = params.get("audio_stream_index", [""])[0].strip()
             audio_stream_index = int(audio_stream_index_raw) if audio_stream_index_raw else None
             subtitle_stream_index_raw = params.get("subtitle_stream_index", [""])[0].strip()
             subtitle_stream_index = int(subtitle_stream_index_raw) if subtitle_stream_index_raw else None
             start_time_seconds = parse_video_start_seconds(params.get("start_time_seconds", [""])[0])
+            force_video_transcode = params.get("force_video_transcode", [""])[0].strip() == "1"
+            force_audio_transcode = params.get("force_audio_transcode", [""])[0].strip() == "1"
             port = int(self.server.server_address[1])  # type: ignore[attr-defined]
             base_url = f"http://127.0.0.1:{port}"
             payload = video_session_manager(self.app).create_session(
                 rel_path=resolved_rel_path,
                 base_url=base_url,
+                file_size=file_size,
                 audio_stream_index=audio_stream_index,
                 subtitle_stream_index=subtitle_stream_index,
                 start_time_seconds=start_time_seconds,
+                force_video_transcode=force_video_transcode,
+                force_audio_transcode=force_audio_transcode,
             )
             status = HTTPStatus.OK
         elif endpoint == "session/stop":

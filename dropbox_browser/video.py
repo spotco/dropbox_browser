@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -66,6 +67,25 @@ VIDEO_DEBUG_LOG_PATH = TEMP_DIR / "video_debug.jsonl"
 _VIDEO_DEBUG_LOG_LOCK = threading.Lock()
 _THREAD_LOCK_TYPE = type(threading.Lock())
 _THREAD_EVENT_TYPE = type(threading.Event())
+
+
+def _video_session_dir() -> Path:
+    return TEMP_DIR / "video_sessions"
+
+
+def ffmpeg_popen_kwargs_for_priority(priority: str) -> dict[str, int]:
+    normalized = str(priority or "").strip().lower().replace("-", "_")
+    if os.name != "nt" or normalized == "normal":
+        return {}
+    if normalized == "idle":
+        creation_flags = getattr(subprocess, "IDLE_PRIORITY_CLASS", None)
+    elif normalized == "below_normal":
+        creation_flags = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", None)
+    else:
+        creation_flags = None
+    if creation_flags is None:
+        return {}
+    return {"creationflags": int(creation_flags)}
 
 
 def _subtitle_window_inflight_guard(app: Any) -> threading.Lock:
@@ -233,6 +253,11 @@ def _video_stream(stream_data: dict[str, object]) -> dict[str, object]:
         "height": stream_data.get("height"),
         "pix_fmt": stream_data.get("pix_fmt"),
     })
+    copy_compatible, copy_reason = video_stream_supports_h264_copy(result)
+    result.update({
+        "hls_video_copy_compatible": copy_compatible,
+        "hls_video_copy_reason": copy_reason,
+    })
     return result
 
 
@@ -242,6 +267,11 @@ def _audio_stream(stream_data: dict[str, object]) -> dict[str, object]:
         "channels": stream_data.get("channels"),
         "channel_layout": stream_data.get("channel_layout"),
         "sample_rate": stream_data.get("sample_rate"),
+    })
+    copy_compatible, copy_reason = audio_stream_supports_aac_copy(result)
+    result.update({
+        "hls_audio_copy_compatible": copy_compatible,
+        "hls_audio_copy_reason": copy_reason,
     })
     return result
 
@@ -262,6 +292,102 @@ _COPYABLE_TEXT_SUBTITLE_SUFFIXES = {
     "srt": ".srt",
     "webvtt": ".vtt",
 }
+
+_H264_COPY_SAFE_PIXEL_FORMATS = frozenset({
+    "nv12",
+    "yuv420p",
+    "yuvj420p",
+})
+_AAC_COPY_SAFE_EXTENSIONS = frozenset({
+    ".m4v",
+    ".mp4",
+})
+
+
+def video_stream_supports_h264_copy(stream_data: dict[str, object]) -> tuple[bool, str]:
+    codec_name = str(stream_data.get("codec_name") or "").strip().casefold()
+    if codec_name != "h264":
+        return False, "video_codec_not_h264"
+    pix_fmt = str(stream_data.get("pix_fmt") or "").strip().casefold()
+    if not pix_fmt:
+        return False, "video_pix_fmt_unknown"
+    if pix_fmt not in _H264_COPY_SAFE_PIXEL_FORMATS:
+        return False, "video_pix_fmt_not_copy_safe"
+    return True, "selected_h264_stream_copy_safe"
+
+
+def audio_stream_supports_aac_copy(stream_data: dict[str, object]) -> tuple[bool, str]:
+    codec_name = str(stream_data.get("codec_name") or "").strip().casefold()
+    if codec_name != "aac":
+        return False, "audio_codec_not_aac"
+    return True, "selected_aac_stream_copy_safe"
+
+
+def compatibility_video_mode_for_probe(
+    probe_payload: dict[str, object] | None,
+    *,
+    subtitle_stream_index: int | None,
+    force_video_transcode: bool = False,
+) -> tuple[str, str]:
+    if force_video_transcode:
+        return "video_transcode", "forced_video_transcode"
+    if subtitle_stream_index is not None:
+        return "video_transcode", "subtitle_burn_in_requires_filter"
+    if not isinstance(probe_payload, dict):
+        return "video_transcode", "probe_payload_missing"
+    video_streams = probe_payload.get("video_streams")
+    if not isinstance(video_streams, list) or not video_streams:
+        return "video_transcode", "video_stream_missing"
+    first_stream = video_streams[0]
+    if not isinstance(first_stream, dict):
+        return "video_transcode", "video_stream_missing"
+    copy_compatible = bool(first_stream.get("hls_video_copy_compatible"))
+    copy_reason = str(first_stream.get("hls_video_copy_reason") or "")
+    if copy_compatible:
+        return "video_copy", copy_reason or "selected_h264_stream_copy_safe"
+    return "video_transcode", copy_reason or "video_copy_not_supported"
+
+
+def compatibility_audio_mode_for_probe(
+    probe_payload: dict[str, object] | None,
+    *,
+    rel_path: str = "",
+    audio_stream_index: int | None,
+    force_audio_transcode: bool = False,
+) -> tuple[str, str]:
+    if force_audio_transcode:
+        return "audio_transcode", "forced_audio_transcode"
+    if not isinstance(probe_payload, dict):
+        return "audio_transcode", "probe_payload_missing"
+    audio_streams = probe_payload.get("audio_streams")
+    if not isinstance(audio_streams, list) or not audio_streams:
+        return "audio_transcode", "audio_stream_missing"
+    selected_index = audio_stream_index
+    if selected_index is None:
+        default_audio_stream_index = probe_payload.get("default_audio_stream_index")
+        if default_audio_stream_index is not None:
+            try:
+                selected_index = int(default_audio_stream_index)
+            except (TypeError, ValueError):
+                selected_index = None
+    selected_stream: dict[str, object] | None = None
+    for stream in audio_streams:
+        if not isinstance(stream, dict):
+            continue
+        if selected_index is None or int(stream.get("index") or -1) == selected_index:
+            selected_stream = stream
+            if selected_index is not None:
+                break
+    if not isinstance(selected_stream, dict):
+        return "audio_transcode", "audio_stream_missing"
+    copy_compatible = bool(selected_stream.get("hls_audio_copy_compatible"))
+    copy_reason = str(selected_stream.get("hls_audio_copy_reason") or "")
+    path_extension = Path(str(rel_path or "")).suffix.casefold()
+    if copy_compatible and path_extension not in _AAC_COPY_SAFE_EXTENSIONS:
+        return "audio_transcode", "audio_container_not_copy_safe"
+    if copy_compatible:
+        return "audio_copy", copy_reason or "selected_aac_stream_copy_safe"
+    return "audio_transcode", copy_reason or "audio_copy_not_supported"
 
 
 def subtitle_codec_supports_webvtt(codec_name: object) -> bool:
@@ -1188,6 +1314,13 @@ def build_ffmpeg_hls_command(
     audio_stream_index: int | None = None,
     subtitle_stream_index: int | None = None,
     start_time_seconds: float = 0.0,
+    read_rate: float = 0.0,
+    read_rate_initial_burst_seconds: float = 0.0,
+    read_rate_catchup: float = 0.0,
+    threads: int = 0,
+    filter_threads: int = 0,
+    copy_video: bool = False,
+    copy_audio: bool = False,
 ) -> list[str]:
     segment_pattern = HLS_SEGMENT_PATTERN
     command = [
@@ -1199,10 +1332,27 @@ def build_ffmpeg_hls_command(
     ]
     if start_time_seconds > 0:
         command.extend(["-ss", _format_ffmpeg_seconds(start_time_seconds)])
+    if read_rate > 0:
+        command.extend(["-readrate", _format_ffmpeg_seconds(read_rate)])
+        if read_rate_initial_burst_seconds > 0:
+            command.extend([
+                "-readrate_initial_burst",
+                _format_ffmpeg_seconds(read_rate_initial_burst_seconds),
+            ])
+        if read_rate_catchup > 0:
+            command.extend(["-readrate_catchup", _format_ffmpeg_seconds(read_rate_catchup)])
     command.extend([
         "-i",
         input_url,
     ])
+    if filter_threads > 0:
+        filter_thread_count = str(int(filter_threads))
+        command.extend([
+            "-filter_threads",
+            filter_thread_count,
+            "-filter_complex_threads",
+            filter_thread_count,
+        ])
     if subtitle_stream_index is None:
         command.extend([
             "-map",
@@ -1219,24 +1369,42 @@ def build_ffmpeg_hls_command(
         command.extend(["-map", "0:a:0?"])
     else:
         command.extend(["-map", f"0:{audio_stream_index}?"])
+    if threads > 0:
+        command.extend(["-threads", str(int(threads))])
+    command.extend(["-sn"])
+    if copy_video and subtitle_stream_index is None:
+        command.extend([
+            "-c:v",
+            "copy",
+        ])
+    else:
+        command.extend([
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+            "-force_key_frames",
+            "expr:gte(t,n_forced*6)",
+        ])
+    if copy_audio:
+        command.extend([
+            "-c:a",
+            "copy",
+        ])
+    else:
+        command.extend([
+            "-c:a",
+            "aac",
+            "-ac",
+            "2",
+            "-ar",
+            "48000",
+        ])
     command.extend([
-        "-sn",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "ultrafast",
-        "-crf",
-        "23",
-        "-pix_fmt",
-        "yuv420p",
-        "-force_key_frames",
-        "expr:gte(t,n_forced*6)",
-        "-c:a",
-        "aac",
-        "-ac",
-        "2",
-        "-ar",
-        "48000",
         "-f",
         "hls",
         "-hls_time",
@@ -1333,6 +1501,10 @@ class VideoHlsSession:
     audio_stream_index: int | None
     subtitle_stream_index: int | None
     start_time_seconds: float
+    video_mode: str
+    video_mode_reason: str
+    audio_mode: str
+    audio_mode_reason: str
 
     def touch(self) -> None:
         self.last_accessed_at = time.time()
@@ -1341,7 +1513,7 @@ class VideoHlsSession:
 class VideoSessionManager:
     def __init__(self, app: Any) -> None:
         self.app = app
-        self.root_dir = VIDEO_SESSION_DIR
+        self.root_dir = _video_session_dir()
         self.root_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._active_session: VideoHlsSession | None = None
@@ -1357,9 +1529,12 @@ class VideoSessionManager:
         *,
         rel_path: str,
         base_url: str,
+        file_size: int | None = None,
         audio_stream_index: int | None = None,
         subtitle_stream_index: int | None = None,
         start_time_seconds: float = 0.0,
+        force_video_transcode: bool = False,
+        force_audio_transcode: bool = False,
     ) -> dict[str, object]:
         video_config = getattr(self.app, "video_tools_config", None)
         ffmpeg_exe = getattr(video_config, "ffmpeg_exe", None)
@@ -1367,6 +1542,27 @@ class VideoSessionManager:
             raise BrowserError(HTTPStatus.SERVICE_UNAVAILABLE, "ffmpeg is not available.")
 
         input_url = base_url + "/file?" + urlencode({"path": rel_path, "source": "remote"})
+        probe_payload: dict[str, object] | None = None
+        try:
+            probe_payload = probe_remote_media(
+                self.app,
+                rel_path=rel_path,
+                base_url=base_url,
+                file_size=file_size,
+            )
+        except Exception:
+            probe_payload = None
+        video_mode, video_mode_reason = compatibility_video_mode_for_probe(
+            probe_payload,
+            subtitle_stream_index=subtitle_stream_index,
+            force_video_transcode=force_video_transcode,
+        )
+        audio_mode, audio_mode_reason = compatibility_audio_mode_for_probe(
+            probe_payload,
+            rel_path=rel_path,
+            audio_stream_index=audio_stream_index,
+            force_audio_transcode=force_audio_transcode,
+        )
         session_id = uuid.uuid4().hex
         create_started_at = time.monotonic()
         session_dir = self.root_dir / session_id
@@ -1381,7 +1577,18 @@ class VideoSessionManager:
             audio_stream_index=audio_stream_index,
             subtitle_stream_index=subtitle_stream_index,
             start_time_seconds=start_time_seconds,
+            read_rate=float(getattr(video_config, "ffmpeg_read_rate", 0.0) or 0.0),
+            read_rate_initial_burst_seconds=float(
+                getattr(video_config, "ffmpeg_initial_burst_seconds", 0.0) or 0.0
+            ),
+            read_rate_catchup=float(getattr(video_config, "ffmpeg_catchup_read_rate", 0.0) or 0.0),
+            threads=int(getattr(video_config, "ffmpeg_threads", 0) or 0),
+            filter_threads=int(getattr(video_config, "ffmpeg_filter_threads", 0) or 0),
+            copy_video=video_mode == "video_copy",
+            copy_audio=audio_mode == "audio_copy",
         )
+        process_priority = str(getattr(video_config, "ffmpeg_process_priority", "below_normal") or "below_normal")
+        priority_popen_kwargs = ffmpeg_popen_kwargs_for_priority(process_priority)
         log_video_debug(
             self.app,
             "session_create_start",
@@ -1390,8 +1597,15 @@ class VideoSessionManager:
             audio_stream_index=audio_stream_index,
             subtitle_stream_index=subtitle_stream_index,
             start_time_seconds=start_time_seconds,
+            force_video_transcode=force_video_transcode,
+            force_audio_transcode=force_audio_transcode,
+            video_mode=video_mode,
+            video_mode_reason=video_mode_reason,
+            audio_mode=audio_mode,
+            audio_mode_reason=audio_mode_reason,
             playlist=str(playlist_path),
             command=command,
+            ffmpeg_process_priority=process_priority,
         )
         try:
             process: subprocess.Popen[bytes] = subprocess.Popen(  # type: ignore[type-var]
@@ -1399,6 +1613,7 @@ class VideoSessionManager:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 cwd=session_dir,
+                **priority_popen_kwargs,
             )
         except FileNotFoundError as exc:
             shutil.rmtree(session_dir, ignore_errors=True)
@@ -1417,6 +1632,10 @@ class VideoSessionManager:
             audio_stream_index=audio_stream_index,
             subtitle_stream_index=subtitle_stream_index,
             start_time_seconds=start_time_seconds,
+            video_mode=video_mode,
+            video_mode_reason=video_mode_reason,
+            audio_mode=audio_mode,
+            audio_mode_reason=audio_mode_reason,
         )
         with self._lock:
             self._cleanup_expired_locked()
@@ -1540,8 +1759,13 @@ class VideoSessionManager:
             "audio_stream_index": session.audio_stream_index,
             "subtitle_stream_index": session.subtitle_stream_index,
             "start_time_seconds": session.start_time_seconds,
+            "video_mode": session.video_mode,
+            "video_mode_reason": session.video_mode_reason,
+            "audio_mode": session.audio_mode,
+            "audio_mode_reason": session.audio_mode_reason,
             "encoded_media_end_seconds": self._encoded_media_end_seconds(session),
             "session_create_elapsed_ms": ready_elapsed_ms,
+            "ffmpeg_pid": getattr(session.process, "pid", None),
         }
 
     def _wait_for_playlist(self, session: VideoHlsSession, timeout_seconds: float = HLS_READY_TIMEOUT_SECONDS) -> bool:

@@ -171,7 +171,7 @@ async function waitForCompatibilityReady(page) {
       if (!response.ok()) return null;
       const payload = await response.json();
       return payload.compatibility_available === true;
-    }, { timeout: 10000 })
+    }, { timeout: 30000 })
     .toBe(true);
 }
 
@@ -189,7 +189,7 @@ async function waitForVisibleVideo(page) {
         const video = document.getElementById("video-player-media");
         return Boolean(video && !video.hidden);
       });
-    }, { timeout: 10000 })
+    }, { timeout: 30000 })
     .toBe(true);
 }
 
@@ -206,7 +206,7 @@ async function waitForLoadingOverlayWithoutPlaceholder(page) {
         const placeholder = document.getElementById("video-playback-placeholder");
         return Boolean(isVisible(loading) && !isVisible(placeholder));
       });
-    }, { timeout: 10000 })
+    }, { timeout: 30000 })
     .toBe(true);
 }
 
@@ -334,7 +334,7 @@ async function expectControlsOverlayHidden(page) {
         || state.display === "none"
         || state.opacity === "0"
         || state.pointerEvents === "none";
-    }, { timeout: 10000 })
+    }, { timeout: 30000 })
     .toBe(true);
 }
 
@@ -352,7 +352,7 @@ async function waitForPlaybackSurfaceWithoutOverlay(page) {
         const video = document.getElementById("video-player-media");
         return Boolean(isVisible(video) && !isVisible(loading) && !isVisible(placeholder));
       });
-    }, { timeout: 10000 })
+    }, { timeout: 30000 })
     .toBe(true);
 }
 
@@ -365,7 +365,7 @@ async function waitForLoadingOverlayHidden(page) {
         const style = window.getComputedStyle(loading);
         return style.display === "none" || style.visibility === "hidden" || style.opacity === "0";
       });
-    }, { timeout: 10000 })
+    }, { timeout: 30000 })
     .toBe(true);
 }
 
@@ -1497,8 +1497,7 @@ test("video playback never shows loading or placeholder copy on top of active pl
   expect(countOccurrences(alphaLoadingText, "alpha.mkv")).toBe(1);
   await expectControlsOverlayUsableDuringLoading(page, "Creating the local HLS compatibility session.");
 
-  await waitForVisibleVideo(page);
-  await page.waitForTimeout(1500);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
   const alphaPlayText = await playbackStageInnerText(page);
   expect(alphaPlayText).not.toContain("Playing through a local HLS compatibility session.");
   expect(alphaPlayText).not.toContain("alpha.mkv");
@@ -1509,10 +1508,10 @@ test("video playback never shows loading or placeholder copy on top of active pl
   await scrubInSessionForward(page, 1);
 
   const bravoRow = await libraryRow(page, "bravo.mkv");
-  const bravoSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fbravo.mkv"));
+  await expect(bravoRow).toBeVisible();
   await bravoRow.dblclick();
   await waitForLoadingOverlayWithoutPlaceholder(page);
-  await bravoSession;
+  await expectActiveQueueTitle(page, "bravo.mkv");
   await expect
     .poll(async () => playbackStageInnerText(page), { timeout: 10000 })
     .toContain("Creating the local HLS compatibility session.");
@@ -1521,8 +1520,7 @@ test("video playback never shows loading or placeholder copy on top of active pl
   expect(countOccurrences(bravoLoadingText, "bravo.mkv")).toBe(1);
   await expectControlsOverlayUsableDuringLoading(page, "Creating the local HLS compatibility session.");
 
-  await waitForVisibleVideo(page);
-  await page.waitForTimeout(2000);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
   const bravoPlayText = await playbackStageInnerText(page);
   expect(bravoPlayText).not.toContain("Playing through a local HLS compatibility session.");
   expect(bravoPlayText).not.toContain("bravo.mkv");

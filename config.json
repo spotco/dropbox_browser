@@ -1,6 +1,12 @@
 {
   "DropboxFolder": "./DropboxLocal",
   "RCloneConfig": "%APPDATA%\\rclone\\rclone.conf",
+  "VideoFFmpegReadRate": 0.0,
+  "VideoFFmpegInitialBurstSeconds": 0.0,
+  "VideoFFmpegCatchupReadRate": 0.0,
+  "VideoFFmpegThreads": 0,
+  "VideoFFmpegFilterThreads": 0,
+  "VideoFFmpegProcessPriority": "below_normal",
   "VideoSubtitleFontFamily": "Arial, Helvetica, sans-serif",
   "VideoSubtitleFontSizePx": 28,
   "VideoSubtitleBold": true,

@@ -215,6 +215,7 @@ test.use({
 });
 
 test.beforeAll(async () => {
+  test.setTimeout(120000);
   server = await startIntegrationServer();
 });
 

@@ -19,6 +19,12 @@ _APP_CONFIG_DEFAULTS: dict = {
     "RCloneConfig": "",
     "FFMpegPath": "",
     "FFProbePath": "",
+    "VideoFFmpegReadRate": 0.0,
+    "VideoFFmpegInitialBurstSeconds": 0.0,
+    "VideoFFmpegCatchupReadRate": 0.0,
+    "VideoFFmpegThreads": 0,
+    "VideoFFmpegFilterThreads": 0,
+    "VideoFFmpegProcessPriority": "below_normal",
     "VideoSubtitleFontFamily": "Arial, Helvetica, sans-serif",
     "VideoSubtitleFontSizePx": 28,
     "VideoSubtitleBold": True,
@@ -54,6 +60,11 @@ _APP_CONFIG_DEFAULTS: dict = {
     "ThumbnailTimeoutSeconds": 15,
 }
 
+_VIDEO_FFMPEG_READ_RATE_MAX = 16.0
+_VIDEO_FFMPEG_INITIAL_BURST_SECONDS_MAX = 600.0
+_VIDEO_FFMPEG_THREADS_MAX = 64
+_VIDEO_FFMPEG_PROCESS_PRIORITIES = {"idle", "below_normal", "normal"}
+
 
 @dataclass(frozen=True)
 class ThumbnailConfig:
@@ -70,6 +81,12 @@ class ThumbnailConfig:
 class VideoToolsConfig:
     ffmpeg_exe: Path | None
     ffprobe_exe: Path | None
+    ffmpeg_read_rate: float = 0.0
+    ffmpeg_initial_burst_seconds: float = 0.0
+    ffmpeg_catchup_read_rate: float = 0.0
+    ffmpeg_threads: int = 0
+    ffmpeg_filter_threads: int = 0
+    ffmpeg_process_priority: str = "below_normal"
 
     @property
     def ffmpeg_available(self) -> bool:
@@ -201,6 +218,33 @@ def _discover_tool(tool_name: str, *, configured_path: Path | None, vendored_pat
     return None
 
 
+def _clamp_non_negative_float(value: object, *, default: float, maximum: float) -> float:
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        return default
+    if normalized <= 0:
+        return 0.0
+    return min(normalized, maximum)
+
+
+def _clamp_non_negative_int(value: object, *, default: int, maximum: int) -> int:
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return default
+    if normalized <= 0:
+        return 0
+    return min(normalized, maximum)
+
+
+def _normalize_video_process_priority(value: object, *, default: str) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    if normalized in _VIDEO_FFMPEG_PROCESS_PRIORITIES:
+        return normalized
+    return default
+
+
 def load_video_tools_config(app_config: dict | None = None) -> VideoToolsConfig:
     config = app_config if app_config is not None else load_app_config()
     configured_ffmpeg = _resolve_configured_tool_path(config.get("FFMpegPath"))
@@ -219,7 +263,48 @@ def load_video_tools_config(app_config: dict | None = None) -> VideoToolsConfig:
         ffmpeg_exe = _adjacent_tool_path(ffprobe_exe, ffmpeg_name)
     if ffprobe_exe is None:
         ffprobe_exe = _adjacent_tool_path(ffmpeg_exe, ffprobe_name)
-    return VideoToolsConfig(ffmpeg_exe=ffmpeg_exe, ffprobe_exe=ffprobe_exe)
+    return VideoToolsConfig(
+        ffmpeg_exe=ffmpeg_exe,
+        ffprobe_exe=ffprobe_exe,
+        ffmpeg_read_rate=_clamp_non_negative_float(
+            config.get("VideoFFmpegReadRate", _APP_CONFIG_DEFAULTS["VideoFFmpegReadRate"]),
+            default=float(_APP_CONFIG_DEFAULTS["VideoFFmpegReadRate"]),
+            maximum=_VIDEO_FFMPEG_READ_RATE_MAX,
+        ),
+        ffmpeg_initial_burst_seconds=_clamp_non_negative_float(
+            config.get(
+                "VideoFFmpegInitialBurstSeconds",
+                _APP_CONFIG_DEFAULTS["VideoFFmpegInitialBurstSeconds"],
+            ),
+            default=float(_APP_CONFIG_DEFAULTS["VideoFFmpegInitialBurstSeconds"]),
+            maximum=_VIDEO_FFMPEG_INITIAL_BURST_SECONDS_MAX,
+        ),
+        ffmpeg_catchup_read_rate=_clamp_non_negative_float(
+            config.get(
+                "VideoFFmpegCatchupReadRate",
+                _APP_CONFIG_DEFAULTS["VideoFFmpegCatchupReadRate"],
+            ),
+            default=float(_APP_CONFIG_DEFAULTS["VideoFFmpegCatchupReadRate"]),
+            maximum=_VIDEO_FFMPEG_READ_RATE_MAX,
+        ),
+        ffmpeg_threads=_clamp_non_negative_int(
+            config.get("VideoFFmpegThreads", _APP_CONFIG_DEFAULTS["VideoFFmpegThreads"]),
+            default=int(_APP_CONFIG_DEFAULTS["VideoFFmpegThreads"]),
+            maximum=_VIDEO_FFMPEG_THREADS_MAX,
+        ),
+        ffmpeg_filter_threads=_clamp_non_negative_int(
+            config.get("VideoFFmpegFilterThreads", _APP_CONFIG_DEFAULTS["VideoFFmpegFilterThreads"]),
+            default=int(_APP_CONFIG_DEFAULTS["VideoFFmpegFilterThreads"]),
+            maximum=_VIDEO_FFMPEG_THREADS_MAX,
+        ),
+        ffmpeg_process_priority=_normalize_video_process_priority(
+            config.get(
+                "VideoFFmpegProcessPriority",
+                _APP_CONFIG_DEFAULTS["VideoFFmpegProcessPriority"],
+            ),
+            default=str(_APP_CONFIG_DEFAULTS["VideoFFmpegProcessPriority"]),
+        ),
+    )
 
 
 def load_thumbnail_config(app_config: dict | None = None) -> ThumbnailConfig:
