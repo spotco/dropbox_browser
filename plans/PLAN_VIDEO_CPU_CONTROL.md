@@ -84,7 +84,8 @@ server-side backpressure.
 - [x] Pick reasonable initial thread defaults before measurement:
       start with ffmpeg automatic thread behavior unless measurements show it
       is too aggressive, and make explicit low thread counts configurable for
-      weaker machines.
+      weaker machines. Final default after the ASUS and Surface Book 3 matrix:
+      `VideoFFmpegThreads = 2`, `VideoFFmpegFilterThreads = 1`.
 - [x] Include thread-count variants in the measurement tooling so defaults can
       be adjusted from real playback data rather than guesswork.
 - [x] Apply `-threads <N>` to the ffmpeg output/encoder command when configured.
@@ -285,7 +286,10 @@ server-side backpressure.
       use a reasonable initial default, then measure. Start with ffmpeg
       automatic threads as the default, expose low fixed thread counts through
       config for weaker machines, and adjust the default only if measurement
-      shows automatic threads are too aggressive.
+      shows automatic threads are too aggressive. Final decision: ship
+      `threads=2` and `filter_threads=1` with the conservative pacing profile
+      because the Surface Book 3 HEVC case dropped from `~154.9%` to `~127.2%`
+      mean ffmpeg CPU without stalls or a startup regression.
 - [x] Decide default Windows process priority:
       use a reasonable initial default, then measure. Start ffmpeg below-normal
       by default on Windows, expose idle and normal through config, and adjust

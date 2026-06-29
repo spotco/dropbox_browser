@@ -42,11 +42,11 @@ class ConfigDefaultsTests(unittest.TestCase):
 
         self.assertEqual(config["FFMpegPath"], "")
         self.assertEqual(config["FFProbePath"], "")
-        self.assertEqual(config["VideoFFmpegReadRate"], 0.0)
-        self.assertEqual(config["VideoFFmpegInitialBurstSeconds"], 0.0)
-        self.assertEqual(config["VideoFFmpegCatchupReadRate"], 0.0)
-        self.assertEqual(config["VideoFFmpegThreads"], 0)
-        self.assertEqual(config["VideoFFmpegFilterThreads"], 0)
+        self.assertEqual(config["VideoFFmpegReadRate"], 1.1)
+        self.assertEqual(config["VideoFFmpegInitialBurstSeconds"], 18.0)
+        self.assertEqual(config["VideoFFmpegCatchupReadRate"], 1.3)
+        self.assertEqual(config["VideoFFmpegThreads"], 2)
+        self.assertEqual(config["VideoFFmpegFilterThreads"], 1)
         self.assertEqual(config["VideoFFmpegProcessPriority"], "below_normal")
         self.assertEqual(config["VideoSubtitleFontFamily"], "Arial, Helvetica, sans-serif")
         self.assertEqual(config["VideoSubtitleFontSizePx"], 28)
@@ -59,11 +59,11 @@ class ConfigDefaultsTests(unittest.TestCase):
     def test_packaged_config_video_subtitle_defaults_are_present(self) -> None:
         config = config_module._read_config_file(config_module.PROJECT_ROOT / "config.json")
 
-        self.assertEqual(config["VideoFFmpegReadRate"], 0.0)
-        self.assertEqual(config["VideoFFmpegInitialBurstSeconds"], 0.0)
-        self.assertEqual(config["VideoFFmpegCatchupReadRate"], 0.0)
-        self.assertEqual(config["VideoFFmpegThreads"], 0)
-        self.assertEqual(config["VideoFFmpegFilterThreads"], 0)
+        self.assertEqual(config["VideoFFmpegReadRate"], 1.1)
+        self.assertEqual(config["VideoFFmpegInitialBurstSeconds"], 18.0)
+        self.assertEqual(config["VideoFFmpegCatchupReadRate"], 1.3)
+        self.assertEqual(config["VideoFFmpegThreads"], 2)
+        self.assertEqual(config["VideoFFmpegFilterThreads"], 1)
         self.assertEqual(config["VideoFFmpegProcessPriority"], "below_normal")
         self.assertEqual(config["VideoSubtitleFontFamily"], "Arial, Helvetica, sans-serif")
         self.assertEqual(config["VideoSubtitleFontSizePx"], 28)
@@ -245,7 +245,7 @@ class VideoToolsConfigTests(unittest.TestCase):
             })
 
         self.assertEqual(video_config.ffmpeg_read_rate, 0.0)
-        self.assertEqual(video_config.ffmpeg_initial_burst_seconds, 0.0)
+        self.assertEqual(video_config.ffmpeg_initial_burst_seconds, 18.0)
         self.assertEqual(video_config.ffmpeg_catchup_read_rate, 16.0)
 
     def test_load_video_tools_config_reads_ffmpeg_thread_settings(self) -> None:
