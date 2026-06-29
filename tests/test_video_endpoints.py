@@ -26,6 +26,9 @@ from dropbox_browser.video import (
     build_ffmpeg_subtitle_copy_command,
     build_ffmpeg_webvtt_command,
     build_ffprobe_command,
+    compatibility_audio_mode_for_probe,
+    compatibility_video_mode_for_probe,
+    ffmpeg_popen_kwargs_for_priority,
     build_probe_cache_key,
     build_seek_subtitle_window_request,
     build_startup_subtitle_window_request,
@@ -55,6 +58,8 @@ from dropbox_browser.video import (
     subtitle_cache_path,
     subtitle_codec_supports_webvtt,
     subtitle_window_end_seconds,
+    audio_stream_supports_aac_copy,
+    video_stream_supports_h264_copy,
     read_subtitle_window_manifest,
 )
 
@@ -86,6 +91,12 @@ def write_hls_session_fixture(
             (playlist_path.parent / f"segment_{index:05d}.m4s").write_bytes(f"segment{index}".encode())
 
 
+def is_ffmpeg_hls_spawn(command: list[str]) -> bool:
+    if not command:
+        return False
+    return str(command[0]).casefold().endswith("ffmpeg.exe") and str(command[-1]).casefold().endswith(".m3u8")
+
+
 class FakeFfmpegProcess:
     def __init__(self, command: list[str]) -> None:
         self.command = command
@@ -93,9 +104,22 @@ class FakeFfmpegProcess:
         self.stderr = io.BytesIO()
         self.returncode = None
         self.killed = False
+        self.pid = 12345
 
     def poll(self):
         return self.returncode
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def communicate(self, input=None, timeout=None):
+        if self.returncode is None:
+            self.returncode = 0
+        stderr_bytes = self.stderr.getvalue() if hasattr(self.stderr, "getvalue") else b""
+        return b"", stderr_bytes
 
     def kill(self) -> None:
         self.killed = True
@@ -332,9 +356,13 @@ class VideoEndpointTests(AppTestCase):
         self.assertEqual(payload["audio_streams"][0]["language"], "jpn")
         self.assertEqual(payload["audio_streams"][0]["title"], "Japanese")
         self.assertTrue(payload["audio_streams"][0]["default"])
+        self.assertTrue(payload["audio_streams"][0]["hls_audio_copy_compatible"])
+        self.assertEqual(payload["audio_streams"][0]["hls_audio_copy_reason"], "selected_aac_stream_copy_safe")
         self.assertEqual(payload["subtitle_streams"][0]["codec_name"], "ass")
         self.assertTrue(payload["subtitle_streams"][0]["webvtt_compatible"])
         self.assertTrue(payload["subtitle_streams"][0]["forced"])
+        self.assertFalse(payload["video_streams"][0]["hls_video_copy_compatible"])
+        self.assertEqual(payload["video_streams"][0]["hls_video_copy_reason"], "video_codec_not_h264")
         ffprobe_cmd = run_mock.call_args.args[0]
         self.assertEqual(ffprobe_cmd[0], "C:\\tools\\ffmpeg\\bin\\ffprobe.exe")
         self.assertIn("-probesize", ffprobe_cmd)
@@ -452,6 +480,7 @@ class VideoEndpointTests(AppTestCase):
                     "index": 0,
                     "codec_type": "video",
                     "codec_name": "h264",
+                    "pix_fmt": "yuv420p",
                 }
             ],
             "format": {"duration": "120.0"},
@@ -471,9 +500,110 @@ class VideoEndpointTests(AppTestCase):
 
         self.assertEqual(first["path"], "movie.mp4")
         self.assertEqual(second["path"], "movie.mp4")
+        self.assertTrue(first["video_streams"][0]["hls_video_copy_compatible"])
+        self.assertEqual(first["video_streams"][0]["hls_video_copy_reason"], "selected_h264_stream_copy_safe")
         self.assertEqual(len(run_calls), 1)
         cache_path = probe_cache_path(build_probe_cache_key("movie.mp4", file_size=10))
         self.assertTrue(cache_path.is_file())
+
+    def test_video_stream_supports_h264_copy_requires_safe_pixel_format(self) -> None:
+        self.assertEqual(
+            video_stream_supports_h264_copy({"codec_name": "h264", "pix_fmt": "yuv420p"}),
+            (True, "selected_h264_stream_copy_safe"),
+        )
+        self.assertEqual(
+            video_stream_supports_h264_copy({"codec_name": "h264", "pix_fmt": "yuv420p10le"}),
+            (False, "video_pix_fmt_not_copy_safe"),
+        )
+        self.assertEqual(
+            video_stream_supports_h264_copy({"codec_name": "hevc", "pix_fmt": "yuv420p"}),
+            (False, "video_codec_not_h264"),
+        )
+
+    def test_audio_stream_supports_aac_copy_prefers_broad_aac_compatibility(self) -> None:
+        self.assertEqual(
+            audio_stream_supports_aac_copy({"codec_name": "aac", "channels": 6, "channel_layout": "5.1"}),
+            (True, "selected_aac_stream_copy_safe"),
+        )
+        self.assertEqual(
+            audio_stream_supports_aac_copy({"codec_name": "ac3", "channels": 6}),
+            (False, "audio_codec_not_aac"),
+        )
+
+    def test_compatibility_video_mode_for_probe_prefers_copy_only_without_burn_in(self) -> None:
+        probe_payload = {
+            "video_streams": [
+                {
+                    "index": 0,
+                    "codec_name": "h264",
+                    "pix_fmt": "yuv420p",
+                    "hls_video_copy_compatible": True,
+                    "hls_video_copy_reason": "selected_h264_stream_copy_safe",
+                }
+            ]
+        }
+
+        self.assertEqual(
+            compatibility_video_mode_for_probe(probe_payload, subtitle_stream_index=None),
+            ("video_copy", "selected_h264_stream_copy_safe"),
+        )
+        self.assertEqual(
+            compatibility_video_mode_for_probe(probe_payload, subtitle_stream_index=4),
+            ("video_transcode", "subtitle_burn_in_requires_filter"),
+        )
+        self.assertEqual(
+            compatibility_video_mode_for_probe(
+                probe_payload,
+                subtitle_stream_index=None,
+                force_video_transcode=True,
+            ),
+            ("video_transcode", "forced_video_transcode"),
+        )
+
+    def test_compatibility_audio_mode_for_probe_prefers_selected_aac_stream_copy(self) -> None:
+        probe_payload = {
+            "audio_streams": [
+                {
+                    "index": 1,
+                    "codec_name": "aac",
+                    "hls_audio_copy_compatible": True,
+                    "hls_audio_copy_reason": "selected_aac_stream_copy_safe",
+                },
+                {
+                    "index": 2,
+                    "codec_name": "ac3",
+                    "hls_audio_copy_compatible": False,
+                    "hls_audio_copy_reason": "audio_codec_not_aac",
+                },
+            ],
+            "default_audio_stream_index": 1,
+        }
+
+        self.assertEqual(
+            compatibility_audio_mode_for_probe(probe_payload, rel_path="movie.mp4", audio_stream_index=None),
+            ("audio_copy", "selected_aac_stream_copy_safe"),
+        )
+        self.assertEqual(
+            compatibility_audio_mode_for_probe(probe_payload, rel_path="movie.mp4", audio_stream_index=2),
+            ("audio_transcode", "audio_codec_not_aac"),
+        )
+        self.assertEqual(
+            compatibility_audio_mode_for_probe(
+                probe_payload,
+                rel_path="movie.mp4",
+                audio_stream_index=1,
+                force_audio_transcode=True,
+            ),
+            ("audio_transcode", "forced_audio_transcode"),
+        )
+        self.assertEqual(
+            compatibility_audio_mode_for_probe(
+                probe_payload,
+                rel_path="movie.mkv",
+                audio_stream_index=1,
+            ),
+            ("audio_transcode", "audio_container_not_copy_safe"),
+        )
 
     def test_probe_cache_key_changes_when_file_size_changes(self) -> None:
         self.assertNotEqual(
@@ -755,7 +885,9 @@ class VideoEndpointTests(AppTestCase):
         )
         spawned: list[FakeFfmpegProcess] = []
 
-        def fake_popen(command, stdout=None, stderr=None, cwd=None):
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            if not is_ffmpeg_hls_spawn(command):
+                return FakeFfmpegProcess(command)
             playlist_path = Path(command[-1])
             segment_base_url = command[command.index("-hls_base_url") + 1]
             write_hls_session_fixture(playlist_path, segment_base_url=segment_base_url)
@@ -774,6 +906,7 @@ class VideoEndpointTests(AppTestCase):
         self.assertEqual(payload["path"], "movie.mp4")
         self.assertEqual(payload["start_time_seconds"], 120.5)
         self.assertEqual(payload["encoded_media_end_seconds"], HLS_MIN_READY_SEGMENTS * 6.0)
+        self.assertEqual(payload["ffmpeg_pid"], 12345)
         self.assertTrue(payload["session_id"])
         self.assertEqual(
             payload["playlist_url"],
@@ -799,7 +932,9 @@ class VideoEndpointTests(AppTestCase):
             ),
         )
 
-        def fake_popen(command, stdout=None, stderr=None, cwd=None):
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            if not is_ffmpeg_hls_spawn(command):
+                return FakeFfmpegProcess(command)
             playlist_path = Path(command[-1])
             segment_base_url = command[command.index("-hls_base_url") + 1]
             write_hls_session_fixture(playlist_path, segment_base_url=segment_base_url)
@@ -841,7 +976,9 @@ class VideoEndpointTests(AppTestCase):
             ),
         )
 
-        def fake_popen(command, stdout=None, stderr=None, cwd=None):
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            if not is_ffmpeg_hls_spawn(command):
+                return FakeFfmpegProcess(command)
             playlist_path = Path(command[-1])
             write_hls_session_fixture(playlist_path, include_segments=False)
 
@@ -877,7 +1014,9 @@ class VideoEndpointTests(AppTestCase):
         )
         requested_segment = threading.Event()
 
-        def fake_popen(command, stdout=None, stderr=None, cwd=None):
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            if not is_ffmpeg_hls_spawn(command):
+                return FakeFfmpegProcess(command)
             playlist_path = Path(command[-1])
             write_hls_session_fixture(playlist_path, segment_count=3)
             (playlist_path.parent / "segment_00002.m4s").unlink(missing_ok=True)
@@ -921,7 +1060,9 @@ class VideoEndpointTests(AppTestCase):
         )
         spawned: list[FakeFfmpegProcess] = []
 
-        def fake_popen(command, stdout=None, stderr=None, cwd=None):
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            if not is_ffmpeg_hls_spawn(command):
+                return FakeFfmpegProcess(command)
             playlist_path = Path(command[-1])
             write_hls_session_fixture(playlist_path)
             process = FakeFfmpegProcess(command)
@@ -958,7 +1099,9 @@ class VideoEndpointTests(AppTestCase):
             ),
         )
 
-        def fake_popen(command, stdout=None, stderr=None, cwd=None):
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            if not is_ffmpeg_hls_spawn(command):
+                return FakeFfmpegProcess(command)
             playlist_path = Path(command[-1])
             write_hls_session_fixture(playlist_path)
             return FakeFfmpegProcess(command)
@@ -990,7 +1133,9 @@ class VideoEndpointTests(AppTestCase):
         )
         spawned: list[FakeFfmpegProcess] = []
 
-        def fake_popen(command, stdout=None, stderr=None, cwd=None):
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            if not is_ffmpeg_hls_spawn(command):
+                return FakeFfmpegProcess(command)
             playlist_path = Path(command[-1])
             write_hls_session_fixture(playlist_path)
             process = FakeFfmpegProcess(command)
@@ -1008,6 +1153,303 @@ class VideoEndpointTests(AppTestCase):
         self.assertIsNone(payload["subtitle_stream_index"])
         self.assertIn("0:2?", spawned[0].command)
 
+    def test_session_endpoint_passes_configured_thread_flags_to_ffmpeg(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+                ffmpeg_threads=3,
+                ffmpeg_filter_threads=2,
+            ),
+        )
+        spawned: list[FakeFfmpegProcess] = []
+
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            if not is_ffmpeg_hls_spawn(command):
+                return FakeFfmpegProcess(command)
+            playlist_path = Path(command[-1])
+            write_hls_session_fixture(playlist_path)
+            process = FakeFfmpegProcess(command)
+            spawned.append(process)
+            return process
+
+        with TestServer(app) as server, patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen):
+            server.post_json("/video/endpoints/session", {
+                "path": "movie.mp4",
+                "source": "remote",
+                "subtitle_stream_index": "4",
+            })
+
+        self.assertEqual(spawned[0].command[spawned[0].command.index("-threads") + 1], "3")
+        self.assertEqual(spawned[0].command[spawned[0].command.index("-filter_threads") + 1], "2")
+        self.assertEqual(spawned[0].command[spawned[0].command.index("-filter_complex_threads") + 1], "2")
+
+    def test_session_endpoint_uses_video_copy_for_copy_safe_h264_without_burn_in(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        spawned: list[FakeFfmpegProcess] = []
+
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            if not is_ffmpeg_hls_spawn(command):
+                return FakeFfmpegProcess(command)
+            playlist_path = Path(command[-1])
+            write_hls_session_fixture(playlist_path)
+            process = FakeFfmpegProcess(command)
+            spawned.append(process)
+            return process
+
+        with (
+            TestServer(app) as server,
+            patch(
+                "dropbox_browser.video.probe_remote_media",
+                return_value={
+                    "video_streams": [
+                        {
+                            "index": 0,
+                            "codec_name": "h264",
+                            "pix_fmt": "yuv420p",
+                            "hls_video_copy_compatible": True,
+                            "hls_video_copy_reason": "selected_h264_stream_copy_safe",
+                        }
+                    ]
+                },
+            ),
+            patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen),
+        ):
+            payload = server.post_json("/video/endpoints/session", {
+                "path": "movie.mp4",
+                "source": "remote",
+            })
+
+        self.assertEqual(payload["video_mode"], "video_copy")
+        self.assertEqual(payload["video_mode_reason"], "selected_h264_stream_copy_safe")
+        self.assertEqual(spawned[0].command[spawned[0].command.index("-c:v") + 1], "copy")
+        self.assertNotIn("-force_key_frames", spawned[0].command)
+        self.assertNotIn("-pix_fmt", spawned[0].command)
+
+    def test_session_endpoint_uses_audio_copy_for_copy_safe_aac_selection(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        spawned: list[FakeFfmpegProcess] = []
+
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            if not is_ffmpeg_hls_spawn(command):
+                return FakeFfmpegProcess(command)
+            playlist_path = Path(command[-1])
+            write_hls_session_fixture(playlist_path)
+            process = FakeFfmpegProcess(command)
+            spawned.append(process)
+            return process
+
+        with (
+            TestServer(app) as server,
+            patch(
+                "dropbox_browser.video.probe_remote_media",
+                return_value={
+                    "video_streams": [
+                        {
+                            "index": 0,
+                            "codec_name": "h264",
+                            "pix_fmt": "yuv420p",
+                            "hls_video_copy_compatible": True,
+                            "hls_video_copy_reason": "selected_h264_stream_copy_safe",
+                        }
+                    ],
+                    "audio_streams": [
+                        {
+                            "index": 2,
+                            "codec_name": "aac",
+                            "hls_audio_copy_compatible": True,
+                            "hls_audio_copy_reason": "selected_aac_stream_copy_safe",
+                        }
+                    ],
+                    "default_audio_stream_index": 2,
+                },
+            ),
+            patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen),
+        ):
+            payload = server.post_json("/video/endpoints/session", {
+                "path": "movie.mp4",
+                "source": "remote",
+                "audio_stream_index": "2",
+            })
+
+        self.assertEqual(payload["audio_mode"], "audio_copy")
+        self.assertEqual(payload["audio_mode_reason"], "selected_aac_stream_copy_safe")
+        self.assertEqual(spawned[0].command[spawned[0].command.index("-c:a") + 1], "copy")
+        self.assertNotIn("-ac", spawned[0].command)
+        self.assertNotIn("-ar", spawned[0].command)
+
+    def test_session_endpoint_force_video_transcode_overrides_copy_safe_probe(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        spawned: list[FakeFfmpegProcess] = []
+
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            if not is_ffmpeg_hls_spawn(command):
+                return FakeFfmpegProcess(command)
+            playlist_path = Path(command[-1])
+            write_hls_session_fixture(playlist_path)
+            process = FakeFfmpegProcess(command)
+            spawned.append(process)
+            return process
+
+        with (
+            TestServer(app) as server,
+            patch(
+                "dropbox_browser.video.probe_remote_media",
+                return_value={
+                    "video_streams": [
+                        {
+                            "index": 0,
+                            "codec_name": "h264",
+                            "pix_fmt": "yuv420p",
+                            "hls_video_copy_compatible": True,
+                            "hls_video_copy_reason": "selected_h264_stream_copy_safe",
+                        }
+                    ]
+                },
+            ),
+            patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen),
+        ):
+            payload = server.post_json("/video/endpoints/session", {
+                "path": "movie.mp4",
+                "source": "remote",
+                "force_video_transcode": "1",
+            })
+
+        self.assertEqual(payload["video_mode"], "video_transcode")
+        self.assertEqual(payload["video_mode_reason"], "forced_video_transcode")
+        self.assertEqual(spawned[0].command[spawned[0].command.index("-c:v") + 1], "libx264")
+
+    def test_session_endpoint_force_audio_transcode_overrides_copy_safe_probe(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        spawned: list[FakeFfmpegProcess] = []
+
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            if not is_ffmpeg_hls_spawn(command):
+                return FakeFfmpegProcess(command)
+            playlist_path = Path(command[-1])
+            write_hls_session_fixture(playlist_path)
+            process = FakeFfmpegProcess(command)
+            spawned.append(process)
+            return process
+
+        with (
+            TestServer(app) as server,
+            patch(
+                "dropbox_browser.video.probe_remote_media",
+                return_value={
+                    "video_streams": [],
+                    "audio_streams": [
+                        {
+                            "index": 2,
+                            "codec_name": "aac",
+                            "hls_audio_copy_compatible": True,
+                            "hls_audio_copy_reason": "selected_aac_stream_copy_safe",
+                        }
+                    ],
+                    "default_audio_stream_index": 2,
+                },
+            ),
+            patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen),
+        ):
+            payload = server.post_json("/video/endpoints/session", {
+                "path": "movie.mp4",
+                "source": "remote",
+                "audio_stream_index": "2",
+                "force_audio_transcode": "1",
+            })
+
+        self.assertEqual(payload["audio_mode"], "audio_transcode")
+        self.assertEqual(payload["audio_mode_reason"], "forced_audio_transcode")
+        self.assertEqual(spawned[0].command[spawned[0].command.index("-c:a") + 1], "aac")
+        self.assertIn("-ac", spawned[0].command)
+        self.assertIn("-ar", spawned[0].command)
+
+    def test_session_endpoint_passes_configured_windows_priority_to_ffmpeg_popen(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+                ffmpeg_process_priority="idle",
+            ),
+        )
+        popen_kwargs: list[dict[str, object]] = []
+
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            if not is_ffmpeg_hls_spawn(command):
+                return FakeFfmpegProcess(command)
+            playlist_path = Path(command[-1])
+            write_hls_session_fixture(playlist_path)
+            popen_kwargs.append(dict(kwargs))
+            return FakeFfmpegProcess(command)
+
+        with (
+            TestServer(app) as server,
+            patch("dropbox_browser.video.os.name", "nt"),
+            patch("dropbox_browser.video.subprocess.IDLE_PRIORITY_CLASS", 64, create=True),
+            patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen),
+        ):
+            server.post_json("/video/endpoints/session", {
+                "path": "movie.mp4",
+                "source": "remote",
+            })
+
+        self.assertEqual(popen_kwargs, [{"creationflags": 64}])
+
+    def test_ffmpeg_popen_kwargs_for_priority_keeps_non_windows_and_normal_unchanged(self) -> None:
+        with patch("dropbox_browser.video.os.name", "posix"):
+            self.assertEqual(ffmpeg_popen_kwargs_for_priority("below_normal"), {})
+
+        with patch("dropbox_browser.video.os.name", "nt"):
+            self.assertEqual(ffmpeg_popen_kwargs_for_priority("normal"), {})
+
+    def test_ffmpeg_popen_kwargs_for_priority_maps_windows_priority_flags(self) -> None:
+        with (
+            patch("dropbox_browser.video.os.name", "nt"),
+            patch("dropbox_browser.video.subprocess.BELOW_NORMAL_PRIORITY_CLASS", 16384, create=True),
+            patch("dropbox_browser.video.subprocess.IDLE_PRIORITY_CLASS", 64, create=True),
+        ):
+            self.assertEqual(ffmpeg_popen_kwargs_for_priority("below-normal"), {"creationflags": 16384})
+            self.assertEqual(ffmpeg_popen_kwargs_for_priority("idle"), {"creationflags": 64})
+            self.assertEqual(ffmpeg_popen_kwargs_for_priority("bad"), {})
+
     def test_session_endpoint_passes_selected_bitmap_subtitle_stream_index_to_ffmpeg(self) -> None:
         rclone = self._remote_media_rclone()
         app = self._build_app(
@@ -1020,7 +1462,9 @@ class VideoEndpointTests(AppTestCase):
         )
         spawned: list[FakeFfmpegProcess] = []
 
-        def fake_popen(command, stdout=None, stderr=None, cwd=None):
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            if not is_ffmpeg_hls_spawn(command):
+                return FakeFfmpegProcess(command)
             playlist_path = Path(command[-1])
             write_hls_session_fixture(playlist_path)
             process = FakeFfmpegProcess(command)
@@ -1080,6 +1524,10 @@ class VideoEndpointTests(AppTestCase):
             audio_stream_index=None,
             subtitle_stream_index=None,
             start_time_seconds=0.0,
+            video_mode="video_transcode",
+            video_mode_reason="test_fixture",
+            audio_mode="audio_transcode",
+            audio_mode_reason="test_fixture",
         )
 
         self.assertFalse(_playlist_ready_for_playback(session))
@@ -1115,6 +1563,102 @@ class VideoEndpointTests(AppTestCase):
         self.assertIn("init.mp4", command)
         self.assertIn("segment_%05d.m4s", command)
 
+    def test_build_ffmpeg_hls_command_adds_input_pacing_flags_before_input(self) -> None:
+        command = build_ffmpeg_hls_command(
+            Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+            "http://127.0.0.1:8000/file?path=movie.mkv&source=remote",
+            Path("E:/dev/dropbox_browser/Temp/video_sessions/test/stream.m3u8"),
+            segment_base_url="/video/endpoints/session/file?id=test&name=",
+            read_rate=1.2,
+            read_rate_initial_burst_seconds=15.0,
+            read_rate_catchup=2.5,
+        )
+
+        self.assertLess(command.index("-readrate"), command.index("-i"))
+        self.assertLess(command.index("-readrate_initial_burst"), command.index("-i"))
+        self.assertLess(command.index("-readrate_catchup"), command.index("-i"))
+        self.assertEqual(command[command.index("-readrate") + 1], "1.2")
+        self.assertEqual(command[command.index("-readrate_initial_burst") + 1], "15")
+        self.assertEqual(command[command.index("-readrate_catchup") + 1], "2.5")
+
+    def test_build_ffmpeg_hls_command_omits_input_pacing_flags_when_disabled(self) -> None:
+        command = build_ffmpeg_hls_command(
+            Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+            "http://127.0.0.1:8000/file?path=movie.mkv&source=remote",
+            Path("E:/dev/dropbox_browser/Temp/video_sessions/test/stream.m3u8"),
+            segment_base_url="/video/endpoints/session/file?id=test&name=",
+            read_rate=0.0,
+            read_rate_initial_burst_seconds=10.0,
+            read_rate_catchup=3.0,
+        )
+
+        self.assertNotIn("-readrate", command)
+        self.assertNotIn("-readrate_initial_burst", command)
+        self.assertNotIn("-readrate_catchup", command)
+
+    def test_build_ffmpeg_hls_command_adds_thread_flags_when_configured(self) -> None:
+        command = build_ffmpeg_hls_command(
+            Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+            "http://127.0.0.1:8000/file?path=movie.mkv&source=remote",
+            Path("E:/dev/dropbox_browser/Temp/video_sessions/test/stream.m3u8"),
+            segment_base_url="/video/endpoints/session/file?id=test&name=",
+            subtitle_stream_index=4,
+            threads=3,
+            filter_threads=2,
+        )
+
+        self.assertIn("-threads", command)
+        self.assertEqual(command[command.index("-threads") + 1], "3")
+        self.assertLess(command.index("-threads"), command.index("-c:v"))
+        self.assertIn("-filter_threads", command)
+        self.assertEqual(command[command.index("-filter_threads") + 1], "2")
+        self.assertIn("-filter_complex_threads", command)
+        self.assertEqual(command[command.index("-filter_complex_threads") + 1], "2")
+        self.assertLess(command.index("-filter_threads"), command.index("-filter_complex"))
+        self.assertLess(command.index("-filter_complex_threads"), command.index("-filter_complex"))
+
+    def test_build_ffmpeg_hls_command_omits_thread_flags_when_disabled(self) -> None:
+        command = build_ffmpeg_hls_command(
+            Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+            "http://127.0.0.1:8000/file?path=movie.mkv&source=remote",
+            Path("E:/dev/dropbox_browser/Temp/video_sessions/test/stream.m3u8"),
+            segment_base_url="/video/endpoints/session/file?id=test&name=",
+            threads=0,
+            filter_threads=0,
+        )
+
+        self.assertNotIn("-threads", command)
+        self.assertNotIn("-filter_threads", command)
+        self.assertNotIn("-filter_complex_threads", command)
+
+    def test_build_ffmpeg_hls_command_uses_video_copy_when_requested(self) -> None:
+        command = build_ffmpeg_hls_command(
+            Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+            "http://127.0.0.1:8000/file?path=movie.mkv&source=remote",
+            Path("E:/dev/dropbox_browser/Temp/video_sessions/test/stream.m3u8"),
+            segment_base_url="/video/endpoints/session/file?id=test&name=",
+            copy_video=True,
+        )
+
+        self.assertEqual(command[command.index("-c:v") + 1], "copy")
+        self.assertNotIn("-force_key_frames", command)
+        self.assertNotIn("-pix_fmt", command)
+        self.assertNotIn("libx264", command)
+
+    def test_build_ffmpeg_hls_command_uses_audio_copy_when_requested(self) -> None:
+        command = build_ffmpeg_hls_command(
+            Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+            "http://127.0.0.1:8000/file?path=movie.mkv&source=remote",
+            Path("E:/dev/dropbox_browser/Temp/video_sessions/test/stream.m3u8"),
+            segment_base_url="/video/endpoints/session/file?id=test&name=",
+            copy_audio=True,
+        )
+
+        self.assertEqual(command[command.index("-c:a") + 1], "copy")
+        self.assertNotIn("-ac", command)
+        self.assertNotIn("-ar", command)
+        self.assertNotIn("aac", [value for value in command if value == "aac"])
+
     def test_build_ffmpeg_hls_command_burns_in_selected_bitmap_subtitle_stream(self) -> None:
         command = build_ffmpeg_hls_command(
             Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
@@ -1124,6 +1668,7 @@ class VideoEndpointTests(AppTestCase):
             audio_stream_index=5,
             subtitle_stream_index=4,
             start_time_seconds=12.5,
+            copy_video=True,
         )
 
         self.assertLess(command.index("-ss"), command.index("-i"))
@@ -1133,6 +1678,7 @@ class VideoEndpointTests(AppTestCase):
         self.assertNotIn("0:v:0", [item for item in command if item == "0:v:0"])
         self.assertIn("0:5?", command)
         self.assertIn("-sn", command)
+        self.assertEqual(command[command.index("-c:v") + 1], "libx264")
 
     def test_subtitle_window_end_seconds_adds_start_and_duration(self) -> None:
         self.assertEqual(subtitle_window_end_seconds(12.5, 30.0), 42.5)

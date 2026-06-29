@@ -9,6 +9,10 @@ function resetPlaybackSurface() {
   ctx.state.lastPlaybackPath = '';
   ctx.state.compatibilityStartSeconds = 0;
   ctx.state.compatibilitySubtitleStreamIndex = null;
+  ctx.state.compatibilitySessionVideoMode = '';
+  ctx.state.compatibilitySessionVideoModeReason = '';
+  ctx.state.compatibilitySessionAudioMode = '';
+  ctx.state.compatibilitySessionAudioModeReason = '';
   ctx.state.requestedSeekSeconds = null;
   ctx.state.seekRestartInProgress = false;
   ctx.resetPlaybackProgress();
@@ -106,8 +110,14 @@ async function syncPlaybackForActiveItem() {
     ctx.state.compatibilitySessionPath = active.path || '';
     ctx.state.compatibilityAudioStreamIndex = audioStreamIndex;
     ctx.state.compatibilitySessionBurnedInSubtitleStreamIndex = burnedInSubtitleStreamIndex;
+    ctx.state.compatibilitySessionVideoMode = session.video_mode || '';
+    ctx.state.compatibilitySessionVideoModeReason = session.video_mode_reason || '';
+    ctx.state.compatibilitySessionAudioMode = session.audio_mode || '';
+    ctx.state.compatibilitySessionAudioModeReason = session.audio_mode_reason || '';
     ctx.reportPlaybackTiming('session_create_complete', {
       server_session_create_elapsed_ms: session.session_create_elapsed_ms,
+      video_mode: session.video_mode || '',
+      audio_mode: session.audio_mode || '',
     });
     ctx.showLoadingOverlay(ctx.loadingOverlayCopy(
       active,

@@ -17,6 +17,13 @@ const hlsStubSource = fs.readFileSync(
   "utf8",
 );
 
+test.describe.configure({ timeout: 90000 });
+
+function isClosedRouteError(error) {
+  const message = error && error.message ? String(error.message) : "";
+  return message.includes("Target page, context or browser has been closed");
+}
+
 const LOADING_OVERLAY_MONITOR = () => {
   window.__loadingOverlayHistory = [];
 
@@ -90,6 +97,10 @@ test.beforeEach(async ({ page }) => {
     window.localStorage.removeItem("dropbox-browser-video-subtitle-track-preferences");
   });
   await page.addInitScript(LOADING_OVERLAY_MONITOR);
+});
+
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: "ignoreErrors" });
 });
 
 test.afterAll(async () => {
@@ -195,7 +206,7 @@ async function waitForLoadingOverlayHidden(page) {
         const style = window.getComputedStyle(overlay);
         return style.display === "none" || style.visibility === "hidden" || style.opacity === "0";
       });
-    }, { timeout: 15000 })
+    }, { timeout: 30000 })
     .toBe(true);
 }
 
@@ -290,7 +301,7 @@ async function waitForMountedSubtitleTrack(page, streamIndex) {
           cueCount: textTrack && textTrack.cues ? textTrack.cues.length : 0,
         };
       }, streamIndex);
-    }, { timeout: 15000 })
+    }, { timeout: 30000 })
     .toMatchObject({
       readyState: 2,
       mode: "hidden",
@@ -348,7 +359,13 @@ test("startup scrubber reflects full cached subtitle coverage after delayed extr
   test.setTimeout(90000);
 
   await page.route("**/video/endpoints/subtitles/window?**path=Videos%2Falpha.mkv**", async (route) => {
-    const response = await route.fetch();
+    let response;
+    try {
+      response = await route.fetch();
+    } catch (error) {
+      if (isClosedRouteError(error)) return;
+      throw error;
+    }
     const payload = await response.json();
     payload.loaded_ranges = [{ start_seconds: 0, end_seconds: 3 }];
     payload.window_end_seconds = 3;

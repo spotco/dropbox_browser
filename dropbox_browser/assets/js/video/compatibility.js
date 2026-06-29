@@ -82,14 +82,22 @@ function clearCompatibilityManifestStallTimer() {
 }
 
 function clearCompatibilityRecoveryTimer() {
+  ctx.state.compatibilityRecoveryScheduled = false;
+  ctx.state.compatibilityRecoveryForceVideoTranscode = false;
+  ctx.state.compatibilityRecoveryForceAudioTranscode = false;
+  ctx.state.compatibilityRecoveryFallbackKey = '';
   if (!ctx.state.compatibilityRecoveryTimer) return;
   window.clearTimeout(ctx.state.compatibilityRecoveryTimer);
   ctx.state.compatibilityRecoveryTimer = 0;
-  ctx.state.compatibilityRecoveryScheduled = false;
 }
 
 function resetCompatibilityRecoveryState() {
   ctx.state.compatibilityRecoveryAttempts = 0;
+  ctx.state.compatibilityForcedVideoTranscodeRetryKeys = Object.create(null);
+  ctx.state.compatibilityForcedAudioTranscodeRetryKeys = Object.create(null);
+  ctx.state.compatibilityRecoveryForceVideoTranscode = false;
+  ctx.state.compatibilityRecoveryForceAudioTranscode = false;
+  ctx.state.compatibilityRecoveryFallbackKey = '';
   clearCompatibilityRecoveryTimer();
 }
 
@@ -108,16 +116,37 @@ function isStaleOrMissingSegmentHlsError(data) {
   return reason.indexOf('404') >= 0 || reason.indexOf('Not Found') >= 0;
 }
 
-function scheduleCompatibilityRecovery(reason, targetSeconds, data) {
+function compatibilityForcedVideoTranscodeRetryKey(itemPath, targetSeconds) {
+  var path = String(itemPath || '');
+  var seconds = Math.max(0, Number(targetSeconds) || 0).toFixed(3);
+  return path + '|' + seconds;
+}
+
+function compatibilityForcedAudioTranscodeRetryKey(itemPath, targetSeconds) {
+  var path = String(itemPath || '');
+  var seconds = Math.max(0, Number(targetSeconds) || 0).toFixed(3);
+  return path + '|' + seconds;
+}
+
+function scheduleCompatibilityRecovery(reason, targetSeconds, data, options) {
   var active = ctx.activeQueueItem();
-  if (!active || !ctx.state.compatibilityAvailable) return;
-  if (ctx.state.compatibilityRecoveryTimer || ctx.state.compatibilityRecoveryScheduled) return;
-  if (ctx.state.seekRestartInProgress) return;
+  if (!active || !ctx.state.compatibilityAvailable) return false;
+  if (ctx.state.compatibilityRecoveryTimer || ctx.state.compatibilityRecoveryScheduled) return false;
+  if (ctx.state.seekRestartInProgress) return false;
 
   ctx.state.compatibilityRecoveryAttempts += 1;
   ctx.state.compatibilityRecoveryScheduled = true;
   ctx.state.transportWantsPlay = true;
   ctx.state.pendingAutoplay = true;
+  ctx.state.compatibilityRecoveryForceVideoTranscode = Boolean(
+    options && options.forceVideoTranscode
+  );
+  ctx.state.compatibilityRecoveryForceAudioTranscode = Boolean(
+    options && options.forceAudioTranscode
+  );
+  ctx.state.compatibilityRecoveryFallbackKey = options && options.fallbackKey
+    ? String(options.fallbackKey)
+    : '';
 
   var resumeSeconds = Number.isFinite(Number(targetSeconds)) && Number(targetSeconds) >= 0
     ? Number(targetSeconds)
@@ -137,17 +166,98 @@ function scheduleCompatibilityRecovery(reason, targetSeconds, data) {
     recovery_attempt: ctx.state.compatibilityRecoveryAttempts,
     recovery_delay_ms: delayMs,
     resume_time: resumeSeconds,
+    force_video_transcode: ctx.state.compatibilityRecoveryForceVideoTranscode ? '1' : '0',
+    force_audio_transcode: ctx.state.compatibilityRecoveryForceAudioTranscode ? '1' : '0',
     hls_details: data && data.details || '',
     hls_reason: data && (data.reason || data.error && data.error.message) || '',
     hls_url: data && data.frag && data.frag.url ? data.frag.url : (data && data.context && data.context.url ? data.context.url : ''),
   });
 
   ctx.state.compatibilityRecoveryTimer = window.setTimeout(function () {
+    var restartForceVideoTranscode = Boolean(ctx.state.compatibilityRecoveryForceVideoTranscode);
+    var restartForceAudioTranscode = Boolean(ctx.state.compatibilityRecoveryForceAudioTranscode);
     ctx.state.compatibilityRecoveryTimer = 0;
     ctx.state.compatibilityRecoveryScheduled = false;
+    ctx.state.compatibilityRecoveryForceVideoTranscode = false;
+    ctx.state.compatibilityRecoveryForceAudioTranscode = false;
+    ctx.state.compatibilityRecoveryFallbackKey = '';
     if (!ctx.activeQueueItem() || !ctx.state.compatibilityAvailable) return;
-    void restartCompatibilityAt(resumeSeconds, reason || 'auto-recovery');
+    void restartCompatibilityAt(resumeSeconds, reason || 'auto-recovery', {
+      forceVideoTranscode: restartForceVideoTranscode,
+      forceAudioTranscode: restartForceAudioTranscode,
+    });
   }, delayMs);
+  return true;
+}
+
+function scheduleCompatibilityVideoCopyFallback(reason, targetSeconds, data) {
+  var active = ctx.activeQueueItem();
+  if (!active || !active.path) return false;
+  if (ctx.state.compatibilitySessionVideoMode !== 'video_copy') return false;
+  if (!ctx.state.compatibilityForcedVideoTranscodeRetryKeys) {
+    ctx.state.compatibilityForcedVideoTranscodeRetryKeys = Object.create(null);
+  }
+  var fallbackKey = compatibilityForcedVideoTranscodeRetryKey(active.path || '', targetSeconds);
+  if (ctx.state.compatibilityForcedVideoTranscodeRetryKeys[fallbackKey]) {
+    ctx.reportVideoDiagnostic({
+      level: 'warn',
+      message: 'Compatibility video-copy fallback suppressed after prior forced transcode retry',
+      recovery_reason: reason || '',
+      resume_time: Number(targetSeconds) || 0,
+      fallback_key: fallbackKey,
+    });
+    return false;
+  }
+  var scheduled = scheduleCompatibilityRecovery(reason, targetSeconds, data, {
+    forceVideoTranscode: true,
+    fallbackKey,
+  });
+  if (!scheduled) return false;
+  ctx.state.compatibilityForcedVideoTranscodeRetryKeys[fallbackKey] = true;
+  ctx.setStatus('Compatibility playback copy mode failed; retrying with video transcode.');
+  ctx.reportVideoDiagnostic({
+    level: 'warn',
+    message: 'Compatibility video-copy fallback scheduled',
+    recovery_reason: reason || '',
+    resume_time: Number(targetSeconds) || 0,
+    fallback_key: fallbackKey,
+  });
+  return true;
+}
+
+function scheduleCompatibilityAudioCopyFallback(reason, targetSeconds, data) {
+  var active = ctx.activeQueueItem();
+  if (!active || !active.path) return false;
+  if (ctx.state.compatibilitySessionAudioMode !== 'audio_copy') return false;
+  if (!ctx.state.compatibilityForcedAudioTranscodeRetryKeys) {
+    ctx.state.compatibilityForcedAudioTranscodeRetryKeys = Object.create(null);
+  }
+  var fallbackKey = compatibilityForcedAudioTranscodeRetryKey(active.path || '', targetSeconds);
+  if (ctx.state.compatibilityForcedAudioTranscodeRetryKeys[fallbackKey]) {
+    ctx.reportVideoDiagnostic({
+      level: 'warn',
+      message: 'Compatibility audio-copy fallback suppressed after prior forced audio transcode retry',
+      recovery_reason: reason || '',
+      resume_time: Number(targetSeconds) || 0,
+      fallback_key: fallbackKey,
+    });
+    return false;
+  }
+  var scheduled = scheduleCompatibilityRecovery(reason, targetSeconds, data, {
+    forceAudioTranscode: true,
+    fallbackKey,
+  });
+  if (!scheduled) return false;
+  ctx.state.compatibilityForcedAudioTranscodeRetryKeys[fallbackKey] = true;
+  ctx.setStatus('Compatibility playback audio copy mode failed; retrying with audio transcode.');
+  ctx.reportVideoDiagnostic({
+    level: 'warn',
+    message: 'Compatibility audio-copy fallback scheduled',
+    recovery_reason: reason || '',
+    resume_time: Number(targetSeconds) || 0,
+    fallback_key: fallbackKey,
+  });
+  return true;
 }
 
 function handleCompatibilityHlsError(data) {
@@ -170,6 +280,12 @@ function handleCompatibilityHlsError(data) {
   }
 
   if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+    if (scheduleCompatibilityVideoCopyFallback('hls-media-copy-fallback', ctx.currentGlobalPlaybackSeconds(), data)) {
+      return;
+    }
+    if (scheduleCompatibilityAudioCopyFallback('hls-media-audio-copy-fallback', ctx.currentGlobalPlaybackSeconds(), data)) {
+      return;
+    }
     ctx.setStatus('Compatibility playback hit a media error; attempting recovery.');
     if (ctx.state.hlsController) {
       ctx.state.hlsController.recoverMediaError();
@@ -365,6 +481,10 @@ async function stopCompatibilitySession() {
   ctx.state.compatibilitySessionPath = '';
   ctx.state.compatibilityAudioStreamIndex = null;
   ctx.state.compatibilitySessionBurnedInSubtitleStreamIndex = null;
+  ctx.state.compatibilitySessionVideoMode = '';
+  ctx.state.compatibilitySessionVideoModeReason = '';
+  ctx.state.compatibilitySessionAudioMode = '';
+  ctx.state.compatibilitySessionAudioModeReason = '';
   ctx.state.compatibilityEncodedMediaEndSeconds = 0;
   ctx.state.compatibilitySubtitleStreamIndex = null;
   destroyHlsController();
@@ -576,7 +696,7 @@ function attachCompatibilityVideo(playlistUrl, title, meta, startSeconds, surfac
   ctx.syncTransportControls();
 }
 
-async function createCompatibilitySession(item, audioStreamIndex, startSeconds, subtitleStreamIndex) {
+async function createCompatibilitySession(item, audioStreamIndex, startSeconds, subtitleStreamIndex, options) {
   var body = 'path=' + encodeURIComponent(item.path || '')
       + '&source=remote'
       + '&start_time_seconds=' + encodeURIComponent(String(Math.max(0, Number(startSeconds) || 0)));
@@ -586,6 +706,12 @@ async function createCompatibilitySession(item, audioStreamIndex, startSeconds, 
     if (typeof subtitleStreamIndex === 'number') {
       body += '&subtitle_stream_index=' + encodeURIComponent(String(subtitleStreamIndex));
     }
+  if (options && options.forceVideoTranscode) {
+    body += '&force_video_transcode=1';
+  }
+  if (options && options.forceAudioTranscode) {
+    body += '&force_audio_transcode=1';
+  }
   var response = await fetch('/video/endpoints/session', {
     method: 'POST',
     headers: {'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8'},
@@ -678,10 +804,12 @@ function trySeekCompatibilityInSession(active, probePayload, clampedTarget, reas
   return true;
 }
 
-async function restartCompatibilityAt(targetSeconds, reason) {
+async function restartCompatibilityAt(targetSeconds, reason, options) {
   var active = ctx.activeQueueItem();
   if (!active || !ctx.state.compatibilityAvailable) return;
   clearCompatibilityRecoveryTimer();
+  var forceVideoTranscode = Boolean(options && options.forceVideoTranscode);
+  var forceAudioTranscode = Boolean(options && options.forceAudioTranscode);
   var syncToken = ++ctx.state.playbackSyncToken;
   var rawTargetSeconds = Math.max(0, Number(targetSeconds) || 0);
   ctx.reportCompatibilitySeekTiming('restart_seek_started', {
@@ -710,7 +838,11 @@ async function restartCompatibilityAt(targetSeconds, reason) {
       });
     }
   }
-  var forceSessionRestart = compatibilityRecoveryRequiresSessionRestart(reason || '');
+  var forceSessionRestart = (
+    forceVideoTranscode
+    || forceAudioTranscode
+    || compatibilityRecoveryRequiresSessionRestart(reason || '')
+  );
   if (!forceSessionRestart && trySeekCompatibilityInSession(active, cachedProbePayload, clampedTarget, reason, 'before-probe')) {
     return;
   }
@@ -791,7 +923,11 @@ async function restartCompatibilityAt(targetSeconds, reason) {
       active,
       audioStreamIndex,
       clampedTarget,
-      burnedInSubtitleStreamIndex
+      burnedInSubtitleStreamIndex,
+      {
+        forceVideoTranscode,
+        forceAudioTranscode,
+      }
     );
     if (syncToken !== ctx.state.playbackSyncToken) {
       await stopCompatibilitySession();
@@ -801,9 +937,15 @@ async function restartCompatibilityAt(targetSeconds, reason) {
     ctx.state.compatibilitySessionPath = active.path || '';
     ctx.state.compatibilityAudioStreamIndex = audioStreamIndex;
     ctx.state.compatibilitySessionBurnedInSubtitleStreamIndex = burnedInSubtitleStreamIndex;
+    ctx.state.compatibilitySessionVideoMode = session.video_mode || '';
+    ctx.state.compatibilitySessionVideoModeReason = session.video_mode_reason || '';
+    ctx.state.compatibilitySessionAudioMode = session.audio_mode || '';
+    ctx.state.compatibilitySessionAudioModeReason = session.audio_mode_reason || '';
     ctx.reportPlaybackTiming('session_create_complete', {
       requested_time: clampedTarget,
       server_session_create_elapsed_ms: session.session_create_elapsed_ms,
+      force_video_transcode: forceVideoTranscode ? '1' : '0',
+      force_audio_transcode: forceAudioTranscode ? '1' : '0',
     });
     ctx.reportCompatibilitySeekTiming('session_create_response', {
       requested_time: clampedTarget,
@@ -811,6 +953,10 @@ async function restartCompatibilityAt(targetSeconds, reason) {
       encoded_media_end_seconds: Number(session.encoded_media_end_seconds) || 0,
       session_id: session.session_id || '',
       seek_reason: reason || '',
+      video_mode: session.video_mode || '',
+      force_video_transcode: forceVideoTranscode ? '1' : '0',
+      audio_mode: session.audio_mode || '',
+      force_audio_transcode: forceAudioTranscode ? '1' : '0',
     });
     ctx.showLoadingOverlay(ctx.loadingOverlayCopy(
       active,
@@ -888,6 +1034,10 @@ async function restartCompatibilityAt(targetSeconds, reason) {
   ctx.compatibilityRecoveryDelayMs = compatibilityRecoveryDelayMs;
   ctx.isStaleOrMissingSegmentHlsError = isStaleOrMissingSegmentHlsError;
   ctx.scheduleCompatibilityRecovery = scheduleCompatibilityRecovery;
+  ctx.scheduleCompatibilityVideoCopyFallback = scheduleCompatibilityVideoCopyFallback;
+  ctx.scheduleCompatibilityAudioCopyFallback = scheduleCompatibilityAudioCopyFallback;
+  ctx.compatibilityForcedVideoTranscodeRetryKey = compatibilityForcedVideoTranscodeRetryKey;
+  ctx.compatibilityForcedAudioTranscodeRetryKey = compatibilityForcedAudioTranscodeRetryKey;
   ctx.handleCompatibilityHlsError = handleCompatibilityHlsError;
   ctx.resetCompatibilityBufferState = resetCompatibilityBufferState;
   ctx.compatibilitySeekableRanges = compatibilitySeekableRanges;
@@ -997,6 +1147,12 @@ async function restartCompatibilityAt(targetSeconds, reason) {
         media_error_code: ctx.els.videoEl.error ? ctx.els.videoEl.error.code : '',
         media_error_message: ctx.els.videoEl.error ? ctx.els.videoEl.error.message : '',
       });
+      if (scheduleCompatibilityVideoCopyFallback('media-element-copy-fallback', ctx.currentGlobalPlaybackSeconds(), null)) {
+        return;
+      }
+      if (scheduleCompatibilityAudioCopyFallback('media-element-audio-copy-fallback', ctx.currentGlobalPlaybackSeconds(), null)) {
+        return;
+      }
       scheduleCompatibilityRecovery('media-element-error', ctx.currentGlobalPlaybackSeconds(), null);
     });
   }

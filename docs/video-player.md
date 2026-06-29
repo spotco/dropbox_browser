@@ -53,6 +53,31 @@ Generated state under `Temp/` (not source artifacts):
 - `Temp/video_header_cache/` — header byte cache for probe acceleration
 - `Temp/video_debug.jsonl` — server diagnostics when `LogVideoDebug` is enabled
 
+Video-related config in `config.json` / `config_local.json`:
+
+- `VideoFFmpegReadRate` — optional ffmpeg `-readrate` multiplier for HLS input pacing.
+- `VideoFFmpegInitialBurstSeconds` — optional `-readrate_initial_burst` startup burst.
+- `VideoFFmpegCatchupReadRate` — optional `-readrate_catchup` recovery rate after stalls/seeks.
+- `VideoFFmpegThreads` — optional ffmpeg encoder/output `-threads` value.
+- `VideoFFmpegFilterThreads` — optional `-filter_threads` and
+  `-filter_complex_threads` value, mainly useful for burned-in subtitle sessions.
+- `VideoFFmpegProcessPriority` — Windows-only ffmpeg process priority:
+  `below_normal` by default, with `idle` and `normal` also accepted.
+
+Pacing values are clamped conservatively in config loading. A read rate of `0`
+or blank disables ffmpeg input pacing entirely and omits the related flags.
+Thread values of `0` or blank keep ffmpeg's automatic thread behavior. Lower
+fixed thread counts can reduce peak CPU use, but may make realtime encoding
+impossible on slower machines or more complex files.
+On Windows, process priority can make the desktop more responsive while ffmpeg
+runs. It does not reduce total encode work; it only changes scheduling priority.
+
+For CPU/pacing validation, `misc/benchmark_video_startup.py` can be run against a
+running local server. It creates JSONL results under `Temp/video_benchmarks/` by
+default and records probe/session startup timing, playlist segment growth,
+encoded media edge, best-effort ffmpeg CPU samples, and video-related client log
+events observed during the run.
+
 ### HTTP Endpoints
 
 All routes are under `/video/endpoints/`.
@@ -75,11 +100,28 @@ Session creation (`POST /video/endpoints/session`) accepts form fields:
 - `audio_stream_index` — optional ffmpeg audio stream index
 - `subtitle_stream_index` — optional burned-in subtitle stream index
 - `start_time_seconds` — seek target for the new session
+- `force_video_transcode` — optional retry knob (`1`) that disables H.264
+  stream copy for that session request
+- `force_audio_transcode` — optional retry knob (`1`) that disables AAC
+  stream copy for that session request
 
 The server builds an ffmpeg command that reads from the local `/file` URL for the
 remote path, writes fMP4 HLS into `Temp/video_sessions/<uuid>/`, and returns a
 playlist URL under `/video/endpoints/session/file`. Only one active session is
 kept at a time; creating a new session stops the previous one.
+
+When probe metadata says the selected video stream is browser/HLS-safe H.264 and
+no burned-in subtitle stream is selected, the server uses `-c:v copy` and omits
+transcode-only flags such as `-pix_fmt yuv420p` and `-force_key_frames`.
+Otherwise it stays on the existing x264 transcode path. Session payloads and
+diagnostics include `video_mode` (`video_copy` or `video_transcode`) plus
+`video_mode_reason`.
+
+When probe metadata says the selected audio stream is AAC, the server uses
+`-c:a copy` and omits audio normalization flags such as `-ac 2` and
+`-ar 48000`. Otherwise it stays on the existing AAC transcode path. Session
+payloads and diagnostics include `audio_mode` (`audio_copy` or
+`audio_transcode`) plus `audio_mode_reason`.
 
 `GET /video/endpoints/status` is polled by the client during playback to learn
 `encoded_media_end_seconds` for the active session (how far ffmpeg has encoded
@@ -90,7 +132,9 @@ ahead of the session start).
 `VideoSessionManager` in `video.py`:
 
 1. Resolves the remote file path and builds an input URL (`/file?path=...&source=remote`).
-2. Spawns ffmpeg with `build_ffmpeg_hls_command(...)`.
+2. Spawns ffmpeg with `build_ffmpeg_hls_command(...)`, optionally adding
+   ffmpeg input pacing flags before `-i` when `VideoFFmpegReadRate` is enabled.
+   On Windows, ffmpeg is started with the configured process priority.
 3. Waits for `stream.m3u8` to become ready (longer timeout when burned-in subtitles are requested).
 4. Serves playlist and segment files through `session/file`.
 5. Rewrites the playlist's `#EXT-X-MAP` URI and injects `#EXT-X-START` when serving `.m3u8`.
@@ -102,7 +146,11 @@ client pure module `video/compatibility-core.js`.
 ### Probe and Subtitles
 
 `probe_remote_media()` uses ffprobe (with disk cache) to return audio/subtitle
-stream layout, duration, and compatibility hints.
+stream layout, duration, and compatibility hints. Video stream rows include
+`hls_video_copy_compatible` and `hls_video_copy_reason` so compatibility
+session creation can decide whether `-c:v copy` is safe. Audio stream rows
+include `hls_audio_copy_compatible` and `hls_audio_copy_reason` so session
+creation can decide whether `-c:a copy` is safe.
 
 Subtitle extraction uses ffmpeg to produce WebVTT:
 
@@ -210,6 +258,14 @@ defer a follow-up seek when the user scrubs during an in-flight restart.
 HLS errors and missing segments schedule recovery through `compatibility.js`, which
 may restart the session when `compatibilityRecoveryRequiresSessionRestart()` says
 a new ffmpeg session is required.
+If a `video_copy` session hits a fatal media/codec playback failure, the client
+restarts session creation with `force_video_transcode=1` so the retry falls back
+to the normal x264 path. That fallback is one-shot per playback item and resume
+timestamp to avoid copy/transcode retry loops.
+If an `audio_copy` session hits a fatal media/codec playback failure, the client
+restarts session creation with `force_audio_transcode=1` so the retry falls back
+to the normal AAC transcode/downmix path. That fallback is also one-shot per
+playback item and resume timestamp.
 
 ### Subtitles
 

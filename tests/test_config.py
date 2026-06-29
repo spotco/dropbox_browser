@@ -42,6 +42,12 @@ class ConfigDefaultsTests(unittest.TestCase):
 
         self.assertEqual(config["FFMpegPath"], "")
         self.assertEqual(config["FFProbePath"], "")
+        self.assertEqual(config["VideoFFmpegReadRate"], 0.0)
+        self.assertEqual(config["VideoFFmpegInitialBurstSeconds"], 0.0)
+        self.assertEqual(config["VideoFFmpegCatchupReadRate"], 0.0)
+        self.assertEqual(config["VideoFFmpegThreads"], 0)
+        self.assertEqual(config["VideoFFmpegFilterThreads"], 0)
+        self.assertEqual(config["VideoFFmpegProcessPriority"], "below_normal")
         self.assertEqual(config["VideoSubtitleFontFamily"], "Arial, Helvetica, sans-serif")
         self.assertEqual(config["VideoSubtitleFontSizePx"], 28)
         self.assertTrue(config["VideoSubtitleBold"])
@@ -53,6 +59,12 @@ class ConfigDefaultsTests(unittest.TestCase):
     def test_packaged_config_video_subtitle_defaults_are_present(self) -> None:
         config = config_module._read_config_file(config_module.PROJECT_ROOT / "config.json")
 
+        self.assertEqual(config["VideoFFmpegReadRate"], 0.0)
+        self.assertEqual(config["VideoFFmpegInitialBurstSeconds"], 0.0)
+        self.assertEqual(config["VideoFFmpegCatchupReadRate"], 0.0)
+        self.assertEqual(config["VideoFFmpegThreads"], 0)
+        self.assertEqual(config["VideoFFmpegFilterThreads"], 0)
+        self.assertEqual(config["VideoFFmpegProcessPriority"], "below_normal")
         self.assertEqual(config["VideoSubtitleFontFamily"], "Arial, Helvetica, sans-serif")
         self.assertEqual(config["VideoSubtitleFontSizePx"], 28)
         self.assertTrue(config["VideoSubtitleBold"])
@@ -179,12 +191,127 @@ class VideoToolsConfigTests(unittest.TestCase):
         with (
             patch.object(config_module, "find_vendored_ffmpeg", return_value=None),
             patch.object(config_module, "find_vendored_ffprobe", return_value=None),
-            patch.object(config_module.shutil, "which", side_effect=["C:/bin/ffmpeg.exe", "C:/bin/ffprobe.exe"]),
+            patch.object(
+                config_module.shutil,
+                "which",
+                side_effect=[
+                    "C:/bin/ffmpeg.exe",
+                    "C:/bin/ffprobe.exe",
+                    "C:/bin/ffmpeg.exe",
+                    "C:/bin/ffprobe.exe",
+                ],
+            ),
         ):
             video_config = config_module.load_video_tools_config({})
 
         self.assertEqual(video_config.ffmpeg_exe, Path("C:/bin/ffmpeg.exe").resolve())
         self.assertEqual(video_config.ffprobe_exe, Path("C:/bin/ffprobe.exe").resolve())
+
+    def test_load_video_tools_config_reads_ffmpeg_input_pacing_settings(self) -> None:
+        with (
+            patch.object(config_module, "find_vendored_ffmpeg", return_value=None),
+            patch.object(config_module, "find_vendored_ffprobe", return_value=None),
+            patch.object(
+                config_module.shutil,
+                "which",
+                side_effect=[
+                    "C:/bin/ffmpeg.exe",
+                    "C:/bin/ffprobe.exe",
+                    "C:/bin/ffmpeg.exe",
+                    "C:/bin/ffprobe.exe",
+                ],
+            ),
+        ):
+            video_config = config_module.load_video_tools_config({
+                "VideoFFmpegReadRate": "1.25",
+                "VideoFFmpegInitialBurstSeconds": "18.5",
+                "VideoFFmpegCatchupReadRate": 2,
+            })
+
+        self.assertEqual(video_config.ffmpeg_read_rate, 1.25)
+        self.assertEqual(video_config.ffmpeg_initial_burst_seconds, 18.5)
+        self.assertEqual(video_config.ffmpeg_catchup_read_rate, 2.0)
+
+    def test_load_video_tools_config_clamps_invalid_ffmpeg_input_pacing_settings(self) -> None:
+        with (
+            patch.object(config_module, "find_vendored_ffmpeg", return_value=None),
+            patch.object(config_module, "find_vendored_ffprobe", return_value=None),
+            patch.object(config_module.shutil, "which", side_effect=["C:/bin/ffmpeg.exe", "C:/bin/ffprobe.exe"]),
+        ):
+            video_config = config_module.load_video_tools_config({
+                "VideoFFmpegReadRate": "-2",
+                "VideoFFmpegInitialBurstSeconds": "oops",
+                "VideoFFmpegCatchupReadRate": 99,
+            })
+
+        self.assertEqual(video_config.ffmpeg_read_rate, 0.0)
+        self.assertEqual(video_config.ffmpeg_initial_burst_seconds, 0.0)
+        self.assertEqual(video_config.ffmpeg_catchup_read_rate, 16.0)
+
+    def test_load_video_tools_config_reads_ffmpeg_thread_settings(self) -> None:
+        with (
+            patch.object(config_module, "find_vendored_ffmpeg", return_value=None),
+            patch.object(config_module, "find_vendored_ffprobe", return_value=None),
+            patch.object(config_module.shutil, "which", side_effect=["C:/bin/ffmpeg.exe", "C:/bin/ffprobe.exe"]),
+        ):
+            video_config = config_module.load_video_tools_config({
+                "VideoFFmpegThreads": "4",
+                "VideoFFmpegFilterThreads": 2,
+            })
+
+        self.assertEqual(video_config.ffmpeg_threads, 4)
+        self.assertEqual(video_config.ffmpeg_filter_threads, 2)
+
+    def test_load_video_tools_config_clamps_invalid_ffmpeg_thread_settings(self) -> None:
+        with (
+            patch.object(config_module, "find_vendored_ffmpeg", return_value=None),
+            patch.object(config_module, "find_vendored_ffprobe", return_value=None),
+            patch.object(config_module.shutil, "which", side_effect=["C:/bin/ffmpeg.exe", "C:/bin/ffprobe.exe"]),
+        ):
+            video_config = config_module.load_video_tools_config({
+                "VideoFFmpegThreads": "-1",
+                "VideoFFmpegFilterThreads": 999,
+            })
+
+        self.assertEqual(video_config.ffmpeg_threads, 0)
+        self.assertEqual(video_config.ffmpeg_filter_threads, 64)
+
+    def test_load_video_tools_config_reads_ffmpeg_process_priority(self) -> None:
+        with (
+            patch.object(config_module, "find_vendored_ffmpeg", return_value=None),
+            patch.object(config_module, "find_vendored_ffprobe", return_value=None),
+            patch.object(config_module.shutil, "which", side_effect=["C:/bin/ffmpeg.exe", "C:/bin/ffprobe.exe"]),
+        ):
+            video_config = config_module.load_video_tools_config({
+                "VideoFFmpegProcessPriority": "idle",
+            })
+
+        self.assertEqual(video_config.ffmpeg_process_priority, "idle")
+
+    def test_load_video_tools_config_normalizes_invalid_ffmpeg_process_priority(self) -> None:
+        with (
+            patch.object(config_module, "find_vendored_ffmpeg", return_value=None),
+            patch.object(config_module, "find_vendored_ffprobe", return_value=None),
+            patch.object(
+                config_module.shutil,
+                "which",
+                side_effect=[
+                    "C:/bin/ffmpeg.exe",
+                    "C:/bin/ffprobe.exe",
+                    "C:/bin/ffmpeg.exe",
+                    "C:/bin/ffprobe.exe",
+                ],
+            ),
+        ):
+            hyphenated_config = config_module.load_video_tools_config({
+                "VideoFFmpegProcessPriority": "below-normal",
+            })
+            invalid_config = config_module.load_video_tools_config({
+                "VideoFFmpegProcessPriority": "realtime",
+            })
+
+        self.assertEqual(hyphenated_config.ffmpeg_process_priority, "below_normal")
+        self.assertEqual(invalid_config.ffmpeg_process_priority, "below_normal")
 
 
 if __name__ == "__main__":
