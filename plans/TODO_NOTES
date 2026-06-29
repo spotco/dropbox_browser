@@ -1,10 +1,5 @@
-plans\WINDOWED_SUBTITLE_EXTRACTION_PLAN.md
-
-- subtitles not working
-	http://localhost:8000/file?path=anime%2Fconan_24%2F%5BAh-le-le%5D+Detective+Conan+Movie+24v0+-+The+Scarlet+Bullet+%28BDRip+1080p+HEVC+FLAC+TrueHD%29+%5B12A80FEC%5D.mkv&source=remote
-	
-- http://localhost:8000/file?path=anime%2Fconan_24%2F%5BAh-le-le%5D+Detective+Conan+Movie+24v0+-+The+Scarlet+Bullet+%28BDRip+1080p+HEVC+FLAC+TrueHD%29+%5B12A80FEC%5D.mkv&source=remote
-	subtitles take a long time to load
+- more responsive load (time to end of loaded, smaller faster load smaller section), display time to end of buffer
+- cpu load too high on surface - only high at small buffer time (more responsive)
 
 ---
 
@@ -30,9 +25,6 @@ Traceback (most recent call last):
   File "http\server.py", line 591, in flush_headers
   File "socketserver.py", line 845, in write
 ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host
-	
-- more responsive load (time to end of loaded, smaller faster load smaller section), display time to end of buffer
-- cpu load too high on surface - only high at small buffer time (more responsive)
 
 - scrubbing outside of loaded area should not clear loaded cache
 - forward/backward playlist + at end, loop
