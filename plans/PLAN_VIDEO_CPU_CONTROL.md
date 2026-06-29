@@ -182,95 +182,105 @@ server-side backpressure.
 
 ## Phase 6 - Define Sliding-Scale Backpressure Contract
 
-- [ ] Define server-side session state for client playback position:
+- [x] Define server-side session state for client playback position:
       current global playback seconds, update timestamp, paused/playing state,
       and last client sync token if useful.
-- [ ] Define a lightweight client-to-server update path, either by extending
+- [x] Define a lightweight client-to-server update path, either by extending
       `/video/endpoints/status` or adding a small POST endpoint such as
       `/video/endpoints/session/progress`.
-- [ ] Define the initial backpressure thresholds:
+- [x] Define the initial backpressure thresholds:
       no throttle below the low watermark, mild throttle in the middle range,
       heavy throttle above the high watermark, and pause input beyond the max
       watermark.
-- [ ] Use reasonable initial sliding-scale thresholds:
+- [x] Use reasonable initial sliding-scale thresholds:
       low `45s`, medium `120s`, high `300s`, and max `600s`.
 - [ ] Include sliding-scale threshold variants in the measurement tooling and
       adjust defaults only if real playback validation shows stutter/loading or
       excessive post-buffer CPU.
-- [ ] Make thresholds config-driven from the start so weak-machine tuning does
+- [x] Make thresholds config-driven from the start so weak-machine tuning does
       not require code changes.
-- [ ] Document the expected behavior around pause, seek, session replacement,
+- [x] Document the expected behavior around pause, seek, session replacement,
       and browser disconnect.
 
 ## Phase 7 - Tag ffmpeg Input Requests With Session Identity
 
-- [ ] Add `video_session_id=<session_id>` to the ffmpeg input URL generated in
+- [x] Add `video_session_id=<session_id>` to the ffmpeg input URL generated in
       `VideoSessionManager.create_session()`.
-- [ ] Ensure `/file` still behaves normally when `video_session_id` is absent.
-- [ ] Validate that `video_session_id` only affects the active matching HLS
+- [x] Ensure `/file` still behaves normally when `video_session_id` is absent.
+- [x] Validate that `video_session_id` only affects the active matching HLS
       session and cannot access arbitrary paths.
-- [ ] Add tests proving ordinary `/file` streaming is unchanged.
-- [ ] Add tests proving a tagged ffmpeg input request can be associated with the
+- [x] Add tests proving ordinary `/file` streaming is unchanged.
+- [x] Add tests proving a tagged ffmpeg input request can be associated with the
       active video session.
 
 ## Phase 8 - Add Throttled Remote Copy For ffmpeg Input
 
-- [ ] Add a streaming copy helper for remote `/file` responses that can sleep or
+- [x] Add a streaming copy helper for remote `/file` responses that can sleep or
       pause between chunks according to an active session throttle decision.
-- [ ] Keep the existing `copy_exact()` behavior for non-video-session requests.
-- [ ] Calculate encode-ahead from:
+- [x] Keep the existing `copy_exact()` behavior for non-video-session requests.
+- [x] Calculate encode-ahead from:
       `session.start_time_seconds + encoded_media_end_seconds -
       reported_playback_seconds`.
-- [ ] Use the existing playlist parsing path to update encoded media edge while
+- [x] Use the existing playlist parsing path to update encoded media edge while
       streaming.
-- [ ] Kill or unblock the underlying rclone process promptly if the client
+- [x] Kill or unblock the underlying rclone process promptly if the client
       disconnects or the HLS session is replaced.
-- [ ] Add diagnostics for throttle mode, ahead seconds, sleep duration, and
+- [x] Add diagnostics for throttle mode, ahead seconds, sleep duration, and
       stream cancellation.
-- [ ] Add unit tests for throttle decisions and copy-loop cancellation.
+- [x] Add unit tests for throttle decisions and copy-loop cancellation.
 
 ## Phase 9 - Report Playback Position From The Client
 
-- [ ] Add client polling or event-driven progress reports while compatibility
+- [x] Add client polling or event-driven progress reports while compatibility
       playback is active.
-- [ ] Report global playback time, media current time, paused/playing state, and
+- [x] Report global playback time, media current time, paused/playing state, and
       active session id.
-- [ ] Send updates more frequently near playback start and after seeks, then
+- [x] Send updates more frequently near playback start and after seeks, then
       settle to a modest interval during steady playback.
-- [ ] Stop progress reports when the pane deactivates, the session stops, or the
+- [x] Stop progress reports when the pane deactivates, the session stops, or the
       active item changes.
-- [ ] Add JS tests for progress-report scheduling and stale-session suppression.
+- [x] Add JS tests for progress-report scheduling and stale-session suppression.
 
 ## Phase 10 - Apply Sliding-Scale Policy
 
-- [ ] Implement the default sliding-scale policy:
+- [x] Implement the default sliding-scale policy:
       low watermark means no throttle, middle range means slow background load,
       high range means heavy throttle, max range means pause input.
-- [ ] Allow brief high CPU after startup, seek restart, or recovery until the
+- [x] Allow brief high CPU after startup, seek restart, or recovery until the
       low watermark is reached.
-- [ ] Resume faster input automatically when playback catches up or the user
+- [x] Resume faster input automatically when playback catches up or the user
       seeks near the encoded edge.
-- [ ] Ensure paused playback does not allow ffmpeg to continue encoding far
+- [x] Ensure paused playback does not allow ffmpeg to continue encoding far
       ahead indefinitely.
-- [ ] Add tests for policy transitions:
+- [x] Add tests for policy transitions:
       catch-up, steady playback, far-ahead pause, paused playback, and seek
       near edge.
-- [ ] Add a manual validation checklist using `Temp/video_debug.jsonl`, Task
+- [x] Add a manual validation checklist using `Temp/video_debug.jsonl`, Task
       Manager CPU usage, and weak-machine playback.
+
+Manual validation checklist:
+
+- Start compatibility playback for a remote MKV/MP4 and confirm startup still reaches visible playback without prolonged loading.
+- Let playback run past the initial startup burst, then inspect `Temp/video_debug.jsonl` for tagged input stream completion/cancellation rows with non-`unthrottled` throttle modes once encode-ahead grows.
+- While playback is running, watch Task Manager and verify ffmpeg CPU drops after a useful ahead buffer is built instead of racing to the end immediately.
+- Pause playback for at least 30-60 seconds and confirm ffmpeg does not continue expanding the encoded-ahead window indefinitely.
+- Resume playback and confirm encode-ahead shrinks and then re-enters lighter throttle bands automatically.
+- Scrub near the current encoded edge and confirm playback recovers promptly without remaining stuck in a heavy-throttle or pause-input state.
+- Replace the session by switching items or subtitle burn-in mode and confirm the prior tagged input stream is cancelled promptly.
 
 ## Phase 11 - Test Matrix
 
-- [ ] Run compile checks:
+- [x] Run compile checks:
       `python -m compileall -q dropbox_browser.py dropbox_browser`.
-- [ ] Run video endpoint tests:
+- [x] Run video endpoint tests:
       `python -m tests.run video -v`.
-- [ ] Run streaming tests if `/file` copy behavior changed:
+- [x] Run streaming tests if `/file` copy behavior changed:
       `python -m tests.run streaming -v`.
-- [ ] Run web UI tests if config/status payloads or player assets changed:
+- [x] Run web UI tests if config/status payloads or player assets changed:
       `python -m tests.run web -v`.
-- [ ] Run JS tests if client progress reporting changed:
+- [x] Run JS tests if client progress reporting changed:
       `npm run test:js`.
-- [ ] Run video E2E checks before checkin when playback behavior changes:
+- [x] Run video E2E checks before checkin when playback behavior changes:
       `npx playwright test --grep video`.
 - [ ] Run full unittest discovery before broad handoff:
       `python -m unittest discover -s tests -v`.

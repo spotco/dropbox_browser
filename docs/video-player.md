@@ -63,10 +63,17 @@ Video-related config in `config.json` / `config_local.json`:
   `-filter_complex_threads` value, mainly useful for burned-in subtitle sessions.
 - `VideoFFmpegProcessPriority` — Windows-only ffmpeg process priority:
   `below_normal` by default, with `idle` and `normal` also accepted.
+- `VideoBackpressureLowWaterSeconds` — ahead-buffer point below which future
+  server-side throttling should stay unthrottled.
+- `VideoBackpressureMediumWaterSeconds` — middle watermark for mild throttling.
+- `VideoBackpressureHighWaterSeconds` — high watermark for heavy throttling.
+- `VideoBackpressureMaxWaterSeconds` — max watermark where future server-side
+  input pausing can stop background encode-ahead work.
 
 Current shipped defaults are tuned from the checked-in CPU benchmark matrix:
 `readrate=1.1`, `initial_burst=18`, `catchup=1.3`, `threads=2`,
-`filter_threads=1`, and Windows priority `below_normal`.
+`filter_threads=1`, Windows priority `below_normal`, and backpressure
+thresholds `45 / 120 / 300 / 600` seconds.
 
 Pacing values are clamped conservatively in config loading. A read rate of `0`
 or blank disables ffmpeg input pacing entirely and omits the related flags.
@@ -77,6 +84,10 @@ thread defaults were chosen because they kept the Surface Book 3 HEVC transcode
 case above realtime while reducing CPU compared with auto-thread pacing.
 On Windows, process priority can make the desktop more responsive while ffmpeg
 runs. It does not reduce total encode work; it only changes scheduling priority.
+The backpressure thresholds are config-driven now even though throttle
+enforcement lands in later phases. They are normalized into a nondecreasing
+`low <= medium <= high <= max` sequence so weak-machine tuning does not require
+code changes.
 
 For CPU/pacing validation, `misc/benchmark_video_startup.py` can be run against a
 running local server. It creates JSONL results under `Temp/video_benchmarks/` by
@@ -97,6 +108,7 @@ All routes are under `/video/endpoints/`.
 | GET | `subtitles/all?path=` | Batch-extract all WebVTT-compatible subtitle tracks |
 | GET | `session/file?id=&name=` | Serve HLS playlist, init segment, or media segment |
 | POST | `session` | Create a new HLS compatibility session |
+| POST | `session/progress` | Update active-session playback position and paused/playing state |
 | POST | `session/stop` | Stop the active session and clean up ffmpeg |
 
 Session creation (`POST /video/endpoints/session`) accepts form fields:
@@ -110,6 +122,14 @@ Session creation (`POST /video/endpoints/session`) accepts form fields:
   stream copy for that session request
 - `force_audio_transcode` — optional retry knob (`1`) that disables AAC
   stream copy for that session request
+
+Playback progress updates (`POST /video/endpoints/session/progress`) accept:
+
+- `id` — active session id
+- `playback_seconds` — current global playback time in seconds
+- `playback_media_seconds` — current `<video>` media time relative to the active HLS session start
+- `playback_state` — `playing`, `paused`, or `unknown`
+- `playback_sync_token` — optional client sync token for stale-update suppression
 
 The server builds an ffmpeg command that reads from the local `/file` URL for the
 remote path, writes fMP4 HLS into `Temp/video_sessions/<uuid>/`, and returns a
@@ -131,13 +151,25 @@ payloads and diagnostics include `audio_mode` (`audio_copy` or
 
 `GET /video/endpoints/status` is polled by the client during playback to learn
 `encoded_media_end_seconds` for the active session (how far ffmpeg has encoded
-ahead of the session start).
+ahead of the session start). The payload now also exposes configured
+`backpressure_thresholds`, plus `active_session.client_playback` with the last
+reported global playback seconds, media playback seconds, paused/playing state, report timestamp, and
+optional client sync token. Session replacement leaves stale progress POSTs
+harmless: the endpoint returns `updated: false` instead of mutating a newer
+session.
 
 ### HLS Session Lifecycle
 
 `VideoSessionManager` in `video.py`:
 
 1. Resolves the remote file path and builds an input URL (`/file?path=...&source=remote`).
+   ffmpeg-tagged input requests also include `video_session_id=<session_id>` so
+   the `/file` route can associate remote reads with only the active matching
+   HLS session.
+   Tagged requests now run through a session-aware copy loop that preserves
+   ordinary `/file` behavior for untagged callers, computes encode-ahead from
+   the active session state, and aborts promptly if the tagged session is
+   replaced.
 2. Spawns ffmpeg with `build_ffmpeg_hls_command(...)`, optionally adding
    ffmpeg input pacing flags before `-i` when `VideoFFmpegReadRate` is enabled.
    On Windows, ffmpeg is started with the configured process priority.
@@ -272,6 +304,24 @@ If an `audio_copy` session hits a fatal media/codec playback failure, the client
 restarts session creation with `force_audio_transcode=1` so the retry falls back
 to the normal AAC transcode/downmix path. That fallback is also one-shot per
 playback item and resume timestamp.
+While compatibility playback is active, the client also posts
+`/video/endpoints/session/progress` updates on playback events and a timer:
+roughly every second during startup or after seek/play transitions, then every
+five seconds during steady playback. Timers are cleared when the pane deactivates,
+the active item changes, or the session stops so stale sessions do not keep
+reporting progress.
+
+The server uses those progress reports to pace tagged ffmpeg input reads through
+the `/file` route. The default policy is:
+
+- below `low_water_seconds`: no extra throttling so startup, restart, and near-edge seeks can catch up quickly
+- between `low` and `medium`: light background pacing
+- between `medium` and `high`: slower background pacing
+- between `high` and `max`: heavy pacing
+- at or above `max`: pause tagged input reads until playback catches up or the session changes
+
+Paused playback is promoted one tier more aggressively than playing playback, so
+the browser can sit paused without letting ffmpeg encode indefinitely farther ahead.
 
 ### Subtitles
 

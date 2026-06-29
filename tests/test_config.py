@@ -48,6 +48,10 @@ class ConfigDefaultsTests(unittest.TestCase):
         self.assertEqual(config["VideoFFmpegThreads"], 2)
         self.assertEqual(config["VideoFFmpegFilterThreads"], 1)
         self.assertEqual(config["VideoFFmpegProcessPriority"], "below_normal")
+        self.assertEqual(config["VideoBackpressureLowWaterSeconds"], 45.0)
+        self.assertEqual(config["VideoBackpressureMediumWaterSeconds"], 120.0)
+        self.assertEqual(config["VideoBackpressureHighWaterSeconds"], 300.0)
+        self.assertEqual(config["VideoBackpressureMaxWaterSeconds"], 600.0)
         self.assertEqual(config["VideoSubtitleFontFamily"], "Arial, Helvetica, sans-serif")
         self.assertEqual(config["VideoSubtitleFontSizePx"], 28)
         self.assertTrue(config["VideoSubtitleBold"])
@@ -65,6 +69,10 @@ class ConfigDefaultsTests(unittest.TestCase):
         self.assertEqual(config["VideoFFmpegThreads"], 2)
         self.assertEqual(config["VideoFFmpegFilterThreads"], 1)
         self.assertEqual(config["VideoFFmpegProcessPriority"], "below_normal")
+        self.assertEqual(config["VideoBackpressureLowWaterSeconds"], 45.0)
+        self.assertEqual(config["VideoBackpressureMediumWaterSeconds"], 120.0)
+        self.assertEqual(config["VideoBackpressureHighWaterSeconds"], 300.0)
+        self.assertEqual(config["VideoBackpressureMaxWaterSeconds"], 600.0)
         self.assertEqual(config["VideoSubtitleFontFamily"], "Arial, Helvetica, sans-serif")
         self.assertEqual(config["VideoSubtitleFontSizePx"], 28)
         self.assertTrue(config["VideoSubtitleBold"])
@@ -287,6 +295,42 @@ class VideoToolsConfigTests(unittest.TestCase):
             })
 
         self.assertEqual(video_config.ffmpeg_process_priority, "idle")
+
+    def test_load_video_tools_config_reads_backpressure_thresholds(self) -> None:
+        with (
+            patch.object(config_module, "find_vendored_ffmpeg", return_value=None),
+            patch.object(config_module, "find_vendored_ffprobe", return_value=None),
+            patch.object(config_module.shutil, "which", side_effect=["C:/bin/ffmpeg.exe", "C:/bin/ffprobe.exe"]),
+        ):
+            video_config = config_module.load_video_tools_config({
+                "VideoBackpressureLowWaterSeconds": "30",
+                "VideoBackpressureMediumWaterSeconds": "90",
+                "VideoBackpressureHighWaterSeconds": 240,
+                "VideoBackpressureMaxWaterSeconds": 480,
+            })
+
+        self.assertEqual(video_config.backpressure_low_water_seconds, 30.0)
+        self.assertEqual(video_config.backpressure_medium_water_seconds, 90.0)
+        self.assertEqual(video_config.backpressure_high_water_seconds, 240.0)
+        self.assertEqual(video_config.backpressure_max_water_seconds, 480.0)
+
+    def test_load_video_tools_config_normalizes_backpressure_thresholds(self) -> None:
+        with (
+            patch.object(config_module, "find_vendored_ffmpeg", return_value=None),
+            patch.object(config_module, "find_vendored_ffprobe", return_value=None),
+            patch.object(config_module.shutil, "which", side_effect=["C:/bin/ffmpeg.exe", "C:/bin/ffprobe.exe"]),
+        ):
+            video_config = config_module.load_video_tools_config({
+                "VideoBackpressureLowWaterSeconds": "-1",
+                "VideoBackpressureMediumWaterSeconds": "20",
+                "VideoBackpressureHighWaterSeconds": "10",
+                "VideoBackpressureMaxWaterSeconds": "5",
+            })
+
+        self.assertEqual(video_config.backpressure_low_water_seconds, 0.0)
+        self.assertEqual(video_config.backpressure_medium_water_seconds, 20.0)
+        self.assertEqual(video_config.backpressure_high_water_seconds, 20.0)
+        self.assertEqual(video_config.backpressure_max_water_seconds, 20.0)
 
     def test_load_video_tools_config_normalizes_invalid_ffmpeg_process_priority(self) -> None:
         with (

@@ -22,9 +22,12 @@ from .streaming import (
     RangeNotSatisfiable,
     StreamPlan,
     copy_exact,
+    copy_exact_with_throttle,
     copy_file_range,
     is_client_disconnect,
     plan_stream,
+    StreamCopyCancelled,
+    StreamCopyStats,
     stream_headers,
     unsatisfiable_range_headers,
 )
@@ -39,9 +42,13 @@ from .video import (
     extract_remote_subtitles_to_webvtt,
     handle_video_get,
     parse_playback_sync_token,
+    parse_optional_video_playback_seconds,
     parse_subtitle_window_duration_seconds,
+    parse_video_playback_seconds,
+    parse_video_playback_state,
     parse_video_start_seconds,
     probe_remote_media,
+    log_video_debug,
     video_session_manager,
 )
 from .views import dropbox_home_url, folder_page_title, icon_for_entry, error_html, page_html
@@ -310,6 +317,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         params = parse_qs(query)
         rel_path = clean_rel_path(params.get("path", [""])[0])
         source = params.get("source", ["remote"])[0]
+        video_session_id = params.get("video_session_id", [""])[0].strip() or None
         name = Path(rel_path).name
         content_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
         disposition = "inline" if inline else "attachment"
@@ -337,6 +345,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
 
         remote_rel_path, file_size = self._resolve_remote_file(rel_path)
+        tagged_video_session_manager = video_session_manager(self.app)
+        _video_session = tagged_video_session_manager.tagged_input_session(video_session_id, remote_rel_path)
         try:
             plan = plan_stream(self.headers.get("Range"), file_size)
         except RangeNotSatisfiable:
@@ -354,10 +364,38 @@ class RequestHandler(BaseHTTPRequestHandler):
         assert proc.stdout is not None
         stream_error: Exception | None = None
         wait_error: Exception | None = None
+        stream_stats: StreamCopyStats | None = None
         try:
-            copy_exact(proc.stdout, self.wfile, plan.length)
+            if video_session_id is None:
+                copy_exact(proc.stdout, self.wfile, plan.length)
+            else:
+                stream_stats = copy_exact_with_throttle(
+                    proc.stdout,
+                    self.wfile,
+                    plan.length,
+                    decision_fn=lambda: tagged_video_session_manager.tagged_input_throttle_decision(
+                        video_session_id,
+                        remote_rel_path,
+                    ),
+                )
         except Exception as exc:
             stream_error = exc
+            if isinstance(exc, StreamCopyCancelled):
+                log_video_debug(
+                    self.app,
+                    "tagged_input_stream_cancelled",
+                    session_id=video_session_id,
+                    rel_path=remote_rel_path,
+                    throttle_mode=exc.decision.throttle_mode,
+                    ahead_seconds=exc.decision.ahead_seconds,
+                    sleep_seconds=float(exc.decision.sleep_seconds or 0.0),
+                )
+                if getattr(proc, "poll", lambda: None)() is None:
+                    try:
+                        proc.kill()
+                    except OSError:
+                        pass
+                return
             if is_client_disconnect(exc):
                 if getattr(proc, "poll", lambda: None)() is None:
                     try:
@@ -376,6 +414,18 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.app.rclone.finish_cat(proc, stream_error or wait_error)
             if wait_error is not None:
                 raise wait_error
+        if video_session_id is not None and stream_stats is not None:
+            log_video_debug(
+                self.app,
+                "tagged_input_stream_complete",
+                session_id=video_session_id,
+                rel_path=remote_rel_path,
+                bytes_copied=stream_stats.bytes_copied,
+                sleep_seconds_total=stream_stats.sleep_seconds_total,
+                decision_samples=stream_stats.decision_samples,
+                throttle_mode=stream_stats.last_throttle_mode,
+                ahead_seconds=stream_stats.last_ahead_seconds,
+            )
 
     def serve_thumbnail(self, query: str, head_only: bool = False) -> None:
         params = parse_qs(query, keep_blank_values=True)
@@ -1131,6 +1181,22 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif endpoint == "session/stop":
             session_id = params.get("id", [""])[0].strip() or None
             payload = video_session_manager(self.app).stop_active_session(session_id)
+            status = HTTPStatus.OK
+        elif endpoint == "session/progress":
+            session_id = params.get("id", [""])[0].strip()
+            if not session_id:
+                raise BrowserError(HTTPStatus.BAD_REQUEST, "Video session id is required.")
+            playback_seconds = parse_video_playback_seconds(params.get("playback_seconds", [""])[0])
+            media_seconds = parse_optional_video_playback_seconds(params.get("playback_media_seconds", [""])[0])
+            playback_state = parse_video_playback_state(params.get("playback_state", [""])[0])
+            playback_sync_token = parse_playback_sync_token(params.get("playback_sync_token", [""])[0])
+            payload = video_session_manager(self.app).update_session_progress(
+                session_id=session_id,
+                playback_seconds=playback_seconds,
+                media_seconds=media_seconds,
+                playback_state=playback_state,
+                playback_sync_token=playback_sync_token,
+            )
             status = HTTPStatus.OK
         elif endpoint == "cache/clear":
             payload = {

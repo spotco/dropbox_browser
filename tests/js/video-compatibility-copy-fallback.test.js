@@ -25,6 +25,8 @@ function makeEl() {
     querySelectorAll() { return []; },
     dispatchEvent() {},
     pause() {},
+    paused: true,
+    ended: false,
     load() {},
     textTracks: [],
     currentTime: 0,
@@ -77,6 +79,12 @@ function createCtx(activeItem) {
       compatibilityEncodedMediaEndSeconds: 0,
       compatibilitySubtitleStreamIndex: null,
       compatibilityBufferedFragmentCount: 0,
+      compatibilitySessionStatusRequestInFlight: false,
+      compatibilitySessionStatusTimer: 0,
+      compatibilitySessionProgressRequestInFlight: false,
+      compatibilitySessionProgressTimer: 0,
+      compatibilitySessionProgressPendingImmediate: false,
+      compatibilityProgressBurstUntilMs: 0,
       compatibilityPlaybackRevealed: false,
       compatibilityPlaybackRevealPending: false,
       compatibilitySubtitleWaitStageActive: false,
@@ -443,4 +451,115 @@ test("audio-copy forced-transcode recovery recreates the session instead of seek
   assert.equal(sessionRequests.length, 1);
   assert.match(sessionRequests[0], /force_audio_transcode=1/);
   assert.match(sessionRequests[0], /start_time_seconds=18/);
+});
+
+test("compatibility session progress report posts session id, global time, media time, state, and sync token", async () => {
+  const {initCompatibility} = await importModuleFromWorkspace("dropbox_browser/assets/js/video/compatibility.js");
+  const item = {path: "Videos/copy.mkv"};
+  const ctx = createCtx(item);
+  const requests = [];
+  ctx.state.compatibilityStartSeconds = 120;
+  ctx.els.videoEl.currentTime = 12.5;
+  ctx.els.videoEl.paused = false;
+  ctx.currentGlobalPlaybackSeconds = function () {
+    return 132.5;
+  };
+  global.fetch = async function (url, options) {
+    requests.push({
+      url: String(url || ""),
+      body: String(options && options.body || ""),
+    });
+    return {
+      ok: true,
+      async json() {
+        return {status: "ok", updated: true};
+      },
+    };
+  };
+  global.window = { setTimeout, clearTimeout };
+  initCompatibility(ctx);
+
+  const reported = await ctx.reportCompatibilitySessionProgress("manual");
+
+  assert.equal(reported, true);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "/video/endpoints/session/progress");
+  assert.match(requests[0].body, /id=session-1/);
+  assert.match(requests[0].body, /playback_seconds=132\.5/);
+  assert.match(requests[0].body, /playback_media_seconds=12\.5/);
+  assert.match(requests[0].body, /playback_state=playing/);
+  assert.match(requests[0].body, /playback_sync_token=7/);
+});
+
+test("compatibility session progress reporting uses burst timing near startup and after burst settles", async () => {
+  const {initCompatibility} = await importModuleFromWorkspace("dropbox_browser/assets/js/video/compatibility.js");
+  const item = {path: "Videos/copy.mkv"};
+  const ctx = createCtx(item);
+  const scheduled = [];
+  const originalDateNow = Date.now;
+  let nowMs = 1000;
+  try {
+    Date.now = function () {
+      return nowMs;
+    };
+    global.fetch = async function () {
+      return { ok: true, async json() { return {status: "ok", updated: true}; } };
+    };
+    global.window = {
+      setTimeout(callback, delay) {
+        scheduled.push({callback, delay});
+        return scheduled.length;
+      },
+      clearTimeout() {},
+    };
+    initCompatibility(ctx);
+
+    ctx.els.videoEl.currentTime = 5;
+    ctx.scheduleCompatibilitySessionProgressReport();
+    assert.equal(scheduled[0].delay, 1000);
+
+    ctx.armCompatibilityProgressBurst();
+    scheduled.length = 0;
+    ctx.scheduleCompatibilitySessionProgressReport();
+    assert.equal(scheduled[0].delay, 1000);
+
+    nowMs += 20000;
+    ctx.els.videoEl.currentTime = 60;
+    scheduled.length = 0;
+    ctx.scheduleCompatibilitySessionProgressReport();
+    assert.equal(scheduled[0].delay, 5000);
+  }
+  finally {
+    Date.now = originalDateNow;
+  }
+});
+
+test("compatibility session progress reporting suppresses stale scheduled sends after session change", async () => {
+  const {initCompatibility} = await importModuleFromWorkspace("dropbox_browser/assets/js/video/compatibility.js");
+  const item = {path: "Videos/copy.mkv"};
+  const ctx = createCtx(item);
+  const scheduled = [];
+  const requests = [];
+  global.fetch = async function (url, options) {
+    requests.push({url: String(url || ""), body: String(options && options.body || "")});
+    return { ok: true, async json() { return {status: "ok", updated: true}; } };
+  };
+  global.window = {
+    setTimeout(callback, delay) {
+      scheduled.push({callback, delay});
+      return scheduled.length;
+    },
+    clearTimeout() {},
+  };
+  initCompatibility(ctx);
+
+  ctx.scheduleCompatibilitySessionProgressReport(0, {
+    expectedSessionId: "session-1",
+    expectedSyncToken: 7,
+    reschedule: false,
+  });
+  ctx.state.compatibilitySessionId = "session-2";
+  await scheduled[0].callback();
+
+  assert.equal(requests.length, 0);
 });

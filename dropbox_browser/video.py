@@ -58,6 +58,10 @@ HLS_READY_TIMEOUT_SECONDS = 20.0
 HLS_ASSET_READY_TIMEOUT_SECONDS = 30.0
 HLS_ASSET_READY_TIMEOUT_PROCESS_ALIVE_SECONDS = 120.0
 HLS_READY_TIMEOUT_BURN_IN_SECONDS = 30.0
+VIDEO_BACKPRESSURE_STEADY_SLEEP_SECONDS = 0.05
+VIDEO_BACKPRESSURE_SLOW_SLEEP_SECONDS = 0.15
+VIDEO_BACKPRESSURE_HEAVY_SLEEP_SECONDS = 0.75
+VIDEO_BACKPRESSURE_PAUSE_SLEEP_SECONDS = 2.0
 SUBTITLE_WINDOW_DURATION_SECONDS = 300.0
 SUBTITLE_WINDOW_SEEK_LEAD_SECONDS = 15.0
 SUBTITLE_WINDOW_SEEK_LAG_SECONDS = SUBTITLE_WINDOW_DURATION_SECONDS - SUBTITLE_WINDOW_SEEK_LEAD_SECONDS
@@ -460,6 +464,37 @@ def parse_playback_sync_token(raw: object) -> int | None:
     if value < 0:
         raise BrowserError(HTTPStatus.BAD_REQUEST, "Playback sync token must not be negative.")
     return value
+
+
+def parse_video_playback_seconds(raw: object) -> float:
+    text = str(raw or "").strip()
+    if not text:
+        raise BrowserError(HTTPStatus.BAD_REQUEST, "Playback seconds are required.")
+    try:
+        value = float(text)
+    except (TypeError, ValueError) as exc:
+        raise BrowserError(HTTPStatus.BAD_REQUEST, "Playback seconds must be a number of seconds.") from exc
+    if not math.isfinite(value):
+        raise BrowserError(HTTPStatus.BAD_REQUEST, "Playback seconds must be finite.")
+    if value < 0:
+        raise BrowserError(HTTPStatus.BAD_REQUEST, "Playback seconds must not be negative.")
+    return value
+
+
+def parse_optional_video_playback_seconds(raw: object) -> float | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    return parse_video_playback_seconds(text)
+
+
+def parse_video_playback_state(raw: object) -> str:
+    normalized = str(raw or "").strip().casefold()
+    if not normalized:
+        return "unknown"
+    if normalized in {"playing", "paused", "unknown"}:
+        return normalized
+    raise BrowserError(HTTPStatus.BAD_REQUEST, "Playback state must be one of: playing, paused, unknown.")
 
 
 def _require_finite_non_negative_seconds(value: float, field_name: str) -> float:
@@ -1505,9 +1540,22 @@ class VideoHlsSession:
     video_mode_reason: str
     audio_mode: str
     audio_mode_reason: str
+    reported_playback_seconds: float | None = None
+    reported_media_seconds: float | None = None
+    reported_playback_state: str = "unknown"
+    reported_playback_updated_at: float | None = None
+    reported_playback_sync_token: int | None = None
 
     def touch(self) -> None:
         self.last_accessed_at = time.time()
+
+
+@dataclass(frozen=True)
+class VideoInputThrottleDecision:
+    cancel: bool = False
+    sleep_seconds: float = 0.0
+    throttle_mode: str = "unthrottled"
+    ahead_seconds: float | None = None
 
 
 class VideoSessionManager:
@@ -1541,7 +1589,6 @@ class VideoSessionManager:
         if ffmpeg_exe is None:
             raise BrowserError(HTTPStatus.SERVICE_UNAVAILABLE, "ffmpeg is not available.")
 
-        input_url = base_url + "/file?" + urlencode({"path": rel_path, "source": "remote"})
         probe_payload: dict[str, object] | None = None
         try:
             probe_payload = probe_remote_media(
@@ -1564,6 +1611,11 @@ class VideoSessionManager:
             force_audio_transcode=force_audio_transcode,
         )
         session_id = uuid.uuid4().hex
+        input_url = base_url + "/file?" + urlencode({
+            "path": rel_path,
+            "source": "remote",
+            "video_session_id": session_id,
+        })
         create_started_at = time.monotonic()
         session_dir = self.root_dir / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
@@ -1732,6 +1784,111 @@ class VideoSessionManager:
                 return None
             return self._session_payload(self._active_session)
 
+    def tagged_input_session(self, session_id: str | None, rel_path: str) -> VideoHlsSession | None:
+        normalized_session_id = str(session_id or "").strip()
+        if not normalized_session_id:
+            return None
+        normalized_rel_path = clean_rel_path(rel_path)
+        with self._lock:
+            self._cleanup_expired_locked()
+            session = self._active_session
+            if session is None or session.session_id != normalized_session_id:
+                log_video_debug(
+                    self.app,
+                    "tagged_input_session_miss",
+                    session_id=normalized_session_id,
+                    rel_path=normalized_rel_path,
+                    reason="session_missing_or_inactive",
+                )
+                return None
+            if clean_rel_path(session.rel_path) != normalized_rel_path:
+                log_video_debug(
+                    self.app,
+                    "tagged_input_session_miss",
+                    session_id=normalized_session_id,
+                    rel_path=normalized_rel_path,
+                    active_rel_path=clean_rel_path(session.rel_path),
+                    reason="path_mismatch",
+                )
+                return None
+            session.touch()
+            log_video_debug(
+                self.app,
+                "tagged_input_session_match",
+                session_id=normalized_session_id,
+                rel_path=normalized_rel_path,
+            )
+            return session
+
+    def tagged_input_throttle_decision(self, session_id: str | None, rel_path: str) -> VideoInputThrottleDecision:
+        normalized_session_id = str(session_id or "").strip()
+        if not normalized_session_id:
+            return VideoInputThrottleDecision(cancel=False, throttle_mode="untagged")
+        normalized_rel_path = clean_rel_path(rel_path)
+        with self._lock:
+            self._cleanup_expired_locked()
+            session = self._active_session
+            if session is None:
+                return VideoInputThrottleDecision(cancel=True, throttle_mode="session_missing")
+            if session.session_id != normalized_session_id:
+                return VideoInputThrottleDecision(cancel=True, throttle_mode="session_replaced")
+            if clean_rel_path(session.rel_path) != normalized_rel_path:
+                return VideoInputThrottleDecision(cancel=True, throttle_mode="path_mismatch")
+            reported_playback_seconds = session.reported_playback_seconds
+            ahead_seconds = None
+            if reported_playback_seconds is not None:
+                ahead_seconds = max(
+                    0.0,
+                    session.start_time_seconds
+                    + self._encoded_media_end_seconds(session)
+                    - float(reported_playback_seconds),
+                )
+            return self._backpressure_decision_for_session(session, ahead_seconds=ahead_seconds)
+
+    def update_session_progress(
+        self,
+        *,
+        session_id: str,
+        playback_seconds: float,
+        media_seconds: float | None = None,
+        playback_state: str,
+        playback_sync_token: int | None = None,
+    ) -> dict[str, object]:
+        updated_at = time.time()
+        with self._lock:
+            self._cleanup_expired_locked()
+            session = self._active_session
+            if session is None or session.session_id != session_id:
+                return {
+                    "status": "ok",
+                    "updated": False,
+                    "stale": True,
+                    "active_session_id": session.session_id if session is not None else None,
+                }
+            session.reported_playback_seconds = float(playback_seconds)
+            session.reported_media_seconds = None if media_seconds is None else float(media_seconds)
+            session.reported_playback_state = str(playback_state or "unknown")
+            session.reported_playback_updated_at = updated_at
+            session.reported_playback_sync_token = playback_sync_token
+            session.touch()
+            playback_payload = self._session_playback_payload(session)
+        log_video_debug(
+            self.app,
+            "session_progress_update",
+            session_id=session_id,
+            playback_seconds=float(playback_seconds),
+            media_seconds=media_seconds,
+            playback_state=str(playback_state or "unknown"),
+            playback_sync_token=playback_sync_token,
+        )
+        return {
+            "status": "ok",
+            "updated": True,
+            "stale": False,
+            "session_id": session_id,
+            "client_playback": playback_payload,
+        }
+
     def _encoded_media_end_seconds(self, session: VideoHlsSession) -> float:
         if not session.playlist_path.is_file():
             return 0.0
@@ -1739,6 +1896,80 @@ class VideoSessionManager:
         if segment_count <= 0:
             return 0.0
         return segment_count * HLS_SEGMENT_DURATION_SECONDS
+
+    def _backpressure_thresholds(self) -> tuple[float, float, float, float]:
+        video_config = getattr(self.app, "video_tools_config", None)
+        low = float(getattr(video_config, "backpressure_low_water_seconds", 45.0) or 0.0)
+        medium = float(getattr(video_config, "backpressure_medium_water_seconds", 120.0) or 0.0)
+        high = float(getattr(video_config, "backpressure_high_water_seconds", 300.0) or 0.0)
+        maximum = float(getattr(video_config, "backpressure_max_water_seconds", 600.0) or 0.0)
+        low = max(0.0, low)
+        medium = max(low, medium)
+        high = max(medium, high)
+        maximum = max(high, maximum)
+        return low, medium, high, maximum
+
+    def _backpressure_decision_for_session(
+        self,
+        session: VideoHlsSession,
+        *,
+        ahead_seconds: float | None,
+    ) -> VideoInputThrottleDecision:
+        if ahead_seconds is None:
+            return VideoInputThrottleDecision(cancel=False, throttle_mode="unthrottled", ahead_seconds=None)
+        low, medium, high, maximum = self._backpressure_thresholds()
+        playback_state = str(session.reported_playback_state or "unknown").strip().casefold()
+        paused = playback_state == "paused"
+        if ahead_seconds < low:
+            return VideoInputThrottleDecision(cancel=False, throttle_mode="unthrottled", ahead_seconds=ahead_seconds)
+        if ahead_seconds >= maximum:
+            return VideoInputThrottleDecision(
+                cancel=False,
+                sleep_seconds=VIDEO_BACKPRESSURE_PAUSE_SLEEP_SECONDS,
+                throttle_mode="pause_input",
+                ahead_seconds=ahead_seconds,
+            )
+        if ahead_seconds >= high:
+            if paused:
+                return VideoInputThrottleDecision(
+                    cancel=False,
+                    sleep_seconds=VIDEO_BACKPRESSURE_PAUSE_SLEEP_SECONDS,
+                    throttle_mode="pause_input",
+                    ahead_seconds=ahead_seconds,
+                )
+            return VideoInputThrottleDecision(
+                cancel=False,
+                sleep_seconds=VIDEO_BACKPRESSURE_HEAVY_SLEEP_SECONDS,
+                throttle_mode="heavy_throttle",
+                ahead_seconds=ahead_seconds,
+            )
+        if ahead_seconds >= medium:
+            if paused:
+                return VideoInputThrottleDecision(
+                    cancel=False,
+                    sleep_seconds=VIDEO_BACKPRESSURE_HEAVY_SLEEP_SECONDS,
+                    throttle_mode="heavy_throttle",
+                    ahead_seconds=ahead_seconds,
+                )
+            return VideoInputThrottleDecision(
+                cancel=False,
+                sleep_seconds=VIDEO_BACKPRESSURE_SLOW_SLEEP_SECONDS,
+                throttle_mode="slow_background",
+                ahead_seconds=ahead_seconds,
+            )
+        if paused:
+            return VideoInputThrottleDecision(
+                cancel=False,
+                sleep_seconds=VIDEO_BACKPRESSURE_SLOW_SLEEP_SECONDS,
+                throttle_mode="slow_background",
+                ahead_seconds=ahead_seconds,
+            )
+        return VideoInputThrottleDecision(
+            cancel=False,
+            sleep_seconds=VIDEO_BACKPRESSURE_STEADY_SLEEP_SECONDS,
+            throttle_mode="steady_background",
+            ahead_seconds=ahead_seconds,
+        )
 
     def _session_payload(
         self,
@@ -1766,6 +1997,22 @@ class VideoSessionManager:
             "encoded_media_end_seconds": self._encoded_media_end_seconds(session),
             "session_create_elapsed_ms": ready_elapsed_ms,
             "ffmpeg_pid": getattr(session.process, "pid", None),
+            "client_playback": self._session_playback_payload(session),
+        }
+
+    def _session_playback_payload(self, session: VideoHlsSession) -> dict[str, object]:
+        updated_at = session.reported_playback_updated_at
+        return {
+            "reported_seconds": session.reported_playback_seconds,
+            "media_seconds": session.reported_media_seconds,
+            "state": session.reported_playback_state,
+            "reported_at": (
+                time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(updated_at))
+                if updated_at is not None
+                else None
+            ),
+            "reported_at_unix_ms": int(round(updated_at * 1000)) if updated_at is not None else None,
+            "playback_sync_token": session.reported_playback_sync_token,
         }
 
     def _wait_for_playlist(self, session: VideoHlsSession, timeout_seconds: float = HLS_READY_TIMEOUT_SECONDS) -> bool:
@@ -3198,6 +3445,12 @@ def handle_video_get(app: Any, path: str, query: str) -> tuple[HTTPStatus, dict]
             "ffprobe_path": str(ffprobe_exe) if ffprobe_exe is not None else None,
             "endpoint_root": VIDEO_ENDPOINT_PREFIX.rstrip("/"),
             "query_keys": sorted(params),
+            "backpressure_thresholds": {
+                "low_water_seconds": float(getattr(video_config, "backpressure_low_water_seconds", 45.0) or 0.0),
+                "medium_water_seconds": float(getattr(video_config, "backpressure_medium_water_seconds", 120.0) or 0.0),
+                "high_water_seconds": float(getattr(video_config, "backpressure_high_water_seconds", 300.0) or 0.0),
+                "max_water_seconds": float(getattr(video_config, "backpressure_max_water_seconds", 600.0) or 0.0),
+            },
             "active_session": session_payload,
         }
 
