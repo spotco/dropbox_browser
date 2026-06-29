@@ -1,4 +1,5 @@
 import {
+  HLS_SEGMENT_DURATION_SECONDS,
   findActiveParsedCues,
   parseWebVttCues,
   rebaseWebVttText,
@@ -55,8 +56,14 @@ function resetSubtitleDebugState() {
   if (ctx.els.debugMetaEl) {
     ctx.els.debugMetaEl.textContent = 'No subtitle track loaded.';
   }
+  if (ctx.els.debugCurrentTitleEl) {
+    ctx.els.debugCurrentTitleEl.textContent = 'Current Subtitle';
+  }
   if (ctx.els.debugCurrentCueEl) {
     ctx.els.debugCurrentCueEl.textContent = 'No active subtitle cue.';
+  }
+  if (ctx.els.debugNextTitleEl) {
+    ctx.els.debugNextTitleEl.textContent = 'Next Subtitle';
   }
   if (ctx.els.debugNextCueEl) {
     ctx.els.debugNextCueEl.textContent = 'No upcoming subtitle cue.';
@@ -364,6 +371,17 @@ function subtitleCoverageRangeForTarget(path, subtitleStreamIndex, targetSeconds
   return ranges[ranges.length - 1];
 }
 
+function subtitleCoverageSummaryRange(path, subtitleStreamIndex) {
+  var coverage = subtitleCoverageForPath(path);
+  if (!coverage) return null;
+  var ranges = mergedSubtitleRanges(coverage[String(subtitleStreamIndex)]);
+  if (!ranges.length) return null;
+  return {
+    start_seconds: ranges[0].start_seconds,
+    end_seconds: ranges[ranges.length - 1].end_seconds,
+  };
+}
+
 function findActiveParsedCue(cues, mediaTime) {
   if (!Array.isArray(cues) || !Number.isFinite(mediaTime)) return null;
   for (var index = 0; index < cues.length; index += 1) {
@@ -516,6 +534,101 @@ function maybeLogSubtitleCueChange(displayedCue, nextCue, globalTime, trackOffse
   });
 }
 
+function currentSubtitleModeLabel(textTrack, active, probePayload) {
+  if (!active || !probePayload) return 'none';
+  if (typeof ctx.selectedBurnedInSubtitleStreamIndex === 'function') {
+    var burnedIn = ctx.selectedBurnedInSubtitleStreamIndex(active, probePayload);
+    if (burnedIn !== null) return 'burn-in';
+  }
+  if (typeof ctx.resolvedSubtitleStreamIndex === 'function') {
+    var resolved = ctx.resolvedSubtitleStreamIndex(active, probePayload);
+    if (resolved === '') return 'off';
+  }
+  if (textTrack && textTrack.mode && textTrack.mode !== 'disabled') {
+    return 'webvtt';
+  }
+  if (ctx.state.subtitleDebug.rawVtt) return 'webvtt';
+  return 'none';
+}
+
+function formatSegmentTimestamp(totalSeconds) {
+  if (typeof ctx.formatPlaybackTimeWithMilliseconds === 'function') {
+    return ctx.formatPlaybackTimeWithMilliseconds(totalSeconds);
+  }
+  var totalMilliseconds = Math.max(0, Math.floor((Number(totalSeconds) || 0) * 1000));
+  var minutes = Math.floor(totalMilliseconds / 60000);
+  var seconds = Math.floor((totalMilliseconds % 60000) / 1000);
+  var milliseconds = totalMilliseconds % 1000;
+  return String(minutes) + ':' + String(seconds).padStart(2, '0') + ':' + String(milliseconds).padStart(3, '0');
+}
+
+function compatibilityPlaylistSegmentCountForDebug(probePayload) {
+  var explicitCount = Number(ctx.state.compatibilityPlaylistSegmentCount) || 0;
+  var observedMaxIndex = Math.max(
+    0,
+    Number(ctx.state.compatibilityCurrentSegmentIndex) || 0,
+    Number(ctx.state.compatibilityLoadedSegmentMaxIndex) || 0
+  );
+  if (explicitCount > 0) return Math.max(explicitCount, observedMaxIndex);
+  var probeDuration = Number(probePayload && probePayload.duration_seconds) || 0;
+  var sessionStartSeconds = Math.max(0, Number(ctx.state.compatibilityStartSeconds) || 0);
+  if (probeDuration > 0) {
+    var remainingDuration = Math.max(0, probeDuration - sessionStartSeconds);
+    return Math.max(
+      1,
+      observedMaxIndex,
+      Math.ceil(remainingDuration / HLS_SEGMENT_DURATION_SECONDS)
+    );
+  }
+  return observedMaxIndex;
+}
+
+function currentHlsSegmentSummaryLine(mediaTime, probePayload) {
+  if (ctx.state.playbackMode !== 'compatibility') return 'HLS segment: none';
+  var normalizedMediaTime = Number.isFinite(mediaTime) && mediaTime >= 0 ? mediaTime : 0;
+  var segmentIndex = Math.floor(normalizedMediaTime / HLS_SEGMENT_DURATION_SECONDS) + 1;
+  var totalSegments = compatibilityPlaylistSegmentCountForDebug(probePayload);
+  var segmentStart = (Number(ctx.state.compatibilityStartSeconds) || 0)
+    + ((segmentIndex - 1) * HLS_SEGMENT_DURATION_SECONDS);
+  var segmentEnd = segmentStart + HLS_SEGMENT_DURATION_SECONDS;
+  return 'HLS segment: ['
+    + String(segmentIndex)
+    + '/'
+    + String(totalSegments || '?')
+    + '] '
+    + formatSegmentTimestamp(segmentStart)
+    + ' - '
+    + formatSegmentTimestamp(segmentEnd);
+}
+
+function loadedHlsSegmentsSummaryLine(probePayload) {
+  if (ctx.state.playbackMode !== 'compatibility') return 'Loaded HLS segments: none';
+  var minIndex = Number(ctx.state.compatibilityLoadedSegmentMinIndex) || 0;
+  var maxIndex = Number(ctx.state.compatibilityLoadedSegmentMaxIndex) || 0;
+  var totalSegments = compatibilityPlaylistSegmentCountForDebug(probePayload);
+  var averageLoadMs = Number(ctx.state.compatibilitySegmentLoadAverageMs) || 0;
+  var averageLoadLabel = averageLoadMs > 0 ? ((averageLoadMs / 1000).toFixed(2) + 's') : 'n/a';
+  if (minIndex <= 0 || maxIndex <= 0) {
+    return 'Loaded HLS segments: none • avg load: ' + averageLoadLabel;
+  }
+  return 'Loaded HLS segments: ['
+    + String(minIndex)
+    + '-'
+    + String(maxIndex)
+    + '/'
+    + String(totalSegments || '?')
+    + '] • avg load: '
+    + averageLoadLabel;
+}
+
+function cueOrdinalLabel(baseLabel, cue, cueList) {
+  var total = Array.isArray(cueList) ? cueList.length : 0;
+  if (!cue || !total) return baseLabel;
+  var cueIndex = cueList.indexOf(cue);
+  if (cueIndex < 0) return baseLabel;
+  return baseLabel + ' [' + String(cueIndex + 1) + '/' + String(total) + ']';
+}
+
 function syncSubtitleDebugDisplay() {
   if (!ctx.els.debugMetaEl || !ctx.els.debugCurrentCueEl || !ctx.els.debugNextCueEl) return;
   var mediaTime = ctx.els.videoEl ? Number(ctx.els.videoEl.currentTime) : NaN;
@@ -526,16 +639,26 @@ function syncSubtitleDebugDisplay() {
   var textTrack = managedSubtitleTextTrack();
   var browserCues = summarizeBrowserActiveCues(textTrack);
   var displayedCue = resolveDisplayedCue(parsedCue, browserCues);
-  var metaLines = [
+  var active = typeof ctx.activeQueueItem === 'function' ? ctx.activeQueueItem() : null;
+  var probePayload = active ? ctx.state.probeCache[active.path || ''] || null : null;
+  var progressLines = typeof ctx.currentProgressDebugLines === 'function'
+    ? ctx.currentProgressDebugLines()
+    : [];
+  var metaLines = progressLines.concat([
     'Track: ' + (ctx.state.subtitleDebug.trackLabel || 'none'),
     'Playback position (absolute): ' + formatSubtitleDebugTimestamp(globalTime),
-    'HLS segment offset: ' + formatSubtitleDebugTimestamp(ctx.state.compatibilityStartSeconds),
-    'Subtitle track offset: ' + formatSubtitleDebugTimestamp(trackOffsetSeconds),
+    currentHlsSegmentSummaryLine(mediaTime, probePayload),
+    loadedHlsSegmentsSummaryLine(probePayload),
     'HLS media time: ' + formatSubtitleDebugTimestamp(mediaTime),
-    'Parsed cues loaded: ' + String(ctx.state.subtitleDebug.cues.length),
-    'Browser textTrack mode: ' + (textTrack ? textTrack.mode : 'none'),
-  ];
+    'Subtitle mode: ' + currentSubtitleModeLabel(textTrack, active, probePayload),
+  ]);
   ctx.els.debugMetaEl.textContent = metaLines.join('\n');
+  if (ctx.els.debugCurrentTitleEl) {
+    ctx.els.debugCurrentTitleEl.textContent = cueOrdinalLabel('Current Subtitle', parsedCue, ctx.state.subtitleDebug.cues);
+  }
+  if (ctx.els.debugNextTitleEl) {
+    ctx.els.debugNextTitleEl.textContent = cueOrdinalLabel('Next Subtitle', nextCue, ctx.state.subtitleDebug.cues);
+  }
 
   if (displayedCue) {
     ctx.els.debugCurrentCueEl.textContent = formatDisplayedCueBlock(displayedCue, trackOffsetSeconds);
@@ -1279,6 +1402,7 @@ async function applySubtitlesForSeek(item, probePayload, seekSeconds, options) {
   ctx.storeSubtitleWindowPayload = storeSubtitleWindowPayload;
   ctx.cachedSubtitleWindowPayload = cachedSubtitleWindowPayload;
   ctx.subtitleCoverageRangeForTarget = subtitleCoverageRangeForTarget;
+  ctx.subtitleCoverageSummaryRange = subtitleCoverageSummaryRange;
   ctx.findActiveParsedCue = findActiveParsedCue;
   ctx.findNextParsedCue = findNextParsedCue;
   ctx.subtitleTrackOffsetSeconds = subtitleTrackOffsetSeconds;

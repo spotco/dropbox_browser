@@ -90,6 +90,27 @@ function compatibilityPlaybackState() {
   return ctx.els.videoEl.paused ? 'paused' : 'playing';
 }
 
+function updateCompatibilityCurrentSegmentIndex() {
+  var mediaSeconds = compatibilityMediaPlaybackSeconds();
+  if (!Number.isFinite(mediaSeconds) || mediaSeconds < 0) {
+    ctx.state.compatibilityCurrentSegmentIndex = 0;
+    return;
+  }
+  ctx.state.compatibilityCurrentSegmentIndex = Math.floor(mediaSeconds / HLS_SEGMENT_DURATION_SECONDS) + 1;
+}
+
+function noteCompatibilitySegmentLoadTiming(data) {
+  if (!data || !data.frag || data.frag.sn === 'initSegment') return;
+  var loading = data.stats && data.stats.loading ? data.stats.loading : null;
+  if (!loading) return;
+  var durationMs = Math.round(Number(loading.end) - Number(loading.start));
+  if (!Number.isFinite(durationMs) || durationMs < 0) return;
+  var nextCount = (Number(ctx.state.compatibilitySegmentLoadSampleCount) || 0) + 1;
+  var priorAverage = Number(ctx.state.compatibilitySegmentLoadAverageMs) || 0;
+  ctx.state.compatibilitySegmentLoadAverageMs = ((priorAverage * (nextCount - 1)) + durationMs) / nextCount;
+  ctx.state.compatibilitySegmentLoadSampleCount = nextCount;
+}
+
 function armCompatibilityProgressBurst() {
   ctx.state.compatibilityProgressBurstUntilMs = Date.now() + COMPATIBILITY_PROGRESS_REPORT_BURST_WINDOW_MS;
 }
@@ -450,6 +471,12 @@ function handleCompatibilityHlsError(data) {
 
 function resetCompatibilityBufferState() {
   ctx.state.compatibilityBufferedFragmentCount = 0;
+  ctx.state.compatibilityPlaylistSegmentCount = 0;
+  ctx.state.compatibilityCurrentSegmentIndex = 0;
+  ctx.state.compatibilityLoadedSegmentMinIndex = 0;
+  ctx.state.compatibilityLoadedSegmentMaxIndex = 0;
+  ctx.state.compatibilitySegmentLoadSampleCount = 0;
+  ctx.state.compatibilitySegmentLoadAverageMs = 0;
   ctx.state.compatibilityPlaybackRevealed = false;
   ctx.state.compatibilityPlaybackRevealPending = false;
   ctx.state.compatibilitySubtitleWaitStageActive = false;
@@ -587,6 +614,17 @@ function maybeRevealCompatibilityPlayback(title, surfaceSyncToken, reason) {
 function noteCompatibilityFragmentBuffered(data, title, surfaceSyncToken) {
   if (ctx.state.playbackMode !== 'compatibility' || !ctx.playbackSyncTokenIsCurrent(surfaceSyncToken)) return;
   noteEncodedMediaEndFromFragment(data);
+  if (data && data.frag && data.frag.sn !== 'initSegment') {
+    var segmentIndex = Number(data.frag.sn) + 1;
+    if (Number.isFinite(segmentIndex) && segmentIndex > 0) {
+      if (!ctx.state.compatibilityLoadedSegmentMinIndex || segmentIndex < ctx.state.compatibilityLoadedSegmentMinIndex) {
+        ctx.state.compatibilityLoadedSegmentMinIndex = segmentIndex;
+      }
+      if (!ctx.state.compatibilityLoadedSegmentMaxIndex || segmentIndex > ctx.state.compatibilityLoadedSegmentMaxIndex) {
+        ctx.state.compatibilityLoadedSegmentMaxIndex = segmentIndex;
+      }
+    }
+  }
   ctx.state.compatibilityBufferedFragmentCount += 1;
   if (
     ctx.state.compatibilityBufferedFragmentCount < COMPATIBILITY_START_BUFFER_FRAGMENTS
@@ -701,6 +739,11 @@ function attachCompatibilityVideo(playlistUrl, title, meta, startSeconds, surfac
     ctx.state.hlsController.on(Hls.Events.MANIFEST_LOADED, function (_eventName, data) {
       if (!ctx.playbackSyncTokenIsCurrent(surfaceSyncToken)) return;
       var hlsLevelCount = data && Array.isArray(data.levels) ? data.levels.length : 0;
+      var firstLevel = data && Array.isArray(data.levels) && data.levels.length ? data.levels[0] : null;
+      var details = firstLevel && firstLevel.details ? firstLevel.details : null;
+      if (details && Number.isFinite(Number(details.startSN)) && Number.isFinite(Number(details.endSN))) {
+        ctx.state.compatibilityPlaylistSegmentCount = Math.max(0, (Number(details.endSN) - Number(details.startSN)) + 1);
+      }
       ctx.showLoadingOverlay({
         title: title,
         meta: 'Playlist is ready. Attaching the stream.',
@@ -762,6 +805,12 @@ function attachCompatibilityVideo(playlistUrl, title, meta, startSeconds, surfac
       ctx.setStatus('Buffering compatibility playback before starting.');
     });
     ctx.state.hlsController.on(Hls.Events.FRAG_LOADING, function (_eventName, data) {
+      if (data && data.frag && data.frag.sn !== 'initSegment') {
+        var segmentIndex = Number(data.frag.sn) + 1;
+        if (Number.isFinite(segmentIndex) && segmentIndex > 0) {
+          ctx.state.compatibilityCurrentSegmentIndex = segmentIndex;
+        }
+      }
       ctx.reportVideoDiagnostic({
         level: 'debug',
         message: 'HLS fragment loading',
@@ -770,6 +819,7 @@ function attachCompatibilityVideo(playlistUrl, title, meta, startSeconds, surfac
       });
     });
     ctx.state.hlsController.on(Hls.Events.FRAG_LOADED, function (_eventName, data) {
+      noteCompatibilitySegmentLoadTiming(data);
       ctx.reportVideoDiagnostic({
         level: 'debug',
         message: 'HLS fragment loaded',
@@ -847,6 +897,7 @@ function attachCompatibilityVideo(playlistUrl, title, meta, startSeconds, surfac
   }
   ctx.clearSubtitleTrack();
   ctx.showPlaybackVideo(title, meta);
+  updateCompatibilityCurrentSegmentIndex();
   ctx.syncPlaybackProgress();
   ctx.syncTransportControls();
   requestCompatibilitySessionProgressReport('session-attach', {burst: true});
