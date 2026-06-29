@@ -1031,7 +1031,6 @@ async function readProgressCoverageState(page) {
       processedStart: style ? Number.parseFloat(style.getPropertyValue("--video-progress-processed-start")) : NaN,
       processedEnd: style ? Number.parseFloat(style.getPropertyValue("--video-progress-processed-end")) : NaN,
       subtitleCoverageState: slider ? String(slider.getAttribute("data-subtitle-coverage-state") || "") : "",
-      title: slider ? String(slider.getAttribute("title") || "") : "",
       sliderMax: slider ? Number(slider.max) : NaN,
     };
   });
@@ -1086,10 +1085,14 @@ async function expectPlaybackNearSeconds(page, targetSeconds, toleranceSeconds =
 
 async function readDisplayedSubtitleDebugState(page) {
   return page.evaluate(() => {
+    const currentTitle = document.getElementById("video-debug-current-title");
     const currentCue = document.getElementById("video-debug-current-cue");
+    const nextTitle = document.getElementById("video-debug-next-title");
     const meta = document.getElementById("video-debug-meta");
     return {
+      currentTitleText: currentTitle ? String(currentTitle.textContent || "").trim() : "",
       currentCueText: currentCue ? String(currentCue.textContent || "").trim() : "",
+      nextTitleText: nextTitle ? String(nextTitle.textContent || "").trim() : "",
       metaText: meta ? String(meta.textContent || "").trim() : "",
     };
   });
@@ -2632,7 +2635,7 @@ test("falls back to probing the remote file when cached header bytes are corrupt
   });
 });
 
-test("subtitle-ready scrubber tooltip reflects full cached subtitle coverage after reload", async ({ page }) => {
+test("subtitle-ready scrubber debug info reflects full cached subtitle coverage after reload", async ({ page }) => {
   test.setTimeout(90000);
 
   await page.route("**/video/endpoints/probe?path=Videos%2Falpha.mkv&source=remote*", async (route) => {
@@ -2660,13 +2663,48 @@ test("subtitle-ready scrubber tooltip reflects full cached subtitle coverage aft
   await waitForVisibleVideo(page);
   await waitForPlaybackSurfaceWithoutOverlay(page);
   await waitForMountedSubtitleTrackReady(page, 3);
-
   await expect
     .poll(async () => {
-      const coverage = await readProgressCoverageState(page);
-      return coverage.title;
+      const state = await readDisplayedSubtitleDebugState(page);
+      return state.metaText;
+    }, { timeout: 10000 })
+    .toContain("CPU priority:");
+  await expect
+    .poll(async () => {
+      const state = await readDisplayedSubtitleDebugState(page);
+      return state.metaText;
+    }, { timeout: 10000 })
+    .toContain("HLS segment:");
+  await expect
+    .poll(async () => {
+      const state = await readDisplayedSubtitleDebugState(page);
+      return state.metaText;
+    }, { timeout: 10000 })
+    .toContain("Loaded HLS segments:");
+  await expect
+    .poll(async () => {
+      const state = await readDisplayedSubtitleDebugState(page);
+      return state.metaText;
+    }, { timeout: 10000 })
+    .toContain("Subtitle mode: webvtt");
+  await expect
+    .poll(async () => {
+      const state = await readDisplayedSubtitleDebugState(page);
+      return state.metaText;
     }, { timeout: 10000 })
     .toContain("Loaded video: 0:00 - 6:00. Subtitle-ready: 0:00 - 6:00.");
+  await expect
+    .poll(async () => {
+      const state = await readDisplayedSubtitleDebugState(page);
+      return state.currentTitleText;
+    }, { timeout: 10000 })
+    .toMatch(/^Current Subtitle(?: \[\d+\/\d+\])?$/);
+  await expect
+    .poll(async () => {
+      const state = await readDisplayedSubtitleDebugState(page);
+      return state.nextTitleText;
+    }, { timeout: 10000 })
+    .toMatch(/^Next Subtitle(?: \[\d+\/\d+\])?$/);
 });
 
 test("video track selections persist across reload and matching track layouts", async ({ page }) => {

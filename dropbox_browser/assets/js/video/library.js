@@ -64,10 +64,17 @@ async function loadPlaybackStatus() {
     var response = await fetch('/video/endpoints/status');
     if (!response.ok) throw new Error('Failed to load video playback status.');
     var payload = await response.json();
+    var thresholds = payload && payload.backpressure_thresholds ? payload.backpressure_thresholds : null;
     ctx.state.playbackStatusLoaded = true;
     ctx.state.ffmpegAvailable = Boolean(payload.ffmpeg_available);
     ctx.state.ffprobeAvailable = Boolean(payload.ffprobe_available);
     ctx.state.compatibilityAvailable = Boolean(payload.compatibility_available);
+    ctx.state.backpressureThresholds = {
+      lowWaterSeconds: Number(thresholds && thresholds.low_water_seconds) || 45,
+      mediumWaterSeconds: Number(thresholds && thresholds.medium_water_seconds) || 120,
+      highWaterSeconds: Number(thresholds && thresholds.high_water_seconds) || 300,
+      maxWaterSeconds: Number(thresholds && thresholds.max_water_seconds) || 600,
+    };
     if (ctx.state.paneActive) void ctx.syncPlaybackForActiveItem();
   }
   catch (_error) {

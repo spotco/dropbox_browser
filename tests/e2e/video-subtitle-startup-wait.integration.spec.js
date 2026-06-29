@@ -238,7 +238,21 @@ async function readProgressCoverageState(page) {
       processedStart: style ? String(style.getPropertyValue("--video-progress-processed-start") || "").trim() : "",
       processedEnd: style ? String(style.getPropertyValue("--video-progress-processed-end") || "").trim() : "",
       subtitleCoverageState: slider ? String(slider.getAttribute("data-subtitle-coverage-state") || "") : "",
-      title: slider ? String(slider.getAttribute("title") || "") : "",
+    };
+  });
+}
+
+async function readDisplayedSubtitleDebugState(page) {
+  return page.evaluate(() => {
+    const currentTitle = document.getElementById("video-debug-current-title");
+    const currentCue = document.getElementById("video-debug-current-cue");
+    const nextTitle = document.getElementById("video-debug-next-title");
+    const meta = document.getElementById("video-debug-meta");
+    return {
+      currentTitleText: currentTitle ? String(currentTitle.textContent || "").trim() : "",
+      currentCueText: currentCue ? String(currentCue.textContent || "").trim() : "",
+      nextTitleText: nextTitle ? String(nextTitle.textContent || "").trim() : "",
+      metaText: meta ? String(meta.textContent || "").trim() : "",
     };
   });
 }
@@ -401,6 +415,13 @@ test("startup scrubber reflects full cached subtitle coverage after delayed extr
   const coverage = await readProgressCoverageState(page);
   expect(Number.parseFloat(coverage.subtitleEnd)).toBeCloseTo(Number.parseFloat(coverage.mediaEnd), 3);
   expect(Number.parseFloat(coverage.processedEnd)).toBeCloseTo(Number.parseFloat(coverage.mediaEnd), 3);
-  expect(coverage.title).toContain("Loaded video:");
-  expect(coverage.title).toContain("Subtitle-ready:");
+  const debug = await readDisplayedSubtitleDebugState(page);
+  expect(debug.metaText).toContain("CPU priority:");
+  expect(debug.metaText).toContain("HLS segment:");
+  expect(debug.metaText).toContain("Loaded HLS segments:");
+  expect(debug.metaText).toContain("Subtitle mode: webvtt");
+  expect(debug.metaText).toContain("Loaded video:");
+  expect(debug.metaText).toContain("Subtitle-ready:");
+  expect(debug.currentTitleText).toMatch(/^Current Subtitle(?: \[\d+\/\d+\])?$/);
+  expect(debug.nextTitleText).toMatch(/^Next Subtitle(?: \[\d+\/\d+\])?$/);
 });

@@ -110,16 +110,28 @@ function createCtx(activeItem) {
       subtitleStatusMetaEl: makeEl(),
       subtitleTrackSelectEl: makeEl(),
       debugMetaEl: makeEl(),
+      debugCurrentTitleEl: makeEl(),
       debugCurrentCueEl: makeEl(),
+      debugNextTitleEl: makeEl(),
       debugNextCueEl: makeEl(),
     },
     state: {
       queue: [activeItem],
       activeQueueIndex: 0,
       playbackMode: "compatibility",
+      backpressureThresholds: {
+        lowWaterSeconds: 45,
+        mediumWaterSeconds: 120,
+        highWaterSeconds: 300,
+        maxWaterSeconds: 600,
+      },
       seekRestartInProgress: false,
       playbackSyncToken: 7,
       compatibilityStartSeconds: 0,
+      compatibilityPlaylistSegmentCount: 0,
+      compatibilityLoadedSegmentMinIndex: 0,
+      compatibilityLoadedSegmentMaxIndex: 0,
+      compatibilitySegmentLoadAverageMs: 0,
       compatibilitySubtitleWaitStageActive: false,
       probeCache: Object.create(null),
       selectedSubtitleStreamIndexByPath: Object.create(null),
@@ -152,6 +164,12 @@ function createCtx(activeItem) {
       return activeItem.path;
     },
     selectedSubtitleStreamIndex() {
+      return 3;
+    },
+    selectedBurnedInSubtitleStreamIndex() {
+      return null;
+    },
+    resolvedSubtitleStreamIndex() {
       return 3;
     },
     subtitleTrackLabel() {
@@ -624,8 +642,10 @@ test("syncProcessedProgressTrack clamps the displayed loaded band to selected su
   assert.equal(ctx.els.progressSliderEl.style.getPropertyValue("--video-progress-processed-start"), "50.000%");
   assert.equal(ctx.els.progressSliderEl.style.getPropertyValue("--video-progress-processed-end"), "67.500%");
   assert.equal(ctx.els.progressSliderEl.getAttribute("data-subtitle-coverage-state"), "limited");
-  assert.match(ctx.els.progressSliderEl.title, /Loaded video: 0:00 - 10:00/);
-  assert.match(ctx.els.progressSliderEl.title, /Subtitle-ready: 5:00 - 6:45/);
+  assert.deepEqual(ctx.currentProgressDebugLines(600), [
+    "CPU priority: catch-up • loaded buffer ahead: 4:10.",
+    "Loaded video: 0:00 - 10:00. Subtitle-ready: 5:00 - 6:45.",
+  ]);
 });
 
 test("storeSubtitleWindowPayload expands scrubber coverage when a later background payload reports broader loaded ranges", async () => {
@@ -683,7 +703,100 @@ test("storeSubtitleWindowPayload expands scrubber coverage when a later backgrou
   assert.equal(ctx.els.progressSliderEl.style.getPropertyValue("--video-progress-subtitle-end"), "100.000%");
   assert.equal(ctx.els.progressSliderEl.style.getPropertyValue("--video-progress-processed-end"), "100.000%");
   assert.equal(ctx.els.progressSliderEl.getAttribute("data-subtitle-coverage-state"), "full");
-  assert.match(ctx.els.progressSliderEl.title, /Subtitle-ready: 0:00 - 10:00/);
+  assert.deepEqual(ctx.currentProgressDebugLines(600), [
+    "CPU priority: catch-up • loaded buffer ahead: 10:00.",
+    "Loaded video: 0:00 - 10:00. Subtitle-ready: 0:00 - 10:00.",
+  ]);
+});
+
+test("syncProcessedProgressTrack reports paused heavy throttle state and current loaded buffer ahead in debug lines", async () => {
+  const [{initShared}] = await Promise.all([
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/shared.js"),
+  ]);
+  const item = {path: "movie.mp4"};
+  const ctx = createCtx(item);
+  ctx.state.backpressureThresholds = {
+    lowWaterSeconds: 45,
+    mediumWaterSeconds: 120,
+    highWaterSeconds: 300,
+    maxWaterSeconds: 600,
+  };
+  ctx.state.compatibilityEncodedMediaEndSeconds = 360;
+  ctx.state.compatibilityStartSeconds = 120;
+  ctx.els.videoEl.currentTime = 90;
+  ctx.els.videoEl.paused = true;
+  initShared(ctx);
+
+  ctx.syncProcessedProgressTrack(600);
+
+  assert.deepEqual(ctx.currentProgressDebugLines(600), [
+    "CPU priority: heavy-throttle • loaded buffer ahead: 6:30.",
+    "Loaded video: 2:00 - 10:00.",
+  ]);
+});
+
+test("syncSubtitleDebugDisplay shows HLS segment context, subtitle mode, and cue indices", async () => {
+  const [{initShared}, {initSubtitles}] = await Promise.all([
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/shared.js"),
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/subtitles.js"),
+  ]);
+  const item = {path: "movie.mp4"};
+  const ctx = createCtx(item);
+  ctx.state.probeCache[item.path] = {
+    subtitle_streams: [{index: 3, webvtt_compatible: true, language: "eng"}],
+    default_subtitle_stream_index: 3,
+  };
+  ctx.state.compatibilityStartSeconds = 90;
+  ctx.state.compatibilityPlaylistSegmentCount = 300;
+  ctx.state.compatibilityLoadedSegmentMinIndex = 67;
+  ctx.state.compatibilityLoadedSegmentMaxIndex = 74;
+  ctx.state.compatibilitySegmentLoadAverageMs = 420;
+  ctx.state.subtitleDebug.trackLabel = "English";
+  ctx.state.subtitleDebug.rawVtt = "WEBVTT";
+  ctx.state.subtitleDebug.cues = [
+    {start: 0, end: 2, text: "One", rawText: "One"},
+    {start: 2, end: 4, text: "Two", rawText: "Two"},
+    {start: 4, end: 6, text: "Three", rawText: "Three"},
+  ];
+  ctx.els.videoEl.currentTime = 1;
+  initShared(ctx);
+  initSubtitles(ctx);
+
+  ctx.syncSubtitleDebugDisplay();
+
+  assert.match(ctx.els.debugMetaEl.textContent, /HLS segment: \[1\/300\] 1:30:000 - 1:36:000/);
+  assert.match(ctx.els.debugMetaEl.textContent, /Loaded HLS segments: \[67-74\/300\] • avg load: 0.42s/);
+  assert.match(ctx.els.debugMetaEl.textContent, /Subtitle mode: webvtt/);
+  assert.equal(ctx.els.debugCurrentTitleEl.textContent, "Current Subtitle [1/3]");
+  assert.equal(ctx.els.debugNextTitleEl.textContent, "Next Subtitle [2/3]");
+});
+
+test("syncSubtitleDebugDisplay keeps HLS segment denominator at least as large as observed segment indices", async () => {
+  const [{initShared}, {initSubtitles}] = await Promise.all([
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/shared.js"),
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/subtitles.js"),
+  ]);
+  const item = {path: "movie.mp4"};
+  const ctx = createCtx(item);
+  ctx.state.probeCache[item.path] = {
+    subtitle_streams: [{index: 3, webvtt_compatible: true, language: "eng"}],
+    default_subtitle_stream_index: 3,
+    duration_seconds: 186.3,
+  };
+  ctx.state.compatibilityStartSeconds = 174.3;
+  ctx.state.compatibilityCurrentSegmentIndex = 4;
+  ctx.state.compatibilityLoadedSegmentMinIndex = 1;
+  ctx.state.compatibilityLoadedSegmentMaxIndex = 7;
+  ctx.state.compatibilitySegmentLoadAverageMs = 0;
+  ctx.state.subtitleDebug.trackLabel = "English";
+  ctx.els.videoEl.currentTime = 19;
+  initShared(ctx);
+  initSubtitles(ctx);
+
+  ctx.syncSubtitleDebugDisplay();
+
+  assert.match(ctx.els.debugMetaEl.textContent, /HLS segment: \[4\/7\] 3:12:300 - 3:18:300/);
+  assert.match(ctx.els.debugMetaEl.textContent, /Loaded HLS segments: \[1-7\/7\] • avg load: n\/a/);
 });
 
 test("handleSubtitleTrackChange requests the new text track against current playback coverage", async () => {
