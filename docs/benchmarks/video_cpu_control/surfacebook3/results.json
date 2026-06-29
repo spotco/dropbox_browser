@@ -1,0 +1,784 @@
+{
+  "benchmark_mode": "quick",
+  "copy_candidate_path": "anime/[PsyPlex] Detective Conan 1-1006 + Movies 1-23 Batch/Season 10/Detective Conan - S10E07 - The Fearful Legend of the Snowy Night (1) SDTV-Kienai-AZFS.mp4",
+  "generated_at": "2026-06-29T10:05:10",
+  "iterations": 1,
+  "machine": {
+    "cpu_count_logical": 8,
+    "hostname": "surfacebook3",
+    "platform": "Windows-10-10.0.19045-SP0",
+    "processor": {
+      "Manufacturer": "GenuineIntel",
+      "MaxClockSpeed": 1498,
+      "Name": "Intel(R) Core(TM) i7-1065G7 CPU @ 1.30GHz",
+      "NumberOfCores": 4,
+      "NumberOfLogicalProcessors": 8
+    },
+    "python_version": "3.11.9",
+    "system": {
+      "Manufacturer": "Microsoft Corporation",
+      "Model": "Surface Book 3",
+      "TotalPhysicalMemory": 33925664768
+    },
+    "total_memory_gib": 31.6
+  },
+  "machine_label": "surfacebook3",
+  "recommended_defaults": {
+    "VideoFFmpegCatchupReadRate": 1.3,
+    "VideoFFmpegFilterThreads": 0,
+    "VideoFFmpegInitialBurstSeconds": 18.0,
+    "VideoFFmpegProcessPriority": "below_normal",
+    "VideoFFmpegReadRate": 1.1,
+    "VideoFFmpegThreads": 0,
+    "basis": "conservative-pacing"
+  },
+  "sample_interval_seconds": 1.0,
+  "sample_seconds": 8.0,
+  "scenarios": [
+    {
+      "iterations": [
+        {
+          "asset_fetch_ms": 30.335,
+          "audio_mode": "audio_transcode",
+          "client_hls_loading_events": 0,
+          "client_hls_stall_events": 0,
+          "client_video_stalled_events": 0,
+          "client_video_waiting_events": 0,
+          "encoded_media_end_end_seconds": 60.0,
+          "encoded_media_end_max_seconds": 60.0,
+          "encoded_media_end_start_seconds": 6.0,
+          "error": null,
+          "ffmpeg_cpu_percent_max": 768.262,
+          "ffmpeg_cpu_percent_mean": 741.166,
+          "ffmpeg_cpu_sample_count": 7,
+          "ffmpeg_pid": 12484,
+          "iteration": 1,
+          "media_encode_rate": 6.695478,
+          "playlist_edge_end_seconds": 60.018,
+          "playlist_edge_max_seconds": 60.018,
+          "playlist_edge_start_seconds": 6.006,
+          "playlist_endlist_seen": false,
+          "playlist_sample_count": 8,
+          "playlist_segment_end_count": 10,
+          "playlist_segment_max_count": 10,
+          "playlist_segment_start_count": 1,
+          "probe_cold_ms": 11514.63,
+          "probe_warm_ms": 589.789,
+          "sample_duration_ms": 8066.937,
+          "segment_production_rate_per_second": 1.115665,
+          "server_session_create_ms": 8781.0,
+          "session_create_ms": 9374.647,
+          "session_id": "73219636d1c24afb95026a328063a5c5",
+          "status_sample_count": 8,
+          "total_startup_ms": 20919.611,
+          "video_mode": "video_transcode"
+        }
+      ],
+      "label": "Current unpaced behavior",
+      "name": "current-unpaced",
+      "notes": "Baseline transcode session with pacing disabled and ffmpeg automatic threading.",
+      "observed_audio_mode": "audio_transcode",
+      "observed_video_mode": "video_transcode",
+      "path": "anime/[Judas] Fairy Tail (2009-2014) (Seasons 1-8 + OVAs) [BD 1080p][HEVC x265 10bit][Dual-Audio][Eng-Subs]/[Judas] Fairy Tail (2009)/[Judas] Fairy Tail (2009) - 001.mkv",
+      "scenario_config": {
+        "VideoFFmpegCatchupReadRate": 0.0,
+        "VideoFFmpegFilterThreads": 0,
+        "VideoFFmpegInitialBurstSeconds": 0.0,
+        "VideoFFmpegProcessPriority": "below_normal",
+        "VideoFFmpegReadRate": 0.0,
+        "VideoFFmpegThreads": 0,
+        "force_audio_transcode": false,
+        "force_video_transcode": false
+      },
+      "summary": {
+        "asset_fetch_ms": {
+          "max": 30.335,
+          "mean": 30.335,
+          "median": 30.335,
+          "min": 30.335
+        },
+        "client_hls_loading_events": 0,
+        "client_hls_stall_events": 0,
+        "client_video_stalled_events": 0,
+        "client_video_waiting_events": 0,
+        "encoded_media_end_max_seconds": {
+          "max": 60.0,
+          "mean": 60.0,
+          "median": 60.0,
+          "min": 60.0
+        },
+        "ffmpeg_cpu_percent_mean": {
+          "max": 741.166,
+          "mean": 741.166,
+          "median": 741.166,
+          "min": 741.166
+        },
+        "iterations": 1,
+        "media_encode_rate": {
+          "max": 6.695,
+          "mean": 6.695,
+          "median": 6.695,
+          "min": 6.695
+        },
+        "playlist_segment_max_count": {
+          "max": 10.0,
+          "mean": 10.0,
+          "median": 10.0,
+          "min": 10.0
+        },
+        "probe_cold_ms": {
+          "max": 11514.63,
+          "mean": 11514.63,
+          "median": 11514.63,
+          "min": 11514.63
+        },
+        "probe_warm_ms": {
+          "max": 589.789,
+          "mean": 589.789,
+          "median": 589.789,
+          "min": 589.789
+        },
+        "server_session_create_ms": {
+          "max": 8781.0,
+          "mean": 8781.0,
+          "median": 8781.0,
+          "min": 8781.0
+        },
+        "session_create_ms": {
+          "max": 9374.647,
+          "mean": 9374.647,
+          "median": 9374.647,
+          "min": 9374.647
+        },
+        "successful": 1,
+        "total_startup_ms": {
+          "max": 20919.611,
+          "mean": 20919.611,
+          "median": 20919.611,
+          "min": 20919.611
+        }
+      }
+    },
+    {
+      "iterations": [
+        {
+          "asset_fetch_ms": 22.343,
+          "audio_mode": "audio_transcode",
+          "client_hls_loading_events": 0,
+          "client_hls_stall_events": 0,
+          "client_video_stalled_events": 0,
+          "client_video_waiting_events": 0,
+          "encoded_media_end_end_seconds": 24.0,
+          "encoded_media_end_max_seconds": 24.0,
+          "encoded_media_end_start_seconds": 6.0,
+          "error": null,
+          "ffmpeg_cpu_percent_max": 754.835,
+          "ffmpeg_cpu_percent_mean": 154.92,
+          "ffmpeg_cpu_sample_count": 7,
+          "ffmpeg_pid": 17308,
+          "iteration": 1,
+          "media_encode_rate": 2.206041,
+          "playlist_edge_end_seconds": 24.024,
+          "playlist_edge_max_seconds": 24.024,
+          "playlist_edge_start_seconds": 6.006,
+          "playlist_endlist_seen": false,
+          "playlist_sample_count": 8,
+          "playlist_segment_end_count": 4,
+          "playlist_segment_max_count": 4,
+          "playlist_segment_start_count": 1,
+          "probe_cold_ms": 9506.093,
+          "probe_warm_ms": 590.637,
+          "sample_duration_ms": 8167.571,
+          "segment_production_rate_per_second": 0.367306,
+          "server_session_create_ms": 8531.0,
+          "session_create_ms": 9122.486,
+          "session_id": "af924a7f8ef442ddba7e37deab8c0fbb",
+          "status_sample_count": 8,
+          "total_startup_ms": 18650.921,
+          "video_mode": "video_transcode"
+        }
+      ],
+      "label": "Conservative pacing",
+      "name": "conservative-pacing",
+      "notes": "Gentle pacing intended to reduce background encode-ahead while preserving startup.",
+      "observed_audio_mode": "audio_transcode",
+      "observed_video_mode": "video_transcode",
+      "path": "anime/[Judas] Fairy Tail (2009-2014) (Seasons 1-8 + OVAs) [BD 1080p][HEVC x265 10bit][Dual-Audio][Eng-Subs]/[Judas] Fairy Tail (2009)/[Judas] Fairy Tail (2009) - 001.mkv",
+      "scenario_config": {
+        "VideoFFmpegCatchupReadRate": 1.3,
+        "VideoFFmpegFilterThreads": 0,
+        "VideoFFmpegInitialBurstSeconds": 18.0,
+        "VideoFFmpegProcessPriority": "below_normal",
+        "VideoFFmpegReadRate": 1.1,
+        "VideoFFmpegThreads": 0,
+        "force_audio_transcode": false,
+        "force_video_transcode": false
+      },
+      "summary": {
+        "asset_fetch_ms": {
+          "max": 22.343,
+          "mean": 22.343,
+          "median": 22.343,
+          "min": 22.343
+        },
+        "client_hls_loading_events": 0,
+        "client_hls_stall_events": 0,
+        "client_video_stalled_events": 0,
+        "client_video_waiting_events": 0,
+        "encoded_media_end_max_seconds": {
+          "max": 24.0,
+          "mean": 24.0,
+          "median": 24.0,
+          "min": 24.0
+        },
+        "ffmpeg_cpu_percent_mean": {
+          "max": 154.92,
+          "mean": 154.92,
+          "median": 154.92,
+          "min": 154.92
+        },
+        "iterations": 1,
+        "media_encode_rate": {
+          "max": 2.206,
+          "mean": 2.206,
+          "median": 2.206,
+          "min": 2.206
+        },
+        "playlist_segment_max_count": {
+          "max": 4.0,
+          "mean": 4.0,
+          "median": 4.0,
+          "min": 4.0
+        },
+        "probe_cold_ms": {
+          "max": 9506.093,
+          "mean": 9506.093,
+          "median": 9506.093,
+          "min": 9506.093
+        },
+        "probe_warm_ms": {
+          "max": 590.637,
+          "mean": 590.637,
+          "median": 590.637,
+          "min": 590.637
+        },
+        "server_session_create_ms": {
+          "max": 8531.0,
+          "mean": 8531.0,
+          "median": 8531.0,
+          "min": 8531.0
+        },
+        "session_create_ms": {
+          "max": 9122.486,
+          "mean": 9122.486,
+          "median": 9122.486,
+          "min": 9122.486
+        },
+        "successful": 1,
+        "total_startup_ms": {
+          "max": 18650.921,
+          "mean": 18650.921,
+          "median": 18650.921,
+          "min": 18650.921
+        }
+      }
+    },
+    {
+      "iterations": [
+        {
+          "asset_fetch_ms": 21.494,
+          "audio_mode": "audio_transcode",
+          "client_hls_loading_events": 0,
+          "client_hls_stall_events": 0,
+          "client_video_stalled_events": 0,
+          "client_video_waiting_events": 0,
+          "encoded_media_end_end_seconds": 30.0,
+          "encoded_media_end_max_seconds": 30.0,
+          "encoded_media_end_start_seconds": 6.0,
+          "error": null,
+          "ffmpeg_cpu_percent_max": 758.532,
+          "ffmpeg_cpu_percent_mean": 235.362,
+          "ffmpeg_cpu_sample_count": 7,
+          "ffmpeg_pid": 6540,
+          "iteration": 1,
+          "media_encode_rate": 2.949805,
+          "playlist_edge_end_seconds": 30.03,
+          "playlist_edge_max_seconds": 30.03,
+          "playlist_edge_start_seconds": 6.006,
+          "playlist_endlist_seen": false,
+          "playlist_sample_count": 8,
+          "playlist_segment_end_count": 5,
+          "playlist_segment_max_count": 5,
+          "playlist_segment_start_count": 1,
+          "probe_cold_ms": 10022.69,
+          "probe_warm_ms": 596.568,
+          "sample_duration_ms": 8144.268,
+          "segment_production_rate_per_second": 0.491143,
+          "server_session_create_ms": 8594.0,
+          "session_create_ms": 9172.72,
+          "session_id": "7c49b32aede341649cf14cb51069e14a",
+          "status_sample_count": 8,
+          "total_startup_ms": 19216.904,
+          "video_mode": "video_transcode"
+        }
+      ],
+      "label": "Moderate pacing",
+      "name": "moderate-pacing",
+      "notes": "More aggressive than conservative pacing to test whether a stronger machine still stays responsive.",
+      "observed_audio_mode": "audio_transcode",
+      "observed_video_mode": "video_transcode",
+      "path": "anime/[Judas] Fairy Tail (2009-2014) (Seasons 1-8 + OVAs) [BD 1080p][HEVC x265 10bit][Dual-Audio][Eng-Subs]/[Judas] Fairy Tail (2009)/[Judas] Fairy Tail (2009) - 001.mkv",
+      "scenario_config": {
+        "VideoFFmpegCatchupReadRate": 1.6,
+        "VideoFFmpegFilterThreads": 0,
+        "VideoFFmpegInitialBurstSeconds": 24.0,
+        "VideoFFmpegProcessPriority": "below_normal",
+        "VideoFFmpegReadRate": 1.35,
+        "VideoFFmpegThreads": 0,
+        "force_audio_transcode": false,
+        "force_video_transcode": false
+      },
+      "summary": {
+        "asset_fetch_ms": {
+          "max": 21.494,
+          "mean": 21.494,
+          "median": 21.494,
+          "min": 21.494
+        },
+        "client_hls_loading_events": 0,
+        "client_hls_stall_events": 0,
+        "client_video_stalled_events": 0,
+        "client_video_waiting_events": 0,
+        "encoded_media_end_max_seconds": {
+          "max": 30.0,
+          "mean": 30.0,
+          "median": 30.0,
+          "min": 30.0
+        },
+        "ffmpeg_cpu_percent_mean": {
+          "max": 235.362,
+          "mean": 235.362,
+          "median": 235.362,
+          "min": 235.362
+        },
+        "iterations": 1,
+        "media_encode_rate": {
+          "max": 2.95,
+          "mean": 2.95,
+          "median": 2.95,
+          "min": 2.95
+        },
+        "playlist_segment_max_count": {
+          "max": 5.0,
+          "mean": 5.0,
+          "median": 5.0,
+          "min": 5.0
+        },
+        "probe_cold_ms": {
+          "max": 10022.69,
+          "mean": 10022.69,
+          "median": 10022.69,
+          "min": 10022.69
+        },
+        "probe_warm_ms": {
+          "max": 596.568,
+          "mean": 596.568,
+          "median": 596.568,
+          "min": 596.568
+        },
+        "server_session_create_ms": {
+          "max": 8594.0,
+          "mean": 8594.0,
+          "median": 8594.0,
+          "min": 8594.0
+        },
+        "session_create_ms": {
+          "max": 9172.72,
+          "mean": 9172.72,
+          "median": 9172.72,
+          "min": 9172.72
+        },
+        "successful": 1,
+        "total_startup_ms": {
+          "max": 19216.904,
+          "mean": 19216.904,
+          "median": 19216.904,
+          "min": 19216.904
+        }
+      }
+    },
+    {
+      "iterations": [
+        {
+          "asset_fetch_ms": 23.075,
+          "audio_mode": "audio_transcode",
+          "client_hls_loading_events": 0,
+          "client_hls_stall_events": 0,
+          "client_video_stalled_events": 0,
+          "client_video_waiting_events": 0,
+          "encoded_media_end_end_seconds": 24.0,
+          "encoded_media_end_max_seconds": 24.0,
+          "encoded_media_end_start_seconds": 6.0,
+          "error": null,
+          "ffmpeg_cpu_percent_max": 504.945,
+          "ffmpeg_cpu_percent_mean": 127.233,
+          "ffmpeg_cpu_sample_count": 7,
+          "ffmpeg_pid": 17776,
+          "iteration": 1,
+          "media_encode_rate": 2.204772,
+          "playlist_edge_end_seconds": 24.024,
+          "playlist_edge_max_seconds": 24.024,
+          "playlist_edge_start_seconds": 6.006,
+          "playlist_endlist_seen": false,
+          "playlist_sample_count": 8,
+          "playlist_segment_end_count": 4,
+          "playlist_segment_max_count": 4,
+          "playlist_segment_start_count": 1,
+          "probe_cold_ms": 9649.969,
+          "probe_warm_ms": 603.949,
+          "sample_duration_ms": 8172.273,
+          "segment_production_rate_per_second": 0.367095,
+          "server_session_create_ms": 8797.0,
+          "session_create_ms": 9358.276,
+          "session_id": "fab29beb66134f4a86e66e2d0682bedc",
+          "status_sample_count": 8,
+          "total_startup_ms": 19031.32,
+          "video_mode": "video_transcode"
+        }
+      ],
+      "label": "Weak-CPU thread limits",
+      "name": "weak-cpu-threads",
+      "notes": "Simulates a weaker box by constraining ffmpeg and filter graph threads.",
+      "observed_audio_mode": "audio_transcode",
+      "observed_video_mode": "video_transcode",
+      "path": "anime/[Judas] Fairy Tail (2009-2014) (Seasons 1-8 + OVAs) [BD 1080p][HEVC x265 10bit][Dual-Audio][Eng-Subs]/[Judas] Fairy Tail (2009)/[Judas] Fairy Tail (2009) - 001.mkv",
+      "scenario_config": {
+        "VideoFFmpegCatchupReadRate": 1.3,
+        "VideoFFmpegFilterThreads": 1,
+        "VideoFFmpegInitialBurstSeconds": 18.0,
+        "VideoFFmpegProcessPriority": "below_normal",
+        "VideoFFmpegReadRate": 1.1,
+        "VideoFFmpegThreads": 2,
+        "force_audio_transcode": false,
+        "force_video_transcode": false
+      },
+      "summary": {
+        "asset_fetch_ms": {
+          "max": 23.075,
+          "mean": 23.075,
+          "median": 23.075,
+          "min": 23.075
+        },
+        "client_hls_loading_events": 0,
+        "client_hls_stall_events": 0,
+        "client_video_stalled_events": 0,
+        "client_video_waiting_events": 0,
+        "encoded_media_end_max_seconds": {
+          "max": 24.0,
+          "mean": 24.0,
+          "median": 24.0,
+          "min": 24.0
+        },
+        "ffmpeg_cpu_percent_mean": {
+          "max": 127.233,
+          "mean": 127.233,
+          "median": 127.233,
+          "min": 127.233
+        },
+        "iterations": 1,
+        "media_encode_rate": {
+          "max": 2.205,
+          "mean": 2.205,
+          "median": 2.205,
+          "min": 2.205
+        },
+        "playlist_segment_max_count": {
+          "max": 4.0,
+          "mean": 4.0,
+          "median": 4.0,
+          "min": 4.0
+        },
+        "probe_cold_ms": {
+          "max": 9649.969,
+          "mean": 9649.969,
+          "median": 9649.969,
+          "min": 9649.969
+        },
+        "probe_warm_ms": {
+          "max": 603.949,
+          "mean": 603.949,
+          "median": 603.949,
+          "min": 603.949
+        },
+        "server_session_create_ms": {
+          "max": 8797.0,
+          "mean": 8797.0,
+          "median": 8797.0,
+          "min": 8797.0
+        },
+        "session_create_ms": {
+          "max": 9358.276,
+          "mean": 9358.276,
+          "median": 9358.276,
+          "min": 9358.276
+        },
+        "successful": 1,
+        "total_startup_ms": {
+          "max": 19031.32,
+          "mean": 19031.32,
+          "median": 19031.32,
+          "min": 19031.32
+        }
+      }
+    },
+    {
+      "iterations": [
+        {
+          "asset_fetch_ms": 40.936,
+          "audio_mode": "audio_copy",
+          "client_hls_loading_events": 0,
+          "client_hls_stall_events": 0,
+          "client_video_stalled_events": 0,
+          "client_video_waiting_events": 0,
+          "encoded_media_end_end_seconds": 18.0,
+          "encoded_media_end_max_seconds": 18.0,
+          "encoded_media_end_start_seconds": 6.0,
+          "error": null,
+          "ffmpeg_cpu_percent_max": 0.0,
+          "ffmpeg_cpu_percent_mean": 0.0,
+          "ffmpeg_cpu_sample_count": 7,
+          "ffmpeg_pid": 14372,
+          "iteration": 1,
+          "media_encode_rate": 1.785705,
+          "playlist_edge_end_seconds": 23.774,
+          "playlist_edge_max_seconds": 23.774,
+          "playlist_edge_start_seconds": 9.009,
+          "playlist_endlist_seen": false,
+          "playlist_sample_count": 8,
+          "playlist_segment_end_count": 3,
+          "playlist_segment_max_count": 3,
+          "playlist_segment_start_count": 1,
+          "probe_cold_ms": 2182.372,
+          "probe_warm_ms": 612.0,
+          "sample_duration_ms": 8268.444,
+          "segment_production_rate_per_second": 0.241883,
+          "server_session_create_ms": 6656.0,
+          "session_create_ms": 7233.23,
+          "session_id": "6c3335f58c3841f495f604a01493638f",
+          "status_sample_count": 8,
+          "total_startup_ms": 9456.538,
+          "video_mode": "video_copy"
+        }
+      ],
+      "label": "H.264 copy candidate",
+      "name": "h264-video-copy",
+      "notes": "Expected H.264/AAC copy-safe path to quantify the low-CPU ceiling.",
+      "observed_audio_mode": "audio_copy",
+      "observed_video_mode": "video_copy",
+      "path": "anime/[PsyPlex] Detective Conan 1-1006 + Movies 1-23 Batch/Season 10/Detective Conan - S10E07 - The Fearful Legend of the Snowy Night (1) SDTV-Kienai-AZFS.mp4",
+      "scenario_config": {
+        "VideoFFmpegCatchupReadRate": 1.3,
+        "VideoFFmpegFilterThreads": 0,
+        "VideoFFmpegInitialBurstSeconds": 18.0,
+        "VideoFFmpegProcessPriority": "below_normal",
+        "VideoFFmpegReadRate": 1.1,
+        "VideoFFmpegThreads": 0,
+        "force_audio_transcode": false,
+        "force_video_transcode": false
+      },
+      "summary": {
+        "asset_fetch_ms": {
+          "max": 40.936,
+          "mean": 40.936,
+          "median": 40.936,
+          "min": 40.936
+        },
+        "client_hls_loading_events": 0,
+        "client_hls_stall_events": 0,
+        "client_video_stalled_events": 0,
+        "client_video_waiting_events": 0,
+        "encoded_media_end_max_seconds": {
+          "max": 18.0,
+          "mean": 18.0,
+          "median": 18.0,
+          "min": 18.0
+        },
+        "ffmpeg_cpu_percent_mean": {
+          "max": 0.0,
+          "mean": 0.0,
+          "median": 0.0,
+          "min": 0.0
+        },
+        "iterations": 1,
+        "media_encode_rate": {
+          "max": 1.786,
+          "mean": 1.786,
+          "median": 1.786,
+          "min": 1.786
+        },
+        "playlist_segment_max_count": {
+          "max": 3.0,
+          "mean": 3.0,
+          "median": 3.0,
+          "min": 3.0
+        },
+        "probe_cold_ms": {
+          "max": 2182.372,
+          "mean": 2182.372,
+          "median": 2182.372,
+          "min": 2182.372
+        },
+        "probe_warm_ms": {
+          "max": 612.0,
+          "mean": 612.0,
+          "median": 612.0,
+          "min": 612.0
+        },
+        "server_session_create_ms": {
+          "max": 6656.0,
+          "mean": 6656.0,
+          "median": 6656.0,
+          "min": 6656.0
+        },
+        "session_create_ms": {
+          "max": 7233.23,
+          "mean": 7233.23,
+          "median": 7233.23,
+          "min": 7233.23
+        },
+        "successful": 1,
+        "total_startup_ms": {
+          "max": 9456.538,
+          "mean": 9456.538,
+          "median": 9456.538,
+          "min": 9456.538
+        }
+      }
+    },
+    {
+      "iterations": [
+        {
+          "asset_fetch_ms": 13.238,
+          "audio_mode": "audio_transcode",
+          "client_hls_loading_events": 0,
+          "client_hls_stall_events": 0,
+          "client_video_stalled_events": 0,
+          "client_video_waiting_events": 0,
+          "encoded_media_end_end_seconds": 24.0,
+          "encoded_media_end_max_seconds": 24.0,
+          "encoded_media_end_start_seconds": 6.0,
+          "error": null,
+          "ffmpeg_cpu_percent_max": 105.466,
+          "ffmpeg_cpu_percent_mean": 15.718,
+          "ffmpeg_cpu_sample_count": 7,
+          "ffmpeg_pid": 8532,
+          "iteration": 1,
+          "media_encode_rate": 2.197992,
+          "playlist_edge_end_seconds": 24.024,
+          "playlist_edge_max_seconds": 24.024,
+          "playlist_edge_start_seconds": 6.006,
+          "playlist_endlist_seen": false,
+          "playlist_sample_count": 8,
+          "playlist_segment_end_count": 4,
+          "playlist_segment_max_count": 4,
+          "playlist_segment_start_count": 1,
+          "probe_cold_ms": 2136.481,
+          "probe_warm_ms": 619.167,
+          "sample_duration_ms": 8197.484,
+          "segment_production_rate_per_second": 0.365966,
+          "server_session_create_ms": 6000.0,
+          "session_create_ms": 6588.15,
+          "session_id": "1c4d165affa94e578d20a37a142e089c",
+          "status_sample_count": 8,
+          "total_startup_ms": 8737.869,
+          "video_mode": "video_transcode"
+        }
+      ],
+      "label": "Full transcode session",
+      "name": "full-transcode-copy-candidate",
+      "notes": "Forces the same copy candidate through full video+audio transcode for an apples-to-apples comparison.",
+      "observed_audio_mode": "audio_transcode",
+      "observed_video_mode": "video_transcode",
+      "path": "anime/[PsyPlex] Detective Conan 1-1006 + Movies 1-23 Batch/Season 10/Detective Conan - S10E07 - The Fearful Legend of the Snowy Night (1) SDTV-Kienai-AZFS.mp4",
+      "scenario_config": {
+        "VideoFFmpegCatchupReadRate": 1.3,
+        "VideoFFmpegFilterThreads": 0,
+        "VideoFFmpegInitialBurstSeconds": 18.0,
+        "VideoFFmpegProcessPriority": "below_normal",
+        "VideoFFmpegReadRate": 1.1,
+        "VideoFFmpegThreads": 0,
+        "force_audio_transcode": true,
+        "force_video_transcode": true
+      },
+      "summary": {
+        "asset_fetch_ms": {
+          "max": 13.238,
+          "mean": 13.238,
+          "median": 13.238,
+          "min": 13.238
+        },
+        "client_hls_loading_events": 0,
+        "client_hls_stall_events": 0,
+        "client_video_stalled_events": 0,
+        "client_video_waiting_events": 0,
+        "encoded_media_end_max_seconds": {
+          "max": 24.0,
+          "mean": 24.0,
+          "median": 24.0,
+          "min": 24.0
+        },
+        "ffmpeg_cpu_percent_mean": {
+          "max": 15.718,
+          "mean": 15.718,
+          "median": 15.718,
+          "min": 15.718
+        },
+        "iterations": 1,
+        "media_encode_rate": {
+          "max": 2.198,
+          "mean": 2.198,
+          "median": 2.198,
+          "min": 2.198
+        },
+        "playlist_segment_max_count": {
+          "max": 4.0,
+          "mean": 4.0,
+          "median": 4.0,
+          "min": 4.0
+        },
+        "probe_cold_ms": {
+          "max": 2136.481,
+          "mean": 2136.481,
+          "median": 2136.481,
+          "min": 2136.481
+        },
+        "probe_warm_ms": {
+          "max": 619.167,
+          "mean": 619.167,
+          "median": 619.167,
+          "min": 619.167
+        },
+        "server_session_create_ms": {
+          "max": 6000.0,
+          "mean": 6000.0,
+          "median": 6000.0,
+          "min": 6000.0
+        },
+        "session_create_ms": {
+          "max": 6588.15,
+          "mean": 6588.15,
+          "median": 6588.15,
+          "min": 6588.15
+        },
+        "successful": 1,
+        "total_startup_ms": {
+          "max": 8737.869,
+          "mean": 8737.869,
+          "median": 8737.869,
+          "min": 8737.869
+        }
+      }
+    }
+  ],
+  "transcode_candidate_path": "anime/[Judas] Fairy Tail (2009-2014) (Seasons 1-8 + OVAs) [BD 1080p][HEVC x265 10bit][Dual-Audio][Eng-Subs]/[Judas] Fairy Tail (2009)/[Judas] Fairy Tail (2009) - 001.mkv"
+}
