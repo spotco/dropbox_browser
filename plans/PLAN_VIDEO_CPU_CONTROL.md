@@ -49,135 +49,134 @@ server-side backpressure.
 
 ## Phase 1 - Add Static ffmpeg Input Pacing
 
-- [ ] Add video CPU/pacing defaults to app config:
+- [x] Add video CPU/pacing defaults to app config:
       `VideoFFmpegReadRate`, `VideoFFmpegInitialBurstSeconds`, and
       `VideoFFmpegCatchupReadRate`.
-- [ ] Load and validate those values in config code using conservative clamps.
-- [ ] Add measurement tooling before choosing defaults:
+- [x] Load and validate those values in config code using conservative clamps.
+- [x] Add measurement tooling before choosing defaults:
       a script or developer command that runs representative remote playback
       sessions and records startup time, segment production rate, encoded-ahead
       seconds, HLS stalls/loading events, ffmpeg process CPU, and wall-clock
       encode speed.
-- [ ] Add measurement output under generated state such as `Temp/` so benchmark
+- [x] Add measurement output under generated state such as `Temp/` so benchmark
       results are inspectable but not committed.
-- [ ] Measure at least these scenarios before picking defaults:
+- [x] Measure at least these scenarios before picking defaults:
       current unpaced behavior, conservative pacing, moderate pacing, weak-CPU
       thread limits, H.264 video-copy candidates, and full transcode sessions.
-- [ ] Choose default pacing values from measurement results, optimizing for no
+- [x] Choose default pacing values from measurement results, optimizing for no
       playback stutter/loading while keeping CPU reasonable after the initial
       buffer is loaded.
-- [ ] Add optional ffmpeg input pacing flags before `-i` in
+- [x] Add optional ffmpeg input pacing flags before `-i` in
       `build_ffmpeg_hls_command()`:
       `-readrate`, `-readrate_initial_burst`, and `-readrate_catchup`.
-- [ ] Keep pacing disabled or minimal when configured read rate is `0` or
+- [x] Keep pacing disabled or minimal when configured read rate is `0` or
       blank, so troubleshooting can temporarily restore current behavior.
-- [ ] Document the measured default values and the test data that justified
+- [x] Document the measured default values and the test data that justified
       them.
-- [ ] Add command-construction tests proving pacing flags appear before `-i`.
-- [ ] Add tests proving disabled pacing omits all pacing flags.
-- [ ] Update `docs/video-player.md` with the new config keys and behavior.
+- [x] Add command-construction tests proving pacing flags appear before `-i`.
+- [x] Add tests proving disabled pacing omits all pacing flags.
+- [x] Update `docs/video-player.md` with the new config keys and behavior.
 
 ## Phase 2 - Add ffmpeg CPU / Thread Bounds
 
-- [ ] Add config values for CPU bounds:
-      `VideoFFmpegThreads`, `VideoFFmpegFilterThreads`, and optionally
-      `VideoFFmpegProcessPriority`.
-- [ ] Pick reasonable initial thread defaults before measurement:
+- [x] Add config values for CPU bounds:
+      `VideoFFmpegThreads` and `VideoFFmpegFilterThreads`.
+- [x] Pick reasonable initial thread defaults before measurement:
       start with ffmpeg automatic thread behavior unless measurements show it
       is too aggressive, and make explicit low thread counts configurable for
       weaker machines.
-- [ ] Include thread-count variants in the measurement tooling so defaults can
+- [x] Include thread-count variants in the measurement tooling so defaults can
       be adjusted from real playback data rather than guesswork.
-- [ ] Apply `-threads <N>` to the ffmpeg output/encoder command when configured.
-- [ ] Apply `-filter_threads <N>` and `-filter_complex_threads <N>` when
+- [x] Apply `-threads <N>` to the ffmpeg output/encoder command when configured.
+- [x] Apply `-filter_threads <N>` and `-filter_complex_threads <N>` when
       configured, especially for burned-in subtitle filter graphs.
-- [ ] Clamp thread values to safe integers and treat `0` or blank as ffmpeg
+- [x] Clamp thread values to safe integers and treat `0` or blank as ffmpeg
       default behavior.
-- [ ] Add command-construction tests for thread flags.
-- [ ] Add tests proving invalid or disabled thread config does not emit broken
+- [x] Add command-construction tests for thread flags.
+- [x] Add tests proving invalid or disabled thread config does not emit broken
       ffmpeg arguments.
-- [ ] Document the tradeoff: lower thread counts reduce peak CPU but may make
+- [x] Document the tradeoff: lower thread counts reduce peak CPU but may make
       realtime encode impossible on slow hardware.
 
 ## Phase 3 - Start ffmpeg At Lower OS Priority
 
-- [ ] Add Windows process-priority support in `VideoSessionManager.create_session`
+- [x] Add Windows process-priority support in `VideoSessionManager.create_session`
       when spawning ffmpeg.
-- [ ] Pick a reasonable initial Windows priority default before measurement:
+- [x] Pick a reasonable initial Windows priority default before measurement:
       below-normal by default, with idle and normal available through config.
-- [ ] Include priority variants in the measurement/manual validation pass so the
+- [x] Include priority variants in the measurement/manual validation pass so the
       default can be adjusted based on playback smoothness and system
       responsiveness.
-- [ ] Use `subprocess.BELOW_NORMAL_PRIORITY_CLASS` or
+- [x] Use `subprocess.BELOW_NORMAL_PRIORITY_CLASS` or
       `subprocess.IDLE_PRIORITY_CLASS` according to config.
-- [ ] Keep non-Windows behavior unchanged unless a portable low-priority option
+- [x] Keep non-Windows behavior unchanged unless a portable low-priority option
       is added later.
-- [ ] Add tests around the computed `subprocess.Popen` kwargs without requiring
+- [x] Add tests around the computed `subprocess.Popen` kwargs without requiring
       a real ffmpeg process.
-- [ ] Include the selected priority in `session_create_start` diagnostics when
+- [x] Include the selected priority in `session_create_start` diagnostics when
       video debug logging is enabled.
-- [ ] Document that process priority improves system responsiveness but does not
+- [x] Document that process priority improves system responsiveness but does not
       itself reduce total ffmpeg work.
 
 ## Phase 4 - Copy Compatible Video Streams
 
-- [ ] Extend probe compatibility helpers to identify browser/HLS-safe H.264
+- [x] Extend probe compatibility helpers to identify browser/HLS-safe H.264
       video streams.
-- [ ] Make the H.264 copy decision opportunistic and compatibility-first:
+- [x] Make the H.264 copy decision opportunistic and compatibility-first:
       use video copy for as many H.264 variants as are expected to work, because
       avoiding video transcode is a major CPU win.
-- [ ] Treat video stream copy as allowed only when no burned-in subtitle stream
+- [x] Treat video stream copy as allowed only when no burned-in subtitle stream
       is selected.
-- [ ] Keep video transcode for:
+- [x] Keep video transcode for:
       non-H.264 video, unknown compatibility, required pixel-format conversion,
       burned-in bitmap subtitles, or any active video filter.
-- [ ] Add a session mode marker to distinguish video-copy sessions from normal
+- [x] Add a session mode marker to distinguish video-copy sessions from normal
       video-transcode sessions in server payloads and diagnostics.
-- [ ] Add client recovery behavior for copy-mode playback failures:
+- [x] Add client recovery behavior for copy-mode playback failures:
       if hls.js or the browser reports fatal media/codec playback failure for a
       video-copy session, restart the same session request with video transcode
       forced.
-- [ ] Add server request support for forcing video transcode on retry, without
+- [x] Add server request support for forcing video transcode on retry, without
       changing the selected audio/subtitle streams or playback position.
-- [ ] Add safeguards to avoid infinite copy/transcode retry loops for the same
+- [x] Add safeguards to avoid infinite copy/transcode retry loops for the same
       playback item and timestamp.
-- [ ] Change HLS command construction to choose `-c:v copy` when probe metadata
+- [x] Change HLS command construction to choose `-c:v copy` when probe metadata
       says the selected video stream is safe.
-- [ ] Preserve keyframe/segment behavior for copy mode; verify whether
+- [x] Preserve keyframe/segment behavior for copy mode; verify whether
       `-force_key_frames` must be omitted when `-c:v copy` is used.
-- [ ] Add session creation plumbing so `build_ffmpeg_hls_command()` receives the
+- [x] Add session creation plumbing so `build_ffmpeg_hls_command()` receives the
       selected media compatibility decision, not just path and stream indices.
-- [ ] Add tests for H.264/no-burn-in sessions using `-c:v copy`.
-- [ ] Add tests proving burned-in subtitle sessions still use video transcode.
-- [ ] Add diagnostics indicating whether a session uses video copy or video
+- [x] Add tests for H.264/no-burn-in sessions using `-c:v copy`.
+- [x] Add tests proving burned-in subtitle sessions still use video transcode.
+- [x] Add diagnostics indicating whether a session uses video copy or video
       transcode and why.
 
 ## Phase 5 - Copy Compatible Audio Streams
 
-- [ ] Extend probe compatibility helpers to identify AAC audio streams that are
+- [x] Extend probe compatibility helpers to identify AAC audio streams that are
       browser/HLS-safe for the selected audio track.
-- [ ] Make the AAC copy decision opportunistic and compatibility-first:
+- [x] Make the AAC copy decision opportunistic and compatibility-first:
       use audio copy for as many AAC variants and channel layouts as are
       expected to work, because avoiding audio transcode also reduces CPU.
-- [ ] Change HLS command construction to choose `-c:a copy` when the selected
+- [x] Change HLS command construction to choose `-c:a copy` when the selected
       audio stream is AAC/stereo-compatible.
-- [ ] Keep audio transcode for non-AAC codecs, unknown compatibility, or
+- [x] Keep audio transcode for non-AAC codecs, unknown compatibility, or
       selected retry paths where the browser/player rejects copied audio.
-- [ ] Add a session mode marker to distinguish audio-copy sessions from normal
+- [x] Add a session mode marker to distinguish audio-copy sessions from normal
       audio-transcode sessions in server payloads and diagnostics.
-- [ ] Add client recovery behavior for copy-mode audio playback failures:
+- [x] Add client recovery behavior for copy-mode audio playback failures:
       if hls.js or the browser reports fatal media/codec playback failure for an
       audio-copy session, restart the same session request with audio transcode
       and downmix forced.
-- [ ] Add server request support for forcing audio transcode/downmix on retry,
+- [x] Add server request support for forcing audio transcode/downmix on retry,
       without changing the selected video/subtitle streams or playback position.
-- [ ] Add safeguards to avoid infinite audio copy/transcode retry loops for the
+- [x] Add safeguards to avoid infinite audio copy/transcode retry loops for the
       same playback item and timestamp.
-- [ ] Omit audio normalization flags such as `-ac 2` and `-ar 48000` when
+- [x] Omit audio normalization flags such as `-ac 2` and `-ar 48000` when
       `-c:a copy` is selected.
-- [ ] Add tests for AAC-compatible sessions using `-c:a copy`.
-- [ ] Add tests for non-AAC or incompatible audio still using AAC transcode.
-- [ ] Add diagnostics indicating whether a session uses audio copy or audio
+- [x] Add tests for AAC-compatible sessions using `-c:a copy`.
+- [x] Add tests for non-AAC or incompatible audio still using AAC transcode.
+- [x] Add diagnostics indicating whether a session uses audio copy or audio
       transcode and why.
 
 ## Phase 6 - Define Sliding-Scale Backpressure Contract
