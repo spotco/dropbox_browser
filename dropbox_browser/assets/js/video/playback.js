@@ -3,6 +3,7 @@ function resetPlaybackSurface() {
   if (!ctx.els.videoEl) return;
   ctx.clearCompatibilityRecoveryTimer();
   ctx.clearCompatibilitySessionStatusPoll();
+  ctx.clearCompatibilitySessionProgressReport();
   ctx.hideLoadingOverlay();
   ctx.flushNativeSubtitleRenderSurface();
   ctx.resetCompatibilityRecoveryState();
@@ -15,6 +16,8 @@ function resetPlaybackSurface() {
   ctx.state.compatibilitySessionAudioModeReason = '';
   ctx.state.requestedSeekSeconds = null;
   ctx.state.seekRestartInProgress = false;
+  ctx.state.compatibilitySessionProgressPendingImmediate = false;
+  ctx.state.compatibilityProgressBurstUntilMs = 0;
   ctx.resetPlaybackProgress();
 }
 

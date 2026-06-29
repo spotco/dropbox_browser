@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import BinaryIO
+import time
+from typing import BinaryIO, Callable
 from urllib.parse import quote
 
 
@@ -26,8 +27,33 @@ class StreamPlan:
     is_partial: bool
 
 
+@dataclass(frozen=True)
+class StreamCopyThrottleDecision:
+    cancel: bool = False
+    sleep_seconds: float = 0.0
+    throttle_mode: str = "unthrottled"
+    ahead_seconds: float | None = None
+
+
+@dataclass(frozen=True)
+class StreamCopyStats:
+    bytes_copied: int
+    sleep_seconds_total: float
+    decision_samples: int
+    last_throttle_mode: str
+    last_ahead_seconds: float | None
+
+
 class RangeNotSatisfiable(ValueError):
     """Raised when a syntactically valid Range header cannot fit the file."""
+
+
+class StreamCopyCancelled(Exception):
+    """Raised when a controlled stream copy is cancelled by the caller."""
+
+    def __init__(self, decision: StreamCopyThrottleDecision):
+        super().__init__(decision.throttle_mode)
+        self.decision = decision
 
 
 def stream_headers(
@@ -102,6 +128,47 @@ def copy_exact(src: BinaryIO, dst: BinaryIO, count: int, buffer_size: int = 1024
             break
         dst.write(chunk)
         remaining -= len(chunk)
+
+
+def copy_exact_with_throttle(
+    src: BinaryIO,
+    dst: BinaryIO,
+    count: int,
+    *,
+    decision_fn: Callable[[], StreamCopyThrottleDecision],
+    sleep_fn: Callable[[float], None] = time.sleep,
+    buffer_size: int = 1024 * 1024,
+) -> StreamCopyStats:
+    remaining = count
+    bytes_copied = 0
+    sleep_seconds_total = 0.0
+    decision_samples = 0
+    last_throttle_mode = "unthrottled"
+    last_ahead_seconds: float | None = None
+    while remaining > 0:
+        decision = decision_fn()
+        decision_samples += 1
+        last_throttle_mode = str(decision.throttle_mode or "unthrottled")
+        last_ahead_seconds = decision.ahead_seconds
+        if decision.cancel:
+            raise StreamCopyCancelled(decision)
+        sleep_seconds = max(0.0, float(decision.sleep_seconds or 0.0))
+        if sleep_seconds > 0:
+            sleep_fn(sleep_seconds)
+            sleep_seconds_total += sleep_seconds
+        chunk = src.read(min(buffer_size, remaining))
+        if not chunk:
+            break
+        dst.write(chunk)
+        remaining -= len(chunk)
+        bytes_copied += len(chunk)
+    return StreamCopyStats(
+        bytes_copied=bytes_copied,
+        sleep_seconds_total=sleep_seconds_total,
+        decision_samples=decision_samples,
+        last_throttle_mode=last_throttle_mode,
+        last_ahead_seconds=last_ahead_seconds,
+    )
 
 
 def copy_file_range(src: BinaryIO, dst: BinaryIO, plan: StreamPlan) -> None:

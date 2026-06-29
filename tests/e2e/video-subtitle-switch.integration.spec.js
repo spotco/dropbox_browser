@@ -836,7 +836,11 @@ async function expectTrackSelectors(page, {
 
 function waitForSessionPost(page, predicate) {
   return page.waitForRequest((request) => {
-    if (!request.url().includes("/video/endpoints/session") || request.method() !== "POST") {
+    if (request.method() !== "POST") {
+      return false;
+    }
+    const pathname = new URL(request.url()).pathname;
+    if (pathname !== "/video/endpoints/session") {
       return false;
     }
     const body = request.postData() || "";
@@ -904,7 +908,8 @@ async function scrubInSession(page, targetSeconds) {
   await pausePlayback(page);
   let sessionPosted = false;
   const onRequest = (request) => {
-    if (request.url().includes("/video/endpoints/session") && request.method() === "POST") {
+    if (request.method() !== "POST") return;
+    if (new URL(request.url()).pathname === "/video/endpoints/session") {
       sessionPosted = true;
     }
   };

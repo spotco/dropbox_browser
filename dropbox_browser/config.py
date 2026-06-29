@@ -25,6 +25,10 @@ _APP_CONFIG_DEFAULTS: dict = {
     "VideoFFmpegThreads": 2,
     "VideoFFmpegFilterThreads": 1,
     "VideoFFmpegProcessPriority": "below_normal",
+    "VideoBackpressureLowWaterSeconds": 45.0,
+    "VideoBackpressureMediumWaterSeconds": 120.0,
+    "VideoBackpressureHighWaterSeconds": 300.0,
+    "VideoBackpressureMaxWaterSeconds": 600.0,
     "VideoSubtitleFontFamily": "Arial, Helvetica, sans-serif",
     "VideoSubtitleFontSizePx": 28,
     "VideoSubtitleBold": True,
@@ -63,6 +67,7 @@ _APP_CONFIG_DEFAULTS: dict = {
 _VIDEO_FFMPEG_READ_RATE_MAX = 16.0
 _VIDEO_FFMPEG_INITIAL_BURST_SECONDS_MAX = 600.0
 _VIDEO_FFMPEG_THREADS_MAX = 64
+_VIDEO_BACKPRESSURE_SECONDS_MAX = 24 * 60 * 60.0
 _VIDEO_FFMPEG_PROCESS_PRIORITIES = {"idle", "below_normal", "normal"}
 
 
@@ -87,6 +92,10 @@ class VideoToolsConfig:
     ffmpeg_threads: int = 0
     ffmpeg_filter_threads: int = 0
     ffmpeg_process_priority: str = "below_normal"
+    backpressure_low_water_seconds: float = 45.0
+    backpressure_medium_water_seconds: float = 120.0
+    backpressure_high_water_seconds: float = 300.0
+    backpressure_max_water_seconds: float = 600.0
 
     @property
     def ffmpeg_available(self) -> bool:
@@ -245,6 +254,33 @@ def _normalize_video_process_priority(value: object, *, default: str) -> str:
     return default
 
 
+def _load_video_backpressure_thresholds(config: dict) -> tuple[float, float, float, float]:
+    low = _clamp_non_negative_float(
+        config.get("VideoBackpressureLowWaterSeconds", _APP_CONFIG_DEFAULTS["VideoBackpressureLowWaterSeconds"]),
+        default=float(_APP_CONFIG_DEFAULTS["VideoBackpressureLowWaterSeconds"]),
+        maximum=_VIDEO_BACKPRESSURE_SECONDS_MAX,
+    )
+    medium = _clamp_non_negative_float(
+        config.get("VideoBackpressureMediumWaterSeconds", _APP_CONFIG_DEFAULTS["VideoBackpressureMediumWaterSeconds"]),
+        default=float(_APP_CONFIG_DEFAULTS["VideoBackpressureMediumWaterSeconds"]),
+        maximum=_VIDEO_BACKPRESSURE_SECONDS_MAX,
+    )
+    high = _clamp_non_negative_float(
+        config.get("VideoBackpressureHighWaterSeconds", _APP_CONFIG_DEFAULTS["VideoBackpressureHighWaterSeconds"]),
+        default=float(_APP_CONFIG_DEFAULTS["VideoBackpressureHighWaterSeconds"]),
+        maximum=_VIDEO_BACKPRESSURE_SECONDS_MAX,
+    )
+    max_value = _clamp_non_negative_float(
+        config.get("VideoBackpressureMaxWaterSeconds", _APP_CONFIG_DEFAULTS["VideoBackpressureMaxWaterSeconds"]),
+        default=float(_APP_CONFIG_DEFAULTS["VideoBackpressureMaxWaterSeconds"]),
+        maximum=_VIDEO_BACKPRESSURE_SECONDS_MAX,
+    )
+    medium = max(low, medium)
+    high = max(medium, high)
+    max_value = max(high, max_value)
+    return low, medium, high, max_value
+
+
 def load_video_tools_config(app_config: dict | None = None) -> VideoToolsConfig:
     config = app_config if app_config is not None else load_app_config()
     configured_ffmpeg = _resolve_configured_tool_path(config.get("FFMpegPath"))
@@ -263,6 +299,12 @@ def load_video_tools_config(app_config: dict | None = None) -> VideoToolsConfig:
         ffmpeg_exe = _adjacent_tool_path(ffprobe_exe, ffmpeg_name)
     if ffprobe_exe is None:
         ffprobe_exe = _adjacent_tool_path(ffmpeg_exe, ffprobe_name)
+    (
+        backpressure_low_water_seconds,
+        backpressure_medium_water_seconds,
+        backpressure_high_water_seconds,
+        backpressure_max_water_seconds,
+    ) = _load_video_backpressure_thresholds(config)
     return VideoToolsConfig(
         ffmpeg_exe=ffmpeg_exe,
         ffprobe_exe=ffprobe_exe,
@@ -304,6 +346,10 @@ def load_video_tools_config(app_config: dict | None = None) -> VideoToolsConfig:
             ),
             default=str(_APP_CONFIG_DEFAULTS["VideoFFmpegProcessPriority"]),
         ),
+        backpressure_low_water_seconds=backpressure_low_water_seconds,
+        backpressure_medium_water_seconds=backpressure_medium_water_seconds,
+        backpressure_high_water_seconds=backpressure_high_water_seconds,
+        backpressure_max_water_seconds=backpressure_max_water_seconds,
     )
 
 

@@ -10,9 +10,12 @@ from dropbox_browser.streaming import (
     StreamPlan,
     content_disposition,
     copy_file_range,
+    copy_exact_with_throttle,
     is_client_disconnect,
     parse_byte_range,
     plan_stream,
+    StreamCopyCancelled,
+    StreamCopyThrottleDecision,
     stream_headers,
     unsatisfiable_range_headers,
 )
@@ -126,6 +129,53 @@ class StreamPlanningTests(unittest.TestCase):
         self.assertTrue(is_client_disconnect(ConnectionAbortedError()))
         self.assertTrue(is_client_disconnect(ConnectionResetError()))
         self.assertFalse(is_client_disconnect(RuntimeError()))
+
+    def test_copy_exact_with_throttle_sleeps_and_returns_stats(self) -> None:
+        src = io.BytesIO(b"abcdefgh")
+        dst = io.BytesIO()
+        sleeps: list[float] = []
+        decisions = iter([
+            StreamCopyThrottleDecision(sleep_seconds=0.25, throttle_mode="slow", ahead_seconds=120.0),
+            StreamCopyThrottleDecision(sleep_seconds=0.0, throttle_mode="steady", ahead_seconds=90.0),
+        ])
+
+        stats = copy_exact_with_throttle(
+            src,
+            dst,
+            8,
+            buffer_size=4,
+            decision_fn=lambda: next(decisions),
+            sleep_fn=sleeps.append,
+        )
+
+        self.assertEqual(dst.getvalue(), b"abcdefgh")
+        self.assertEqual(sleeps, [0.25])
+        self.assertEqual(stats.bytes_copied, 8)
+        self.assertEqual(stats.sleep_seconds_total, 0.25)
+        self.assertEqual(stats.decision_samples, 2)
+        self.assertEqual(stats.last_throttle_mode, "steady")
+        self.assertEqual(stats.last_ahead_seconds, 90.0)
+
+    def test_copy_exact_with_throttle_cancels_before_next_chunk(self) -> None:
+        src = io.BytesIO(b"abcdefgh")
+        dst = io.BytesIO()
+        decisions = iter([
+            StreamCopyThrottleDecision(throttle_mode="unthrottled", ahead_seconds=20.0),
+            StreamCopyThrottleDecision(cancel=True, throttle_mode="session_replaced", ahead_seconds=18.0),
+        ])
+
+        with self.assertRaises(StreamCopyCancelled) as ctx:
+            copy_exact_with_throttle(
+                src,
+                dst,
+                8,
+                buffer_size=4,
+                decision_fn=lambda: next(decisions),
+            )
+
+        self.assertEqual(dst.getvalue(), b"abcd")
+        self.assertEqual(ctx.exception.decision.throttle_mode, "session_replaced")
+        self.assertEqual(ctx.exception.decision.ahead_seconds, 18.0)
 
 
 if __name__ == "__main__":

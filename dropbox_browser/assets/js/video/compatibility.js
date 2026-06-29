@@ -8,6 +8,10 @@ import {
   shouldApplyDeferredCompatibilitySeek,
 } from '../video-core.js';
 import {
+  COMPATIBILITY_PROGRESS_REPORT_BURST_MS,
+  COMPATIBILITY_PROGRESS_REPORT_BURST_WINDOW_MS,
+  COMPATIBILITY_PROGRESS_REPORT_STARTUP_SECONDS,
+  COMPATIBILITY_PROGRESS_REPORT_STEADY_MS,
   COMPATIBILITY_RECOVERY_MAX_DELAY_MS,
   COMPATIBILITY_RECOVERY_MIN_DELAY_MS,
   COMPATIBILITY_SESSION_STATUS_POLL_MS,
@@ -64,6 +68,153 @@ async function pollCompatibilitySessionStatus() {
   finally {
     ctx.state.compatibilitySessionStatusRequestInFlight = false;
     scheduleCompatibilitySessionStatusPoll();
+  }
+}
+
+function clearCompatibilitySessionProgressReport() {
+  if (!ctx.state.compatibilitySessionProgressTimer) return;
+  window.clearTimeout(ctx.state.compatibilitySessionProgressTimer);
+  ctx.state.compatibilitySessionProgressTimer = 0;
+}
+
+function compatibilityMediaPlaybackSeconds() {
+  if (!ctx.els.videoEl) return 0;
+  var mediaTime = Number(ctx.els.videoEl.currentTime);
+  return Number.isFinite(mediaTime) && mediaTime >= 0 ? mediaTime : 0;
+}
+
+function compatibilityPlaybackState() {
+  if (ctx.state.playbackMode !== 'compatibility' || !ctx.state.compatibilitySessionId) return 'unknown';
+  if (!ctx.els.videoEl) return ctx.playbackShouldBeRunning() ? 'playing' : 'paused';
+  if (ctx.els.videoEl.ended) return 'paused';
+  return ctx.els.videoEl.paused ? 'paused' : 'playing';
+}
+
+function armCompatibilityProgressBurst() {
+  ctx.state.compatibilityProgressBurstUntilMs = Date.now() + COMPATIBILITY_PROGRESS_REPORT_BURST_WINDOW_MS;
+}
+
+function compatibilitySessionProgressReportDelayMs() {
+  if ((ctx.state.compatibilityProgressBurstUntilMs || 0) > Date.now()) {
+    return COMPATIBILITY_PROGRESS_REPORT_BURST_MS;
+  }
+  if (compatibilityMediaPlaybackSeconds() < COMPATIBILITY_PROGRESS_REPORT_STARTUP_SECONDS) {
+    return COMPATIBILITY_PROGRESS_REPORT_BURST_MS;
+  }
+  return COMPATIBILITY_PROGRESS_REPORT_STEADY_MS;
+}
+
+function compatibilityProgressReportingActive(expectedSessionId, expectedSyncToken) {
+  if (!ctx.state.paneActive) return false;
+  if (!ctx.state.compatibilitySessionId) return false;
+  if (ctx.state.playbackMode !== 'compatibility') return false;
+  if (expectedSessionId && ctx.state.compatibilitySessionId !== expectedSessionId) return false;
+  if (Number.isFinite(expectedSyncToken) && ctx.state.playbackSyncToken !== expectedSyncToken) return false;
+  var active = ctx.activeQueueItem();
+  return Boolean(active && active.path && ctx.state.compatibilitySessionPath === active.path);
+}
+
+function scheduleCompatibilitySessionProgressReport(delayMs, options) {
+  clearCompatibilitySessionProgressReport();
+  if (!compatibilityProgressReportingActive()) return;
+  var normalizedDelay = Number.isFinite(Number(delayMs))
+    ? Math.max(0, Number(delayMs))
+    : compatibilitySessionProgressReportDelayMs();
+  var expectedSessionId = options && options.expectedSessionId
+    ? String(options.expectedSessionId)
+    : String(ctx.state.compatibilitySessionId || '');
+  var expectedSyncToken = Number.isFinite(Number(options && options.expectedSyncToken))
+    ? Number(options.expectedSyncToken)
+    : ctx.state.playbackSyncToken;
+  ctx.state.compatibilitySessionProgressTimer = window.setTimeout(function () {
+    ctx.state.compatibilitySessionProgressTimer = 0;
+    void reportCompatibilitySessionProgress(options && options.reason ? options.reason : 'timer', {
+      reschedule: options && options.reschedule !== false,
+      expectedSessionId: expectedSessionId,
+      expectedSyncToken: expectedSyncToken,
+    });
+  }, normalizedDelay);
+}
+
+function requestCompatibilitySessionProgressReport(reason, options) {
+  var immediate = !options || options.immediate !== false;
+  if (options && options.burst) armCompatibilityProgressBurst();
+  if (!compatibilityProgressReportingActive()) return;
+  if (!immediate && ctx.state.compatibilitySessionProgressTimer) return;
+  if (ctx.state.compatibilitySessionProgressRequestInFlight) {
+    if (immediate) {
+      ctx.state.compatibilitySessionProgressPendingImmediate = true;
+    }
+    return;
+  }
+  scheduleCompatibilitySessionProgressReport(
+    immediate ? 0 : compatibilitySessionProgressReportDelayMs(),
+    {
+      reason: reason || 'event',
+      reschedule: options && options.reschedule === false ? false : true,
+      expectedSessionId: ctx.state.compatibilitySessionId || '',
+      expectedSyncToken: ctx.state.playbackSyncToken,
+    }
+  );
+}
+
+async function reportCompatibilitySessionProgress(reason, options) {
+  var expectedSessionId = options && options.expectedSessionId ? String(options.expectedSessionId) : '';
+  var expectedSyncToken = Number.isFinite(Number(options && options.expectedSyncToken))
+    ? Number(options.expectedSyncToken)
+    : ctx.state.playbackSyncToken;
+  if (!compatibilityProgressReportingActive(expectedSessionId, expectedSyncToken)) {
+    return false;
+  }
+  if (ctx.state.compatibilitySessionProgressRequestInFlight) {
+    if (!options || options.immediate !== false) {
+      ctx.state.compatibilitySessionProgressPendingImmediate = true;
+    }
+    return false;
+  }
+  ctx.state.compatibilitySessionProgressRequestInFlight = true;
+  var body = 'id=' + encodeURIComponent(ctx.state.compatibilitySessionId || '')
+    + '&playback_seconds=' + encodeURIComponent(String(ctx.currentGlobalPlaybackSeconds()))
+    + '&playback_media_seconds=' + encodeURIComponent(String(compatibilityMediaPlaybackSeconds()))
+    + '&playback_state=' + encodeURIComponent(compatibilityPlaybackState())
+    + '&playback_sync_token=' + encodeURIComponent(String(ctx.state.playbackSyncToken));
+  try {
+    var response = await fetch('/video/endpoints/session/progress', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8'},
+      body: body,
+    });
+    if (!response.ok) return false;
+    var payload = await response.json();
+    if (payload && payload.updated === false) return false;
+    ctx.reportVideoDiagnostic({
+      level: 'debug',
+      message: 'Compatibility session progress reported',
+      report_reason: reason || '',
+      playback_seconds: ctx.currentGlobalPlaybackSeconds(),
+      playback_media_seconds: compatibilityMediaPlaybackSeconds(),
+      playback_state: compatibilityPlaybackState(),
+      playback_sync_token: ctx.state.playbackSyncToken,
+    });
+    return true;
+  }
+  catch (_error) {
+    return false;
+  }
+  finally {
+    ctx.state.compatibilitySessionProgressRequestInFlight = false;
+    if (ctx.state.compatibilitySessionProgressPendingImmediate) {
+      ctx.state.compatibilitySessionProgressPendingImmediate = false;
+      requestCompatibilitySessionProgressReport('pending-immediate', {burst: false});
+    }
+    else if (options && options.reschedule !== false) {
+      scheduleCompatibilitySessionProgressReport(undefined, {
+        reason: 'timer',
+        reschedule: true,
+        expectedSessionId: ctx.state.compatibilitySessionId || '',
+        expectedSyncToken: ctx.state.playbackSyncToken,
+      });
+    }
   }
 }
 
@@ -477,6 +628,9 @@ function hlsErrorTargetsCurrentSession(data) {
 async function stopCompatibilitySession() {
   var sessionId = ctx.state.compatibilitySessionId;
   clearCompatibilitySessionStatusPoll();
+  clearCompatibilitySessionProgressReport();
+  ctx.state.compatibilitySessionProgressPendingImmediate = false;
+  ctx.state.compatibilityProgressBurstUntilMs = 0;
   ctx.state.compatibilitySessionId = '';
   ctx.state.compatibilitySessionPath = '';
   ctx.state.compatibilityAudioStreamIndex = null;
@@ -505,6 +659,7 @@ function attachCompatibilityVideo(playlistUrl, title, meta, startSeconds, surfac
   if (!ctx.els.videoEl) return;
   ctx.clearVideoSource();
   resetCompatibilityBufferState();
+  armCompatibilityProgressBurst();
   var normalizedStartSeconds = Math.max(0, Number(startSeconds) || 0);
   ctx.reportCompatibilitySeekTiming('hls_attach_started', {
     playlist_url: playlistUrl || '',
@@ -694,6 +849,7 @@ function attachCompatibilityVideo(playlistUrl, title, meta, startSeconds, surfac
   ctx.showPlaybackVideo(title, meta);
   ctx.syncPlaybackProgress();
   ctx.syncTransportControls();
+  requestCompatibilitySessionProgressReport('session-attach', {burst: true});
 }
 
 async function createCompatibilitySession(item, audioStreamIndex, startSeconds, subtitleStreamIndex, options) {
@@ -1053,6 +1209,14 @@ async function restartCompatibilityAt(targetSeconds, reason, options) {
   ctx.clearCompatibilitySessionStatusPoll = clearCompatibilitySessionStatusPoll;
   ctx.scheduleCompatibilitySessionStatusPoll = scheduleCompatibilitySessionStatusPoll;
   ctx.pollCompatibilitySessionStatus = pollCompatibilitySessionStatus;
+  ctx.clearCompatibilitySessionProgressReport = clearCompatibilitySessionProgressReport;
+  ctx.compatibilityMediaPlaybackSeconds = compatibilityMediaPlaybackSeconds;
+  ctx.compatibilityPlaybackState = compatibilityPlaybackState;
+  ctx.armCompatibilityProgressBurst = armCompatibilityProgressBurst;
+  ctx.compatibilitySessionProgressReportDelayMs = compatibilitySessionProgressReportDelayMs;
+  ctx.scheduleCompatibilitySessionProgressReport = scheduleCompatibilitySessionProgressReport;
+  ctx.requestCompatibilitySessionProgressReport = requestCompatibilitySessionProgressReport;
+  ctx.reportCompatibilitySessionProgress = reportCompatibilitySessionProgress;
   ctx.attachCompatibilityVideo = attachCompatibilityVideo;
   ctx.createCompatibilitySession = createCompatibilitySession;
   ctx.trySeekCompatibilityInSession = trySeekCompatibilityInSession;
@@ -1095,6 +1259,8 @@ async function restartCompatibilityAt(targetSeconds, reason, options) {
     });
     ctx.els.videoEl.addEventListener('seeking', function () {
       if (ctx.state.playbackMode === 'compatibility') {
+        armCompatibilityProgressBurst();
+        requestCompatibilitySessionProgressReport('seeking', {burst: true});
         ctx.reportVideoDiagnostic({
           level: 'debug',
           message: 'Video element seeking',
@@ -1109,6 +1275,8 @@ async function restartCompatibilityAt(targetSeconds, reason, options) {
     });
     ctx.els.videoEl.addEventListener('seeked', function () {
       if (ctx.state.playbackMode === 'compatibility') {
+        armCompatibilityProgressBurst();
+        requestCompatibilitySessionProgressReport('seeked', {burst: true});
         var requestedTime = ctx.state.requestedSeekSeconds;
         var actualTime = ctx.currentGlobalPlaybackSeconds();
         ctx.reportVideoDiagnostic({
@@ -1125,8 +1293,18 @@ async function restartCompatibilityAt(targetSeconds, reason, options) {
       ctx.state.progressSliderActive = false;
       ctx.syncPlaybackProgress();
     });
+    ctx.els.videoEl.addEventListener('timeupdate', function () {
+      if (ctx.state.playbackMode !== 'compatibility') return;
+      requestCompatibilitySessionProgressReport('timeupdate', {immediate: false});
+    });
+    ctx.els.videoEl.addEventListener('pause', function () {
+      if (ctx.state.playbackMode !== 'compatibility') return;
+      requestCompatibilitySessionProgressReport('pause', {burst: false});
+    });
     ctx.els.videoEl.addEventListener('playing', function () {
       if (ctx.state.playbackMode !== 'compatibility') return;
+      armCompatibilityProgressBurst();
+      requestCompatibilitySessionProgressReport('playing', {burst: true});
       ctx.reportPlaybackTiming('playing');
       ctx.emitPlaybackTimingSummary({
         buffered_seconds_ahead: compatibilityBufferedSecondsAhead(),
