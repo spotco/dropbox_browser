@@ -563,34 +563,99 @@ function formatSegmentTimestamp(totalSeconds) {
 }
 
 function compatibilityPlaylistSegmentCountForDebug(probePayload) {
-  var explicitCount = Number(ctx.state.compatibilityPlaylistSegmentCount) || 0;
+  var segmentDuration = compatibilitySegmentDurationForDebug();
   var observedMaxIndex = Math.max(
     0,
-    Number(ctx.state.compatibilityCurrentSegmentIndex) || 0,
-    Number(ctx.state.compatibilityLoadedSegmentMaxIndex) || 0
+    compatibilityAbsoluteSegmentIndex(Number(ctx.state.compatibilityCurrentSegmentIndex) || 0),
+    compatibilityAbsoluteSegmentIndex(Number(ctx.state.compatibilityLoadedSegmentMaxIndex) || 0)
   );
-  if (explicitCount > 0) return Math.max(explicitCount, observedMaxIndex);
   var probeDuration = Number(probePayload && probePayload.duration_seconds) || 0;
-  var sessionStartSeconds = Math.max(0, Number(ctx.state.compatibilityStartSeconds) || 0);
   if (probeDuration > 0) {
-    var remainingDuration = Math.max(0, probeDuration - sessionStartSeconds);
     return Math.max(
       1,
       observedMaxIndex,
-      Math.ceil(remainingDuration / HLS_SEGMENT_DURATION_SECONDS)
+      Math.ceil(probeDuration / segmentDuration)
+    );
+  }
+  var explicitCount = Number(ctx.state.compatibilityPlaylistSegmentCount) || 0;
+  if (explicitCount > 0) {
+    return Math.max(
+      observedMaxIndex,
+      compatibilityAbsoluteSegmentIndex(explicitCount)
     );
   }
   return observedMaxIndex;
 }
 
+function compatibilitySegmentDurationForDebug() {
+  var serverDuration = Number(ctx.state.compatibilitySegmentDurationSeconds) || 0;
+  return serverDuration > 0 ? serverDuration : HLS_SEGMENT_DURATION_SECONDS;
+}
+
+function compatibilityAbsoluteSegmentOffset() {
+  var segmentDuration = compatibilitySegmentDurationForDebug();
+  var sessionStartSeconds = Math.max(0, Number(ctx.state.compatibilityStartSeconds) || 0);
+  return Math.floor(sessionStartSeconds / segmentDuration);
+}
+
+function compatibilityAbsoluteSegmentIndex(sessionSegmentIndex) {
+  var index = Number(sessionSegmentIndex) || 0;
+  if (index <= 0) return 0;
+  return compatibilityAbsoluteSegmentOffset() + index;
+}
+
+function compatibilityLoadedAbsoluteSegmentIndices() {
+  var keys = ctx.state.compatibilityLoadedSegmentIndicesByKey || null;
+  var result = [];
+  if (keys) {
+    Object.keys(keys).forEach(function (key) {
+      if (!keys[key]) return;
+      var absoluteIndex = compatibilityAbsoluteSegmentIndex(Number(key));
+      if (absoluteIndex > 0) result.push(absoluteIndex);
+    });
+  }
+  if (!result.length) {
+    var minIndex = compatibilityAbsoluteSegmentIndex(Number(ctx.state.compatibilityLoadedSegmentMinIndex) || 0);
+    var maxIndex = compatibilityAbsoluteSegmentIndex(Number(ctx.state.compatibilityLoadedSegmentMaxIndex) || 0);
+    if (minIndex > 0 && maxIndex >= minIndex) {
+      for (var index = minIndex; index <= maxIndex; index += 1) result.push(index);
+    }
+  }
+  result.sort(function (a, b) { return a - b; });
+  return result.filter(function (value, index, values) {
+    return index === 0 || value !== values[index - 1];
+  });
+}
+
+function compatibilityLoadedSegmentRangeLabel(indices) {
+  if (!indices.length) return '';
+  var ranges = [];
+  var start = indices[0];
+  var end = indices[0];
+  for (var index = 1; index < indices.length; index += 1) {
+    var value = indices[index];
+    if (value === end + 1) {
+      end = value;
+      continue;
+    }
+    ranges.push(start === end ? String(start) : (String(start) + '-' + String(end)));
+    start = value;
+    end = value;
+  }
+  ranges.push(start === end ? String(start) : (String(start) + '-' + String(end)));
+  return ranges.join(', ');
+}
+
 function currentHlsSegmentSummaryLine(mediaTime, probePayload) {
   if (ctx.state.playbackMode !== 'compatibility') return 'HLS segment: none';
+  var segmentDuration = compatibilitySegmentDurationForDebug();
   var normalizedMediaTime = Number.isFinite(mediaTime) && mediaTime >= 0 ? mediaTime : 0;
-  var segmentIndex = Math.floor(normalizedMediaTime / HLS_SEGMENT_DURATION_SECONDS) + 1;
+  var sessionSegmentIndex = Math.floor(normalizedMediaTime / segmentDuration) + 1;
+  var segmentIndex = compatibilityAbsoluteSegmentIndex(sessionSegmentIndex);
   var totalSegments = compatibilityPlaylistSegmentCountForDebug(probePayload);
   var segmentStart = (Number(ctx.state.compatibilityStartSeconds) || 0)
-    + ((segmentIndex - 1) * HLS_SEGMENT_DURATION_SECONDS);
-  var segmentEnd = segmentStart + HLS_SEGMENT_DURATION_SECONDS;
+    + ((sessionSegmentIndex - 1) * segmentDuration);
+  var segmentEnd = segmentStart + segmentDuration;
   return 'HLS segment: ['
     + String(segmentIndex)
     + '/'
@@ -603,22 +668,23 @@ function currentHlsSegmentSummaryLine(mediaTime, probePayload) {
 
 function loadedHlsSegmentsSummaryLine(probePayload) {
   if (ctx.state.playbackMode !== 'compatibility') return 'Loaded HLS segments: none';
-  var minIndex = Number(ctx.state.compatibilityLoadedSegmentMinIndex) || 0;
-  var maxIndex = Number(ctx.state.compatibilityLoadedSegmentMaxIndex) || 0;
+  var loadedIndices = compatibilityLoadedAbsoluteSegmentIndices();
+  var rangeLabel = compatibilityLoadedSegmentRangeLabel(loadedIndices);
   var totalSegments = compatibilityPlaylistSegmentCountForDebug(probePayload);
   var averageLoadMs = Number(ctx.state.compatibilitySegmentLoadAverageMs) || 0;
   var averageLoadLabel = averageLoadMs > 0 ? ((averageLoadMs / 1000).toFixed(2) + 's') : 'n/a';
-  if (minIndex <= 0 || maxIndex <= 0) {
-    return 'Loaded HLS segments: none • avg load: ' + averageLoadLabel;
+  var segmentLengthLabel = compatibilitySegmentDurationForDebug().toFixed(2) + 's';
+  if (!rangeLabel) {
+    return 'Loaded HLS segments: none • avg load: ' + averageLoadLabel + ' • segment length: ' + segmentLengthLabel;
   }
   return 'Loaded HLS segments: ['
-    + String(minIndex)
-    + '-'
-    + String(maxIndex)
+    + rangeLabel
     + '/'
     + String(totalSegments || '?')
     + '] • avg load: '
-    + averageLoadLabel;
+    + averageLoadLabel
+    + ' • segment length: '
+    + segmentLengthLabel;
 }
 
 function cueOrdinalLabel(baseLabel, cue, cueList) {

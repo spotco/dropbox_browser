@@ -1995,6 +1995,7 @@ class VideoSessionManager:
             "audio_mode": session.audio_mode,
             "audio_mode_reason": session.audio_mode_reason,
             "encoded_media_end_seconds": self._encoded_media_end_seconds(session),
+            "hls_segment_duration_seconds": HLS_SEGMENT_DURATION_SECONDS,
             "session_create_elapsed_ms": ready_elapsed_ms,
             "ffmpeg_pid": getattr(session.process, "pid", None),
             "client_playback": self._session_playback_payload(session),

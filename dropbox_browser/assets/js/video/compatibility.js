@@ -99,6 +99,21 @@ function updateCompatibilityCurrentSegmentIndex() {
   ctx.state.compatibilityCurrentSegmentIndex = Math.floor(mediaSeconds / HLS_SEGMENT_DURATION_SECONDS) + 1;
 }
 
+function compatibilitySegmentLoadNowMs() {
+  if (typeof window !== 'undefined' && window.performance && typeof window.performance.now === 'function') {
+    return window.performance.now();
+  }
+  return Date.now();
+}
+
+function compatibilitySegmentLoadKey(data) {
+  if (!data || !data.frag || data.frag.sn === 'initSegment') return '';
+  if (data.part) return '';
+  var segmentNumber = Number(data.frag.sn);
+  if (!Number.isFinite(segmentNumber)) return '';
+  return String(segmentNumber);
+}
+
 function compatibilitySegmentLoadStats(data) {
   if (!data) return null;
   if (data.part && data.part.stats) return data.part.stats;
@@ -123,14 +138,72 @@ function compatibilitySegmentLoadDurationMs(data) {
   return null;
 }
 
-function noteCompatibilitySegmentLoadTiming(data) {
+function compatibilitySegmentLoadedAtMs(data) {
+  var stats = compatibilitySegmentLoadStats(data);
+  var loading = stats && stats.loading ? stats.loading : null;
+  var end = loading ? Number(loading.end) : NaN;
+  if (Number.isFinite(end) && end >= 0) return end;
+  return compatibilitySegmentLoadNowMs();
+}
+
+function compatibilitySegmentLoadStartedAtMs(data) {
+  var stats = compatibilitySegmentLoadStats(data);
+  var loading = stats && stats.loading ? stats.loading : null;
+  var start = loading ? Number(loading.start) : NaN;
+  if (Number.isFinite(start) && start >= 0) return start;
+  var segmentKey = compatibilitySegmentLoadKey(data);
+  var pendingStarts = ctx.state.compatibilityPendingSegmentLoadStartMsByKey || null;
+  var pendingStartMs = segmentKey && pendingStarts ? Number(pendingStarts[segmentKey]) : NaN;
+  if (Number.isFinite(pendingStartMs)) return pendingStartMs;
+  return compatibilitySegmentLoadNowMs();
+}
+
+function recordCompatibilitySegmentFetchDuration(durationMs) {
+  if (!Number.isFinite(durationMs) || durationMs < 0) return;
+  var nextCount = (Number(ctx.state.compatibilitySegmentFetchSampleCount) || 0) + 1;
+  var priorAverage = Number(ctx.state.compatibilitySegmentFetchAverageMs) || 0;
+  ctx.state.compatibilitySegmentFetchAverageMs = ((priorAverage * (nextCount - 1)) + durationMs) / nextCount;
+  ctx.state.compatibilitySegmentFetchSampleCount = nextCount;
+}
+
+function recordCompatibilitySegmentLoadArrival(startedAtMs, loadedAtMs) {
+  if (!Number.isFinite(startedAtMs) || !Number.isFinite(loadedAtMs)) return;
+  if (!Number.isFinite(Number(ctx.state.compatibilitySegmentLoadWindowStartMs))) {
+    ctx.state.compatibilitySegmentLoadWindowStartMs = startedAtMs;
+  }
+  var nextCount = (Number(ctx.state.compatibilitySegmentLoadSampleCount) || 0) + 1;
+  var windowStartMs = Number(ctx.state.compatibilitySegmentLoadWindowStartMs);
+  ctx.state.compatibilitySegmentLoadAverageMs = Math.max(0, loadedAtMs - windowStartMs) / nextCount;
+  ctx.state.compatibilitySegmentLoadSampleCount = nextCount;
+}
+
+function noteCompatibilityFragmentLoading(data) {
+  var segmentKey = compatibilitySegmentLoadKey(data);
+  if (!segmentKey) return;
+  if (!ctx.state.compatibilityPendingSegmentLoadStartMsByKey) {
+    ctx.state.compatibilityPendingSegmentLoadStartMsByKey = Object.create(null);
+  }
+  ctx.state.compatibilityPendingSegmentLoadStartMsByKey[segmentKey] = compatibilitySegmentLoadNowMs();
+}
+
+function noteCompatibilityFragmentLoaded(data) {
   if (!data || !data.frag || data.frag.sn === 'initSegment') return;
   var durationMs = compatibilitySegmentLoadDurationMs(data);
-  if (!Number.isFinite(durationMs) || durationMs < 0) return;
-  var nextCount = (Number(ctx.state.compatibilitySegmentLoadSampleCount) || 0) + 1;
-  var priorAverage = Number(ctx.state.compatibilitySegmentLoadAverageMs) || 0;
-  ctx.state.compatibilitySegmentLoadAverageMs = ((priorAverage * (nextCount - 1)) + durationMs) / nextCount;
-  ctx.state.compatibilitySegmentLoadSampleCount = nextCount;
+  var startedAtMs = compatibilitySegmentLoadStartedAtMs(data);
+  var loadedAtMs = compatibilitySegmentLoadedAtMs(data);
+  var segmentKey = compatibilitySegmentLoadKey(data);
+  var pendingStarts = ctx.state.compatibilityPendingSegmentLoadStartMsByKey || null;
+  var pendingStartMs = segmentKey && pendingStarts ? Number(pendingStarts[segmentKey]) : NaN;
+  if (segmentKey && pendingStarts && Object.prototype.hasOwnProperty.call(pendingStarts, segmentKey)) {
+    delete pendingStarts[segmentKey];
+  }
+  if (!Number.isFinite(durationMs)) {
+    if (Number.isFinite(pendingStartMs)) {
+      durationMs = compatibilitySegmentLoadNowMs() - pendingStartMs;
+    }
+  }
+  recordCompatibilitySegmentFetchDuration(durationMs);
+  recordCompatibilitySegmentLoadArrival(startedAtMs, loadedAtMs);
 }
 
 function armCompatibilityProgressBurst() {
@@ -497,8 +570,13 @@ function resetCompatibilityBufferState() {
   ctx.state.compatibilityCurrentSegmentIndex = 0;
   ctx.state.compatibilityLoadedSegmentMinIndex = 0;
   ctx.state.compatibilityLoadedSegmentMaxIndex = 0;
+  ctx.state.compatibilityLoadedSegmentIndicesByKey = Object.create(null);
+  ctx.state.compatibilityPendingSegmentLoadStartMsByKey = Object.create(null);
   ctx.state.compatibilitySegmentLoadSampleCount = 0;
   ctx.state.compatibilitySegmentLoadAverageMs = 0;
+  ctx.state.compatibilitySegmentLoadWindowStartMs = NaN;
+  ctx.state.compatibilitySegmentFetchSampleCount = 0;
+  ctx.state.compatibilitySegmentFetchAverageMs = 0;
   ctx.state.compatibilityPlaybackRevealed = false;
   ctx.state.compatibilityPlaybackRevealPending = false;
   ctx.state.compatibilitySubtitleWaitStageActive = false;
@@ -636,9 +714,18 @@ function maybeRevealCompatibilityPlayback(title, surfaceSyncToken, reason) {
 function noteCompatibilityFragmentBuffered(data, title, surfaceSyncToken) {
   if (ctx.state.playbackMode !== 'compatibility' || !ctx.playbackSyncTokenIsCurrent(surfaceSyncToken)) return;
   noteEncodedMediaEndFromFragment(data);
+  var segmentKey = compatibilitySegmentLoadKey(data);
+  var pendingStarts = ctx.state.compatibilityPendingSegmentLoadStartMsByKey || null;
+  if (segmentKey && pendingStarts && Object.prototype.hasOwnProperty.call(pendingStarts, segmentKey)) {
+    delete pendingStarts[segmentKey];
+  }
   if (data && data.frag && data.frag.sn !== 'initSegment') {
     var segmentIndex = Number(data.frag.sn) + 1;
     if (Number.isFinite(segmentIndex) && segmentIndex > 0) {
+      if (!ctx.state.compatibilityLoadedSegmentIndicesByKey) {
+        ctx.state.compatibilityLoadedSegmentIndicesByKey = Object.create(null);
+      }
+      ctx.state.compatibilityLoadedSegmentIndicesByKey[String(segmentIndex)] = true;
       if (!ctx.state.compatibilityLoadedSegmentMinIndex || segmentIndex < ctx.state.compatibilityLoadedSegmentMinIndex) {
         ctx.state.compatibilityLoadedSegmentMinIndex = segmentIndex;
       }
@@ -661,6 +748,12 @@ function noteCompatibilityFragmentBuffered(data, title, surfaceSyncToken) {
     if (details.live === false && details.endSN === data.frag.sn) {
       ctx.state.compatibilityBufferedFragmentCount = COMPATIBILITY_START_BUFFER_FRAGMENTS;
     }
+  }
+  if (typeof ctx.syncPlaybackProgress === 'function') {
+    ctx.syncPlaybackProgress();
+  }
+  if (typeof ctx.syncSubtitleDebugDisplay === 'function') {
+    ctx.syncSubtitleDebugDisplay();
   }
   maybeRevealCompatibilityPlayback(title, surfaceSyncToken, 'hls-fragment-buffered');
 }
@@ -695,10 +788,11 @@ async function stopCompatibilitySession() {
   ctx.state.compatibilitySessionPath = '';
   ctx.state.compatibilityAudioStreamIndex = null;
   ctx.state.compatibilitySessionBurnedInSubtitleStreamIndex = null;
-  ctx.state.compatibilitySessionVideoMode = '';
-  ctx.state.compatibilitySessionVideoModeReason = '';
-  ctx.state.compatibilitySessionAudioMode = '';
-  ctx.state.compatibilitySessionAudioModeReason = '';
+    ctx.state.compatibilitySessionVideoMode = '';
+    ctx.state.compatibilitySessionVideoModeReason = '';
+    ctx.state.compatibilitySessionAudioMode = '';
+    ctx.state.compatibilitySessionAudioModeReason = '';
+    ctx.state.compatibilitySegmentDurationSeconds = 0;
   ctx.state.compatibilityEncodedMediaEndSeconds = 0;
   ctx.state.compatibilitySubtitleStreamIndex = null;
   destroyHlsController();
@@ -827,6 +921,7 @@ function attachCompatibilityVideo(playlistUrl, title, meta, startSeconds, surfac
       ctx.setStatus('Buffering compatibility playback before starting.');
     });
     ctx.state.hlsController.on(Hls.Events.FRAG_LOADING, function (_eventName, data) {
+      noteCompatibilityFragmentLoading(data);
       if (data && data.frag && data.frag.sn !== 'initSegment') {
         var segmentIndex = Number(data.frag.sn) + 1;
         if (Number.isFinite(segmentIndex) && segmentIndex > 0) {
@@ -841,9 +936,9 @@ function attachCompatibilityVideo(playlistUrl, title, meta, startSeconds, surfac
       });
     });
     ctx.state.hlsController.on(Hls.Events.FRAG_LOADED, function (_eventName, data) {
-      noteCompatibilitySegmentLoadTiming(data);
       var stats = compatibilitySegmentLoadStats(data);
       var loadingMs = compatibilitySegmentLoadDurationMs(data);
+      noteCompatibilityFragmentLoaded(data);
       ctx.reportVideoDiagnostic({
         level: 'debug',
         message: 'HLS fragment loaded',
@@ -851,6 +946,10 @@ function attachCompatibilityVideo(playlistUrl, title, meta, startSeconds, surfac
         frag_url: data && data.frag ? data.frag.url : '',
         loaded_bytes: stats ? stats.loaded : '',
         loading_ms: Number.isFinite(loadingMs) ? loadingMs : '',
+        average_load_ms: Number(ctx.state.compatibilitySegmentLoadAverageMs) || '',
+        load_sample_count: Number(ctx.state.compatibilitySegmentLoadSampleCount) || '',
+        average_fetch_ms: Number(ctx.state.compatibilitySegmentFetchAverageMs) || '',
+        fetch_sample_count: Number(ctx.state.compatibilitySegmentFetchSampleCount) || '',
       });
       if (
         data && data.frag && data.frag.sn !== 'initSegment'
@@ -1194,6 +1293,10 @@ async function restartCompatibilityAt(targetSeconds, reason, options) {
       0,
       Number(session.encoded_media_end_seconds) || 0
     );
+    ctx.state.compatibilitySegmentDurationSeconds = Math.max(
+      0,
+      Number(session.hls_segment_duration_seconds) || 0
+    );
     var deferredSeekSeconds = ctx.state.requestedSeekSeconds;
     attachCompatibilityVideo(
       session.playlist_url,
@@ -1275,6 +1378,8 @@ async function restartCompatibilityAt(targetSeconds, reason, options) {
   ctx.showCompatibilitySubtitleWaitStage = showCompatibilitySubtitleWaitStage;
   ctx.revealCompatibilityPlaybackWhenReady = revealCompatibilityPlaybackWhenReady;
   ctx.maybeRevealCompatibilityPlayback = maybeRevealCompatibilityPlayback;
+  ctx.noteCompatibilityFragmentLoading = noteCompatibilityFragmentLoading;
+  ctx.noteCompatibilityFragmentLoaded = noteCompatibilityFragmentLoaded;
   ctx.noteCompatibilityFragmentBuffered = noteCompatibilityFragmentBuffered;
   ctx.failCompatibilityPlayback = failCompatibilityPlayback;
   ctx.clearCompatibilitySessionStatusPoll = clearCompatibilitySessionStatusPoll;
