@@ -462,6 +462,7 @@ async function togglePictureInPicture() {
     ctx.els.videoEl.addEventListener('durationchange', syncPlaybackProgress);
     ctx.els.videoEl.addEventListener('timeupdate', function () {
       syncPlaybackProgress();
+      ctx.syncSubtitlesForCurrentPlaybackTime('timeupdate');
       ctx.syncSubtitleOverlayDisplay();
       ctx.syncSubtitleDebugDisplay();
     });

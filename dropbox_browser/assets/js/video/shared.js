@@ -431,7 +431,12 @@ function compatibilityStartupShouldWaitForSubtitles() {
   if (ctx.selectedBurnedInSubtitleStreamIndex(active, probePayload) !== null) return false;
   var streamIndex = ctx.resolvedSubtitleStreamIndex(active, probePayload);
   if (streamIndex === '') return false;
-  return !ctx.subtitlesAreMounted(active, streamIndex, ctx.state.compatibilityStartSeconds || 0);
+  var fetchStartSeconds = Math.max(0, Number(ctx.state.compatibilityStartSeconds) || 0);
+  var coverageTargetSeconds = fetchStartSeconds;
+  if (typeof ctx.currentGlobalPlaybackSeconds === 'function') {
+    coverageTargetSeconds = Math.max(0, Number(ctx.currentGlobalPlaybackSeconds()) || 0);
+  }
+  return !ctx.subtitlesAreMounted(active, streamIndex, fetchStartSeconds, coverageTargetSeconds);
 }
 
 function showLoadingOverlay(options) {

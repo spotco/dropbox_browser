@@ -1880,6 +1880,76 @@ test("seek-triggered subtitle extraction expands scrubber coverage without a ses
     });
 });
 
+test("windowed subtitles remount when playback crosses mounted coverage", async ({ page }) => {
+  test.setTimeout(90000);
+
+  const subtitleWindowRequests = [];
+  await page.route("**/video/endpoints/subtitles/all?path=Videos%2Fseek-window.mkv&source=remote", async (route) => {
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ status: "error" }),
+    });
+  });
+  await page.route("**/video/endpoints/subtitles?path=Videos%2Fseek-window.mkv&source=remote&track=*", async (route) => {
+    await route.fulfill({
+      status: 500,
+      contentType: "text/plain",
+      body: "subtitle preload disabled for window boundary test",
+    });
+  });
+  await page.route("**/video/endpoints/subtitles/window**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("path") !== "Videos/seek-window.mkv") {
+      await route.continue();
+      return;
+    }
+    const windowStatus = String(url.searchParams.get("window_status") || "requested");
+    const requestStart = Number(url.searchParams.get("start") || "0");
+    subtitleWindowRequests.push({ windowStatus, requestStart });
+    let response;
+    try {
+      response = await route.fetch();
+    } catch (error) {
+      if (isClosedRouteError(error)) return;
+      throw error;
+    }
+    const payload = await response.json();
+    if (windowStatus === "startup") {
+      payload.window_start_seconds = 0;
+      payload.window_end_seconds = 12;
+      payload.loaded_ranges = [{ start_seconds: 0, end_seconds: 12 }];
+      payload.vtt = "WEBVTT\n\n00:00:10.000 --> 00:00:12.000\nSEEK-WINDOW-ENG\n";
+    } else {
+      payload.window_start_seconds = 12;
+      payload.window_end_seconds = 24;
+      payload.loaded_ranges = [{ start_seconds: 12, end_seconds: 24 }];
+      payload.vtt = "WEBVTT\n\n00:00:16.000 --> 00:00:18.000\nSEEK-WINDOW-ENG AGAIN\n";
+    }
+    await route.fulfill({
+      status: response.status(),
+      headers: response.headers(),
+      contentType: "application/json",
+      body: JSON.stringify(payload),
+    });
+  });
+
+  await installHlsStub(page, { fragmentCount: 4 });
+  await openVideoPane(page);
+  await playLibraryFile(page, "seek-window.mkv");
+  await waitForScrubberReady(page);
+  await waitForMountedSubtitleTrackReady(page, 3);
+
+  await setPlaybackTimeForSubtitleChecks(page, 10.5);
+  await waitForDisplayedSubtitleDebugText(page, "SEEK-WINDOW-ENG");
+
+  await setPlaybackTimeForSubtitleChecks(page, 17);
+  await waitForDisplayedSubtitleDebugText(page, "SEEK-WINDOW-ENG AGAIN");
+
+  expect(subtitleWindowRequests.some((request) => request.windowStatus === "startup")).toBe(true);
+  expect(subtitleWindowRequests.some((request) => request.windowStatus === "seek")).toBe(true);
+});
+
 test("seek subtitle extraction failure keeps playback running and shows subtitle refresh failure state", async ({ page }) => {
   test.setTimeout(90000);
 
