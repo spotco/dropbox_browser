@@ -144,6 +144,7 @@ import {initPane} from './video/pane.js';
       subtitleObjectUrls: [],
       subtitleMountedSeekSeconds: null,
       subtitleMountedStreamIndex: null,
+      subtitlePlaybackRefreshInFlightKey: '',
       subtitleDebug: {
         rawVtt: '',
         cues: [],

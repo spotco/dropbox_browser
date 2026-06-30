@@ -909,6 +909,39 @@ function ensureSubtitlesAfterPlaybackReady(reason) {
   });
 }
 
+function syncSubtitlesForCurrentPlaybackTime(reason) {
+  var active = ctx.activeQueueItem();
+  if (!active || ctx.state.playbackMode !== 'compatibility') return;
+  if (ctx.state.seekRestartInProgress) return;
+  if (ctx.state.subtitleFailureState === 'error') return;
+  var probePayload = ctx.state.probeCache[active.path || ''] || null;
+  if (!subtitlesEnabledForItem(active, probePayload)) return;
+  if (selectedBurnedInSubtitleStreamIndex(active, probePayload) !== null) return;
+  var streamIndex = resolvedSubtitleStreamIndex(active, probePayload);
+  if (streamIndex === '') return;
+  var mountedSeekSeconds = Math.max(0, Number(ctx.state.subtitleMountedSeekSeconds) || 0);
+  var targetSeconds = Math.max(0, Number(ctx.currentGlobalPlaybackSeconds()) || 0);
+  if (subtitlesAreMounted(active, streamIndex, mountedSeekSeconds, targetSeconds)) return;
+  if (!subtitlesAlreadyActive()) return;
+  var refreshKey = [
+    active.path || '',
+    String(streamIndex),
+    String(ctx.state.playbackSyncToken),
+  ].join('|');
+  if (ctx.state.subtitlePlaybackRefreshInFlightKey === refreshKey) return;
+  ctx.state.subtitlePlaybackRefreshInFlightKey = refreshKey;
+  void applySubtitlesForSeek(active, probePayload, mountedSeekSeconds, {
+    coverageTargetSeconds: targetSeconds,
+    playbackSyncToken: ctx.state.playbackSyncToken,
+    reloadReason: reason || 'playback-window-boundary',
+    silent: true,
+  }).finally(function () {
+    if (ctx.state.subtitlePlaybackRefreshInFlightKey === refreshKey) {
+      ctx.state.subtitlePlaybackRefreshInFlightKey = '';
+    }
+  });
+}
+
 function resyncSubtitleTrackAfterHlsRecovery(reason, data) {
   if (!ctx.hlsErrorTargetsCurrentSession(data)) {
     ctx.reportSubtitleDiagnostic({
@@ -1500,6 +1533,7 @@ async function applySubtitlesForSeek(item, probePayload, seekSeconds, options) {
   ctx.subtitlesAlreadyActive = subtitlesAlreadyActive;
   ctx.subtitlesAreMounted = subtitlesAreMounted;
   ctx.ensureSubtitlesAfterPlaybackReady = ensureSubtitlesAfterPlaybackReady;
+  ctx.syncSubtitlesForCurrentPlaybackTime = syncSubtitlesForCurrentPlaybackTime;
   ctx.resyncSubtitleTrackAfterHlsRecovery = resyncSubtitleTrackAfterHlsRecovery;
   ctx.subtitleTrackUrl = subtitleTrackUrl;
   ctx.allSubtitlesUrl = allSubtitlesUrl;
