@@ -170,11 +170,18 @@ the smallest fix, rerun that test, then run the relevant group. See
 ## Git Notes
 
 - Remote: `https://github.com/spotco/dropbox_browser`
-- For requests to publish or push changes to GitHub, default to pushing
-  `master` unless the human explicitly requests a different branch strategy.
-- Before pushing, verify the current branch with `git branch --show-current`.
-- If the needed commit is not on `master`, move only the requested commit(s) to
-  `master` first, without pulling unrelated uncommitted changes into the push.
+- For an explicit request to commit and push:
+  1. Check the current branch with `git branch --show-current`.
+  2. Inspect `git status --short`.
+  3. Stage only the files that belong to the requested work.
+  4. Leave unrelated local edits uncommitted unless the human explicitly asks
+     to include them.
+  5. Commit with a focused message.
+  6. Push the current branch to `origin` unless the human explicitly asks for a
+     different branch or flow.
+- Do not waste time probing `.git/index.lock` unless a git command actually
+  fails with an index-lock error. If that specific error happens, confirm there
+  is no live git process and then clear the stale lock before retrying.
 - Use the approval-gated push tool call for network pushes.
 - `rclone.exe` is tracked and large. Do not rewrite history or remove it unless
   asked.
