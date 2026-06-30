@@ -99,11 +99,33 @@ function updateCompatibilityCurrentSegmentIndex() {
   ctx.state.compatibilityCurrentSegmentIndex = Math.floor(mediaSeconds / HLS_SEGMENT_DURATION_SECONDS) + 1;
 }
 
+function compatibilitySegmentLoadStats(data) {
+  if (!data) return null;
+  if (data.part && data.part.stats) return data.part.stats;
+  if (data.frag && data.frag.stats) return data.frag.stats;
+  if (data.stats) return data.stats;
+  return null;
+}
+
+function compatibilitySegmentLoadDurationMs(data) {
+  var stats = compatibilitySegmentLoadStats(data);
+  var loading = stats && stats.loading ? stats.loading : null;
+  if (!loading) return null;
+  var start = Number(loading.start);
+  var end = Number(loading.end);
+  if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {
+    return Math.round(end - start);
+  }
+  var first = Number(loading.first);
+  if (Number.isFinite(start) && Number.isFinite(first) && first >= start) {
+    return Math.round(first - start);
+  }
+  return null;
+}
+
 function noteCompatibilitySegmentLoadTiming(data) {
   if (!data || !data.frag || data.frag.sn === 'initSegment') return;
-  var loading = data.stats && data.stats.loading ? data.stats.loading : null;
-  if (!loading) return;
-  var durationMs = Math.round(Number(loading.end) - Number(loading.start));
+  var durationMs = compatibilitySegmentLoadDurationMs(data);
   if (!Number.isFinite(durationMs) || durationMs < 0) return;
   var nextCount = (Number(ctx.state.compatibilitySegmentLoadSampleCount) || 0) + 1;
   var priorAverage = Number(ctx.state.compatibilitySegmentLoadAverageMs) || 0;
@@ -820,15 +842,15 @@ function attachCompatibilityVideo(playlistUrl, title, meta, startSeconds, surfac
     });
     ctx.state.hlsController.on(Hls.Events.FRAG_LOADED, function (_eventName, data) {
       noteCompatibilitySegmentLoadTiming(data);
+      var stats = compatibilitySegmentLoadStats(data);
+      var loadingMs = compatibilitySegmentLoadDurationMs(data);
       ctx.reportVideoDiagnostic({
         level: 'debug',
         message: 'HLS fragment loaded',
         frag_sn: data && data.frag ? data.frag.sn : '',
         frag_url: data && data.frag ? data.frag.url : '',
-        loaded_bytes: data && data.stats ? data.stats.loaded : '',
-        loading_ms: data && data.stats && data.stats.loading
-          ? Math.round(data.stats.loading.end - data.stats.loading.start)
-          : '',
+        loaded_bytes: stats ? stats.loaded : '',
+        loading_ms: Number.isFinite(loadingMs) ? loadingMs : '',
       });
       if (
         data && data.frag && data.frag.sn !== 'initSegment'
@@ -837,9 +859,7 @@ function attachCompatibilityVideo(playlistUrl, title, meta, startSeconds, surfac
       ) {
         ctx.reportPlaybackTiming('hls_first_fragment_loaded', {
           frag_sn: data.frag.sn,
-          loading_ms: data && data.stats && data.stats.loading
-            ? Math.round(data.stats.loading.end - data.stats.loading.start)
-            : '',
+          loading_ms: Number.isFinite(loadingMs) ? loadingMs : '',
         });
       }
     });

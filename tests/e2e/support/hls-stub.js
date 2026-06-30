@@ -137,11 +137,11 @@ class Hls {
         const fragment = {
           sn: index,
           url: `stub://segment_${String(index).padStart(5, "0")}.m4s`,
+          stats: { loaded: 128, loading: { start: 0, first: 1, end: 3 } },
         };
         this.emit(Events.FRAG_LOADING, { frag: fragment });
         this.emit(Events.FRAG_LOADED, {
           frag: fragment,
-          stats: { loaded: 128, loading: { start: 0, end: 1 } },
         });
         this.emit(Events.FRAG_BUFFERED, { frag: fragment });
       }

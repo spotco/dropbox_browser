@@ -2665,6 +2665,20 @@ test("subtitle-ready scrubber debug info reflects full cached subtitle coverage 
   await waitForMountedSubtitleTrackReady(page, 3);
   await expect
     .poll(async () => {
+      const state = await readProgressCoverageState(page);
+      return {
+        subtitleEndAtFull: state.subtitleEnd > 99,
+        processedEndAtFull: state.processedEnd > 99,
+        subtitleCoverageState: state.subtitleCoverageState,
+      };
+    }, { timeout: 10000 })
+    .toMatchObject({
+      subtitleEndAtFull: true,
+      processedEndAtFull: true,
+      subtitleCoverageState: "full",
+    });
+  await expect
+    .poll(async () => {
       const state = await readDisplayedSubtitleDebugState(page);
       return state.metaText;
     }, { timeout: 10000 })
@@ -2681,6 +2695,13 @@ test("subtitle-ready scrubber debug info reflects full cached subtitle coverage 
       return state.metaText;
     }, { timeout: 10000 })
     .toContain("Loaded HLS segments:");
+  await expect
+    .poll(async () => {
+      const state = await readDisplayedSubtitleDebugState(page);
+      const match = state.metaText.match(/avg load: ([0-9]+\.[0-9]{2})s/);
+      return match ? match[1] : "n/a";
+    }, { timeout: 10000 })
+    .not.toBe("n/a");
   await expect
     .poll(async () => {
       const state = await readDisplayedSubtitleDebugState(page);
