@@ -611,6 +611,66 @@ test("applySubtitlesForSeek reuses cached seek windows on repeated covered seeks
   });
 });
 
+test("full cached subtitles clear stale mounted window coverage and stay mounted past the startup window", async () => {
+  const [{initSubtitles}] = await Promise.all([
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/subtitles.js"),
+  ]);
+  const item = {path: "movie.mp4"};
+  const ctx = createCtx(item);
+  const probePayload = {
+    subtitle_streams: [{index: 3, webvtt_compatible: true, language: "eng"}],
+    default_subtitle_stream_index: 3,
+    duration_seconds: 24,
+  };
+  ctx.state.probeCache[item.path] = probePayload;
+  ctx.state.selectedSubtitleStreamIndexByPath[item.path] = 3;
+  global.document = {
+    createElement() {
+      return createTrackNode();
+    },
+  };
+  global.URL = {
+    createObjectURL() {
+      return "blob:test-full-cache";
+    },
+    revokeObjectURL() {},
+  };
+  initSubtitles(ctx);
+  ctx.storeSubtitleWindowPayload(item.path, 3, {
+    status: "ok",
+    track: 3,
+    window_start_seconds: 0,
+    window_end_seconds: 12,
+    coverage_complete: false,
+    loaded_ranges: [{start_seconds: 0, end_seconds: 12}],
+    gap_action: "pause-until-ready",
+    window_status: "ready",
+    vtt: "WEBVTT\n\n00:00:10.000 --> 00:00:12.000\nSEEK-WINDOW-ENG\n",
+  }, {
+    mounted: true,
+  });
+  ctx.storeFullSubtitleVtt(
+    item.path,
+    3,
+    "WEBVTT\n\n00:00:10.000 --> 00:00:12.000\nSEEK-WINDOW-ENG\n"
+      + "\n00:00:16.000 --> 00:00:18.000\nSEEK-WINDOW-ENG AGAIN\n",
+  );
+
+  const mounted = ctx.mountSubtitleTrackForItem(item, probePayload, 3, 0, {
+    playbackSyncToken: 7,
+    silent: true,
+    coverageTargetSeconds: 17,
+  });
+
+  assert.equal(mounted, true);
+  assert.equal(ctx.state.subtitleMountedStreamIndex, 3);
+  assert.equal(ctx.state.subtitleMountedWindowByPath[item.path]["3"], undefined);
+  assert.equal(
+    ctx.subtitlesAreMounted(item, 3, 0, 17),
+    true,
+  );
+});
+
 test("syncProcessedProgressTrack clamps the displayed loaded band to selected subtitle coverage", async () => {
   const [{initShared}, {initSubtitles}] = await Promise.all([
     importModuleFromWorkspace("dropbox_browser/assets/js/video/shared.js"),

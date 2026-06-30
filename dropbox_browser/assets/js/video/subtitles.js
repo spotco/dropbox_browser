@@ -1307,6 +1307,12 @@ function mountSubtitleTrackForItem(item, probePayload, streamIndex, seekSeconds,
     subtitle_cache_source: cachedSource.sourceType,
   });
   var rebasedText = rebaseWebVttText(cachedSource.subtitleText, requestedSeek);
+  if (cachedSource.sourceType === 'full') {
+    var staleMountedCoverage = subtitleMountedWindowForPath(item.path || '');
+    if (staleMountedCoverage) {
+      delete staleMountedCoverage[String(normalized)];
+    }
+  }
   clearSubtitleTrack();
   var subtitleStreams = subtitleStreamsForPayload(payload);
   var subtitleStream = subtitleStreams.find(function (stream) {
