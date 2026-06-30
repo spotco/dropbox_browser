@@ -1,34 +1,23 @@
-- more responsive load (time to end of loaded, smaller faster load smaller section), display time to end of buffer
-- cpu load too high on surface - only high at small buffer time (more responsive)
+- bad subtitle, not present in VLC (investigate)
+s2e10 1:34
+s2e10 23:47
+s2e4 0:49
 
----
+- mp4 compat http://localhost:8000/?path=spotco_game_archive%2FSwitchScreenshots
 
-- mp4 compat
-	http://localhost:8000/?path=spotco_game_archive%2FSwitchScreenshots
+--- video player features
 
-- handle error:
-Traceback (most recent call last):
-  File "socketserver.py", line 697, in process_request_thread
-  File "socketserver.py", line 362, in finish_request
-  File "socketserver.py", line 766, in __init__
-  File "http\server.py", line 485, in handle
-  File "http\server.py", line 473, in handle_one_request
-  File "F:\dev\dropbox_browser\.\dropbox_browser\handlers.py", line 124, in do_GET
-    self.render_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
-    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "F:\dev\dropbox_browser\.\dropbox_browser\handlers.py", line 1316, in render_error
-    self.send_html(status, error_html(status, message), head_only=head_only)
-    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "F:\dev\dropbox_browser\.\dropbox_browser\handlers.py", line 1306, in send_html
-    self.end_headers()
-[01:20:58] [0.47s 0/0] 'F:\dev\dropbox_browser\rclone.exe' lsjson --stat --no-modtime --no-mimetype -- 'dropbox:anime/[Judas] Fairy Tail (2009-2014) (Seasons 1-8 + OVAs) [BD 1080p][HEVC x265 10bit][Dual-Audio][Eng-Subs]/[Judas] Fairy Tail (2009)/[Judas] Fairy Tail (2009) - 001.mkv'
-  File "http\server.py", line 591, in flush_headers
-  File "socketserver.py", line 845, in write
-ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host
+- fast forward/backwards 10 sec (button or arrow key)
+- next video/prev video (button)
+- video player queue force as unique
 
-- scrubbing outside of loaded area should not clear loaded cache
-- forward/backward playlist + at end, loop
-- video player: library management
+- video player plane: resizeable panes, use resizer style from music player
+- video player scrollbars: use scrollbar styles from music player
+
+- current folder videos panel improvements
+	- make text not selectable
+	- remove extra text on right side
+- queue panel improvements
 
 ---
 
