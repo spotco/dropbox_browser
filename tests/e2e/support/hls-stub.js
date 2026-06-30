@@ -21,6 +21,11 @@ function configuredFragmentCount(key, fallback) {
   return fallback;
 }
 
+function configuredDelayMs(key) {
+  const configured = Number(globalThis[key]);
+  return Number.isFinite(configured) && configured >= 0 ? configured : 0;
+}
+
 function installSeekableMedia(media, durationSeconds) {
   if (!media) return;
   const duration = Math.max(0, Number(durationSeconds) || 0);
@@ -127,6 +132,8 @@ class Hls {
       "__HLS_STUB_PLAYLIST_FRAGMENT_COUNT",
       availableFragmentCount,
     );
+    const fragmentLoadDelayMs = configuredDelayMs("__HLS_STUB_FRAGMENT_LOAD_DELAY_MS");
+    const fragmentLoadIntervalMs = configuredDelayMs("__HLS_STUB_FRAGMENT_LOAD_INTERVAL_MS");
     const playlistDurationSeconds = playlistFragmentCount * 6;
     setTimeout(() => {
       this.emit(Events.MANIFEST_LOADING, { url: "stub://manifest.m3u8" });
@@ -134,16 +141,22 @@ class Hls {
       this.emit(Events.MANIFEST_PARSED);
       installSeekableMedia(this._media, playlistDurationSeconds);
       for (let index = 0; index < availableFragmentCount; index += 1) {
+        const loadStartMs = index * fragmentLoadIntervalMs;
+        const loadEndMs = loadStartMs + fragmentLoadDelayMs;
         const fragment = {
           sn: index,
           url: `stub://segment_${String(index).padStart(5, "0")}.m4s`,
-          stats: { loaded: 128, loading: { start: 0, first: 1, end: 3 } },
+          stats: { loaded: 128, loading: { start: loadStartMs, first: loadEndMs, end: loadEndMs } },
         };
-        this.emit(Events.FRAG_LOADING, { frag: fragment });
-        this.emit(Events.FRAG_LOADED, {
-          frag: fragment,
-        });
-        this.emit(Events.FRAG_BUFFERED, { frag: fragment });
+        setTimeout(() => {
+          this.emit(Events.FRAG_LOADING, { frag: fragment });
+        }, loadStartMs);
+        setTimeout(() => {
+          this.emit(Events.FRAG_LOADED, {
+            frag: fragment,
+          });
+          this.emit(Events.FRAG_BUFFERED, { frag: fragment });
+        }, loadEndMs);
       }
       if (this._media) {
         this._media.dispatchEvent(new Event("loadedmetadata"));

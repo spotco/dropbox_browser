@@ -30,15 +30,21 @@ async function installHlsStub(page, {
   fragmentCount = 2,
   playlistFragmentCount = null,
   simulateMissingOnSeek = false,
+  fragmentLoadDelayMs = 0,
+  fragmentLoadIntervalMs = 0,
 } = {}) {
   await page.addInitScript((options) => {
     window.__HLS_STUB_FRAGMENT_COUNT = options.fragmentCount;
     window.__HLS_STUB_PLAYLIST_FRAGMENT_COUNT = options.playlistFragmentCount ?? options.fragmentCount;
     window.__HLS_STUB_SIMULATE_MISSING_ON_SEEK = options.simulateMissingOnSeek;
+    window.__HLS_STUB_FRAGMENT_LOAD_DELAY_MS = options.fragmentLoadDelayMs;
+    window.__HLS_STUB_FRAGMENT_LOAD_INTERVAL_MS = options.fragmentLoadIntervalMs;
   }, {
     fragmentCount,
     playlistFragmentCount: playlistFragmentCount ?? fragmentCount,
     simulateMissingOnSeek,
+    fragmentLoadDelayMs,
+    fragmentLoadIntervalMs,
   });
   await page.route("**/assets/js/vendor/hls.js", async (route) => {
     await route.fulfill({
@@ -2635,6 +2641,40 @@ test("falls back to probing the remote file when cached header bytes are corrupt
   });
 });
 
+test("loaded HLS segment average reflects fragment load timing", async ({ page }) => {
+  test.setTimeout(60000);
+
+  const statusResponse = await page.request.get("/video/endpoints/status");
+  expect(statusResponse.ok()).toBe(true);
+  const statusPayload = await statusResponse.json();
+  if (statusPayload && statusPayload.active_session && statusPayload.active_session.session_id) {
+    const stopResponse = await page.request.post("/video/endpoints/session/stop", {
+      data: { id: statusPayload.active_session.session_id },
+    });
+    expect(stopResponse.ok()).toBe(true);
+  }
+  const clearResponse = await page.request.post("/video/endpoints/cache/clear");
+  expect(clearResponse.ok()).toBe(true);
+  await installHlsStub(page, {
+    fragmentCount: 8,
+    playlistFragmentCount: 8,
+    fragmentLoadDelayMs: 20,
+    fragmentLoadIntervalMs: 80,
+  });
+  await openVideoPane(page);
+  await playLibraryFile(page, "alpha.mkv");
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+  await waitForMountedSubtitleTrackReady(page, 3);
+  await expect
+    .poll(async () => {
+      const state = await readDisplayedSubtitleDebugState(page);
+      const match = state.metaText.match(/avg load: ([0-9]+\.[0-9]{2})s/);
+      return match ? Number.parseFloat(match[1]) : Number.NaN;
+    }, { timeout: 10000 })
+    .toBeGreaterThan(0.05);
+});
+
 test("subtitle-ready scrubber debug info reflects full cached subtitle coverage after reload", async ({ page }) => {
   test.setTimeout(90000);
 
@@ -2695,13 +2735,6 @@ test("subtitle-ready scrubber debug info reflects full cached subtitle coverage 
       return state.metaText;
     }, { timeout: 10000 })
     .toContain("Loaded HLS segments:");
-  await expect
-    .poll(async () => {
-      const state = await readDisplayedSubtitleDebugState(page);
-      const match = state.metaText.match(/avg load: ([0-9]+\.[0-9]{2})s/);
-      return match ? match[1] : "n/a";
-    }, { timeout: 10000 })
-    .not.toBe("n/a");
   await expect
     .poll(async () => {
       const state = await readDisplayedSubtitleDebugState(page);

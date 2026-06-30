@@ -920,6 +920,7 @@ class VideoEndpointTests(AppTestCase):
         self.assertEqual(payload["path"], "movie.mp4")
         self.assertEqual(payload["start_time_seconds"], 120.5)
         self.assertEqual(payload["encoded_media_end_seconds"], HLS_MIN_READY_SEGMENTS * 6.0)
+        self.assertEqual(payload["hls_segment_duration_seconds"], 6.0)
         self.assertEqual(payload["ffmpeg_pid"], 12345)
         self.assertTrue(payload["session_id"])
         self.assertEqual(

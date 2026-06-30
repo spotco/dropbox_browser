@@ -128,10 +128,16 @@ function createCtx(activeItem) {
       seekRestartInProgress: false,
       playbackSyncToken: 7,
       compatibilityStartSeconds: 0,
+      compatibilitySegmentDurationSeconds: 0,
       compatibilityPlaylistSegmentCount: 0,
       compatibilityLoadedSegmentMinIndex: 0,
       compatibilityLoadedSegmentMaxIndex: 0,
+      compatibilityLoadedSegmentIndicesByKey: Object.create(null),
+      compatibilitySegmentLoadSampleCount: 0,
       compatibilitySegmentLoadAverageMs: 0,
+      compatibilitySegmentLoadWindowStartMs: NaN,
+      compatibilitySegmentFetchSampleCount: 0,
+      compatibilitySegmentFetchAverageMs: 0,
       compatibilitySubtitleWaitStageActive: false,
       probeCache: Object.create(null),
       selectedSubtitleStreamIndexByPath: Object.create(null),
@@ -745,8 +751,10 @@ test("syncSubtitleDebugDisplay shows HLS segment context, subtitle mode, and cue
   ctx.state.probeCache[item.path] = {
     subtitle_streams: [{index: 3, webvtt_compatible: true, language: "eng"}],
     default_subtitle_stream_index: 3,
+    duration_seconds: 1800,
   };
   ctx.state.compatibilityStartSeconds = 90;
+  ctx.state.compatibilitySegmentDurationSeconds = 6;
   ctx.state.compatibilityPlaylistSegmentCount = 300;
   ctx.state.compatibilityLoadedSegmentMinIndex = 67;
   ctx.state.compatibilityLoadedSegmentMaxIndex = 74;
@@ -764,8 +772,8 @@ test("syncSubtitleDebugDisplay shows HLS segment context, subtitle mode, and cue
 
   ctx.syncSubtitleDebugDisplay();
 
-  assert.match(ctx.els.debugMetaEl.textContent, /HLS segment: \[1\/300\] 1:30:000 - 1:36:000/);
-  assert.match(ctx.els.debugMetaEl.textContent, /Loaded HLS segments: \[67-74\/300\] • avg load: 0.42s/);
+  assert.match(ctx.els.debugMetaEl.textContent, /HLS segment: \[16\/300\] 1:30:000 - 1:36:000/);
+  assert.match(ctx.els.debugMetaEl.textContent, /Loaded HLS segments: \[82-89\/300\] • avg load: 0.42s • segment length: 6.00s/);
   assert.match(ctx.els.debugMetaEl.textContent, /Subtitle mode: webvtt/);
   assert.equal(ctx.els.debugCurrentTitleEl.textContent, "Current Subtitle [1/3]");
   assert.equal(ctx.els.debugNextTitleEl.textContent, "Next Subtitle [2/3]");
@@ -784,6 +792,7 @@ test("syncSubtitleDebugDisplay keeps HLS segment denominator at least as large a
     duration_seconds: 186.3,
   };
   ctx.state.compatibilityStartSeconds = 174.3;
+  ctx.state.compatibilitySegmentDurationSeconds = 6;
   ctx.state.compatibilityCurrentSegmentIndex = 4;
   ctx.state.compatibilityLoadedSegmentMinIndex = 1;
   ctx.state.compatibilityLoadedSegmentMaxIndex = 7;
@@ -795,8 +804,106 @@ test("syncSubtitleDebugDisplay keeps HLS segment denominator at least as large a
 
   ctx.syncSubtitleDebugDisplay();
 
-  assert.match(ctx.els.debugMetaEl.textContent, /HLS segment: \[4\/7\] 3:12:300 - 3:18:300/);
-  assert.match(ctx.els.debugMetaEl.textContent, /Loaded HLS segments: \[1-7\/7\] • avg load: n\/a/);
+  assert.match(ctx.els.debugMetaEl.textContent, /HLS segment: \[33\/36\] 3:12:300 - 3:18:300/);
+  assert.match(ctx.els.debugMetaEl.textContent, /Loaded HLS segments: \[30-36\/36\] • avg load: n\/a • segment length: 6.00s/);
+});
+
+test("syncSubtitleDebugDisplay renders discontinuous loaded HLS segment ranges as absolute indices", async () => {
+  const [{initShared}, {initSubtitles}] = await Promise.all([
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/shared.js"),
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/subtitles.js"),
+  ]);
+  const item = {path: "movie.mp4"};
+  const ctx = createCtx(item);
+  ctx.state.probeCache[item.path] = {
+    subtitle_streams: [{index: 3, webvtt_compatible: true, language: "eng"}],
+    default_subtitle_stream_index: 3,
+    duration_seconds: 720,
+  };
+  ctx.state.compatibilityStartSeconds = 180;
+  ctx.state.compatibilitySegmentDurationSeconds = 6;
+  ctx.state.compatibilityLoadedSegmentIndicesByKey = {
+    "1": true,
+    "2": true,
+    "5": true,
+    "6": true,
+  };
+  ctx.state.compatibilitySegmentLoadAverageMs = 4120;
+  ctx.state.subtitleDebug.trackLabel = "English";
+  ctx.els.videoEl.currentTime = 0;
+  initShared(ctx);
+  initSubtitles(ctx);
+
+  ctx.syncSubtitleDebugDisplay();
+
+  assert.match(ctx.els.debugMetaEl.textContent, /Loaded HLS segments: \[31-32, 35-36\/120\] • avg load: 4.12s • segment length: 6.00s/);
+});
+
+test("compatibility segment load average uses segment arrival cadence", async () => {
+  const [{initShared}, {initSubtitles}, {initCompatibility}] = await Promise.all([
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/shared.js"),
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/subtitles.js"),
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/compatibility.js"),
+  ]);
+  const item = {path: "movie.mp4"};
+  const ctx = createCtx(item);
+  let nowMs = 1000;
+  global.window = {
+    setTimeout,
+    clearTimeout,
+    performance: {
+      now() {
+        return nowMs;
+      },
+    },
+  };
+  initShared(ctx);
+  initSubtitles(ctx);
+  initCompatibility(ctx);
+
+  ctx.noteCompatibilityFragmentLoading({frag: {sn: 0}});
+  nowMs = 1400;
+  ctx.noteCompatibilityFragmentLoaded({frag: {sn: 0}});
+  nowMs = 1900;
+  ctx.noteCompatibilityFragmentBuffered({frag: {sn: 0}}, "test", ctx.state.playbackSyncToken);
+
+  ctx.noteCompatibilityFragmentLoading({frag: {sn: 1}});
+  nowMs = 2000;
+  ctx.noteCompatibilityFragmentLoaded({frag: {sn: 1}});
+  nowMs = 2600;
+  ctx.noteCompatibilityFragmentBuffered({frag: {sn: 1}}, "test", ctx.state.playbackSyncToken);
+
+  assert.equal(ctx.state.compatibilitySegmentLoadSampleCount, 2);
+  assert.equal(ctx.state.compatibilitySegmentLoadAverageMs, 500);
+  assert.equal(ctx.state.compatibilitySegmentFetchSampleCount, 2);
+  assert.equal(ctx.state.compatibilitySegmentFetchAverageMs, 250);
+  assert.equal(ctx.state.compatibilityLoadedSegmentMinIndex, 1);
+  assert.equal(ctx.state.compatibilityLoadedSegmentMaxIndex, 2);
+});
+
+test("compatibility segment fetch average prefers hls loader stats", async () => {
+  const [{initShared}, {initSubtitles}, {initCompatibility}] = await Promise.all([
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/shared.js"),
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/subtitles.js"),
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/compatibility.js"),
+  ]);
+  const item = {path: "movie.mp4"};
+  const ctx = createCtx(item);
+  initShared(ctx);
+  initSubtitles(ctx);
+  initCompatibility(ctx);
+
+  ctx.noteCompatibilityFragmentLoaded({
+    frag: {sn: 0, stats: {loading: {start: 10, first: 30, end: 90}}},
+  });
+  ctx.noteCompatibilityFragmentLoaded({
+    frag: {sn: 1, stats: {loading: {start: 20, first: 30, end: 180}}},
+  });
+
+  assert.equal(ctx.state.compatibilitySegmentLoadSampleCount, 2);
+  assert.equal(ctx.state.compatibilitySegmentLoadAverageMs, 85);
+  assert.equal(ctx.state.compatibilitySegmentFetchSampleCount, 2);
+  assert.equal(ctx.state.compatibilitySegmentFetchAverageMs, 120);
 });
 
 test("handleSubtitleTrackChange requests the new text track against current playback coverage", async () => {
