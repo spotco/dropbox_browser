@@ -150,8 +150,24 @@ function createCtx(activeItem) {
       subtitleBackgroundCoverageByPath: Object.create(null),
       subtitleMountedWindowByPath: Object.create(null),
       subtitleObjectUrls: [],
-      subtitleMountedSeekSeconds: null,
-      subtitleMountedStreamIndex: null,
+      subtitleMountState: {
+        mode: "none",
+        path: "",
+        streamIndex: null,
+        seekSeconds: 0,
+        coverageStartSeconds: null,
+        coverageEndSeconds: null,
+        playbackSyncToken: null,
+        generation: 0,
+      },
+      subtitlePlaybackSyncState: {
+        path: "",
+        streamIndex: null,
+        mountedSeekSeconds: 0,
+        playbackSyncToken: null,
+        mountGeneration: 0,
+        outsideCoverageObserved: false,
+      },
       subtitleDebug: {
         rawVtt: "",
         cues: [],
@@ -364,12 +380,18 @@ test("mountSubtitleTrackForItem mounts from a cached subtitle window and records
   });
 
   assert.equal(mounted, true);
-  assert.equal(ctx.state.subtitleMountedStreamIndex, 3);
-  assert.equal(ctx.state.subtitleMountedSeekSeconds, 0);
+  assert.equal(ctx.state.subtitleMountState.mode, "window");
+  assert.equal(ctx.state.subtitleMountState.path, item.path);
+  assert.equal(ctx.state.subtitleMountState.streamIndex, 3);
+  assert.equal(ctx.state.subtitleMountState.seekSeconds, 0);
+  assert.equal(ctx.state.subtitleMountState.coverageStartSeconds, 0);
+  assert.equal(ctx.state.subtitleMountState.coverageEndSeconds, 300);
   assert.deepEqual(ctx.state.subtitleMountedWindowByPath[item.path]["3"], {
     start_seconds: 0,
     end_seconds: 300,
   });
+  assert.equal(ctx.subtitleMountCoversTarget(item, 3, 0, 120), true);
+  assert.equal(ctx.subtitleMountCoversTarget(item, 3, 0, 303), false);
   assert.equal(ctx.state.subtitleDebug.cues.length, 1);
 });
 
@@ -414,7 +436,7 @@ test("mountSubtitleTrackForItem does not mount from a cached subtitle window out
   });
 
   assert.equal(mounted, false);
-  assert.equal(ctx.state.subtitleMountedStreamIndex, null);
+  assert.equal(ctx.state.subtitleMountState.streamIndex, null);
   assert.equal(ctx.state.subtitleDebug.cues.length, 0);
 });
 
@@ -462,8 +484,8 @@ test("applySubtitlesForSeek remounts immediately from cached coverage during in-
     silent: true,
   });
 
-  assert.equal(ctx.state.subtitleMountedStreamIndex, 3);
-  assert.equal(ctx.state.subtitleMountedSeekSeconds, 0);
+  assert.equal(ctx.state.subtitleMountState.streamIndex, 3);
+  assert.equal(ctx.state.subtitleMountState.seekSeconds, 0);
   assert.deepEqual(ctx.state.subtitleMountedWindowByPath[item.path]["3"], {
     start_seconds: 105,
     end_seconds: 405,
@@ -532,7 +554,7 @@ test("applySubtitlesForSeek fetches an uncovered seek window and mounts it once 
   assert.match(requests[0], /\/video\/endpoints\/subtitles\/window\?/);
   assert.match(requests[0], /start=105/);
   assert.match(requests[0], /window_status=seek/);
-  assert.equal(ctx.state.subtitleMountedStreamIndex, 3);
+  assert.equal(ctx.state.subtitleMountState.streamIndex, 3);
   assert.deepEqual(ctx.state.subtitleMountedWindowByPath[item.path]["3"], {
     start_seconds: 105,
     end_seconds: 405,
@@ -604,7 +626,7 @@ test("applySubtitlesForSeek reuses cached seek windows on repeated covered seeks
   });
 
   assert.equal(requests.length, 1);
-  assert.equal(ctx.state.subtitleMountedStreamIndex, 3);
+  assert.equal(ctx.state.subtitleMountState.streamIndex, 3);
   assert.deepEqual(ctx.state.subtitleMountedWindowByPath[item.path]["3"], {
     start_seconds: 105,
     end_seconds: 405,
@@ -649,6 +671,7 @@ test("full cached subtitles clear stale mounted window coverage and stay mounted
   }, {
     mounted: true,
   });
+  assert.equal(ctx.state.subtitleMountedWindowByPath[item.path]["3"].end_seconds, 12);
   ctx.storeFullSubtitleVtt(
     item.path,
     3,
@@ -663,12 +686,223 @@ test("full cached subtitles clear stale mounted window coverage and stay mounted
   });
 
   assert.equal(mounted, true);
-  assert.equal(ctx.state.subtitleMountedStreamIndex, 3);
+  assert.equal(ctx.state.subtitleMountState.streamIndex, 3);
+  assert.equal(ctx.state.subtitleMountState.mode, "full");
+  assert.equal(ctx.state.subtitleMountState.path, item.path);
+  assert.equal(ctx.state.subtitleMountState.streamIndex, 3);
+  assert.equal(ctx.state.subtitleMountState.coverageStartSeconds, null);
+  assert.equal(ctx.state.subtitleMountState.coverageEndSeconds, null);
   assert.equal(ctx.state.subtitleMountedWindowByPath[item.path]["3"], undefined);
+  assert.equal(ctx.subtitleMountCoversTarget(item, 3, 0, 17), true);
   assert.equal(
     ctx.subtitlesAreMounted(item, 3, 0, 17),
     true,
   );
+});
+
+test("subtitlesAreMounted ignores stale legacy mounted-window metadata when full mount state is active", async () => {
+  const [{initSubtitles}] = await Promise.all([
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/subtitles.js"),
+  ]);
+  const item = {path: "movie.mp4"};
+  const ctx = createCtx(item);
+  initSubtitles(ctx);
+
+  ctx.recordFullSubtitleMount(item, 3, 0, {
+    playbackSyncToken: 7,
+  });
+  ctx.state.subtitleMountedWindowByPath[item.path] = Object.assign(Object.create(null), {
+    3: {
+      start_seconds: 0,
+      end_seconds: 12,
+    },
+  });
+  ctx.els.videoEl.textTracks.push({
+    kind: "subtitles",
+    mode: "hidden",
+    activeCues: [],
+    addEventListener() {},
+    removeEventListener() {},
+  });
+
+  assert.equal(ctx.subtitlesAreMounted(item, 3, 0, 17), true);
+});
+
+test("subtitlesAreMounted does not treat debug or legacy mounted fields as authority", async () => {
+  const [{initSubtitles}] = await Promise.all([
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/subtitles.js"),
+  ]);
+  const item = {path: "movie.mp4"};
+  const ctx = createCtx(item);
+  initSubtitles(ctx);
+
+  ctx.state.subtitleMountedWindowByPath[item.path] = Object.assign(Object.create(null), {
+    3: {
+      start_seconds: 0,
+      end_seconds: 300,
+    },
+  });
+  ctx.state.subtitleDebug.trackLabel = "English";
+  ctx.state.subtitleDebug.cues = [{
+    start: 0,
+    end: 1,
+    text: "Hello",
+  }];
+  ctx.els.videoEl.textTracks.push({
+    kind: "subtitles",
+    mode: "hidden",
+    activeCues: [],
+    addEventListener() {},
+    removeEventListener() {},
+  });
+
+  assert.equal(ctx.state.subtitleMountState.mode, "none");
+  assert.equal(ctx.subtitlesAreMounted(item, 3, 0, 17), false);
+});
+
+test("mountedSubtitleSeekSeconds reads the explicit subtitle mount state", async () => {
+  const [{initSubtitles}] = await Promise.all([
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/subtitles.js"),
+  ]);
+  const item = {path: "movie.mp4"};
+  const ctx = createCtx(item);
+  initSubtitles(ctx);
+
+  assert.equal(ctx.mountedSubtitleSeekSeconds(), 0);
+
+  ctx.recordWindowSubtitleMount(item, 3, 12, {
+    window_start_seconds: 10,
+    window_end_seconds: 20,
+  }, {
+    playbackSyncToken: 7,
+  });
+  assert.equal(ctx.mountedSubtitleSeekSeconds(), 12);
+});
+
+test("shouldRefreshSubtitlesForPlaybackTime triggers once when playback first crosses outside mounted window coverage", async () => {
+  const [{initSubtitles}] = await Promise.all([
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/subtitles.js"),
+  ]);
+  const item = {path: "movie.mp4"};
+  const ctx = createCtx(item);
+  initSubtitles(ctx);
+
+  ctx.recordWindowSubtitleMount(item, 3, 0, {
+    window_start_seconds: 0,
+    window_end_seconds: 12,
+  }, {
+    playbackSyncToken: 7,
+  });
+
+  assert.equal(ctx.shouldRefreshSubtitlesForPlaybackTime(item, 3, 10), false);
+  assert.equal(ctx.shouldRefreshSubtitlesForPlaybackTime(item, 3, 17), true);
+  assert.equal(ctx.shouldRefreshSubtitlesForPlaybackTime(item, 3, 18), false);
+
+  ctx.recordWindowSubtitleMount(item, 3, 12, {
+    window_start_seconds: 12,
+    window_end_seconds: 24,
+  }, {
+    playbackSyncToken: 7,
+  });
+
+  assert.equal(ctx.shouldRefreshSubtitlesForPlaybackTime(item, 3, 18), false);
+  assert.equal(ctx.shouldRefreshSubtitlesForPlaybackTime(item, 3, 27), true);
+});
+
+test("shouldRefreshSubtitlesForPlaybackTime keeps full-cache steady playback as a no-op", async () => {
+  const [{initSubtitles}] = await Promise.all([
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/subtitles.js"),
+  ]);
+  const item = {path: "movie.mp4"};
+  const ctx = createCtx(item);
+  initSubtitles(ctx);
+
+  ctx.recordFullSubtitleMount(item, 3, 0, {
+    playbackSyncToken: 7,
+  });
+
+  assert.equal(ctx.shouldRefreshSubtitlesForPlaybackTime(item, 3, 17), false);
+  assert.equal(ctx.shouldRefreshSubtitlesForPlaybackTime(item, 3, 18), false);
+});
+
+test("storeFullSubtitleVtt clears obsolete mounted window metadata before the next remount", async () => {
+  const [{initSubtitles}] = await Promise.all([
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/subtitles.js"),
+  ]);
+  const item = {path: "movie.mp4"};
+  const ctx = createCtx(item);
+  initSubtitles(ctx);
+
+  ctx.storeSubtitleWindowPayload(item.path, 3, {
+    status: "ok",
+    track: 3,
+    window_start_seconds: 0,
+    window_end_seconds: 12,
+    coverage_complete: false,
+    loaded_ranges: [{start_seconds: 0, end_seconds: 12}],
+    gap_action: "pause-until-ready",
+    window_status: "ready",
+    vtt: "WEBVTT\n\n00:00:10.000 --> 00:00:12.000\nSEEK-WINDOW-ENG\n",
+  }, {
+    mounted: true,
+  });
+
+  assert.deepEqual(ctx.state.subtitleMountedWindowByPath[item.path]["3"], {
+    start_seconds: 0,
+    end_seconds: 12,
+  });
+  ctx.storeFullSubtitleVtt(item.path, 3, "WEBVTT\n\n00:00:16.000 --> 00:00:18.000\nSEEK-WINDOW-ENG AGAIN\n");
+
+  assert.equal(ctx.state.subtitleMountedWindowByPath[item.path]["3"], undefined);
+});
+
+test("clearSubtitleTrack resets explicit subtitle mount state", async () => {
+  const [{initSubtitles}] = await Promise.all([
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/subtitles.js"),
+  ]);
+  const item = {path: "movie.mp4"};
+  const ctx = createCtx(item);
+  const probePayload = {
+    subtitle_streams: [{index: 3, webvtt_compatible: true, language: "eng"}],
+    default_subtitle_stream_index: 3,
+  };
+  ctx.state.probeCache[item.path] = probePayload;
+  global.document = {
+    createElement() {
+      return createTrackNode();
+    },
+  };
+  global.URL = {
+    createObjectURL() {
+      return "blob:test-reset";
+    },
+    revokeObjectURL() {},
+  };
+  initSubtitles(ctx);
+  ctx.storeSubtitleWindowPayload(item.path, 3, {
+    status: "ok",
+    track: 3,
+    window_start_seconds: 0,
+    window_end_seconds: 300,
+    coverage_complete: true,
+    loaded_ranges: [{start_seconds: 0, end_seconds: 300}],
+    gap_action: "pause-until-ready",
+    window_status: "ready",
+    vtt: "WEBVTT\n\n00:00.000 --> 00:01.000\nHello\n",
+  });
+  assert.equal(ctx.mountSubtitleTrackForItem(item, probePayload, 3, 0, {
+    playbackSyncToken: 7,
+    silent: true,
+  }), true);
+
+  ctx.clearSubtitleTrack();
+
+  assert.equal(ctx.state.subtitleMountState.mode, "none");
+  assert.equal(ctx.state.subtitleMountState.path, "");
+  assert.equal(ctx.state.subtitleMountState.streamIndex, null);
+  assert.equal(ctx.state.subtitleMountState.coverageStartSeconds, null);
+  assert.equal(ctx.state.subtitleMountState.coverageEndSeconds, null);
+  assert.equal(ctx.mountedSubtitleSeekSeconds(), 0);
 });
 
 test("syncProcessedProgressTrack clamps the displayed loaded band to selected subtitle coverage", async () => {

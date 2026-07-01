@@ -335,6 +335,63 @@ Two subtitle paths:
 The client may wait for subtitle preload before revealing playback when a sidecar
 track is selected at startup.
 
+`subtitles.js` owns the subtitle mount contract. The active mounted state now
+lives in one explicit client object:
+
+```javascript
+subtitleMountState: {
+  mode: 'none' | 'window' | 'full',
+  path: '',
+  streamIndex: null,
+  seekSeconds: 0,
+  coverageStartSeconds: null,
+  coverageEndSeconds: null,
+  playbackSyncToken: null,
+  generation: 0
+}
+```
+
+The important rules are:
+
+- `mode: 'full'` means the mounted sidecar subtitle is valid for any later
+  playback time for the same item/stream/seek context.
+- `mode: 'window'` means the mounted sidecar subtitle is valid only for the
+  recorded mounted coverage range.
+- `storeFullSubtitleVtt(...)` clears obsolete mounted-window metadata for the
+  same path/stream as soon as full-cache data arrives.
+- DOM `<track>` state and subtitle debug output are effects of the mount state,
+  not independent authorities for deciding mounted coverage.
+
+The client still keeps `subtitleMountedWindowByPath` as derived compatibility
+state because other UI surfaces consume mounted coverage summaries:
+
+- scrubber subtitle-ready coverage display
+- subtitle debug/range reporting
+- tests that assert precise mounted-window replacement behavior
+
+The old `subtitleMountedSeekSeconds` and `subtitleMountedStreamIndex` runtime
+fields have been removed; callers should use `subtitleMountState`.
+
+Playback-time subtitle refresh is edge-triggered. During compatibility
+`timeupdate`, `subtitles.js` compares the current playback time against the
+active mount state:
+
+- if the active mount still covers the target time, no subtitle work runs
+- if a full-cache mount is active, steady playback is a no-op
+- if a windowed mount no longer covers the target time, the client requests one
+  refresh for that uncovered boundary crossing and records that it has already
+  reacted for the current mount generation
+- seek, subtitle-track changes, audio-track restarts, and HLS-recovery restarts
+  still use their existing explicit refresh paths instead of relying on the
+  `timeupdate` loop
+
+That structure is what prevents the original regressions:
+
+- Bug A: uncovered window-boundary playback now triggers one intentional window
+  refresh without restarting the HLS session
+- Bug B: once full-cache data is mounted or cached, stale mounted-window
+  metadata no longer makes the active subtitle appear unmounted
+
 ### Diagnostics
 
 Client diagnostics post to `POST /client-log` with subsystem `video` or
@@ -349,7 +406,7 @@ Server HLS/session events go to `Temp/video_debug.jsonl` when enabled.
 | Module import graph | `npm run test:js` — `video-modules.test.js` smoke imports |
 | Server endpoints | `python -m tests.run video -v` |
 | UI asset contracts | `python -m tests.run web -v` |
-| Browser integration | `npx playwright test --grep video` (4 specs, 18 tests) |
+| Browser integration | `npx playwright test --grep video` |
 
 When changing playback, subtitle, or HLS behavior, run the video e2e suite before
 checkin. When changing pure seek/queue/WebVTT math, run the JS unit tests first.
