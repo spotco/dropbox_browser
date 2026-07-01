@@ -278,134 +278,172 @@ make these rules explicit:
       sufficient to prevent Bug B as currently observed, so no extra Bug B-only
       fix is required before the later structural refactor phases.
 - [x] Run the new Bug B unit and e2e tests until they pass.
-- [ ] Run the full subtitle-switch e2e file:
+- [x] Run the full subtitle-switch e2e file:
       `npx playwright test tests/e2e/video-subtitle-switch.integration.spec.js`.
-      Current status: the strengthened Bug B test passes, the JS subtitle tests
-      pass, and the full file passes in some runs but still shows an unrelated
-      intermittent failure in `missing HLS segment recovery restarts session
-      instead of looping in-session seek`. Treat that as Phase 6 flake work, not
-      a blocker on Bug B diagnosis.
+      Current status after later refactor verification: the strengthened Bug B
+      test passes, the JS subtitle tests pass, and the full file passed
+      `28/28`. The unrelated intermittent failure in
+      `missing HLS segment recovery restarts session instead of looping
+      in-session seek` remains Phase 6 flake-hardening scope because it is not
+      specific to the subtitle behavior under test.
 
 ## Phase 3 - Introduce Explicit Subtitle Mount State
 
-- [ ] Add a mount-state initializer to `video.js` state or to an init helper in
+- [x] Add a mount-state initializer to `video.js` state or to an init helper in
       `subtitles.js`.
-- [ ] Add helper functions in `subtitles.js`:
+- [x] Add helper functions in `subtitles.js`:
       `resetSubtitleMountState`, `recordWindowSubtitleMount`,
       `recordFullSubtitleCached`, `recordFullSubtitleMount`,
       `clearObsoleteMountedWindowState`, and `subtitleMountCoversTarget`.
-- [ ] Keep old fields temporarily populated where existing tests or functions
+- [x] Keep old fields temporarily populated where existing tests or functions
       still need them.
-- [ ] Make `mountSubtitleTrackForItem(...)` update mount state through the new
+- [x] Make `mountSubtitleTrackForItem(...)` update mount state through the new
       helpers instead of writing scattered mounted fields directly.
-- [ ] Make full-cache storage update mount/cache state immediately so stale
+- [x] Make full-cache storage update mount/cache state immediately so stale
       window metadata is removed before the next playback-time sync tick.
-- [ ] Make `clearSubtitleTrack()` clear the mount state and DOM/debug state in
+- [x] Make `clearSubtitleTrack()` clear the mount state and DOM/debug state in
       one ordered transition.
-- [ ] Add focused JS tests for:
+- [x] Add focused JS tests for:
       full mount covers any target for the same path/stream/seek;
       window mount covers only its recorded range;
       full-cache storage clears obsolete mounted-window metadata;
       clear resets to `mode: none`.
-- [ ] Run:
+- [x] Run:
       `node --test tests/js/video-subtitles-startup.test.js`.
-- [ ] Run focused e2e for Bug A and Bug B.
-- [ ] Run the full subtitle-switch e2e file before continuing.
+- [x] Run focused e2e for Bug A and Bug B.
+- [x] Run the full subtitle-switch e2e file before continuing.
+      Current verification after the explicit mount-state slice:
+      `tests/js/video-subtitles-startup.test.js` passed 20/20 and
+      `tests/e2e/video-subtitle-switch.integration.spec.js` passed 28/28.
 
 ## Phase 4 - Route Mounted Checks Through The New State
 
-- [ ] Rewrite `subtitlesAreMounted(...)` to ask the explicit mount state whether
+- [x] Rewrite `subtitlesAreMounted(...)` to ask the explicit mount state whether
       the current path/stream/seek/coverage target is satisfied.
-- [ ] Preserve compatibility with existing callers during the transition.
-- [ ] Remove duplicated mounted-window inference from `subtitlesAreMounted`.
-- [ ] Ensure full-cache presence and window-cache presence cannot disagree about
+- [x] Preserve compatibility with existing callers during the transition.
+- [x] Remove duplicated mounted-window inference from `subtitlesAreMounted`.
+- [x] Ensure full-cache presence and window-cache presence cannot disagree about
       whether the active track is mounted.
-- [ ] Confirm debug state is not used as an authority for mounted state.
-- [ ] Confirm stale mounted-window state is absent immediately after full-cache
+- [x] Confirm debug state is not used as an authority for mounted state.
+- [x] Confirm stale mounted-window state is absent immediately after full-cache
       preload, not merely after a later full-cache remount.
-- [ ] Run:
+- [x] Run:
       `node --test tests/js/video-subtitles-startup.test.js`.
-- [ ] Run focused e2e for Bug A and Bug B.
-- [ ] Run the full subtitle-switch e2e file before continuing.
+- [x] Run focused e2e for Bug A and Bug B.
+- [x] Run the full subtitle-switch e2e file before continuing.
+      Current verification after routing mounted checks through explicit mount
+      state: `tests/js/video-subtitles-startup.test.js` passed `23/23` and
+      `tests/e2e/video-subtitle-switch.integration.spec.js` passed `28/28`.
 
 ## Phase 5 - Make Playback-Time Subtitle Sync Edge-Triggered
 
-- [ ] Replace unconditional high-frequency refresh attempts with an
+- [x] Replace unconditional high-frequency refresh attempts with an
       edge-triggered check.
-- [ ] Track the last subtitle coverage target or mount generation considered by
+- [x] Track the last subtitle coverage target or mount generation considered by
       playback-time sync.
-- [ ] Only call `applySubtitlesForSeek(...)` from playback-time sync when the
+- [x] Only call `applySubtitlesForSeek(...)` from playback-time sync when the
       current global playback time crosses outside the mounted window coverage.
-- [ ] Keep full-cache steady-state playback a no-op.
-- [ ] Keep genuine window-boundary crossing behavior from Bug A.
-- [ ] Ensure clearing stale state early does not suppress needed window-only
+- [x] Keep full-cache steady-state playback a no-op.
+- [x] Keep genuine window-boundary crossing behavior from Bug A.
+- [x] Ensure clearing stale state early does not suppress needed window-only
       boundary refreshes.
-- [ ] Keep seek, subtitle-track change, audio-track restart, and HLS recovery
+- [x] Keep seek, subtitle-track change, audio-track restart, and HLS recovery
       behavior routed through their existing explicit refresh paths.
-- [ ] Add JS coverage for the decision helper if a pure helper is introduced.
-- [ ] Run:
+- [x] Add JS coverage for the decision helper if a pure helper is introduced.
+- [x] Run:
       `node --test tests/js/video-subtitles-startup.test.js`.
-- [ ] Run focused e2e for Bug A and Bug B.
+- [x] Run focused e2e for Bug A and Bug B.
 - [ ] Run the full subtitle-switch e2e file before continuing.
+      Current verification after the edge-triggered playback-sync slice:
+      `tests/js/video-subtitles-startup.test.js` passed `25/25`.
+      Focused Bug A and Bug B Playwright coverage passed:
+      `windowed subtitles remount when playback crosses mounted coverage` and
+      `full cached subtitles stay mounted across timeupdate without remount
+      flicker`.
+      The full file still intermittently fails in the unrelated Phase 6 test
+      `missing HLS segment recovery restarts session instead of looping
+      in-session seek`, so do not treat that flake as a subtitle-regression
+      failure for this phase.
 
 ## Phase 6 - Harden E2E Against Late Subtitle Requests
 
-- [ ] Audit route handlers in
+- [x] Audit route handlers in
       `tests/e2e/video-subtitle-switch.integration.spec.js` that call
       `route.fetch()`.
-- [ ] Treat teardown-time `ECONNREFUSED 127.0.0.1:<port>` similarly to closed
+- [x] Treat teardown-time `ECONNREFUSED 127.0.0.1:<port>` similarly to closed
       page/context errors when the page is already closing.
-- [ ] Prefer deterministic route fulfillment over proxying with `route.fetch()`
+- [x] Prefer deterministic route fulfillment over proxying with `route.fetch()`
       where a test only needs a synthetic subtitle payload.
-- [ ] Ensure each test waits for the subtitle request or mounted state it caused
+- [x] Ensure each test waits for the subtitle request or mounted state it caused
       before moving to teardown.
-- [ ] Re-run the two tests that previously failed only in full-file order:
+- [x] Re-run the two tests that previously failed only in full-file order:
       `subtitle track switch and audio restart keep windowed subtitles correct
       at non-zero playback` and `subtitle-ready scrubber debug info reflects
       full cached subtitle coverage after reload`.
-- [ ] Run the full subtitle-switch e2e file twice in a row.
-- [ ] If flake remains, collect Playwright error contexts and client logs before
+- [x] Run the full subtitle-switch e2e file twice in a row.
+- [x] If flake remains, collect Playwright error contexts and client logs before
       making further changes.
+      Phase 6 changes:
+      added shared JSON route helpers for `route.fetch()` interception,
+      treated closed-page and connection-refused fetch failures as ignorable
+      during teardown-sensitive interception, and reset active video session
+      plus cache before the missing-HLS-segment recovery test so full-file order
+      does not inherit stale server state.
+      Verification:
+      `missing HLS segment recovery restarts session instead of looping
+      in-session seek` passed in isolation, and
+      `npx playwright test tests/e2e/video-subtitle-switch.integration.spec.js`
+      passed `28/28` twice in a row.
 
 ## Phase 7 - Remove Transitional State And Update Docs
 
-- [ ] Remove obsolete writes to `subtitleMountedSeekSeconds`,
+- [x] Remove obsolete writes to `subtitleMountedSeekSeconds`,
       `subtitleMountedStreamIndex`, or `subtitleMountedWindowByPath` if the new
       mount state fully replaces them.
-- [ ] If those fields remain for compatibility or debug output, document why and
+- [x] If those fields remain for compatibility or debug output, document why and
       ensure they are derived from the explicit mount state.
-- [ ] Update `docs/video-player.md` subtitle architecture notes to describe the
+- [x] Update `docs/video-player.md` subtitle architecture notes to describe the
       explicit mount state and playback-boundary refresh behavior.
-- [ ] Keep the bug-plan notes focused; do not add local log dumps or generated
+- [x] Keep the bug-plan notes focused; do not add local log dumps or generated
       state.
-- [ ] Run:
+- [x] Run:
       `node --test tests/js/video-subtitles-startup.test.js`.
-- [ ] Run:
+- [x] Run:
       `npm run test:js`.
-- [ ] Run:
+- [x] Run:
       `npx playwright test tests/e2e/video-subtitle-switch.integration.spec.js`.
 - [ ] Run `python -m tests.run video -v` if server endpoint behavior changed.
 - [ ] Run `python -m tests.run web -v` if asset loading, page shell, or script
       contracts changed.
+      Phase 7 result:
+      removed the transitional runtime fields
+      `subtitleMountedSeekSeconds` and `subtitleMountedStreamIndex`, moved
+      diagnostics onto `subtitleMountState`, and documented why
+      `subtitleMountedWindowByPath` still exists as derived mounted-coverage
+      state for scrubber/debug consumers.
+      Verification:
+      `tests/js/video-subtitles-startup.test.js` passed `25/25`,
+      `npm run test:js` passed `174/174`, and
+      `tests/e2e/video-subtitle-switch.integration.spec.js` passed `28/28`.
 
 ## Final Acceptance Checklist
 
-- [ ] Bug A has an e2e test that fails before the fix and passes after it.
-- [ ] Bug B has an e2e test that fails before the fix and passes after it.
-- [ ] Bug B has focused JS coverage for stale mounted-window metadata/full-cache
+- [x] Bug A has an e2e test that fails before the fix and passes after it.
+- [x] Bug B has an e2e test that fails before the fix and passes after it.
+- [x] Bug B has focused JS coverage for stale mounted-window metadata/full-cache
       precedence.
-- [ ] Full subtitle-switch e2e passes repeatedly.
-- [ ] JS subtitle tests pass.
-- [ ] No subtitle remount storm occurs during full-cache steady playback.
-- [ ] Full-cache preload clears obsolete mounted-window state before the next
+- [x] Full subtitle-switch e2e passes repeatedly.
+- [x] JS subtitle tests pass.
+- [x] No subtitle remount storm occurs during full-cache steady playback.
+- [x] Full-cache preload clears obsolete mounted-window state before the next
       `timeupdate` can classify the active full-cache subtitle as unmounted.
-- [ ] Window-only playback still refreshes when playback crosses uncovered
+- [x] Window-only playback still refreshes when playback crosses uncovered
       mounted coverage.
-- [ ] Subtitle track changes and audio restarts preserve the selected subtitle at
+- [x] Subtitle track changes and audio restarts preserve the selected subtitle at
       non-zero playback.
-- [ ] Reloaded video playback still mounts selected subtitles and reports full
+- [x] Reloaded video playback still mounts selected subtitles and reports full
       cached subtitle coverage.
-- [ ] Documentation describes the new mount-state contract.
+- [x] Documentation describes the new mount-state contract.
 
 ## Questions Status
 
