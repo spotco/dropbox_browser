@@ -1883,6 +1883,13 @@ test("seek-triggered subtitle extraction expands scrubber coverage without a ses
 test("windowed subtitles remount when playback crosses mounted coverage", async ({ page }) => {
   test.setTimeout(90000);
 
+  const sessionPosts = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/video/endpoints/session") && request.method() === "POST") {
+      sessionPosts.push(request.postData() || "");
+    }
+  });
+
   const subtitleWindowRequests = [];
   await page.route("**/video/endpoints/subtitles/all?path=Videos%2Fseek-window.mkv&source=remote", async (route) => {
     await route.fulfill({
@@ -1943,16 +1950,19 @@ test("windowed subtitles remount when playback crosses mounted coverage", async 
   await setPlaybackTimeForSubtitleChecks(page, 10.5);
   await waitForDisplayedSubtitleDebugText(page, "SEEK-WINDOW-ENG");
 
+  const postsBeforeBoundaryCross = sessionPosts.length;
   await setPlaybackTimeForSubtitleChecks(page, 17);
   await waitForDisplayedSubtitleDebugText(page, "SEEK-WINDOW-ENG AGAIN");
 
   expect(subtitleWindowRequests.some((request) => request.windowStatus === "startup")).toBe(true);
   expect(subtitleWindowRequests.some((request) => request.windowStatus === "seek")).toBe(true);
+  expect(sessionPosts.slice(postsBeforeBoundaryCross)).toEqual([]);
 });
 
 test("full cached subtitles stay mounted across timeupdate without remount flicker", async ({ page }) => {
   test.setTimeout(90000);
 
+  const subtitleWindowRequests = [];
   await page.route("**/video/endpoints/subtitles?path=Videos%2Fseek-window.mkv&source=remote&track=*", async (route) => {
     await route.fulfill({
       status: 500,
@@ -1967,6 +1977,11 @@ test("full cached subtitles stay mounted across timeupdate without remount flick
       return;
     }
     const windowStatus = String(url.searchParams.get("window_status") || "requested");
+    subtitleWindowRequests.push({
+      windowStatus,
+      start: Number(url.searchParams.get("start") || "0"),
+      track: Number(url.searchParams.get("track") || "0"),
+    });
     if (windowStatus !== "startup") {
       await route.fulfill({
         status: 502,
@@ -2014,6 +2029,7 @@ test("full cached subtitles stay mounted across timeupdate without remount flick
   await page.evaluate(() => {
     window.__subtitleTeardownEvents = [];
   });
+  const windowRequestsBeforeTimeupdates = subtitleWindowRequests.length;
 
   await page.evaluate(() => {
     const video = document.getElementById("video-player-media");
@@ -2025,6 +2041,10 @@ test("full cached subtitles stay mounted across timeupdate without remount flick
 
   const teardownEvents = await page.evaluate(() => window.__subtitleTeardownEvents || []);
   expect(teardownEvents).toEqual([]);
+  expect(subtitleWindowRequests).toEqual([
+    { windowStatus: "startup", start: 0, track: 3 },
+  ]);
+  expect(subtitleWindowRequests.slice(windowRequestsBeforeTimeupdates)).toEqual([]);
 
   const debugState = await readDisplayedSubtitleDebugState(page);
   expect(debugState.metaText).toContain("Track:");

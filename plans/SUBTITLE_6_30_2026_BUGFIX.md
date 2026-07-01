@@ -177,69 +177,114 @@ make these rules explicit:
 
 - [x] Create and switch to new implementation branch:
       `subtitle-6-30-2026-bugfix`.
-- [ ] Confirm the active branch with `git branch --show-current` before code
+- [x] Confirm the active branch with `git branch --show-current` before code
       implementation continues.
-- [ ] Confirm the worktree is clean or identify unrelated local changes with
+- [x] Confirm the worktree is clean or identify unrelated local changes with
       `git status --short`.
-- [ ] Read `docs/video-player.md` and `docs/testing.md`.
-- [ ] Inspect current subtitle functions:
+- [x] Read `docs/video-player.md` and `docs/testing.md`.
+- [x] Inspect current subtitle functions:
       `subtitlesAreMounted`, `mountSubtitleTrackForItem`,
       `applySubtitlesForSeek`, `preloadSubtitleWindowForStream`,
       `preloadAllSubtitleVttsForItem`, and the `timeupdate` listener.
-- [ ] Run the current relevant baseline:
+- [x] Run the current relevant baseline:
       `node --test tests/js/video-subtitles-startup.test.js`.
-- [ ] Run the current relevant e2e baseline:
+- [x] Run the current relevant e2e baseline:
       `npx playwright test tests/e2e/video-subtitle-switch.integration.spec.js`.
-- [ ] Record any pre-existing failures in this plan before changing behavior.
+- [x] Record any pre-existing failures in this plan before changing behavior.
+      Current baseline on `subtitle-6-30-2026-bugfix`:
+      `tests/js/video-subtitles-startup.test.js` passed 18/18 and
+      `tests/e2e/video-subtitle-switch.integration.spec.js` passed 28/28 in one
+      full run. No failing test is presently blocking implementation.
+      One Python integration-server `ConnectionResetError [WinError 10054]`
+      appeared in server logs during the passing Playwright run, so E2E
+      hardening in Phase 6 remains justified even though the baseline passed.
 
 ## Phase 1 - Add Repro Coverage For Bug A
 
-- [ ] Add or modify an e2e test that fails without the Bug A behavior.
-- [ ] Use the generated video fixture and route interception to force
+- [x] Add or modify an e2e test that fails without the Bug A behavior.
+- [x] Use the generated video fixture and route interception to force
       `/video/endpoints/subtitles/all` and per-track full extraction to fail for
       `Videos/seek-window.mkv`, so only windowed subtitle extraction is active.
-- [ ] Mount an initial subtitle window that covers only the startup range.
-- [ ] Advance playback across the mounted-window boundary using the same helper
+- [x] Mount an initial subtitle window that covers only the startup range.
+- [x] Advance playback across the mounted-window boundary using the same helper
       style as existing subtitle e2e tests.
-- [ ] Assert that a `/video/endpoints/subtitles/window` request is made with
+- [x] Assert that a `/video/endpoints/subtitles/window` request is made with
       `window_status=seek` for the crossed boundary.
-- [ ] Assert that the subtitle debug/current cue switches to the later-window
+- [x] Assert that the subtitle debug/current cue switches to the later-window
       text.
-- [ ] Assert no `/video/endpoints/session` restart is made for the subtitle
+- [x] Assert no `/video/endpoints/session` restart is made for the subtitle
       window refresh.
-- [ ] Verify the new test fails on the pre-fix code path.
-- [ ] Implement the smallest Bug A fix if it is not already present:
+- [x] Verify the new test fails on the pre-fix code path.
+      Verified against a disposable snapshot exported from commit
+      `f562edcb05f74ab76b4b4acae54517db9b5cdbc8` using the in-project
+      `tests/e2e/fixtures/video_player_generated_fixture.py` generator and the
+      current Bug A test overlaid onto that snapshot. Failure was the expected
+      product behavior: after moving playback to `17s`, the debug subtitle text
+      stayed at `No active subtitle cue.` instead of reaching
+      `SEEK-WINDOW-ENG AGAIN`.
+- [x] Implement the smallest Bug A fix if it is not already present:
+      Already present on `subtitle-6-30-2026-bugfix` via
+      `syncSubtitlesForCurrentPlaybackTime(...)` plus the `timeupdate` hookup
+      that routes playback-boundary subtitle refresh through
+      `applySubtitlesForSeek(...)` without forcing a new HLS session.
       `timeupdate` or equivalent edge-triggered playback sync must call
       `applySubtitlesForSeek(...)` for the current global playback time when the
       mounted window does not cover it.
-- [ ] Run the new Bug A e2e test until it passes.
-- [ ] Run the full subtitle-switch e2e file:
+- [x] Run the new Bug A e2e test until it passes.
+- [x] Run the full subtitle-switch e2e file:
       `npx playwright test tests/e2e/video-subtitle-switch.integration.spec.js`.
 
 ## Phase 2 - Add Repro Coverage For Bug B
 
-- [ ] Add or modify an e2e test that fails without the Bug B behavior.
-- [ ] Start with a mounted windowed subtitle payload for `Videos/seek-window.mkv`.
-- [ ] Allow `/video/endpoints/subtitles/all` to populate the full subtitle cache
+- [x] Add or modify an e2e test that fails without the Bug B behavior.
+- [x] Start with a mounted windowed subtitle payload for `Videos/seek-window.mkv`.
+- [x] Allow `/video/endpoints/subtitles/all` to populate the full subtitle cache
       after startup.
-- [ ] Move playback beyond the originally mounted window.
-- [ ] Instrument subtitle `<track>` removal in the page.
-- [ ] Dispatch repeated `timeupdate` events after the full-cache cue is visible.
-- [ ] Assert no subtitle track teardown/remount events occur during those
+- [x] Move playback beyond the originally mounted window.
+- [x] Instrument subtitle `<track>` removal in the page.
+- [x] Dispatch repeated `timeupdate` events after the full-cache cue is visible.
+- [x] Assert no subtitle track teardown/remount events occur during those
       repeated steady-state `timeupdate` events.
-- [ ] Assert the debug panel does not regress to `Track: none`.
-- [ ] Add or extend a JS unit test proving full-cache mounts clear or supersede
+- [x] Assert the debug panel does not regress to `Track: none`.
+- [x] Add or extend a JS unit test proving full-cache mounts clear or supersede
       stale mounted-window metadata.
-- [ ] Verify the new Bug B e2e/unit tests fail on the pre-fix code path.
-- [ ] Implement the smallest Bug B fix if it is not already present:
+- [x] Assert no non-startup subtitle-window fetch is attempted after full-cache
+      takeover during repeated steady-state `timeupdate` events.
+- [x] Verify the new Bug B e2e/unit tests fail on the pre-fix code path.
+      Verified against a disposable snapshot at `f71f644` with the current Bug B
+      e2e and JS test files overlaid onto that snapshot and exercised through the
+      in-project `tests/e2e/fixtures/video_player_generated_fixture.py`
+      generator.
+      E2E failure matched the original bug: repeated steady-state `timeupdate`
+      events produced a recorded subtitle `<track>` teardown instead of zero
+      teardown events.
+      JS failure matched the stale-state diagnosis: the mounted window entry
+      remained `{ start_seconds: 0, end_seconds: 12 }` instead of becoming
+      `undefined` after mounting from full cache.
+- [x] Implement the smallest Bug B fix if it is not already present:
+      Already present on `subtitle-6-30-2026-bugfix`. The current code does not
+      proactively clear stale mounted-window state inside
+      `storeFullSubtitleVtt(...)`, but Bug B does not persist because:
+      `cachedSubtitleSourceForSeek(...)` prefers full cache, and the first
+      full-cache `mountSubtitleTrackForItem(...)` clears the stale mounted
+      window entry before subsequent steady-state `timeupdate` events can loop.
       full-cache storage and full-cache mounts must make stale mounted-window
       coverage irrelevant as early as possible.
-- [ ] Confirm storing full VTT for a path/stream proactively clears obsolete
-      mounted-window metadata for that path/stream when the active/mounted
-      source can no longer be window-bounded.
-- [ ] Run the new Bug B unit and e2e tests until they pass.
+- [x] Confirm whether storing full VTT for a path/stream proactively clears
+      obsolete mounted-window metadata for that path/stream when the
+      active/mounted source can no longer be window-bounded.
+      It does not today; current code still clears on full-cache mount, not on
+      cache store. Current regression coverage shows that mount-time clearing is
+      sufficient to prevent Bug B as currently observed, so no extra Bug B-only
+      fix is required before the later structural refactor phases.
+- [x] Run the new Bug B unit and e2e tests until they pass.
 - [ ] Run the full subtitle-switch e2e file:
       `npx playwright test tests/e2e/video-subtitle-switch.integration.spec.js`.
+      Current status: the strengthened Bug B test passes, the JS subtitle tests
+      pass, and the full file passes in some runs but still shows an unrelated
+      intermittent failure in `missing HLS segment recovery restarts session
+      instead of looping in-session seek`. Treat that as Phase 6 flake work, not
+      a blocker on Bug B diagnosis.
 
 ## Phase 3 - Introduce Explicit Subtitle Mount State
 
