@@ -80,6 +80,7 @@ function reportCompatibilitySeekTiming(milestone, fields) {
 
 function subtitleSyncContext(fields) {
   var active = ctx.activeQueueItem();
+  var mountState = ctx.state.subtitleMountState || {};
   return Object.assign({}, fields || {}, {
     playback_mode: ctx.state.playbackMode || '',
     path: active && active.path ? active.path : '',
@@ -88,7 +89,9 @@ function subtitleSyncContext(fields) {
     source_start_seconds: ctx.state.compatibilityStartSeconds || 0,
     subtitle_fetch_start_seconds: ctx.state.subtitleDebug.fetchStartSeconds || 0,
     subtitle_track_label: ctx.state.subtitleDebug.trackLabel || '',
-    subtitle_mounted_stream_index: ctx.state.subtitleMountedStreamIndex,
+    subtitle_mount_mode: mountState.mode || 'none',
+    subtitle_mounted_stream_index: mountState.streamIndex,
+    subtitle_mounted_seek_seconds: Number(mountState.seekSeconds) || 0,
     playback_sync_token: ctx.state.playbackSyncToken,
   });
 }

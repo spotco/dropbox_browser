@@ -24,6 +24,37 @@ function isClosedRouteError(error) {
   return message.includes("Target page, context or browser has been closed");
 }
 
+function isIgnorableRouteFetchError(error) {
+  const message = error && error.message ? String(error.message) : "";
+  return isClosedRouteError(error)
+    || message.includes("ECONNREFUSED")
+    || message.includes("socket hang up")
+    || message.includes("ERR_CONNECTION_REFUSED");
+}
+
+async function fetchJsonRoute(route, { ignoreErrors = false } = {}) {
+  let response;
+  try {
+    response = await route.fetch();
+  } catch (error) {
+    if (ignoreErrors && isIgnorableRouteFetchError(error)) return null;
+    throw error;
+  }
+  return {
+    response,
+    payload: await response.json(),
+  };
+}
+
+async function fulfillJsonRoute(route, response, payload) {
+  await route.fulfill({
+    status: response.status(),
+    headers: response.headers(),
+    contentType: "application/json",
+    body: JSON.stringify(payload),
+  });
+}
+
 test.describe.configure({ timeout: 90000 });
 
 async function installHlsStub(page, {
@@ -318,6 +349,20 @@ async function clearStoredTrackPreferences(page) {
     window.localStorage.removeItem("dropbox-browser-video-audio-track-preferences");
     window.localStorage.removeItem("dropbox-browser-video-subtitle-track-preferences");
   });
+}
+
+async function clearActiveVideoSessionAndCache(page) {
+  const statusResponse = await page.request.get("/video/endpoints/status");
+  expect(statusResponse.ok()).toBe(true);
+  const statusPayload = await statusResponse.json();
+  if (statusPayload && statusPayload.active_session && statusPayload.active_session.session_id) {
+    const stopResponse = await page.request.post("/video/endpoints/session/stop", {
+      data: { id: statusPayload.active_session.session_id },
+    });
+    expect(stopResponse.ok()).toBe(true);
+  }
+  const clearResponse = await page.request.post("/video/endpoints/cache/clear");
+  expect(clearResponse.ok()).toBe(true);
 }
 
 async function expectControlsOverlayVisible(page) {
@@ -1883,6 +1928,13 @@ test("seek-triggered subtitle extraction expands scrubber coverage without a ses
 test("windowed subtitles remount when playback crosses mounted coverage", async ({ page }) => {
   test.setTimeout(90000);
 
+  const sessionPosts = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/video/endpoints/session") && request.method() === "POST") {
+      sessionPosts.push(request.postData() || "");
+    }
+  });
+
   const subtitleWindowRequests = [];
   await page.route("**/video/endpoints/subtitles/all?path=Videos%2Fseek-window.mkv&source=remote", async (route) => {
     await route.fulfill({
@@ -1907,14 +1959,9 @@ test("windowed subtitles remount when playback crosses mounted coverage", async 
     const windowStatus = String(url.searchParams.get("window_status") || "requested");
     const requestStart = Number(url.searchParams.get("start") || "0");
     subtitleWindowRequests.push({ windowStatus, requestStart });
-    let response;
-    try {
-      response = await route.fetch();
-    } catch (error) {
-      if (isClosedRouteError(error)) return;
-      throw error;
-    }
-    const payload = await response.json();
+    const fetched = await fetchJsonRoute(route, { ignoreErrors: true });
+    if (!fetched) return;
+    const { response, payload } = fetched;
     if (windowStatus === "startup") {
       payload.window_start_seconds = 0;
       payload.window_end_seconds = 12;
@@ -1926,12 +1973,7 @@ test("windowed subtitles remount when playback crosses mounted coverage", async 
       payload.loaded_ranges = [{ start_seconds: 12, end_seconds: 24 }];
       payload.vtt = "WEBVTT\n\n00:00:16.000 --> 00:00:18.000\nSEEK-WINDOW-ENG AGAIN\n";
     }
-    await route.fulfill({
-      status: response.status(),
-      headers: response.headers(),
-      contentType: "application/json",
-      body: JSON.stringify(payload),
-    });
+    await fulfillJsonRoute(route, response, payload);
   });
 
   await installHlsStub(page, { fragmentCount: 4 });
@@ -1943,11 +1985,106 @@ test("windowed subtitles remount when playback crosses mounted coverage", async 
   await setPlaybackTimeForSubtitleChecks(page, 10.5);
   await waitForDisplayedSubtitleDebugText(page, "SEEK-WINDOW-ENG");
 
+  const postsBeforeBoundaryCross = sessionPosts.length;
   await setPlaybackTimeForSubtitleChecks(page, 17);
   await waitForDisplayedSubtitleDebugText(page, "SEEK-WINDOW-ENG AGAIN");
 
   expect(subtitleWindowRequests.some((request) => request.windowStatus === "startup")).toBe(true);
   expect(subtitleWindowRequests.some((request) => request.windowStatus === "seek")).toBe(true);
+  expect(sessionPosts.slice(postsBeforeBoundaryCross)).toEqual([]);
+});
+
+test("full cached subtitles stay mounted across timeupdate without remount flicker", async ({ page }) => {
+  test.setTimeout(90000);
+
+  const subtitleWindowRequests = [];
+  await page.route("**/video/endpoints/subtitles?path=Videos%2Fseek-window.mkv&source=remote&track=*", async (route) => {
+    await route.fulfill({
+      status: 500,
+      contentType: "text/plain",
+      body: "per-track subtitle preload disabled for full-cache remount test",
+    });
+  });
+  await page.route("**/video/endpoints/subtitles/window**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("path") !== "Videos/seek-window.mkv") {
+      await route.continue();
+      return;
+    }
+    const windowStatus = String(url.searchParams.get("window_status") || "requested");
+    subtitleWindowRequests.push({
+      windowStatus,
+      start: Number(url.searchParams.get("start") || "0"),
+      track: Number(url.searchParams.get("track") || "0"),
+    });
+    if (windowStatus !== "startup") {
+      await route.fulfill({
+        status: 502,
+        contentType: "text/plain",
+        body: "seek windows disabled after startup for full-cache remount test",
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        status: "ok",
+        track: Number(url.searchParams.get("track") || "3"),
+        window_start_seconds: 0,
+        window_end_seconds: 12,
+        coverage_complete: false,
+        loaded_ranges: [{ start_seconds: 0, end_seconds: 12 }],
+        gap_action: "pause-until-ready",
+        window_status: "ready",
+        vtt: "WEBVTT\n\n00:00:10.000 --> 00:00:12.000\nSEEK-WINDOW-ENG\n",
+      }),
+    });
+  });
+
+  await page.addInitScript(TRACK_REMOVAL_INSTRUMENTATION);
+  await installHlsStub(page, { fragmentCount: 4 });
+  await openVideoPane(page);
+  const fullPreloadResponse = page.waitForResponse(
+    (response) => (
+      response.url().includes("/video/endpoints/subtitles/all?path=Videos%2Fseek-window.mkv")
+      && response.ok()
+    ),
+    { timeout: 30000 },
+  );
+  await playLibraryFile(page, "seek-window.mkv");
+  await waitForScrubberReady(page);
+  await fullPreloadResponse;
+  await waitForMountedSubtitleTrackReady(page, 3);
+  await setPlaybackTimeForSubtitleChecks(page, 10.5);
+  await waitForDisplayedSubtitleDebugText(page, "SEEK-WINDOW-ENG");
+
+  await setPlaybackTimeForSubtitleChecks(page, 17);
+  await waitForDisplayedSubtitleDebugText(page, "SEEK-WINDOW-ENG AGAIN");
+  await page.evaluate(() => {
+    window.__subtitleTeardownEvents = [];
+  });
+  const windowRequestsBeforeTimeupdates = subtitleWindowRequests.length;
+
+  await page.evaluate(() => {
+    const video = document.getElementById("video-player-media");
+    if (!video) throw new Error("video element missing");
+    for (let index = 0; index < 40; index += 1) {
+      video.dispatchEvent(new Event("timeupdate"));
+    }
+  });
+
+  const teardownEvents = await page.evaluate(() => window.__subtitleTeardownEvents || []);
+  expect(teardownEvents).toEqual([]);
+  expect(subtitleWindowRequests).toEqual([
+    { windowStatus: "startup", start: 0, track: 3 },
+  ]);
+  expect(subtitleWindowRequests.slice(windowRequestsBeforeTimeupdates)).toEqual([]);
+
+  const debugState = await readDisplayedSubtitleDebugState(page);
+  expect(debugState.metaText).toContain("Track:");
+  expect(debugState.metaText).not.toMatch(/Track: none\b/);
+  expect(debugState.currentCueText).toContain("SEEK-WINDOW-ENG AGAIN");
 });
 
 test("seek subtitle extraction failure keeps playback running and shows subtitle refresh failure state", async ({ page }) => {
@@ -2076,14 +2213,9 @@ test("subtitle track switch and audio restart keep windowed subtitles correct at
       start: Number(url.searchParams.get("start") || "0"),
       windowStatus: String(url.searchParams.get("window_status") || ""),
     });
-    let response;
-    try {
-      response = await route.fetch();
-    } catch (error) {
-      if (isClosedRouteError(error)) return;
-      throw error;
-    }
-    const payload = await response.json();
+    const fetched = await fetchJsonRoute(route, { ignoreErrors: true });
+    if (!fetched) return;
+    const { response, payload } = fetched;
     if (url.searchParams.get("window_status") === "seek") {
       payload.loaded_ranges = [{ start_seconds: 0, end_seconds: 24 }];
       payload.window_end_seconds = 24;
@@ -2091,12 +2223,7 @@ test("subtitle track switch and audio restart keep windowed subtitles correct at
       payload.loaded_ranges = [{ start_seconds: 0, end_seconds: 12 }];
       payload.window_end_seconds = 12;
     }
-    await route.fulfill({
-      status: response.status(),
-      headers: response.headers(),
-      contentType: "application/json",
-      body: JSON.stringify(payload),
-    });
+    await fulfillJsonRoute(route, response, payload);
   });
 
   await installHlsStub(page, { fragmentCount: 4 });
@@ -2268,27 +2395,26 @@ test("missing HLS segment recovery restarts session instead of looping in-sessio
   const seekTargetSeconds = 18;
   const expectedRestartSeconds = 18;
 
+  await clearActiveVideoSessionAndCache(page);
+
   await page.route("**/video/endpoints/session", async (route) => {
     if (route.request().method() !== "POST") {
       await route.continue();
       return;
     }
-    const response = await route.fetch();
-    const payload = await response.json();
+    const fetched = await fetchJsonRoute(route, { ignoreErrors: true });
+    if (!fetched) return;
+    const { response, payload } = fetched;
     if ((route.request().postData() || "").includes("path=Videos%2Fseek-window.mkv")) {
       payload.encoded_media_end_seconds = encodedMediaEndSeconds;
     }
-    await route.fulfill({
-      status: response.status(),
-      headers: response.headers(),
-      contentType: "application/json",
-      body: JSON.stringify(payload),
-    });
+    await fulfillJsonRoute(route, response, payload);
   });
 
   await page.route("**/video/endpoints/status**", async (route) => {
-    const response = await route.fetch();
-    const payload = await response.json();
+    const fetched = await fetchJsonRoute(route, { ignoreErrors: true });
+    if (!fetched) return;
+    const { response, payload } = fetched;
     if (
       payload
       && payload.active_session
@@ -2296,12 +2422,7 @@ test("missing HLS segment recovery restarts session instead of looping in-sessio
     ) {
       payload.active_session.encoded_media_end_seconds = encodedMediaEndSeconds;
     }
-    await route.fulfill({
-      status: response.status(),
-      headers: response.headers(),
-      contentType: "application/json",
-      body: JSON.stringify(payload),
-    });
+    await fulfillJsonRoute(route, response, payload);
   });
 
   await installHlsStub(page, {
