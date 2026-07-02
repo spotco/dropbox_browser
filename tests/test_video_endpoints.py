@@ -2695,8 +2695,18 @@ class VideoEndpointTests(AppTestCase):
 
         self.assertFalse(first_payload["cache_hit"])
         self.assertTrue(second_payload["cache_hit"])
+        self.assertEqual(first_payload["status"], second_payload["status"])
+        self.assertEqual(first_payload["track"], second_payload["track"])
+        self.assertEqual(first_payload["window_status"], second_payload["window_status"])
+        self.assertEqual(first_payload["window_start_seconds"], second_payload["window_start_seconds"])
+        self.assertEqual(first_payload["window_end_seconds"], second_payload["window_end_seconds"])
+        self.assertEqual(first_payload["coverage_complete"], second_payload["coverage_complete"])
         self.assertEqual(first_payload["loaded_ranges"], [{"start_seconds": 4.0, "end_seconds": 8.0}])
         self.assertEqual(second_payload["loaded_ranges"], [{"start_seconds": 4.0, "end_seconds": 8.0}])
+        self.assertEqual(first_payload["gap_action"], second_payload["gap_action"])
+        self.assertEqual(first_payload["language"], second_payload["language"])
+        self.assertEqual(first_payload["path"], second_payload["path"])
+        self.assertEqual(first_payload["file_size"], second_payload["file_size"])
         self.assertEqual(run_mock.call_count, 3)
 
     def test_subtitle_window_extraction_keeps_startup_to_first_window_and_requests_later_window_independently(self) -> None:
@@ -2881,8 +2891,18 @@ class VideoEndpointTests(AppTestCase):
         self.assertFalse(results[0]["cache_hit"])
         self.assertTrue(results[1]["cache_hit"])
         self.assertEqual(results[0]["vtt"], results[1]["vtt"])
+        self.assertEqual(results[0]["status"], results[1]["status"])
+        self.assertEqual(results[0]["track"], results[1]["track"])
+        self.assertEqual(results[0]["window_status"], results[1]["window_status"])
+        self.assertEqual(results[0]["window_start_seconds"], results[1]["window_start_seconds"])
+        self.assertEqual(results[0]["window_end_seconds"], results[1]["window_end_seconds"])
+        self.assertEqual(results[0]["coverage_complete"], results[1]["coverage_complete"])
         self.assertEqual(results[0]["loaded_ranges"], [{"start_seconds": 4.0, "end_seconds": 8.0}])
         self.assertEqual(results[1]["loaded_ranges"], [{"start_seconds": 4.0, "end_seconds": 8.0}])
+        self.assertEqual(results[0]["gap_action"], results[1]["gap_action"])
+        self.assertEqual(results[0]["language"], results[1]["language"])
+        self.assertEqual(results[0]["path"], results[1]["path"])
+        self.assertEqual(results[0]["file_size"], results[1]["file_size"])
 
     def test_startup_subtitle_window_request_triggers_background_backfill_for_future_windows(self) -> None:
         rclone = self._remote_media_rclone()

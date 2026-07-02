@@ -548,8 +548,10 @@ class ThumbnailHttpTests(AppTestCase):
         self.assertEqual(status, HTTPStatus.OK)
         self.assertEqual(body, b"png-thumb")
         self.assertEqual(headers["Content-Type"], "image/png")
-        self.assertEqual(headers["Cache-Control"], "private, max-age=60")
-        self.assertTrue(headers["ETag"])
+        self.assertEqual(headers["Cache-Control"], "no-store, no-cache, must-revalidate")
+        self.assertEqual(headers["Pragma"], "no-cache")
+        self.assertEqual(headers["Expires"], "0")
+        self.assertNotIn("ETag", headers)
 
     def test_thumbnail_route_serves_generated_remote_png(self) -> None:
         remote_bytes = b"remote-image"
@@ -621,6 +623,9 @@ class ThumbnailHttpTests(AppTestCase):
         self.assertEqual(status, HTTPStatus.OK)
         self.assertEqual(body, b"")
         self.assertEqual(headers["content-type"], "image/png")
+        self.assertEqual(headers["cache-control"], "no-store, no-cache, must-revalidate")
+        self.assertEqual(headers["pragma"], "no-cache")
+        self.assertEqual(headers["expires"], "0")
         self.assertGreater(int(headers["content-length"]), 0)
 
     def test_thumbnail_route_rejects_unsupported_extension(self) -> None:
@@ -678,6 +683,9 @@ class ThumbnailHttpTests(AppTestCase):
 
         self.assertEqual(body, b"cached-thumb")
         self.assertEqual(headers["Content-Type"], "image/png")
+        self.assertEqual(headers["Cache-Control"], "no-store, no-cache, must-revalidate")
+        self.assertEqual(headers["Pragma"], "no-cache")
+        self.assertEqual(headers["Expires"], "0")
 
     def test_thumbnail_route_returns_not_found_when_generation_fails(self) -> None:
         local_root = self.create_local_root({"photos/cover.png": b"local-image"})

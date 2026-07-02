@@ -177,6 +177,7 @@ const MODULES = [
   ["dropbox_browser/assets/js/video/probe.js", "initProbe"],
   ["dropbox_browser/assets/js/video/tracks.js", "initTracks"],
   ["dropbox_browser/assets/js/video/compatibility.js", "initCompatibility"],
+  ["dropbox_browser/assets/js/video/subtitle-mount-core.js", null],
   ["dropbox_browser/assets/js/video/subtitles.js", "initSubtitles"],
   ["dropbox_browser/assets/js/video/controls.js", "initControls"],
   ["dropbox_browser/assets/js/video/playback.js", "initPlayback"],
