@@ -400,6 +400,13 @@ def subtitle_codec_supports_webvtt(codec_name: object) -> bool:
     return codec_name.casefold() not in _WEBVTT_INCOMPATIBLE_SUBTITLE_CODECS
 
 
+def _stream_index_value(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _subtitle_stream(stream_data: dict[str, object]) -> dict[str, object]:
     result = _base_stream(stream_data)
     result.update({
@@ -2643,7 +2650,10 @@ def extract_remote_subtitles_to_webvtt(
     subtitle_streams = probe_payload.get("subtitle_streams") if isinstance(probe_payload, dict) else None
     subtitle_rows = subtitle_streams if isinstance(subtitle_streams, list) else []
     track_info = next(
-        (row for row in subtitle_rows if isinstance(row, dict) and int(row.get("index") or -1) == subtitle_stream_index),
+        (
+            row for row in subtitle_rows
+            if isinstance(row, dict) and _stream_index_value(row.get("index")) == subtitle_stream_index
+        ),
         None,
     )
     if track_info is None:
@@ -2706,7 +2716,10 @@ def extract_remote_subtitle_window_to_webvtt(
     subtitle_streams = probe_payload.get("subtitle_streams") if isinstance(probe_payload, dict) else None
     subtitle_rows = subtitle_streams if isinstance(subtitle_streams, list) else []
     track_info = next(
-        (row for row in subtitle_rows if isinstance(row, dict) and int(row.get("index") or -1) == subtitle_stream_index),
+        (
+            row for row in subtitle_rows
+            if isinstance(row, dict) and _stream_index_value(row.get("index")) == subtitle_stream_index
+        ),
         None,
     )
     if track_info is None:
@@ -3268,7 +3281,9 @@ def _run_ffmpeg_batch_webvtt(
     copyable_rows: list[dict[str, object]] = []
     try:
         for row in missing_rows:
-            subtitle_stream_index = int(row.get("index") or -1)
+            subtitle_stream_index = _stream_index_value(row.get("index"))
+            if subtitle_stream_index is None:
+                return None
             suffix = subtitle_codec_copy_suffix(row.get("codec_name"))
             if suffix is None:
                 return None
@@ -3296,7 +3311,9 @@ def _run_ffmpeg_batch_webvtt(
             return None
         results: dict[int, bytes] = {}
         for row, temp_path in zip(copyable_rows, temp_paths):
-            subtitle_stream_index = int(row.get("index") or -1)
+            subtitle_stream_index = _stream_index_value(row.get("index"))
+            if subtitle_stream_index is None:
+                return None
             try:
                 body = _convert_subtitle_file_to_webvtt(ffmpeg_exe, temp_path)
             except (BrowserError, OSError):
@@ -3345,8 +3362,8 @@ def extract_all_remote_subtitles_to_webvtt(
 
     missing_rows: list[dict[str, object]] = []
     for row in compatible_rows:
-        subtitle_stream_index = int(row.get("index") or -1)
-        if subtitle_stream_index < 0:
+        subtitle_stream_index = _stream_index_value(row.get("index"))
+        if subtitle_stream_index is None or subtitle_stream_index < 0:
             continue
         cache_key = build_subtitle_cache_key(
             rel_path=rel_path,
@@ -3377,7 +3394,9 @@ def extract_all_remote_subtitles_to_webvtt(
                 track_count=len(missing_rows),
             )
             for row in missing_rows:
-                subtitle_stream_index = int(row.get("index") or -1)
+                subtitle_stream_index = _stream_index_value(row.get("index"))
+                if subtitle_stream_index is None:
+                    continue
                 body = _run_ffmpeg_single_webvtt(
                     ffmpeg_exe,
                     input_url,
@@ -3402,7 +3421,9 @@ def extract_all_remote_subtitles_to_webvtt(
                 )
         else:
             for row in missing_rows:
-                subtitle_stream_index = int(row.get("index") or -1)
+                subtitle_stream_index = _stream_index_value(row.get("index"))
+                if subtitle_stream_index is None:
+                    continue
                 body = batch_results.get(subtitle_stream_index)
                 if body is None:
                     continue

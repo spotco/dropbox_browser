@@ -426,6 +426,64 @@ make these rules explicit:
       `npm run test:js` passed `174/174`, and
       `tests/e2e/video-subtitle-switch.integration.spec.js` passed `28/28`.
 
+## Follow-Up Hardening Tasks
+
+- [x] Add a single subtitle stream-index parsing helper in `video.py`.
+      Replace repeated `int(row.get("index") or -1)` subtitle code paths with
+      one helper that returns `None` for missing/invalid values and preserves
+      valid stream index `0`. Cover single-track extraction, window extraction,
+      batch extraction, and `/subtitles/all` fallback paths. Add focused server
+      tests for a subtitle stream at index `0`, then run:
+      `python -m tests.run video -v`.
+      Follow-up result:
+      added `_stream_index_value(...)` in `video.py`, routed the repeated
+      subtitle extraction paths through it, and added focused index-`0`
+      regression coverage for single-track extraction, window extraction, batch
+      `/subtitles/all`, and fallback `/subtitles/all`.
+      Verification:
+      `python -m tests.run video -v` passed `110/110`,
+      `npm run test:js` passed `174/174`, and
+      `npx playwright test --grep video` passed `32/32`.
+- [ ] Extract pure subtitle mount-state and playback-refresh helpers from
+      `subtitles.js`.
+      Move the explicit mount-state transitions and coverage decisions into a
+      small pure module so behavior can be tested without DOM, HLS, or fetch
+      mocks. Keep DOM track lifecycle, overlay rendering, and network fetches in
+      `subtitles.js`. Add direct JS tests for window/full/none transitions,
+      generation changes, stale playback sync identity, and one-shot boundary
+      refresh decisions, then run:
+      `node --test tests/js/video-subtitles-startup.test.js` and
+      `npm run test:js`.
+- [ ] Make `subtitleMountedWindowByPath` derived compatibility state or rename
+      it to reflect its limited role.
+      The explicit `subtitleMountState` must remain the only authority for
+      mounted subtitle validity. If the mounted-window map remains, constrain
+      writes to a single derivation point used only by scrubber/debug/test
+      consumers, and update docs/tests so future code does not treat it as an
+      independent mount contract. Run:
+      `node --test tests/js/video-subtitles-startup.test.js` and the focused
+      subtitle-switch e2e coverage for Bug A and Bug B.
+- [ ] Evaluate and, if useful, implement proactive full-cache mount upgrades.
+      When `storeFullSubtitleVtt(...)` receives full VTT for the active
+      path/stream while a window mount is active, decide whether to silently
+      upgrade parsed/debug subtitle state or remount the full track before the
+      next boundary crossing. The implementation must not reintroduce DOM track
+      teardown storms, must stay stale-token safe, and must preserve window-only
+      boundary refresh behavior. Add JS and e2e coverage proving steady
+      full-cache playback does not remount repeatedly, then run:
+      `node --test tests/js/video-subtitles-startup.test.js` and
+      `npx playwright test tests/e2e/video-subtitle-switch.integration.spec.js`.
+- [ ] Deduplicate server subtitle-window response and diagnostic assembly.
+      The cached, inflight-waited, and freshly-extracted paths in
+      `extract_remote_subtitle_window_to_webvtt(...)` should share one helper
+      for building the JSON response and one helper or compact wrapper for
+      logging `subtitle_window_request`. Preserve `cache_hit`,
+      `inflight_waited`, `coverage_complete`, `loaded_ranges`, language,
+      canonical path, file size, and backfill fields exactly. Add or update
+      server tests for cache hit, inflight wait, and fresh extraction
+      equivalence, then run:
+      `python -m tests.run video -v`.
+
 ## Final Acceptance Checklist
 
 - [x] Bug A has an e2e test that fails before the fix and passes after it.

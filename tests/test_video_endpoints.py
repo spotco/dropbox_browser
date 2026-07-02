@@ -42,6 +42,8 @@ from dropbox_browser.video import (
     clamp_subtitle_window,
     expand_subtitle_window_for_extraction,
     extracted_webvtt_needs_absolute_offset,
+    extract_all_remote_subtitles_to_webvtt,
+    extract_remote_subtitles_to_webvtt,
     extract_remote_subtitle_window_to_webvtt,
     merge_subtitle_coverage_ranges,
     offset_webvtt_text,
@@ -2468,6 +2470,110 @@ class VideoEndpointTests(AppTestCase):
         self.assertIn("00:04.500 --> 00:06.000", payload["vtt"])
         self.assertIn("00:06.000 --> 00:07.000", payload["vtt"])
 
+    def test_extract_remote_subtitles_to_webvtt_accepts_subtitle_stream_index_zero(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        ffprobe_payload = {
+            "streams": [
+                {
+                    "index": 0,
+                    "codec_type": "subtitle",
+                    "codec_name": "ass",
+                    "tags": {"language": "eng", "title": "English"},
+                    "disposition": {"default": 1, "forced": 0},
+                },
+            ],
+            "format": {"duration": "15.0"},
+        }
+
+        def fake_subprocess(command, stdout=None, stderr=None, check=False, timeout=None):
+            if "ffprobe" in command[0]:
+                return CompletedProcess(command, 0, json.dumps(ffprobe_payload).encode("utf-8"), b"")
+            if "-c:s" in command and "copy" in command:
+                output_path = Path(command[-1])
+                output_path.write_text("WEBVTT\n\n00:00.000 --> 00:01.000\nTrack zero\n", encoding="utf-8")
+                return CompletedProcess(command, 0, b"", b"")
+            if command and command[-1] == "-":
+                input_path = Path(command[command.index("-i") + 1])
+                return CompletedProcess(command, 0, input_path.read_bytes(), b"")
+            return CompletedProcess(command, 0, b"", b"")
+
+        with patch("dropbox_browser.video.subprocess.run", side_effect=fake_subprocess):
+            body, language = extract_remote_subtitles_to_webvtt(
+                app,
+                rel_path="movie.mp4",
+                subtitle_stream_index=0,
+                base_url="http://127.0.0.1:8000",
+                file_size=10,
+            )
+
+        self.assertIn(b"WEBVTT", body)
+        self.assertIn(b"Track zero", body)
+        self.assertEqual(language, "eng")
+
+    def test_extract_remote_subtitle_window_to_webvtt_accepts_subtitle_stream_index_zero(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        ffprobe_payload = {
+            "streams": [
+                {
+                    "index": 0,
+                    "codec_type": "subtitle",
+                    "codec_name": "ass",
+                    "tags": {"language": "eng", "title": "English"},
+                    "disposition": {"default": 1, "forced": 0},
+                },
+            ],
+            "format": {"duration": "12.0"},
+        }
+
+        def fake_subprocess(command, stdout=None, stderr=None, check=False, timeout=None):
+            if "ffprobe" in command[0]:
+                return CompletedProcess(command, 0, json.dumps(ffprobe_payload).encode("utf-8"), b"")
+            if "-c:s" in command and "copy" in command:
+                output_path = Path(command[-1])
+                output_path.write_text(
+                    "WEBVTT\n\n"
+                    "00:00.500 --> 00:01.500\nZero overlap\n\n"
+                    "00:01.500 --> 00:03.000\nZero inside\n",
+                    encoding="utf-8",
+                )
+                return CompletedProcess(command, 0, b"", b"")
+            if command and command[-1] == "-":
+                input_path = Path(command[command.index("-i") + 1])
+                return CompletedProcess(command, 0, input_path.read_bytes(), b"")
+            return CompletedProcess(command, 0, b"", b"")
+
+        with patch("dropbox_browser.video.subprocess.run", side_effect=fake_subprocess):
+            payload = extract_remote_subtitle_window_to_webvtt(
+                app,
+                rel_path="movie.mp4",
+                subtitle_stream_index=0,
+                base_url="http://127.0.0.1:8000",
+                file_size=10,
+                window_start_seconds=1.0,
+                window_duration_seconds=4.0,
+            )
+
+        self.assertEqual(payload["track"], 0)
+        self.assertEqual(payload["language"], "eng")
+        self.assertIn("Zero overlap", payload["vtt"])
+        self.assertIn("Zero inside", payload["vtt"])
+
     def test_subtitles_window_endpoint_returns_clamped_json_window_payload(self) -> None:
         rclone = self._remote_media_rclone()
         app = self._build_app(
@@ -3335,6 +3441,116 @@ class VideoEndpointTests(AppTestCase):
         self.assertIn("copy", ffmpeg_calls[0])
         self.assertEqual(ffmpeg_calls[1][-3:], ["-f", "webvtt", "-"])
         self.assertEqual(ffmpeg_calls[2][-3:], ["-f", "webvtt", "-"])
+
+    def test_extract_all_remote_subtitles_to_webvtt_keeps_subtitle_stream_index_zero_in_batch_mode(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        ffprobe_payload = {
+            "streams": [
+                {
+                    "index": 0,
+                    "codec_type": "subtitle",
+                    "codec_name": "ass",
+                    "tags": {"language": "eng", "title": "English"},
+                    "disposition": {"default": 1, "forced": 0},
+                },
+            ],
+            "format": {"duration": "15.0"},
+        }
+
+        def fake_subprocess(command, stdout=None, stderr=None, check=False, timeout=None):
+            if "ffprobe" in command[0]:
+                return CompletedProcess(command, 0, json.dumps(ffprobe_payload).encode("utf-8"), b"")
+            if "-c:s" in command and "copy" in command:
+                for index, arg in enumerate(command):
+                    if arg == "copy" and index + 1 < len(command):
+                        Path(command[index + 1]).write_text(
+                            "WEBVTT\n\n00:00.000 --> 00:01.000\nTrack zero batch\n",
+                            encoding="utf-8",
+                        )
+                return CompletedProcess(command, 0, b"", b"")
+            if command and command[-1] == "-":
+                input_path = Path(command[command.index("-i") + 1])
+                return CompletedProcess(command, 0, input_path.read_bytes(), b"")
+            return CompletedProcess(command, 0, b"", b"")
+
+        with (
+            patch("dropbox_browser.video.subprocess.run", side_effect=fake_subprocess),
+            patch("dropbox_browser.video.SUBTITLE_CACHE_DIR", self.temp_dir / "subtitle_cache"),
+        ):
+            payload = extract_all_remote_subtitles_to_webvtt(
+                app,
+                rel_path="movie.mp4",
+                base_url="http://127.0.0.1:8000",
+                file_size=10,
+            )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["tracks"]["0"]["language"], "eng")
+        self.assertIn("Track zero batch", payload["tracks"]["0"]["vtt"])
+
+    def test_extract_all_remote_subtitles_to_webvtt_keeps_subtitle_stream_index_zero_in_fallback_mode(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        ffprobe_payload = {
+            "streams": [
+                {
+                    "index": 0,
+                    "codec_type": "subtitle",
+                    "codec_name": "ass",
+                    "tags": {"language": "eng", "title": "English"},
+                    "disposition": {"default": 1, "forced": 0},
+                },
+            ],
+            "format": {"duration": "15.0"},
+        }
+
+        def fake_subprocess(command, stdout=None, stderr=None, check=False, timeout=None):
+            if "ffprobe" in command[0]:
+                return CompletedProcess(command, 0, json.dumps(ffprobe_payload).encode("utf-8"), b"")
+            if "-c:s" in command and "copy" in command:
+                map_count = sum(1 for value in command if value == "-map")
+                if map_count > 1:
+                    return CompletedProcess(command, 1, b"", b"batch failed")
+                output_path = Path(command[-1])
+                output_path.write_text(
+                    "WEBVTT\n\n00:00.000 --> 00:01.000\nTrack zero fallback\n",
+                    encoding="utf-8",
+                )
+                return CompletedProcess(command, 0, b"", b"")
+            if command and command[-1] == "-":
+                input_path = Path(command[command.index("-i") + 1])
+                return CompletedProcess(command, 0, input_path.read_bytes(), b"")
+            return CompletedProcess(command, 0, b"", b"")
+
+        with (
+            patch("dropbox_browser.video.subprocess.run", side_effect=fake_subprocess),
+            patch("dropbox_browser.video.SUBTITLE_CACHE_DIR", self.temp_dir / "subtitle_cache"),
+        ):
+            payload = extract_all_remote_subtitles_to_webvtt(
+                app,
+                rel_path="movie.mp4",
+                base_url="http://127.0.0.1:8000",
+                file_size=10,
+            )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["tracks"]["0"]["language"], "eng")
+        self.assertIn("Track zero fallback", payload["tracks"]["0"]["vtt"])
 
     def test_subtitle_codec_supports_webvtt_rejects_bitmap_codecs(self) -> None:
         self.assertTrue(subtitle_codec_supports_webvtt("ass"))
