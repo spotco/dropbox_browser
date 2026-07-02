@@ -363,7 +363,9 @@ The important rules are:
   not independent authorities for deciding mounted coverage.
 
 The client still keeps `subtitleMountedWindowByPath` as derived compatibility
-state because other UI surfaces consume mounted coverage summaries:
+state because other UI surfaces consume mounted coverage summaries. It is
+recomputed from the explicit `subtitleMountState` window coverage and never
+written directly by subtitle window cache updates:
 
 - scrubber subtitle-ready coverage display
 - subtitle debug/range reporting

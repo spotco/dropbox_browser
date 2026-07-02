@@ -61,6 +61,11 @@ ASSET_ROUTE_PREFIX = "/assets/"
 class RequestHandler(BaseHTTPRequestHandler):
     server_version = "DropboxBrowser/0.1"
 
+    def _send_no_store_headers(self) -> None:
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+
     @property
     def app(self) -> DropboxBrowser:
         return self.server.app  # type: ignore[attr-defined]
@@ -305,12 +310,14 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_response(plan.status)
         for key, value in stream_headers(plan, content_type=content_type, disposition=disposition, filename=name):
             self.send_header(key, value)
+        self._send_no_store_headers()
         self.end_headers()
 
     def _send_unsatisfiable_range(self, file_size: int) -> None:
         self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
         for key, value in unsatisfiable_range_headers(file_size):
             self.send_header(key, value)
+        self._send_no_store_headers()
         self.end_headers()
 
     def serve_file(self, query: str, inline: bool, head_only: bool = False) -> None:
@@ -444,9 +451,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             body_size = result.path.stat().st_size
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "image/png")
-            self.send_header("Cache-Control", "private, max-age=60")
-            if result.descriptor is not None:
-                self.send_header("ETag", f'"{result.descriptor.cache_key}"')
+            self._send_no_store_headers()
             self.send_header("Content-Length", str(body_size))
             self.end_headers()
             if head_only:
@@ -466,6 +471,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         body = _json.dumps(logstore.entries_since(since, since_upd)).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json")
+        self._send_no_store_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -755,6 +761,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         body = _json.dumps(payload).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json")
+        self._send_no_store_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -861,6 +868,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         body = _json.dumps(payload).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json")
+        self._send_no_store_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -874,6 +882,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         body = _json.dumps(op).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json")
+        self._send_no_store_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -958,6 +967,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         body = _json.dumps({"results": results}).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json")
+        self._send_no_store_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -992,6 +1002,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         body = _json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        self._send_no_store_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1032,7 +1043,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             body = _json.dumps(payload).encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
+            self._send_no_store_headers()
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -1062,7 +1073,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             )
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/vtt; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
+            self._send_no_store_headers()
             if language:
                 self.send_header("Content-Language", language)
             self.send_header("Content-Length", str(len(body)))
@@ -1103,7 +1114,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             body = _json.dumps(payload).encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
+            self._send_no_store_headers()
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -1135,7 +1146,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                         body = body.replace(b"#EXTM3U" + newline, b"#EXTM3U" + newline + start_tag)
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type)
-            self.send_header("Cache-Control", "no-store")
+            self._send_no_store_headers()
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -1145,6 +1156,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         body = _json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        self._send_no_store_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1209,6 +1221,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         body = _json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        self._send_no_store_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1236,6 +1249,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         body = _json.dumps({"status": "ok", "logged": logged}).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json")
+        self._send_no_store_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1276,7 +1290,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         body = path.read_bytes()
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
-        self.send_header("Cache-Control", "public, max-age=86400")
+        self._send_no_store_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         if head_only:
@@ -1309,6 +1323,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         body = _json.dumps({"id": op_id}).encode("utf-8")
         self.send_response(HTTPStatus.ACCEPTED)
         self.send_header("Content-Type", "application/json")
+        self._send_no_store_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1337,6 +1352,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         body = _json.dumps({"id": op_id}).encode("utf-8")
         self.send_response(HTTPStatus.ACCEPTED)
         self.send_header("Content-Type", "application/json")
+        self._send_no_store_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1361,6 +1377,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         body = _json.dumps({"id": op_id, "total": plan["total"]}).encode("utf-8")
         self.send_response(HTTPStatus.ACCEPTED)
         self.send_header("Content-Type", "application/json")
+        self._send_no_store_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1380,6 +1397,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/x-msdos-program")
         self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header("X-Local-Only-File-Count", str(total))
+        self._send_no_store_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1414,6 +1432,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         }).encode("utf-8")
         self.send_response(HTTPStatus.ACCEPTED)
         self.send_header("Content-Type", "application/json")
+        self._send_no_store_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1422,6 +1441,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         encoded = body.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self._send_no_store_headers()
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
         if head_only:

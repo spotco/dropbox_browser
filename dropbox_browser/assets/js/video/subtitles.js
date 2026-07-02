@@ -1,9 +1,20 @@
 import {
   HLS_SEGMENT_DURATION_SECONDS,
+  createEmptySubtitleMountState as createEmptySubtitleMountStateCore,
+  createEmptySubtitlePlaybackSyncState as createEmptySubtitlePlaybackSyncStateCore,
+  ensureSubtitleMountState as ensureSubtitleMountStateCore,
+  ensureSubtitlePlaybackSyncState as ensureSubtitlePlaybackSyncStateCore,
   findActiveParsedCues,
+  mountedSubtitleSeekSeconds as mountedSubtitleSeekSecondsCore,
   parseWebVttCues,
+  recordFullSubtitleMount as recordFullSubtitleMountCore,
+  recordWindowSubtitleMount as recordWindowSubtitleMountCore,
   rebaseWebVttText,
+  resetSubtitleMountState as resetSubtitleMountStateCore,
+  resetSubtitlePlaybackSyncState as resetSubtitlePlaybackSyncStateCore,
+  shouldRefreshSubtitlesForPlaybackTime as shouldRefreshSubtitlesForPlaybackTimeCore,
   stripWebVttMarkup,
+  subtitleMountCoversTarget as subtitleMountCoversTargetCore,
   webvttCueTextToHtml,
 } from '../video-core.js';
 import {
@@ -146,6 +157,32 @@ function storeFullSubtitleVtt(path, subtitleStreamIndex, subtitleText) {
   if (!cache) return;
   cache[String(subtitleStreamIndex)] = String(subtitleText || '');
   recordFullSubtitleCached(path, subtitleStreamIndex);
+  maybeUpgradeMountedWindowToFullCache(path, subtitleStreamIndex);
+}
+
+function maybeUpgradeMountedWindowToFullCache(path, subtitleStreamIndex) {
+  var normalized = normalizeSubtitleStreamIndex(subtitleStreamIndex);
+  if (!path || normalized === null) return false;
+  var mountState = ensureSubtitleMountState();
+  if (mountState.mode !== 'window') return false;
+  if (String(mountState.path || '') !== String(path)) return false;
+  if (normalizeSubtitleStreamIndex(mountState.streamIndex) !== normalized) return false;
+  if (String(ctx.activeItemPath ? ctx.activeItemPath() : '') !== String(path)) return false;
+  var activeItem = typeof ctx.activeQueueItem === 'function' ? ctx.activeQueueItem() : null;
+  if (!activeItem || String(activeItem.path || '') !== String(path)) return false;
+  var probePayload = ctx.state.probeCache[path] || null;
+  if (!probePayload) return false;
+  if (selectedBurnedInSubtitleStreamIndex(activeItem, probePayload) !== null) return false;
+  if (normalizeSubtitleStreamIndex(resolvedSubtitleStreamIndex(activeItem, probePayload)) !== normalized) {
+    return false;
+  }
+  return mountSubtitleTrackForItem(activeItem, probePayload, normalized, mountedSubtitleSeekSeconds(), {
+    playbackSyncToken: ctx.state.playbackSyncToken,
+    silent: true,
+    coverageTargetSeconds: typeof ctx.currentGlobalPlaybackSeconds === 'function'
+      ? Math.max(0, Number(ctx.currentGlobalPlaybackSeconds()) || 0)
+      : mountedSubtitleSeekSeconds(),
+  });
 }
 
 function subtitleWindowCacheForPath(path) {
@@ -273,15 +310,6 @@ function storeSubtitleWindowPayload(path, subtitleStreamIndex, payload, options)
         backgroundCoverage[String(subtitleStreamIndex)],
         payload.loaded_ranges
       );
-    }
-  }
-  if (options && options.mounted) {
-    var mountedCoverage = subtitleMountedWindowForPath(path);
-    if (mountedCoverage) {
-      mountedCoverage[String(subtitleStreamIndex)] = {
-        start_seconds: Math.max(0, Number(payload.window_start_seconds) || 0),
-        end_seconds: Math.max(0, Number(payload.window_end_seconds) || 0),
-      };
     }
   }
   if (typeof ctx.syncPlaybackProgress === 'function') {
@@ -769,115 +797,76 @@ function normalizeSubtitleStreamIndex(value) {
 }
 
 function createEmptySubtitleMountState() {
-  return {
-    mode: 'none',
-    path: '',
-    streamIndex: null,
-    seekSeconds: 0,
-    coverageStartSeconds: null,
-    coverageEndSeconds: null,
-    playbackSyncToken: null,
-    generation: 0,
-  };
+  return createEmptySubtitleMountStateCore();
 }
 
 function createEmptySubtitlePlaybackSyncState() {
-  return {
-    path: '',
-    streamIndex: null,
-    mountedSeekSeconds: 0,
-    playbackSyncToken: null,
-    mountGeneration: 0,
-    outsideCoverageObserved: false,
-  };
+  return createEmptySubtitlePlaybackSyncStateCore();
 }
 
 function ensureSubtitleMountState() {
-  var current = ctx.state.subtitleMountState;
-  if (!current || typeof current !== 'object') {
-    ctx.state.subtitleMountState = createEmptySubtitleMountState();
-    return ctx.state.subtitleMountState;
-  }
-  if (typeof current.mode !== 'string') current.mode = 'none';
-  if (typeof current.path !== 'string') current.path = '';
-  if (current.streamIndex === undefined) current.streamIndex = null;
-  if (!Number.isFinite(Number(current.seekSeconds))) current.seekSeconds = 0;
-  if (current.coverageStartSeconds === undefined) current.coverageStartSeconds = null;
-  if (current.coverageEndSeconds === undefined) current.coverageEndSeconds = null;
-  if (current.playbackSyncToken === undefined) current.playbackSyncToken = null;
-  if (!Number.isFinite(Number(current.generation))) current.generation = 0;
-  return current;
+  ctx.state.subtitleMountState = ensureSubtitleMountStateCore(ctx.state.subtitleMountState);
+  return ctx.state.subtitleMountState;
 }
 
 function ensureSubtitlePlaybackSyncState() {
-  var current = ctx.state.subtitlePlaybackSyncState;
-  if (!current || typeof current !== 'object') {
-    ctx.state.subtitlePlaybackSyncState = createEmptySubtitlePlaybackSyncState();
-    return ctx.state.subtitlePlaybackSyncState;
-  }
-  if (typeof current.path !== 'string') current.path = '';
-  if (current.streamIndex === undefined) current.streamIndex = null;
-  if (!Number.isFinite(Number(current.mountedSeekSeconds))) current.mountedSeekSeconds = 0;
-  if (current.playbackSyncToken === undefined) current.playbackSyncToken = null;
-  if (!Number.isFinite(Number(current.mountGeneration))) current.mountGeneration = 0;
-  current.outsideCoverageObserved = Boolean(current.outsideCoverageObserved);
-  return current;
+  ctx.state.subtitlePlaybackSyncState = ensureSubtitlePlaybackSyncStateCore(ctx.state.subtitlePlaybackSyncState);
+  return ctx.state.subtitlePlaybackSyncState;
 }
 
 function resetSubtitlePlaybackSyncState() {
-  var syncState = ensureSubtitlePlaybackSyncState();
-  syncState.path = '';
-  syncState.streamIndex = null;
-  syncState.mountedSeekSeconds = 0;
-  syncState.playbackSyncToken = null;
-  syncState.mountGeneration = 0;
-  syncState.outsideCoverageObserved = false;
-  return syncState;
+  ctx.state.subtitlePlaybackSyncState = resetSubtitlePlaybackSyncStateCore(ctx.state.subtitlePlaybackSyncState);
+  return ctx.state.subtitlePlaybackSyncState;
 }
 
 function resetSubtitleMountState() {
   var mountState = ensureSubtitleMountState();
-  mountState.mode = 'none';
-  mountState.path = '';
-  mountState.streamIndex = null;
-  mountState.seekSeconds = 0;
-  mountState.coverageStartSeconds = null;
-  mountState.coverageEndSeconds = null;
-  mountState.playbackSyncToken = null;
-  mountState.generation = (Number(mountState.generation) || 0) + 1;
+  ctx.state.subtitleMountState = resetSubtitleMountStateCore(mountState);
   resetSubtitlePlaybackSyncState();
-  return mountState;
+  syncDerivedMountedWindowCompatibilityState();
+  return ctx.state.subtitleMountState;
 }
 
-function clearObsoleteMountedWindowState(path, subtitleStreamIndex) {
-  var mountedCoverage = subtitleMountedWindowForPath(path || '');
+function syncDerivedMountedWindowCompatibilityState() {
+  ctx.state.subtitleMountedWindowByPath = Object.create(null);
+  var mountState = ensureSubtitleMountState();
+  if (mountState.mode !== 'window') return;
+  var path = String(mountState.path || '');
+  var streamIndex = normalizeSubtitleStreamIndex(mountState.streamIndex);
+  if (!path || streamIndex === null) return;
+  if (getCachedFullSubtitleVtt(path, streamIndex)) return;
+  if (!Number.isFinite(Number(mountState.coverageStartSeconds)) || !Number.isFinite(Number(mountState.coverageEndSeconds))) {
+    return;
+  }
+  var mountedCoverage = subtitleMountedWindowForPath(path);
   if (!mountedCoverage) return;
-  delete mountedCoverage[String(subtitleStreamIndex)];
+  mountedCoverage[String(streamIndex)] = {
+    start_seconds: Math.max(0, Number(mountState.coverageStartSeconds) || 0),
+    end_seconds: Math.max(0, Number(mountState.coverageEndSeconds) || 0),
+  };
 }
 
 function recordWindowSubtitleMount(item, subtitleStreamIndex, seekSeconds, payload, options) {
   options = options || {};
-  var mountState = ensureSubtitleMountState();
   var normalized = normalizeSubtitleStreamIndex(subtitleStreamIndex);
-  mountState.mode = 'window';
-  mountState.path = item && item.path ? String(item.path) : '';
-  mountState.streamIndex = normalized;
-  mountState.seekSeconds = Math.max(0, Number(seekSeconds) || 0);
-  mountState.coverageStartSeconds = payload ? Math.max(0, Number(payload.window_start_seconds) || 0) : null;
-  mountState.coverageEndSeconds = payload ? Math.max(0, Number(payload.window_end_seconds) || 0) : null;
-  mountState.playbackSyncToken = options.playbackSyncToken === undefined ? null : options.playbackSyncToken;
-  mountState.generation = (Number(mountState.generation) || 0) + 1;
+  ctx.state.subtitleMountState = recordWindowSubtitleMountCore(ensureSubtitleMountState(), {
+    path: item && item.path ? String(item.path) : '',
+    streamIndex: normalized,
+    seekSeconds: seekSeconds,
+    coverageStartSeconds: payload ? payload.window_start_seconds : null,
+    coverageEndSeconds: payload ? payload.window_end_seconds : null,
+    playbackSyncToken: options.playbackSyncToken === undefined ? null : options.playbackSyncToken,
+  });
   if (payload) {
-    storeSubtitleWindowPayload(mountState.path, normalized, payload, {
-      mounted: true,
-    });
+    storeSubtitleWindowPayload(ctx.state.subtitleMountState.path, normalized, payload);
   }
-  return mountState;
+  syncDerivedMountedWindowCompatibilityState();
+  return ctx.state.subtitleMountState;
 }
 
 function recordFullSubtitleCached(path, subtitleStreamIndex) {
   var mountState = ensureSubtitleMountState();
-  clearObsoleteMountedWindowState(path || '', subtitleStreamIndex);
+  syncDerivedMountedWindowCompatibilityState();
   if ((path || '') !== mountState.path) return mountState;
   if (normalizeSubtitleStreamIndex(subtitleStreamIndex) !== normalizeSubtitleStreamIndex(mountState.streamIndex)) {
     return mountState;
@@ -887,83 +876,49 @@ function recordFullSubtitleCached(path, subtitleStreamIndex) {
 
 function recordFullSubtitleMount(item, subtitleStreamIndex, seekSeconds, options) {
   options = options || {};
-  var mountState = ensureSubtitleMountState();
   var normalized = normalizeSubtitleStreamIndex(subtitleStreamIndex);
   var path = item && item.path ? String(item.path) : '';
-  clearObsoleteMountedWindowState(path, normalized);
-  mountState.mode = 'full';
-  mountState.path = path;
-  mountState.streamIndex = normalized;
-  mountState.seekSeconds = Math.max(0, Number(seekSeconds) || 0);
-  mountState.coverageStartSeconds = null;
-  mountState.coverageEndSeconds = null;
-  mountState.playbackSyncToken = options.playbackSyncToken === undefined ? null : options.playbackSyncToken;
-  mountState.generation = (Number(mountState.generation) || 0) + 1;
-  return mountState;
+  ctx.state.subtitleMountState = recordFullSubtitleMountCore(ensureSubtitleMountState(), {
+    path: path,
+    streamIndex: normalized,
+    seekSeconds: seekSeconds,
+    playbackSyncToken: options.playbackSyncToken === undefined ? null : options.playbackSyncToken,
+  });
+  syncDerivedMountedWindowCompatibilityState();
+  return ctx.state.subtitleMountState;
 }
 
 function subtitleMountCoversTarget(item, subtitleStreamIndex, seekSeconds, coverageTargetSeconds) {
   if (!item || (item.path || '') !== ctx.activeItemPath()) return false;
-  var mountState = ensureSubtitleMountState();
-  if (mountState.mode === 'none') return false;
-  if ((item.path || '') !== mountState.path) return false;
   var normalized = normalizeSubtitleStreamIndex(subtitleStreamIndex);
-  var mounted = normalizeSubtitleStreamIndex(mountState.streamIndex);
-  if (normalized === null || mounted === null || normalized !== mounted) return false;
-  var mountedSeek = Math.max(0, Number(mountState.seekSeconds) || 0);
-  var requestedSeek = Math.max(0, Number(seekSeconds) || 0);
-  if (Math.abs(mountedSeek - requestedSeek) > 0.05) return false;
-  if (mountState.mode === 'full') return true;
-  if (mountState.mode !== 'window') return false;
-  if (!Number.isFinite(Number(mountState.coverageStartSeconds)) || !Number.isFinite(Number(mountState.coverageEndSeconds))) {
-    return false;
-  }
-  var requestedCoverageTarget = Math.max(0, Number(
-    coverageTargetSeconds === undefined ? seekSeconds : coverageTargetSeconds
-  ) || 0);
-  return subtitleRangesCoverWindow([{
-    start_seconds: Number(mountState.coverageStartSeconds) || 0,
-    end_seconds: Number(mountState.coverageEndSeconds) || 0,
-  }], requestedCoverageTarget, requestedCoverageTarget);
+  return subtitleMountCoversTargetCore(ensureSubtitleMountState(), {
+    path: item.path || '',
+    streamIndex: normalized,
+    seekSeconds: seekSeconds,
+    coverageTargetSeconds: coverageTargetSeconds,
+    overlapSeconds: SUBTITLE_WINDOW_OVERLAP_SECONDS,
+  });
 }
 
 function mountedSubtitleSeekSeconds() {
-  var mountState = ensureSubtitleMountState();
-  return Math.max(0, Number(mountState.seekSeconds) || 0);
+  return mountedSubtitleSeekSecondsCore(ensureSubtitleMountState());
 }
 
 function shouldRefreshSubtitlesForPlaybackTime(item, streamIndex, targetSeconds) {
   if (!item || (item.path || '') !== ctx.activeItemPath()) return false;
-  var mountState = ensureSubtitleMountState();
-  if (mountState.mode === 'none') return false;
   var normalized = normalizeSubtitleStreamIndex(streamIndex);
   if (normalized === null) return false;
-  var mountedSeekSeconds = mountedSubtitleSeekSeconds();
-  var coverageTargetSeconds = Math.max(0, Number(targetSeconds) || 0);
-  var covered = subtitleMountCoversTarget(item, normalized, mountedSeekSeconds, coverageTargetSeconds);
-  var syncState = ensureSubtitlePlaybackSyncState();
-  var mountGeneration = Number(mountState.generation) || 0;
-  var playbackSyncToken = ctx.state.playbackSyncToken;
-  var sameMountIdentity = syncState.path === String(item.path || '')
-    && normalizeSubtitleStreamIndex(syncState.streamIndex) === normalized
-    && Math.abs((Number(syncState.mountedSeekSeconds) || 0) - mountedSeekSeconds) <= 0.05
-    && syncState.playbackSyncToken === playbackSyncToken
-    && (Number(syncState.mountGeneration) || 0) === mountGeneration;
-  if (!sameMountIdentity) {
-    syncState.path = String(item.path || '');
-    syncState.streamIndex = normalized;
-    syncState.mountedSeekSeconds = mountedSeekSeconds;
-    syncState.playbackSyncToken = playbackSyncToken;
-    syncState.mountGeneration = mountGeneration;
-    syncState.outsideCoverageObserved = false;
-  }
-  if (covered) {
-    syncState.outsideCoverageObserved = false;
-    return false;
-  }
-  if (syncState.outsideCoverageObserved) return false;
-  syncState.outsideCoverageObserved = true;
-  return true;
+  return shouldRefreshSubtitlesForPlaybackTimeCore(
+    ensureSubtitleMountState(),
+    ensureSubtitlePlaybackSyncState(),
+    {
+      path: item.path || '',
+      streamIndex: normalized,
+      targetSeconds: targetSeconds,
+      playbackSyncToken: ctx.state.playbackSyncToken,
+      overlapSeconds: SUBTITLE_WINDOW_OVERLAP_SECONDS,
+    }
+  );
 }
 
 function revokeSubtitleObjectUrls() {
@@ -1712,7 +1667,7 @@ async function applySubtitlesForSeek(item, probePayload, seekSeconds, options) {
   ctx.resetSubtitleMountState = resetSubtitleMountState;
   ctx.ensureSubtitlePlaybackSyncState = ensureSubtitlePlaybackSyncState;
   ctx.resetSubtitlePlaybackSyncState = resetSubtitlePlaybackSyncState;
-  ctx.clearObsoleteMountedWindowState = clearObsoleteMountedWindowState;
+  ctx.syncDerivedMountedWindowCompatibilityState = syncDerivedMountedWindowCompatibilityState;
   ctx.recordWindowSubtitleMount = recordWindowSubtitleMount;
   ctx.recordFullSubtitleCached = recordFullSubtitleCached;
   ctx.recordFullSubtitleMount = recordFullSubtitleMount;

@@ -444,7 +444,7 @@ make these rules explicit:
       `python -m tests.run video -v` passed `110/110`,
       `npm run test:js` passed `174/174`, and
       `npx playwright test --grep video` passed `32/32`.
-- [ ] Extract pure subtitle mount-state and playback-refresh helpers from
+- [x] Extract pure subtitle mount-state and playback-refresh helpers from
       `subtitles.js`.
       Move the explicit mount-state transitions and coverage decisions into a
       small pure module so behavior can be tested without DOM, HLS, or fetch
@@ -454,7 +454,20 @@ make these rules explicit:
       refresh decisions, then run:
       `node --test tests/js/video-subtitles-startup.test.js` and
       `npm run test:js`.
-- [ ] Make `subtitleMountedWindowByPath` derived compatibility state or rename
+      Follow-up result:
+      moved the explicit mount-state and playback-refresh decision logic into
+      `dropbox_browser/assets/js/video/subtitle-mount-core.js`, re-exported it
+      through `video-core.js`, and kept `subtitles.js` as the `ctx`/DOM/fetch
+      integration layer with thin state wrappers.
+      Added direct JS coverage for window/full/none transitions, generation
+      increments, stale playback-sync identity resets, and one-shot boundary
+      refresh decisions.
+      Verification:
+      `node --test tests/js/video-subtitle-mount-core.test.js` passed `7/7`,
+      `npm run test:js` passed `182/182`,
+      `python -m tests.run video -v` passed `110/110`, and
+      `npx playwright test --grep video` passed `32/32`.
+- [x] Make `subtitleMountedWindowByPath` derived compatibility state or rename
       it to reflect its limited role.
       The explicit `subtitleMountState` must remain the only authority for
       mounted subtitle validity. If the mounted-window map remains, constrain
@@ -463,7 +476,22 @@ make these rules explicit:
       independent mount contract. Run:
       `node --test tests/js/video-subtitles-startup.test.js` and the focused
       subtitle-switch e2e coverage for Bug A and Bug B.
-- [ ] Evaluate and, if useful, implement proactive full-cache mount upgrades.
+      Follow-up result:
+      `subtitleMountedWindowByPath` now stays derived-only compatibility state
+      inside `subtitles.js`, recomputed from explicit `subtitleMountState`
+      window coverage instead of being written by subtitle window cache stores.
+      Full-cache promotion now clears the derived compatibility bucket by
+      recomputation, and the startup subtitle JS coverage was updated so
+      explicit mount helpers, not cache writes, define mounted coverage.
+      Documentation now states that cache updates do not directly mutate the
+      compatibility map.
+      Verification:
+      `node --test tests/js/video-subtitles-startup.test.js` passed `26/26`,
+      focused Playwright Bug A/B coverage passed `2/2`,
+      `npm run test:js` passed `183/183`,
+      `python -m tests.run video -v` passed `110/110`, and
+      `npx playwright test --grep video` passed `32/32`.
+- [x] Evaluate and, if useful, implement proactive full-cache mount upgrades.
       When `storeFullSubtitleVtt(...)` receives full VTT for the active
       path/stream while a window mount is active, decide whether to silently
       upgrade parsed/debug subtitle state or remount the full track before the
@@ -473,7 +501,22 @@ make these rules explicit:
       full-cache playback does not remount repeatedly, then run:
       `node --test tests/js/video-subtitles-startup.test.js` and
       `npx playwright test tests/e2e/video-subtitle-switch.integration.spec.js`.
-- [ ] Deduplicate server subtitle-window response and diagnostic assembly.
+      Follow-up result:
+      `storeFullSubtitleVtt(...)` now performs one silent proactive upgrade when
+      full VTT arrives for the currently active matching window mount. The
+      upgrade is constrained to the active item/path/stream, preserves the
+      current mounted seek/session context, and no-ops if selection or active
+      playback has moved on. Added JS coverage proving full-cache arrival flips
+      the active mount from `window` to `full` immediately, and tightened the
+      subtitle startup test harness so repeated `<track>` remounts remove stale
+      mock tracks like the browser does.
+      Verification:
+      `node --test tests/js/video-subtitles-startup.test.js` passed `27/27`,
+      `tests/e2e/video-subtitle-switch.integration.spec.js` passed `28/28`,
+      `npm run test:js` passed `184/184`,
+      `python -m tests.run video -v` passed `110/110`, and
+      `npx playwright test --grep video` passed `32/32`.
+- [x] Deduplicate server subtitle-window response and diagnostic assembly.
       The cached, inflight-waited, and freshly-extracted paths in
       `extract_remote_subtitle_window_to_webvtt(...)` should share one helper
       for building the JSON response and one helper or compact wrapper for
@@ -483,6 +526,19 @@ make these rules explicit:
       server tests for cache hit, inflight wait, and fresh extraction
       equivalence, then run:
       `python -m tests.run video -v`.
+      Follow-up result:
+      extracted shared server helpers in `video.py` for subtitle-window payload
+      assembly and `subtitle_window_request` diagnostic logging, then routed the
+      cached-hit, inflight-waited, and fresh-extraction branches through those
+      helpers without changing the wire-format fields. Strengthened the server
+      subtitle-window cache-hit and inflight dedupe tests so they now assert
+      parity for the shared response fields instead of only comparing `vtt` and
+      `loaded_ranges`.
+      Verification:
+      focused server subtitle-window tests passed,
+      `python -m tests.run video -v` passed `110/110`,
+      `npm run test:js` passed `184/184`, and
+      `npx playwright test --grep video` passed `32/32`.
 
 ## Final Acceptance Checklist
 
