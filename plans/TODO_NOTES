@@ -1,7 +1,4 @@
-- bad subtitle, not present in VLC (investigate)
-s2e10 1:34
-s2e10 23:47
-s2e4 0:49
+- plans\IMPLEMENT_ASS_TO_WEBVTT_SUBTITLE_CONVERSION.md
 
 - mp4 compat http://localhost:8000/?path=spotco_game_archive%2FSwitchScreenshots
 
@@ -9,15 +6,10 @@ s2e4 0:49
 
 - fast forward/backwards 10 sec (button or arrow key)
 - next video/prev video (button)
-- video player queue force as unique
 
-- video player plane: resizeable panes, use resizer style from music player
-- video player scrollbars: use scrollbar styles from music player
-
-- current folder videos panel improvements
-	- make text not selectable
-	- remove extra text on right side
-- queue panel improvements
+- current folder/ queue panel
+	make it shared with music player functionality, all the same functionality
+	more e2e's for music player
 
 ---
 
