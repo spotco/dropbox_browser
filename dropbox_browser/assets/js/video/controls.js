@@ -323,8 +323,8 @@ function videoKeyboardShortcutAllowed(event) {
   if (!event) return false;
   var fullscreenHost = ctx.fullscreenHostElement();
   var stageFullscreen = fullscreenHost && document.fullscreenElement === fullscreenHost;
-  if (!stageFullscreen && !ctx.state.paneActive) return;
-  if (!stageFullscreen && eventTargetIsTextEntry(event.target)) return;
+  if (!stageFullscreen && !ctx.state.paneActive) return false;
+  if (eventTargetIsTextEntry(event.target)) return false;
   return true;
 }
 

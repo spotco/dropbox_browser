@@ -1500,6 +1500,52 @@ test("video keyboard shortcuts seek backward and forward by 15 seconds with arro
   await expectControlsOverlayVisible(page);
 });
 
+test("video Space shortcut toggles playback in embedded and fullscreen modes without hijacking text inputs", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await installHlsStub(page, { fragmentCount: 4, playlistFragmentCount: 5 });
+  await openVideoPane(page);
+
+  const alphaSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
+  await playLibraryFile(page, "alpha.mkv");
+  await alphaSession;
+  await waitForScrubberReady(page);
+
+  await expectPlayToggleState(page, "Pause");
+  await page.keyboard.press("Space");
+  await expectPlayToggleState(page, "Play");
+  await page.keyboard.press("Space");
+  await expectPlayToggleState(page, "Pause");
+
+  await ensureTrackPanelOpen(page);
+  await page.locator("#video-subtitle-font-size").focus();
+  await page.keyboard.press("Space");
+  await expectPlayToggleState(page, "Pause");
+
+  const surface = page.locator("#video-playback-surface");
+  await surface.hover({ position: { x: 40, y: 40 } });
+  await expectControlsOverlayVisible(page);
+  await surface.dblclick({ position: { x: 48, y: 48 } });
+
+  await expect
+    .poll(async () => readFullscreenPlaybackState(page), { timeout: 10000 })
+    .toMatchObject({
+      fullscreenElementId: "video-playback-stage",
+      fullscreenLabel: "Exit fullscreen",
+    });
+
+  await page.keyboard.press("Space");
+  await expectPlayToggleState(page, "Play");
+  await page.keyboard.press("Space");
+  await expectPlayToggleState(page, "Pause");
+
+  await page.evaluate(async () => {
+    if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
+      await document.exitFullscreen();
+    }
+  });
+});
+
 test("video controls stay visible and usable in fullscreen", async ({ page }) => {
   test.setTimeout(90000);
 

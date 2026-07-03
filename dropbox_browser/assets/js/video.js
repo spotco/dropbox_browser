@@ -274,6 +274,7 @@ import {initPane} from './video/pane.js';
   });
 
   pane.addEventListener('video-playback-ended', function () {
+    if (ctx.state.activeQueueIndex < 0) return;
     ctx.state.activeQueueIndex = advanceQueueAfterPlaybackEnd(
       ctx.state.queue.length,
       ctx.state.activeQueueIndex,
