@@ -1,11 +1,9 @@
+
+- plans/VIDEO_PLAYER_SMALL_LAYOUT_TRACK_PANEL.md
+- plans/video_player_additional_controls.md
 - plans\IMPLEMENT_ASS_TO_WEBVTT_SUBTITLE_CONVERSION.md
 
-- mp4 compat http://localhost:8000/?path=spotco_game_archive%2FSwitchScreenshots
-
 --- video player features
-
-- fast forward/backwards 10 sec (button or arrow key)
-- next video/prev video (button)
 
 - current folder/ queue panel
 	make it shared with music player functionality, all the same functionality

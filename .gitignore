@@ -16,3 +16,4 @@ agent-tools/
 mcps/
 misc/*.json
 terminals/
+debug.log
