@@ -319,16 +319,36 @@ function eventTargetIsTextEntry(target) {
   return Boolean(target.isContentEditable);
 }
 
-function handleVideoSpaceKey(event) {
-  if (!event || event.key !== ' ') return;
+function videoKeyboardShortcutAllowed(event) {
+  if (!event) return false;
   var fullscreenHost = ctx.fullscreenHostElement();
   var stageFullscreen = fullscreenHost && document.fullscreenElement === fullscreenHost;
   if (!stageFullscreen && !ctx.state.paneActive) return;
   if (!stageFullscreen && eventTargetIsTextEntry(event.target)) return;
-  if (!videoControlsAvailable()) return;
-  event.preventDefault();
-  toggleVideoPlayPause();
-  revealControlsOverlay();
+  return true;
+}
+
+function handleVideoKeyboardShortcut(event) {
+  if (!event || !videoKeyboardShortcutAllowed(event)) return;
+  if (event.key === ' ') {
+    if (!videoControlsAvailable()) return;
+    event.preventDefault();
+    toggleVideoPlayPause();
+    revealControlsOverlay();
+    return;
+  }
+  if (event.key === 'ArrowLeft') {
+    if (!videoControlsAvailable()) return;
+    event.preventDefault();
+    seekBySeconds(-15);
+    return;
+  }
+  if (event.key === 'ArrowRight') {
+    if (!videoControlsAvailable()) return;
+    event.preventDefault();
+    seekBySeconds(15);
+    return;
+  }
 }
 
 function syncPlaybackProgress() {
@@ -661,7 +681,7 @@ async function togglePictureInPicture() {
     ctx.els.videoEl.addEventListener('volumechange', syncTransportControls);
     if (typeof document !== 'undefined') {
       document.addEventListener('fullscreenchange', syncTransportControls);
-      document.addEventListener('keydown', handleVideoSpaceKey);
+      document.addEventListener('keydown', handleVideoKeyboardShortcut);
     }
     ctx.els.videoEl.addEventListener('enterpictureinpicture', syncTransportControls);
     ctx.els.videoEl.addEventListener('leavepictureinpicture', syncTransportControls);

@@ -308,13 +308,13 @@ test("playback pane keeps a usable embedded stage and scrolls vertically at smal
     const barRect = bar.getBoundingClientRect();
     const controlOrder = [
       "video-play-toggle",
+      "video-back-15",
+      "video-forward-15",
       "video-mute-toggle",
-      "video-pip-toggle",
       "video-loop-toggle",
       "video-previous",
       "video-next",
-      "video-back-15",
-      "video-forward-15",
+      "video-pip-toggle",
       "video-fullscreen-toggle",
     ];
     const rects = Object.fromEntries(controlOrder.map((id) => [id, rectFor(id)]));
@@ -341,18 +341,22 @@ test("playback pane keeps a usable embedded stage and scrolls vertically at smal
         barRect.left >= overlayRect.left
         && barRect.right <= overlayRect.right + 1
         && barRect.bottom <= overlayRect.bottom + 1,
-      pipBeforeLoop: rects["video-pip-toggle"].right <= rects["video-loop-toggle"].left + 1
-        || rects["video-pip-toggle"].bottom <= rects["video-loop-toggle"].top + 1,
+      playBeforeBack15: rects["video-play-toggle"].right <= rects["video-back-15"].left + 1
+        || rects["video-play-toggle"].bottom <= rects["video-back-15"].top + 1,
       loopBeforePrevious: rects["video-loop-toggle"].right <= rects["video-previous"].left + 1
         || rects["video-loop-toggle"].bottom <= rects["video-previous"].top + 1,
       previousBeforeNext: rects["video-previous"].right <= rects["video-next"].left + 1
         || rects["video-previous"].bottom <= rects["video-next"].top + 1,
-      nextBeforeBack15: rects["video-next"].right <= rects["video-back-15"].left + 1
-        || rects["video-next"].bottom <= rects["video-back-15"].top + 1,
       back15BeforeForward15: rects["video-back-15"].right <= rects["video-forward-15"].left + 1
         || rects["video-back-15"].bottom <= rects["video-forward-15"].top + 1,
-      forward15BeforeFullscreen: rects["video-forward-15"].right <= rects["video-fullscreen-toggle"].left + 1
-        || rects["video-forward-15"].bottom <= rects["video-fullscreen-toggle"].top + 1,
+      forward15BeforeMute: rects["video-forward-15"].right <= rects["video-mute-toggle"].left + 1
+        || rects["video-forward-15"].bottom <= rects["video-mute-toggle"].top + 1,
+      nextBeforePip: rects["video-next"].right <= rects["video-pip-toggle"].left + 1
+        || rects["video-next"].bottom <= rects["video-pip-toggle"].top + 1,
+      forward15BeforePip: rects["video-forward-15"].right <= rects["video-pip-toggle"].left + 1
+        || rects["video-forward-15"].bottom <= rects["video-pip-toggle"].top + 1,
+      pipBeforeFullscreen: rects["video-pip-toggle"].right <= rects["video-fullscreen-toggle"].left + 1
+        || rects["video-pip-toggle"].bottom <= rects["video-fullscreen-toggle"].top + 1,
     };
   });
 
@@ -360,12 +364,14 @@ test("playback pane keeps a usable embedded stage and scrolls vertically at smal
   expect(controlsMetrics.overlayHorizontallyInsidePane).toBe(true);
   expect(controlsMetrics.barInsideOverlay).toBe(true);
   expect(controlsMetrics.overlappingPairs).toEqual([]);
-  expect(controlsMetrics.pipBeforeLoop).toBe(true);
+  expect(controlsMetrics.playBeforeBack15).toBe(true);
   expect(controlsMetrics.loopBeforePrevious).toBe(true);
   expect(controlsMetrics.previousBeforeNext).toBe(true);
-  expect(controlsMetrics.nextBeforeBack15).toBe(true);
   expect(controlsMetrics.back15BeforeForward15).toBe(true);
-  expect(controlsMetrics.forward15BeforeFullscreen).toBe(true);
+  expect(controlsMetrics.forward15BeforeMute).toBe(true);
+  expect(controlsMetrics.nextBeforePip).toBe(true);
+  expect(controlsMetrics.forward15BeforePip).toBe(true);
+  expect(controlsMetrics.pipBeforeFullscreen).toBe(true);
   for (const id of controlsMetrics.controlOrder) {
     expect(controlsMetrics.rects[id].width).toBeGreaterThan(0);
     expect(controlsMetrics.rects[id].height).toBeGreaterThan(0);
