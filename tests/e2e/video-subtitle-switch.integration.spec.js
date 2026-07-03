@@ -343,13 +343,13 @@ async function readFullscreenPlaybackState(page) {
     const elapsed = document.getElementById("video-elapsed-time");
     const controlOrder = [
       "video-play-toggle",
+      "video-back-15",
+      "video-forward-15",
       "video-mute-toggle",
-      "video-pip-toggle",
       "video-loop-toggle",
       "video-previous",
       "video-next",
-      "video-back-15",
-      "video-forward-15",
+      "video-pip-toggle",
       "video-fullscreen-toggle",
     ];
     const controlRects = Object.fromEntries(controlOrder.map((id) => [id, rectFor(id)]));
@@ -377,18 +377,22 @@ async function readFullscreenPlaybackState(page) {
       controlOrder,
       controlRects,
       overlappingControlPairs,
-      pipBeforeLoop: controlRects["video-pip-toggle"].right <= controlRects["video-loop-toggle"].left + 1
-        || controlRects["video-pip-toggle"].bottom <= controlRects["video-loop-toggle"].top + 1,
+      playBeforeBack15: controlRects["video-play-toggle"].right <= controlRects["video-back-15"].left + 1
+        || controlRects["video-play-toggle"].bottom <= controlRects["video-back-15"].top + 1,
       loopBeforePrevious: controlRects["video-loop-toggle"].right <= controlRects["video-previous"].left + 1
         || controlRects["video-loop-toggle"].bottom <= controlRects["video-previous"].top + 1,
       previousBeforeNext: controlRects["video-previous"].right <= controlRects["video-next"].left + 1
         || controlRects["video-previous"].bottom <= controlRects["video-next"].top + 1,
-      nextBeforeBack15: controlRects["video-next"].right <= controlRects["video-back-15"].left + 1
-        || controlRects["video-next"].bottom <= controlRects["video-back-15"].top + 1,
       back15BeforeForward15: controlRects["video-back-15"].right <= controlRects["video-forward-15"].left + 1
         || controlRects["video-back-15"].bottom <= controlRects["video-forward-15"].top + 1,
-      forward15BeforeFullscreen: controlRects["video-forward-15"].right <= controlRects["video-fullscreen-toggle"].left + 1
-        || controlRects["video-forward-15"].bottom <= controlRects["video-fullscreen-toggle"].top + 1,
+      forward15BeforeMute: controlRects["video-forward-15"].right <= controlRects["video-mute-toggle"].left + 1
+        || controlRects["video-forward-15"].bottom <= controlRects["video-mute-toggle"].top + 1,
+      nextBeforePip: controlRects["video-next"].right <= controlRects["video-pip-toggle"].left + 1
+        || controlRects["video-next"].bottom <= controlRects["video-pip-toggle"].top + 1,
+      forward15BeforePip: controlRects["video-forward-15"].right <= controlRects["video-pip-toggle"].left + 1
+        || controlRects["video-forward-15"].bottom <= controlRects["video-pip-toggle"].top + 1,
+      pipBeforeFullscreen: controlRects["video-pip-toggle"].right <= controlRects["video-fullscreen-toggle"].left + 1
+        || controlRects["video-pip-toggle"].bottom <= controlRects["video-fullscreen-toggle"].top + 1,
     };
   });
 }
@@ -1473,6 +1477,29 @@ test("video controls seek backward and forward by 15 seconds in embedded playbac
   await expectControlsOverlayVisible(page);
 });
 
+test("video keyboard shortcuts seek backward and forward by 15 seconds with arrow keys", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await installHlsStub(page, { fragmentCount: 4, playlistFragmentCount: 5 });
+  await openVideoPane(page);
+
+  const seekSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fseek-window.mkv"));
+  await playLibraryFile(page, "seek-window.mkv");
+  await seekSession;
+  await waitForScrubberReady(page);
+  await pausePlayback(page);
+  await page.locator("#video-playback-surface").click();
+
+  await setMediaPlaybackTime(page, 18);
+  await expectPlaybackNearSeconds(page, 18, 1);
+  await page.keyboard.press("ArrowLeft");
+  await expectPlaybackNearSeconds(page, 3, 1);
+
+  await page.keyboard.press("ArrowRight");
+  await expectPlaybackNearSeconds(page, 18, 1);
+  await expectControlsOverlayVisible(page);
+});
+
 test("video controls stay visible and usable in fullscreen", async ({ page }) => {
   test.setTimeout(90000);
 
@@ -1500,12 +1527,14 @@ test("video controls stay visible and usable in fullscreen", async ({ page }) =>
       sliderDisabled: false,
       fullscreenLabel: "Exit fullscreen",
       overlappingControlPairs: [],
-      pipBeforeLoop: true,
+      playBeforeBack15: true,
       loopBeforePrevious: true,
       previousBeforeNext: true,
-      nextBeforeBack15: true,
       back15BeforeForward15: true,
-      forward15BeforeFullscreen: true,
+      forward15BeforeMute: true,
+      nextBeforePip: true,
+      forward15BeforePip: true,
+      pipBeforeFullscreen: true,
     });
 
   await expectVideoControlState(page, {
@@ -2931,12 +2960,14 @@ test("video fullscreen keeps the scrubber overlay visible and functional", async
   expect(fullscreenState.sliderMax).toBeGreaterThan(0);
   expect(fullscreenState.sliderValue).toBeGreaterThanOrEqual(scrubTarget - 1);
   expect(fullscreenState.overlappingControlPairs).toEqual([]);
-  expect(fullscreenState.pipBeforeLoop).toBe(true);
+  expect(fullscreenState.playBeforeBack15).toBe(true);
   expect(fullscreenState.loopBeforePrevious).toBe(true);
   expect(fullscreenState.previousBeforeNext).toBe(true);
-  expect(fullscreenState.nextBeforeBack15).toBe(true);
   expect(fullscreenState.back15BeforeForward15).toBe(true);
-  expect(fullscreenState.forward15BeforeFullscreen).toBe(true);
+  expect(fullscreenState.forward15BeforeMute).toBe(true);
+  expect(fullscreenState.nextBeforePip).toBe(true);
+  expect(fullscreenState.forward15BeforePip).toBe(true);
+  expect(fullscreenState.pipBeforeFullscreen).toBe(true);
   for (const id of fullscreenState.controlOrder) {
     expect(fullscreenState.controlRects[id].width).toBeGreaterThan(0);
     expect(fullscreenState.controlRects[id].height).toBeGreaterThan(0);
