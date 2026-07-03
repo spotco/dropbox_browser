@@ -292,15 +292,48 @@ test("playback pane keeps a usable embedded stage and scrolls vertically at smal
       };
     }
 
+    function verticallyOverlap(a, b) {
+      return a && b && a.top < b.bottom && b.top < a.bottom;
+    }
+
+    function horizontallyOverlap(a, b) {
+      return a && b && a.left < b.right && b.left < a.right;
+    }
+
     const pane = document.getElementById("video-playback-pane");
     const overlay = document.getElementById("video-controls-overlay");
     const bar = overlay ? overlay.querySelector(".video-controls-bar") : null;
     const paneRect = pane.getBoundingClientRect();
     const overlayRect = overlay.getBoundingClientRect();
     const barRect = bar.getBoundingClientRect();
+    const controlOrder = [
+      "video-play-toggle",
+      "video-mute-toggle",
+      "video-pip-toggle",
+      "video-loop-toggle",
+      "video-previous",
+      "video-next",
+      "video-back-15",
+      "video-forward-15",
+      "video-fullscreen-toggle",
+    ];
+    const rects = Object.fromEntries(controlOrder.map((id) => [id, rectFor(id)]));
+    const overlappingPairs = [];
+    for (let index = 0; index < controlOrder.length; index += 1) {
+      for (let nextIndex = index + 1; nextIndex < controlOrder.length; nextIndex += 1) {
+        const left = rects[controlOrder[index]];
+        const right = rects[controlOrder[nextIndex]];
+        if (verticallyOverlap(left, right) && horizontallyOverlap(left, right)) {
+          overlappingPairs.push([controlOrder[index], controlOrder[nextIndex]]);
+        }
+      }
+    }
     return {
       paneClientWidth: pane.clientWidth,
       paneScrollWidth: pane.scrollWidth,
+      controlOrder,
+      rects,
+      overlappingPairs,
       overlayHorizontallyInsidePane:
         overlayRect.left >= paneRect.left
         && overlayRect.right <= paneRect.right + 1,
@@ -308,18 +341,33 @@ test("playback pane keeps a usable embedded stage and scrolls vertically at smal
         barRect.left >= overlayRect.left
         && barRect.right <= overlayRect.right + 1
         && barRect.bottom <= overlayRect.bottom + 1,
-      play: rectFor("video-play-toggle"),
-      mute: rectFor("video-mute-toggle"),
-      pip: rectFor("video-pip-toggle"),
-      fullscreen: rectFor("video-fullscreen-toggle"),
+      pipBeforeLoop: rects["video-pip-toggle"].right <= rects["video-loop-toggle"].left + 1
+        || rects["video-pip-toggle"].bottom <= rects["video-loop-toggle"].top + 1,
+      loopBeforePrevious: rects["video-loop-toggle"].right <= rects["video-previous"].left + 1
+        || rects["video-loop-toggle"].bottom <= rects["video-previous"].top + 1,
+      previousBeforeNext: rects["video-previous"].right <= rects["video-next"].left + 1
+        || rects["video-previous"].bottom <= rects["video-next"].top + 1,
+      nextBeforeBack15: rects["video-next"].right <= rects["video-back-15"].left + 1
+        || rects["video-next"].bottom <= rects["video-back-15"].top + 1,
+      back15BeforeForward15: rects["video-back-15"].right <= rects["video-forward-15"].left + 1
+        || rects["video-back-15"].bottom <= rects["video-forward-15"].top + 1,
+      forward15BeforeFullscreen: rects["video-forward-15"].right <= rects["video-fullscreen-toggle"].left + 1
+        || rects["video-forward-15"].bottom <= rects["video-fullscreen-toggle"].top + 1,
     };
   });
 
   expect(controlsMetrics.paneScrollWidth).toBeLessThanOrEqual(controlsMetrics.paneClientWidth + 1);
   expect(controlsMetrics.overlayHorizontallyInsidePane).toBe(true);
   expect(controlsMetrics.barInsideOverlay).toBe(true);
-  for (const key of ["play", "mute", "pip", "fullscreen"]) {
-    expect(controlsMetrics[key].width).toBeGreaterThan(0);
-    expect(controlsMetrics[key].height).toBeGreaterThan(0);
+  expect(controlsMetrics.overlappingPairs).toEqual([]);
+  expect(controlsMetrics.pipBeforeLoop).toBe(true);
+  expect(controlsMetrics.loopBeforePrevious).toBe(true);
+  expect(controlsMetrics.previousBeforeNext).toBe(true);
+  expect(controlsMetrics.nextBeforeBack15).toBe(true);
+  expect(controlsMetrics.back15BeforeForward15).toBe(true);
+  expect(controlsMetrics.forward15BeforeFullscreen).toBe(true);
+  for (const id of controlsMetrics.controlOrder) {
+    expect(controlsMetrics.rects[id].width).toBeGreaterThan(0);
+    expect(controlsMetrics.rects[id].height).toBeGreaterThan(0);
   }
 });

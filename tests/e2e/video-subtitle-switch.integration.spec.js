@@ -314,11 +314,55 @@ async function readFullscreenPlaybackState(page) {
       return rect.width > 0 && rect.height > 0;
     }
 
+    function rectFor(id) {
+      const element = document.getElementById(id);
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return {
+        width: rect.width,
+        height: rect.height,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        left: rect.left,
+      };
+    }
+
+    function verticallyOverlap(a, b) {
+      return a && b && a.top < b.bottom && b.top < a.bottom;
+    }
+
+    function horizontallyOverlap(a, b) {
+      return a && b && a.left < b.right && b.left < a.right;
+    }
+
     const stage = document.getElementById("video-playback-stage");
     const overlay = document.getElementById("video-controls-overlay");
     const slider = document.getElementById("video-progress-slider");
     const fullscreenButton = document.getElementById("video-fullscreen-toggle");
     const elapsed = document.getElementById("video-elapsed-time");
+    const controlOrder = [
+      "video-play-toggle",
+      "video-mute-toggle",
+      "video-pip-toggle",
+      "video-loop-toggle",
+      "video-previous",
+      "video-next",
+      "video-back-15",
+      "video-forward-15",
+      "video-fullscreen-toggle",
+    ];
+    const controlRects = Object.fromEntries(controlOrder.map((id) => [id, rectFor(id)]));
+    const overlappingControlPairs = [];
+    for (let index = 0; index < controlOrder.length; index += 1) {
+      for (let nextIndex = index + 1; nextIndex < controlOrder.length; nextIndex += 1) {
+        const left = controlRects[controlOrder[index]];
+        const right = controlRects[controlOrder[nextIndex]];
+        if (verticallyOverlap(left, right) && horizontallyOverlap(left, right)) {
+          overlappingControlPairs.push([controlOrder[index], controlOrder[nextIndex]]);
+        }
+      }
+    }
 
     return {
       fullscreenElementId: document.fullscreenElement ? String(document.fullscreenElement.id || "") : "",
@@ -330,6 +374,21 @@ async function readFullscreenPlaybackState(page) {
       sliderMax: slider ? Number(slider.max) : NaN,
       fullscreenLabel: fullscreenButton ? String(fullscreenButton.getAttribute("aria-label") || "") : "",
       elapsedText: elapsed ? String(elapsed.textContent || "").trim() : "",
+      controlOrder,
+      controlRects,
+      overlappingControlPairs,
+      pipBeforeLoop: controlRects["video-pip-toggle"].right <= controlRects["video-loop-toggle"].left + 1
+        || controlRects["video-pip-toggle"].bottom <= controlRects["video-loop-toggle"].top + 1,
+      loopBeforePrevious: controlRects["video-loop-toggle"].right <= controlRects["video-previous"].left + 1
+        || controlRects["video-loop-toggle"].bottom <= controlRects["video-previous"].top + 1,
+      previousBeforeNext: controlRects["video-previous"].right <= controlRects["video-next"].left + 1
+        || controlRects["video-previous"].bottom <= controlRects["video-next"].top + 1,
+      nextBeforeBack15: controlRects["video-next"].right <= controlRects["video-back-15"].left + 1
+        || controlRects["video-next"].bottom <= controlRects["video-back-15"].top + 1,
+      back15BeforeForward15: controlRects["video-back-15"].right <= controlRects["video-forward-15"].left + 1
+        || controlRects["video-back-15"].bottom <= controlRects["video-forward-15"].top + 1,
+      forward15BeforeFullscreen: controlRects["video-forward-15"].right <= controlRects["video-fullscreen-toggle"].left + 1
+        || controlRects["video-forward-15"].bottom <= controlRects["video-fullscreen-toggle"].top + 1,
     };
   });
 }
@@ -348,6 +407,7 @@ async function clearStoredTrackPreferences(page) {
   await page.evaluate(() => {
     window.localStorage.removeItem("dropbox-browser-video-audio-track-preferences");
     window.localStorage.removeItem("dropbox-browser-video-subtitle-track-preferences");
+    window.localStorage.removeItem("dropbox-browser.video-loop-queue");
   });
 }
 
@@ -782,6 +842,74 @@ function countOccurrences(text, needle) {
   return String(text || "").split(String(needle || "")).length - 1;
 }
 
+async function readVideoControlState(page) {
+  return page.evaluate(() => {
+    function buttonState(id) {
+      const button = document.getElementById(id);
+      if (!button) return null;
+      const icon = button.querySelector(".video-control-icon");
+      const rect = button.getBoundingClientRect();
+      const style = window.getComputedStyle(button);
+      return {
+        disabled: Boolean(button.disabled),
+        label: String(button.getAttribute("aria-label") || ""),
+        title: String(button.getAttribute("title") || ""),
+        pressed: String(button.getAttribute("aria-pressed") || ""),
+        icon: icon ? String(icon.getAttribute("src") || "") : "",
+        visible:
+          !button.hidden
+          && style.display !== "none"
+          && style.visibility !== "hidden"
+          && Number(style.opacity) !== 0
+          && rect.width > 0
+          && rect.height > 0,
+      };
+    }
+
+    return {
+      loop: buttonState("video-loop-toggle"),
+      previous: buttonState("video-previous"),
+      next: buttonState("video-next"),
+      back15: buttonState("video-back-15"),
+      forward15: buttonState("video-forward-15"),
+    };
+  });
+}
+
+async function expectVideoControlState(page, expected) {
+  await expect
+    .poll(async () => readVideoControlState(page), { timeout: 10000 })
+    .toMatchObject(expected);
+}
+
+async function clickVideoControl(page, id) {
+  await page.evaluate((buttonId) => {
+    const button = document.getElementById(buttonId);
+    if (!button || button.disabled) {
+      throw new Error(`${buttonId} is not usable`);
+    }
+    button.click();
+  }, id);
+}
+
+async function queueLibraryFile(page, filename) {
+  const row = await libraryRow(page, filename);
+  await expect(row).toBeVisible();
+  await row.click();
+  await page.locator("#video-library-add-selected").click();
+}
+
+async function setMediaPlaybackTime(page, seconds) {
+  await page.evaluate((targetSeconds) => {
+    const video = document.getElementById("video-player-media");
+    if (!video) {
+      throw new Error("video element missing");
+    }
+    video.currentTime = Number(targetSeconds);
+    video.dispatchEvent(new Event("timeupdate"));
+  }, seconds);
+}
+
 async function expectControlsOverlayUsableDuringLoading(page, expectedLoadingMetaSubstring) {
   await expect
     .poll(async () => playbackStageInnerText(page), { timeout: 10000 })
@@ -1209,6 +1337,207 @@ test.afterEach(async ({ page }) => {
 test.afterAll(async () => {
   await stopIntegrationServer(server);
   server = null;
+});
+
+test("video controls navigate the queue, persist loop, and wrap natural end when enabled", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await installHlsStub(page);
+  await openVideoPane(page);
+
+  await expectVideoControlState(page, {
+    loop: {
+      disabled: false,
+      label: "Loop queue",
+      title: "Loop queue",
+      pressed: "false",
+      icon: "/assets/icons/material-icon-theme/music-loop.svg",
+    },
+  });
+
+  await clickVideoControl(page, "video-loop-toggle");
+  await expectVideoControlState(page, {
+    loop: {
+      label: "Loop queue on",
+      title: "Loop queue on",
+      pressed: "true",
+    },
+  });
+  await expect
+    .poll(async () => page.evaluate(() => window.localStorage.getItem("dropbox-browser.video-loop-queue")))
+    .toBe("true");
+
+  await page.reload();
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await page.locator("#bottom-pane-mode").selectOption("video-player");
+  await expect(page.locator("#video-player-pane")).toBeVisible();
+  await expectVideoControlState(page, { loop: { pressed: "true", label: "Loop queue on" } });
+
+  const alphaSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
+  await playLibraryFile(page, "alpha.mkv");
+  await alphaSession;
+  await queueLibraryFile(page, "bravo.mkv");
+  await expect(page.locator("#video-queue-list .video-queue-row")).toHaveCount(2);
+
+  const icons = await readVideoControlState(page);
+  expect([
+    icons.loop.icon,
+    icons.previous.icon,
+    icons.next.icon,
+    icons.back15.icon,
+    icons.forward15.icon,
+  ]).toEqual([
+    "/assets/icons/material-icon-theme/music-loop.svg",
+    "/assets/icons/material-icon-theme/shared-prev.svg",
+    "/assets/icons/material-icon-theme/shared-next.svg",
+    "/assets/icons/material-icon-theme/video-back-15.svg",
+    "/assets/icons/material-icon-theme/video-forward-15.svg",
+  ]);
+  expect(new Set([
+    icons.previous.icon,
+    icons.next.icon,
+    icons.back15.icon,
+    icons.forward15.icon,
+  ]).size).toBe(4);
+
+  await expectVideoControlState(page, {
+    previous: { disabled: false, label: "Previous video", visible: true },
+    next: { disabled: false, label: "Next video", visible: true },
+    back15: { disabled: false, label: "Back 15 seconds", visible: true },
+    forward15: { disabled: false, label: "Forward 15 seconds", visible: true },
+  });
+
+  const bravoSessionFromNext = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fbravo.mkv"));
+  await clickVideoControl(page, "video-next");
+  await bravoSessionFromNext;
+  await expectActiveQueueTitle(page, "bravo.mkv");
+
+  const alphaSessionFromPrevious = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
+  await clickVideoControl(page, "video-previous");
+  await alphaSessionFromPrevious;
+  await expectActiveQueueTitle(page, "alpha.mkv");
+
+  const bravoSessionFromPreviousWrap = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fbravo.mkv"));
+  await clickVideoControl(page, "video-previous");
+  await bravoSessionFromPreviousWrap;
+  await expectActiveQueueTitle(page, "bravo.mkv");
+
+  const alphaSessionFromLoopEnd = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
+  await page.locator("#video-player-media").evaluate((video) => {
+    video.dispatchEvent(new Event("ended"));
+  });
+  await alphaSessionFromLoopEnd;
+  await expectActiveQueueTitle(page, "alpha.mkv");
+
+  await clickVideoControl(page, "video-loop-toggle");
+  await expectVideoControlState(page, {
+    loop: { pressed: "false", label: "Loop queue" },
+    previous: { disabled: true },
+    next: { disabled: false },
+  });
+
+  const bravoSessionFromNextAgain = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fbravo.mkv"));
+  await clickVideoControl(page, "video-next");
+  await bravoSessionFromNextAgain;
+  await expectActiveQueueTitle(page, "bravo.mkv");
+  await expectVideoControlState(page, {
+    previous: { disabled: false },
+    next: { disabled: true },
+  });
+
+  await page.locator("#video-player-media").evaluate((video) => {
+    video.dispatchEvent(new Event("ended"));
+  });
+  await expect(page.locator("#video-queue-list .video-queue-row.is-active")).toHaveCount(0);
+});
+
+test("video controls seek backward and forward by 15 seconds in embedded playback", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await installHlsStub(page, { fragmentCount: 4, playlistFragmentCount: 5 });
+  await openVideoPane(page);
+
+  const seekSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fseek-window.mkv"));
+  await playLibraryFile(page, "seek-window.mkv");
+  await seekSession;
+  await waitForScrubberReady(page);
+  await pausePlayback(page);
+
+  await setMediaPlaybackTime(page, 18);
+  await expectPlaybackNearSeconds(page, 18, 1);
+  await clickVideoControl(page, "video-back-15");
+  await expectPlaybackNearSeconds(page, 3, 1);
+
+  await clickVideoControl(page, "video-forward-15");
+  await expectPlaybackNearSeconds(page, 18, 1);
+  await expectControlsOverlayVisible(page);
+});
+
+test("video controls stay visible and usable in fullscreen", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await installHlsStub(page, { fragmentCount: 4, playlistFragmentCount: 5 });
+  await openVideoPane(page);
+
+  const alphaSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
+  await playLibraryFile(page, "alpha.mkv");
+  await alphaSession;
+  await queueLibraryFile(page, "bravo.mkv");
+  await waitForScrubberReady(page);
+
+  const surface = page.locator("#video-playback-surface");
+  await surface.hover({ position: { x: 40, y: 40 } });
+  await expectControlsOverlayVisible(page);
+  await surface.dblclick({ position: { x: 48, y: 48 } });
+
+  await expect
+    .poll(async () => readFullscreenPlaybackState(page), { timeout: 10000 })
+    .toMatchObject({
+      fullscreenElementId: "video-playback-stage",
+      stageVisible: true,
+      overlayVisible: true,
+      sliderVisible: true,
+      sliderDisabled: false,
+      fullscreenLabel: "Exit fullscreen",
+      overlappingControlPairs: [],
+      pipBeforeLoop: true,
+      loopBeforePrevious: true,
+      previousBeforeNext: true,
+      nextBeforeBack15: true,
+      back15BeforeForward15: true,
+      forward15BeforeFullscreen: true,
+    });
+
+  await expectVideoControlState(page, {
+    loop: { visible: true, disabled: false },
+    previous: { visible: true, disabled: true },
+    next: { visible: true, disabled: false },
+    back15: { visible: true, disabled: false },
+    forward15: { visible: true, disabled: false },
+  });
+
+  await clickVideoControl(page, "video-loop-toggle");
+  await expectVideoControlState(page, { loop: { pressed: "true" }, previous: { disabled: false } });
+
+  const bravoSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fbravo.mkv"));
+  await clickVideoControl(page, "video-next");
+  await bravoSession;
+  await expectActiveQueueTitle(page, "bravo.mkv");
+
+  const alphaSessionFromPrevious = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
+  await clickVideoControl(page, "video-previous");
+  await alphaSessionFromPrevious;
+  await expectActiveQueueTitle(page, "alpha.mkv");
+
+  await setMediaPlaybackTime(page, 18);
+  await clickVideoControl(page, "video-back-15");
+  await expectPlaybackNearSeconds(page, 3, 1);
+
+  await page.evaluate(async () => {
+    if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
+      await document.exitFullscreen();
+    }
+  });
 });
 
 test("video playback loads tracks, switches tracks, and hides video before subtitle teardown", async ({ page }) => {
@@ -2601,6 +2930,17 @@ test("video fullscreen keeps the scrubber overlay visible and functional", async
   const fullscreenState = await readFullscreenPlaybackState(page);
   expect(fullscreenState.sliderMax).toBeGreaterThan(0);
   expect(fullscreenState.sliderValue).toBeGreaterThanOrEqual(scrubTarget - 1);
+  expect(fullscreenState.overlappingControlPairs).toEqual([]);
+  expect(fullscreenState.pipBeforeLoop).toBe(true);
+  expect(fullscreenState.loopBeforePrevious).toBe(true);
+  expect(fullscreenState.previousBeforeNext).toBe(true);
+  expect(fullscreenState.nextBeforeBack15).toBe(true);
+  expect(fullscreenState.back15BeforeForward15).toBe(true);
+  expect(fullscreenState.forward15BeforeFullscreen).toBe(true);
+  for (const id of fullscreenState.controlOrder) {
+    expect(fullscreenState.controlRects[id].width).toBeGreaterThan(0);
+    expect(fullscreenState.controlRects[id].height).toBeGreaterThan(0);
+  }
 
   await page.evaluate(async () => {
     if (document.fullscreenElement && typeof document.exitFullscreen === "function") {

@@ -8,6 +8,11 @@ export const VIDEO_ICONS = {
   fullscreenExit: '/assets/icons/material-icon-theme/video-fullscreen-exit.svg',
   pipEnter: '/assets/icons/material-icon-theme/video-pip-enter.svg',
   pipExit: '/assets/icons/material-icon-theme/video-pip-exit.svg',
+  loop: '/assets/icons/material-icon-theme/music-loop.svg',
+  previous: '/assets/icons/material-icon-theme/shared-prev.svg',
+  next: '/assets/icons/material-icon-theme/shared-next.svg',
+  back15: '/assets/icons/material-icon-theme/video-back-15.svg',
+  forward15: '/assets/icons/material-icon-theme/video-forward-15.svg',
 };
 export const CONTROLS_IDLE_HIDE_MS = 2800;
 export const COMPATIBILITY_SESSION_STATUS_POLL_MS = 1000;

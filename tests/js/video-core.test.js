@@ -71,6 +71,36 @@ test("advanceQueueAfterPlaybackEnd moves to the next item and stops at the end",
   assert.equal(mod.advanceQueueAfterPlaybackEnd(0, -1), -1);
 });
 
+test("advanceQueueAfterPlaybackEnd wraps the final item only when loop is enabled", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
+
+  assert.equal(mod.advanceQueueAfterPlaybackEnd(3, 2, false), -1);
+  assert.equal(mod.advanceQueueAfterPlaybackEnd(3, 2, true), 0);
+  assert.equal(mod.advanceQueueAfterPlaybackEnd(1, 0, true), 0);
+});
+
+test("previousQueueIndex respects queue boundaries and loop wrapping", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
+
+  assert.equal(mod.previousQueueIndex(3, 2, false), 1);
+  assert.equal(mod.previousQueueIndex(3, 1, false), 0);
+  assert.equal(mod.previousQueueIndex(3, 0, false), -1);
+  assert.equal(mod.previousQueueIndex(3, 0, true), 2);
+  assert.equal(mod.previousQueueIndex(0, -1, true), -1);
+  assert.equal(mod.previousQueueIndex(3, 3, true), -1);
+});
+
+test("nextQueueIndex respects queue boundaries and loop wrapping", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
+
+  assert.equal(mod.nextQueueIndex(3, 0, false), 1);
+  assert.equal(mod.nextQueueIndex(3, 1, false), 2);
+  assert.equal(mod.nextQueueIndex(3, 2, false), -1);
+  assert.equal(mod.nextQueueIndex(3, 2, true), 0);
+  assert.equal(mod.nextQueueIndex(0, -1, true), -1);
+  assert.equal(mod.nextQueueIndex(3, 3, true), -1);
+});
+
 test("playbackDurationSeconds uses finite media duration outside compatibility playback", async () => {
   const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/video-core.js");
 
