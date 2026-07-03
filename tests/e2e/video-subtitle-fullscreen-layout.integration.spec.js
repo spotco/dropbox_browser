@@ -62,7 +62,7 @@ async function waitForPlaybackStageUsable(page) {
     return { width: rect.width, height: rect.height };
   });
   expect(size.width).toBeGreaterThan(240);
-  expect(size.height).toBeGreaterThan(180);
+  expect(size.height).toBeGreaterThanOrEqual(180);
 }
 
 async function waitForDecodedVideo(page) {

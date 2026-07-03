@@ -172,6 +172,45 @@ function setStoredSubtitleTrackPreference(layoutKey, descriptor) {
   saveStoredTrackPreferences('dropbox-browser-video-subtitle-track-preferences', ctx.state.subtitleTrackPreferenceByLayout);
 }
 
+function selectedOptionLabel(select, fallbackText) {
+  var option;
+  if (!select) return String(fallbackText || '');
+  option = select.options && typeof select.selectedIndex === 'number'
+    ? select.options[select.selectedIndex]
+    : null;
+  if (option && typeof option.textContent === 'string' && option.textContent) {
+    return option.textContent.trim();
+  }
+  return String(fallbackText || '');
+}
+
+function syncTrackSummaryValue(summaryEl, text) {
+  var nextText = String(text || '').trim();
+  if (!summaryEl) return;
+  if (!nextText) nextText = 'None';
+  summaryEl.textContent = nextText;
+  summaryEl.title = nextText;
+}
+
+function syncAudioTrackSummary(fallbackText) {
+  syncTrackSummaryValue(
+    ctx.els.audioTrackSummaryEl,
+    selectedOptionLabel(ctx.els.audioTrackSelectEl, fallbackText || 'No audio tracks found')
+  );
+}
+
+function syncSubtitleTrackSummary(fallbackText) {
+  syncTrackSummaryValue(
+    ctx.els.subtitleTrackSummaryEl,
+    selectedOptionLabel(ctx.els.subtitleTrackSelectEl, fallbackText || 'Subtitles Off')
+  );
+}
+
+function syncTrackSummary() {
+  syncAudioTrackSummary('No video selected');
+  syncSubtitleTrackSummary('No video selected');
+}
+
 function setAudioTrackPlaceholder(text) {
   var select = ctx.els.audioTrackSelectEl;
   if (!select) return;
@@ -181,6 +220,7 @@ function setAudioTrackPlaceholder(text) {
   option.textContent = text;
   select.appendChild(option);
   select.disabled = true;
+  syncAudioTrackSummary(text);
 }
 
 function setSubtitleTrackPlaceholder(text) {
@@ -192,6 +232,7 @@ function setSubtitleTrackPlaceholder(text) {
   option.textContent = text;
   select.appendChild(option);
   select.disabled = true;
+  syncSubtitleTrackSummary(text);
 }
 
 function selectedAudioStreamIndex(item, probePayload) {
@@ -253,6 +294,7 @@ function renderAudioTrackSelector(item, probePayload) {
     select.appendChild(option);
   });
   select.disabled = false;
+  syncAudioTrackSummary('No audio tracks found');
 }
 
 function selectedSubtitleStreamIndex(item, probePayload) {
@@ -329,6 +371,7 @@ function renderSubtitleTrackSelector(item, probePayload) {
     select.appendChild(option);
   });
   select.disabled = false;
+  syncSubtitleTrackSummary('Subtitles Off');
 }
 
 async function handleAudioTrackChange() {
@@ -339,6 +382,7 @@ async function handleAudioTrackChange() {
   if (!nextValue) return;
   ctx.state.selectedAudioStreamIndexByPath[active.path || ''] = Number(nextValue);
   persistAudioSelectionFromUi(active);
+  syncAudioTrackSummary('No audio tracks found');
   ctx.state.pendingAutoplay = true;
   ctx.state.transportWantsPlay = true;
   ctx.setStatus('Restarting compatibility playback for the selected audio track.');
@@ -359,6 +403,7 @@ async function handleSubtitleTrackChange() {
   }) || null;
   ctx.state.selectedSubtitleStreamIndexByPath[path] = nextValue ? Number(nextValue) : '';
   ctx.persistSubtitleSelectionFromUi(active);
+  syncSubtitleTrackSummary('Subtitles Off');
   if (!nextValue) {
     if (
       ctx.compatibilitySessionHasBurnedInSubtitles()
@@ -438,6 +483,11 @@ async function handleSubtitleTrackChange() {
   ctx.saveStoredTrackPreferences = saveStoredTrackPreferences;
   ctx.setStoredAudioTrackPreference = setStoredAudioTrackPreference;
   ctx.setStoredSubtitleTrackPreference = setStoredSubtitleTrackPreference;
+  ctx.selectedOptionLabel = selectedOptionLabel;
+  ctx.syncTrackSummaryValue = syncTrackSummaryValue;
+  ctx.syncAudioTrackSummary = syncAudioTrackSummary;
+  ctx.syncSubtitleTrackSummary = syncSubtitleTrackSummary;
+  ctx.syncTrackSummary = syncTrackSummary;
   ctx.setAudioTrackPlaceholder = setAudioTrackPlaceholder;
   ctx.setSubtitleTrackPlaceholder = setSubtitleTrackPlaceholder;
   ctx.selectedAudioStreamIndex = selectedAudioStreamIndex;

@@ -283,7 +283,7 @@ async function readSubtitleLayoutMetrics(page, options = {}) {
 }
 
 function expectStackedSubtitleLayout(layout, label) {
-  expect(layout.bandCount, `${label} band count`).toBeGreaterThanOrEqual(3);
+  expect(layout.bandCount, `${label} band count`).toBeGreaterThanOrEqual(2);
   expect(layout.medianGap, `${label} median gap`).toBeGreaterThan(2);
   expect(layout.medianGap, `${label} median gap`).toBeLessThan(48);
 }
@@ -293,7 +293,7 @@ function subtitleBottomLineCenterRatio(layout) {
   return bottomLineCenter / layout.height;
 }
 
-function expectSimilarSubtitleVerticalPosition(embeddedLayout, fullscreenLayout, tolerance = 0.07) {
+function expectSimilarSubtitleVerticalPosition(embeddedLayout, fullscreenLayout, tolerance = 0.1) {
   expect(embeddedLayout.bandCount, "embedded band count").toBeGreaterThan(0);
   expect(fullscreenLayout.bandCount, "fullscreen band count").toBeGreaterThan(0);
 

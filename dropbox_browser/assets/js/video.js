@@ -45,8 +45,11 @@ import {initPane} from './video/pane.js';
       progressSliderEl: document.getElementById('video-progress-slider'),
       elapsedTimeEl: document.getElementById('video-elapsed-time'),
       totalTimeEl: document.getElementById('video-total-time'),
+      trackPanelEl: document.getElementById('video-track-panel'),
       audioTrackSelectEl: document.getElementById('video-audio-track'),
+      audioTrackSummaryEl: document.getElementById('video-audio-track-summary'),
       subtitleTrackSelectEl: document.getElementById('video-subtitle-track'),
+      subtitleTrackSummaryEl: document.getElementById('video-subtitle-track-summary'),
       debugPanelEl: document.getElementById('video-debug-panel'),
       debugActionsEl: document.getElementById('video-debug-actions'),
       clearCacheButtonEl: document.getElementById('video-clear-cache-button'),
@@ -204,6 +207,7 @@ import {initPane} from './video/pane.js';
   ctx.updateCurrentFolder(ctx.currentFolderPath());
   ctx.renderAudioTrackSelector(null, null);
   ctx.renderSubtitleTrackSelector(null, null);
+  ctx.syncTrackSummary();
   if (ctx.els.videoEl) {
     ctx.els.videoEl.controls = false;
     ctx.els.videoEl.removeAttribute('controls');

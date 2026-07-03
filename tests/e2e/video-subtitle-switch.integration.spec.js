@@ -365,6 +365,21 @@ async function clearActiveVideoSessionAndCache(page) {
   expect(clearResponse.ok()).toBe(true);
 }
 
+async function ensureTrackPanelOpen(page) {
+  const panel = page.locator("#video-track-panel");
+  await expect(panel).toBeVisible();
+  if (await panel.evaluate((element) => Boolean(element.open))) return;
+  await panel.locator("summary").click();
+  await expect
+    .poll(async () => panel.evaluate((element) => Boolean(element.open)), { timeout: 5000 })
+    .toBe(true);
+}
+
+async function selectTrackOption(page, selector, value) {
+  await ensureTrackPanelOpen(page);
+  await page.locator(selector).selectOption(value);
+}
+
 async function expectControlsOverlayVisible(page) {
   await expect
     .poll(async () => readControlsOverlayState(page), { timeout: 10000 })
@@ -1244,7 +1259,7 @@ test("video playback loads tracks, switches tracks, and hides video before subti
   await waitForSubtitleStreamIndex(page, 3);
   await expect(page.locator("#video-player-status")).not.toContainText("Compatibility playback failed");
 
-  await page.locator("#video-subtitle-track").selectOption("4");
+  await selectTrackOption(page, "#video-subtitle-track", "4");
   await waitForSubtitleStreamIndex(page, 4);
   await expectTrackSelectors(page, { subtitleValue: "4" });
   await waitForMountedSubtitleTrackReady(page, 4);
@@ -1304,7 +1319,7 @@ test("video playback loads tracks, switches tracks, and hides video before subti
     page,
     (body) => body.includes("path=Videos%2Fbravo.mkv") && body.includes("audio_stream_index=2"),
   );
-  await page.locator("#video-audio-track").selectOption("2");
+  await selectTrackOption(page, "#video-audio-track", "2");
   await waitForLoadingOverlayWithoutPlaceholder(page);
   await bravoAudioRestart;
   await waitForVisibleVideo(page);
@@ -1316,11 +1331,11 @@ test("video playback loads tracks, switches tracks, and hides video before subti
   await expectTrackSelectors(page, { audioValue: "2", subtitleValue: "4" });
   await waitForSubtitleStreamIndex(page, 4);
 
-  await page.locator("#video-subtitle-track").selectOption("");
+  await selectTrackOption(page, "#video-subtitle-track", "");
   await expectNoMountedSubtitleTrack(page);
   await expectTrackSelectors(page, { subtitleValue: "" });
 
-  await page.locator("#video-subtitle-track").selectOption("3");
+  await selectTrackOption(page, "#video-subtitle-track", "3");
   await waitForSubtitleStreamIndex(page, 3);
   await expectTrackSelectors(page, { subtitleValue: "3" });
 });
@@ -1384,7 +1399,7 @@ test("WebVTT formatting tags render in the subtitle overlay", async ({ page }) =
     expectedText: "ALPHA-SUBTITLE-ENG",
   });
 
-  await page.locator("#video-subtitle-track").selectOption("4");
+  await selectTrackOption(page, "#video-subtitle-track", "4");
   await waitForSubtitleStreamIndex(page, 4);
   await waitForDisplayedSubtitleText(page, "ALPHA-SUBTITLE-FRA");
   await waitForSubtitleOverlayMarkup(page, {
@@ -1498,7 +1513,7 @@ test("automatic playlist next clears old subtitles and mounts the next video tra
   const alphaSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
   await playLibraryFile(page, "alpha.mkv");
   await alphaSession;
-  await page.locator("#video-subtitle-track").selectOption("4");
+  await selectTrackOption(page, "#video-subtitle-track", "4");
   await waitForSubtitleStreamIndex(page, 4);
   await waitForMountedSubtitleTrackReady(page, 4);
   await setPlaybackTimeForSubtitleChecks(page, 1);
@@ -1560,7 +1575,7 @@ test("video playback never shows loading or placeholder copy on top of active pl
   const alphaPlayText = await playbackStageInnerText(page);
   expect(alphaPlayText).not.toContain("Playing through a local HLS compatibility session.");
   expect(alphaPlayText).not.toContain("alpha.mkv");
-  await page.locator("#video-subtitle-track").selectOption("4");
+  await selectTrackOption(page, "#video-subtitle-track", "4");
   await waitForSubtitleStreamIndex(page, 4);
   await expectNoPlaybackSurfaceViolations(page);
 
@@ -2241,7 +2256,7 @@ test("subtitle track switch and audio restart keep windowed subtitles correct at
   await waitForLoadingOverlayWithoutPlaceholder(page);
 
   const postsBeforeSubtitleSwitch = sessionPosts.length;
-  await page.locator("#video-subtitle-track").selectOption("4");
+  await selectTrackOption(page, "#video-subtitle-track", "4");
   await waitForLoadingOverlayWithoutPlaceholder(page);
   await expect
     .poll(
@@ -2265,7 +2280,7 @@ test("subtitle track switch and audio restart keep windowed subtitles correct at
     const startSeconds = Number(new URLSearchParams(body).get("start_time_seconds"));
     return Number.isFinite(startSeconds) && startSeconds > 0;
   });
-  await page.locator("#video-audio-track").selectOption("2");
+  await selectTrackOption(page, "#video-audio-track", "2");
   await waitForLoadingOverlayWithoutPlaceholder(page);
   await audioRestart;
   await waitForVisibleVideo(page);
@@ -2366,14 +2381,14 @@ test("turning subtitles off clears only the mounted track and remounts cached wi
 
   const requestsBeforeOff = subtitleWindowRequests.length;
   const postsBeforeOff = sessionPosts.length;
-  await page.locator("#video-subtitle-track").selectOption("");
+  await selectTrackOption(page, "#video-subtitle-track", "");
   await expectTrackSelectors(page, { subtitleValue: "" });
   await expectNoMountedSubtitleTrack(page);
   expect(subtitleWindowRequests).toHaveLength(requestsBeforeOff);
   expect(sessionPosts.slice(postsBeforeOff)).toEqual([]);
 
   const postsBeforeRemount = sessionPosts.length;
-  await page.locator("#video-subtitle-track").selectOption("3");
+  await selectTrackOption(page, "#video-subtitle-track", "3");
   await expectTrackSelectors(page, { subtitleValue: "3" });
   await waitForSubtitleStreamIndex(page, 3);
   await waitForMountedSubtitleTrackReady(page, 3);
@@ -2524,22 +2539,19 @@ test("video controls follow standard hover and idle visibility behavior", async 
   await expectPlayToggleState(page, "Pause");
 
   const surface = page.locator("#video-playback-surface");
-  const box = await surface.boundingBox();
-  expect(box).not.toBeNull();
-
-  await page.mouse.move(box.x + (box.width / 2), box.y + (box.height / 2));
+  await surface.hover({ position: { x: 40, y: 40 } });
   await expectControlsOverlayVisible(page);
 
   await page.mouse.move(4, 4);
   await expectControlsOverlayHidden(page);
 
-  await page.mouse.move(box.x + (box.width / 2), box.y + (box.height / 2));
+  await surface.hover({ position: { x: 48, y: 48 } });
   await expectControlsOverlayVisible(page);
 
   await page.waitForTimeout(3200);
   await expectControlsOverlayHidden(page);
 
-  await page.mouse.move(box.x + (box.width / 2) + 8, box.y + (box.height / 2) + 8);
+  await surface.hover({ position: { x: 56, y: 56 } });
   await expectControlsOverlayVisible(page);
 });
 
@@ -2556,12 +2568,9 @@ test("video fullscreen keeps the scrubber overlay visible and functional", async
   await waitForPlaybackSurfaceWithoutOverlay(page);
 
   const surface = page.locator("#video-playback-surface");
-  const box = await surface.boundingBox();
-  expect(box).not.toBeNull();
-
-  await page.mouse.move(box.x + (box.width / 2), box.y + (box.height / 2));
+  await surface.hover({ position: { x: 40, y: 40 } });
   await expectControlsOverlayVisible(page);
-  await page.mouse.dblclick(box.x + (box.width / 2), box.y + (box.height / 2));
+  await surface.dblclick({ position: { x: 48, y: 48 } });
 
   await expect
     .poll(async () => readFullscreenPlaybackState(page), { timeout: 10000 })
@@ -2973,13 +2982,13 @@ test("video track selections persist across reload and matching track layouts", 
     page,
     (body) => body.includes("path=Videos%2Falpha.mkv") && body.includes("audio_stream_index=2"),
   );
-  await page.locator("#video-audio-track").selectOption("2");
+  await selectTrackOption(page, "#video-audio-track", "2");
   await waitForLoadingOverlayWithoutPlaceholder(page);
   await alphaAudioRestart;
   await waitForVisibleVideo(page);
   await waitForPlaybackSurfaceWithoutOverlay(page);
 
-  await page.locator("#video-subtitle-track").selectOption("4");
+  await selectTrackOption(page, "#video-subtitle-track", "4");
   await waitForSubtitleStreamIndex(page, 4);
   await expectTrackSelectors(page, { audioValue: "2", subtitleValue: "4" });
   await expect

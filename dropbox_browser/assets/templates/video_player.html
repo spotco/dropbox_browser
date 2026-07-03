@@ -40,20 +40,6 @@
           <div id="video-player-status" class="video-subpane-meta">Native or compatibility playback status will appear here.</div>
         </div>
       </div>
-      <div class="video-playback-controls">
-        <label class="video-control-field" for="video-audio-track">
-          <span class="video-control-label">Audio Track</span>
-          <select id="video-audio-track" disabled>
-            <option value="">No video selected</option>
-          </select>
-        </label>
-        <label class="video-control-field" for="video-subtitle-track">
-          <span class="video-control-label">Subtitles</span>
-          <select id="video-subtitle-track" disabled>
-            <option value="">No video selected</option>
-          </select>
-        </label>
-      </div>
       <div id="video-playback-surface" class="video-playback-surface">
         <div id="video-playback-stage" class="video-playback-stage" data-loading-state="idle">
           <video id="video-player-media" class="video-player-media hidden" preload="metadata" hidden></video>
@@ -109,9 +95,38 @@
           </div>
         </div>
       </div>
-      <details id="video-debug-panel" class="video-debug-panel">
-        <summary class="video-debug-summary">Debug Info</summary>
-        <div class="video-debug-body">
+      <details id="video-track-panel" class="video-track-panel video-collapsible-panel">
+        <summary class="video-track-summary video-collapsible-summary">
+          <span class="video-track-summary-title">Tracks</span>
+          <span class="video-track-summary-values">
+            <span class="video-track-summary-item">
+              <span class="video-track-summary-label">Audio</span>
+              <span id="video-audio-track-summary" class="video-track-summary-value" title="No video selected">No video selected</span>
+            </span>
+            <span class="video-track-summary-item">
+              <span class="video-track-summary-label">Subtitles</span>
+              <span id="video-subtitle-track-summary" class="video-track-summary-value" title="No video selected">No video selected</span>
+            </span>
+          </span>
+        </summary>
+        <div class="video-track-body video-collapsible-body">
+          <label class="video-control-field" for="video-audio-track">
+            <span class="video-control-label">Audio Track</span>
+            <select id="video-audio-track" disabled>
+              <option value="">No video selected</option>
+            </select>
+          </label>
+          <label class="video-control-field" for="video-subtitle-track">
+            <span class="video-control-label">Subtitles</span>
+            <select id="video-subtitle-track" disabled>
+              <option value="">No video selected</option>
+            </select>
+          </label>
+        </div>
+      </details>
+      <details id="video-debug-panel" class="video-debug-panel video-collapsible-panel">
+        <summary class="video-debug-summary video-collapsible-summary">Debug Info</summary>
+        <div class="video-debug-body video-collapsible-body">
           <div id="video-debug-actions" class="video-debug-actions">
             <button type="button" id="video-clear-cache-button" class="video-debug-action-button">Clear Cache</button>
           </div>

@@ -90,6 +90,21 @@ async function expectNoMountedSubtitleTrack(page) {
     .toBe(0);
 }
 
+async function ensureTrackPanelOpen(page) {
+  const panel = page.locator("#video-track-panel");
+  await expect(panel).toBeVisible();
+  if (await panel.evaluate((element) => Boolean(element.open))) return;
+  await panel.locator("summary").click();
+  await expect
+    .poll(async () => panel.evaluate((element) => Boolean(element.open)), { timeout: 5000 })
+    .toBe(true);
+}
+
+async function selectTrackOption(page, selector, value) {
+  await ensureTrackPanelOpen(page);
+  await page.locator(selector).selectOption(value);
+}
+
 function waitForSessionPost(page, predicate) {
   return page.waitForRequest((request) => {
     if (request.method() !== "POST") {
@@ -192,7 +207,7 @@ test("bitmap subtitle tracks restart compatibility playback instead of mounting 
     page,
     (body) => body.includes("path=Videos%2Fbitmap.mkv") && body.includes("subtitle_stream_index=5"),
   );
-  await page.locator("#video-subtitle-track").selectOption("5");
+  await selectTrackOption(page, "#video-subtitle-track", "5");
   await bitmapRestart;
   await waitForVisibleVideo(page);
   await expect(page.locator("#video-subtitle-track")).toHaveValue("5");
@@ -210,13 +225,13 @@ test("bitmap subtitle tracks restart compatibility playback instead of mounting 
     page,
     (body) => body.includes("path=Videos%2Fbitmap.mkv") && !body.includes("subtitle_stream_index="),
   );
-  await page.locator("#video-subtitle-track").selectOption("");
+  await selectTrackOption(page, "#video-subtitle-track", "");
   await subtitleOffRestart;
   await waitForVisibleVideo(page);
   await expect(page.locator("#video-subtitle-track")).toHaveValue("");
   await expectNoMountedSubtitleTrack(page);
 
-  await page.locator("#video-subtitle-track").selectOption("3");
+  await selectTrackOption(page, "#video-subtitle-track", "3");
   await expect(page.locator("#video-subtitle-track")).toHaveValue("3");
 
   const subtitleResponse = await page.request.get("/video/endpoints/subtitles?path=Videos%2Fbitmap.mkv&source=remote&track=3");
