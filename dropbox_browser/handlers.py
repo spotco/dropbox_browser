@@ -1174,6 +1174,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             audio_stream_index = int(audio_stream_index_raw) if audio_stream_index_raw else None
             subtitle_stream_index_raw = params.get("subtitle_stream_index", [""])[0].strip()
             subtitle_stream_index = int(subtitle_stream_index_raw) if subtitle_stream_index_raw else None
+            subtitle_stroke_enabled = params.get("subtitle_stroke_enabled", ["1"])[0].strip() != "0"
+            subtitle_shadow_enabled = params.get("subtitle_shadow_enabled", ["1"])[0].strip() != "0"
             start_time_seconds = parse_video_start_seconds(params.get("start_time_seconds", [""])[0])
             force_video_transcode = params.get("force_video_transcode", [""])[0].strip() == "1"
             force_audio_transcode = params.get("force_audio_transcode", [""])[0].strip() == "1"
@@ -1185,6 +1187,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 file_size=file_size,
                 audio_stream_index=audio_stream_index,
                 subtitle_stream_index=subtitle_stream_index,
+                subtitle_stroke_enabled=subtitle_stroke_enabled,
+                subtitle_shadow_enabled=subtitle_shadow_enabled,
                 start_time_seconds=start_time_seconds,
                 force_video_transcode=force_video_transcode,
                 force_audio_transcode=force_audio_transcode,

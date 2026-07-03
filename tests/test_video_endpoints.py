@@ -1902,7 +1902,13 @@ class VideoEndpointTests(AppTestCase):
         self.assertIsNone(payload["audio_stream_index"])
         self.assertEqual(payload["subtitle_stream_index"], 4)
         self.assertIn("-filter_complex", spawned[0].command)
-        self.assertIn("[0:v:0][0:4]overlay[vout]", spawned[0].command)
+        filter_graph = spawned[0].command[spawned[0].command.index("-filter_complex") + 1]
+        self.assertIn("[0:4]format=rgba,split=6[sub_main][sub_shadow_src][sub_stroke_left_src][sub_stroke_right_src][sub_stroke_up_src][sub_stroke_down_src]", filter_graph)
+        self.assertIn("colorchannelmixer=rr=0:gg=0:bb=0:aa=0.85[sub_shadow]", filter_graph)
+        self.assertIn("[sub_stroke_left_src]colorchannelmixer=rr=0:gg=0:bb=0:aa=0.9[sub_stroke_left]", filter_graph)
+        self.assertIn("[0:v:0][sub_stroke_left]overlay=-1:0[tmp1]", filter_graph)
+        self.assertIn("[tmp4][sub_shadow]overlay=2:2[tmp5]", filter_graph)
+        self.assertIn("[tmp5][sub_main]overlay[vout]", filter_graph)
         self.assertIn("[vout]", spawned[0].command)
 
     def test_session_endpoint_rejects_negative_start_time(self) -> None:
@@ -2094,12 +2100,66 @@ class VideoEndpointTests(AppTestCase):
 
         self.assertLess(command.index("-ss"), command.index("-i"))
         self.assertIn("-filter_complex", command)
-        self.assertIn("[0:v:0][0:4]overlay[vout]", command)
+        filter_graph = command[command.index("-filter_complex") + 1]
+        self.assertIn("[0:4]format=rgba,split=6[sub_main][sub_shadow_src][sub_stroke_left_src][sub_stroke_right_src][sub_stroke_up_src][sub_stroke_down_src]", filter_graph)
+        self.assertIn("colorchannelmixer=rr=0:gg=0:bb=0:aa=0.85[sub_shadow]", filter_graph)
+        self.assertIn("[sub_stroke_left_src]colorchannelmixer=rr=0:gg=0:bb=0:aa=0.9[sub_stroke_left]", filter_graph)
+        self.assertIn("[0:v:0][sub_stroke_left]overlay=-1:0[tmp1]", filter_graph)
+        self.assertIn("[tmp4][sub_shadow]overlay=2:2[tmp5]", filter_graph)
+        self.assertIn("[tmp5][sub_main]overlay[vout]", filter_graph)
         self.assertIn("[vout]", command)
         self.assertNotIn("0:v:0", [item for item in command if item == "0:v:0"])
         self.assertIn("0:5?", command)
         self.assertIn("-sn", command)
         self.assertEqual(command[command.index("-c:v") + 1], "libx264")
+
+    def test_build_ffmpeg_hls_command_can_disable_burned_in_subtitle_stroke(self) -> None:
+        command = build_ffmpeg_hls_command(
+            Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+            "http://127.0.0.1:8000/file?path=movie.mkv&source=remote",
+            Path("E:/dev/dropbox_browser/Temp/video_sessions/test/stream.m3u8"),
+            segment_base_url="/video/endpoints/session/file?id=test&name=",
+            subtitle_stream_index=4,
+            subtitle_stroke_enabled=False,
+        )
+
+        filter_graph = command[command.index("-filter_complex") + 1]
+        self.assertIn("[0:4]format=rgba,split=2[sub_main][sub_shadow_src]", filter_graph)
+        self.assertNotIn("sub_stroke_left", filter_graph)
+        self.assertIn("[0:v:0][sub_shadow]overlay=2:2[tmp]", filter_graph)
+        self.assertIn("[tmp][sub_main]overlay[vout]", filter_graph)
+
+    def test_build_ffmpeg_hls_command_can_disable_burned_in_subtitle_shadow(self) -> None:
+        command = build_ffmpeg_hls_command(
+            Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+            "http://127.0.0.1:8000/file?path=movie.mkv&source=remote",
+            Path("E:/dev/dropbox_browser/Temp/video_sessions/test/stream.m3u8"),
+            segment_base_url="/video/endpoints/session/file?id=test&name=",
+            subtitle_stream_index=4,
+            subtitle_shadow_enabled=False,
+        )
+
+        filter_graph = command[command.index("-filter_complex") + 1]
+        self.assertIn(
+            "[0:4]format=rgba,split=5[sub_main][sub_stroke_left_src][sub_stroke_right_src][sub_stroke_up_src][sub_stroke_down_src]",
+            filter_graph,
+        )
+        self.assertNotIn("sub_shadow", filter_graph)
+        self.assertIn("[tmp4][sub_main]overlay[vout]", filter_graph)
+
+    def test_build_ffmpeg_hls_command_can_disable_burned_in_subtitle_shadow_and_stroke(self) -> None:
+        command = build_ffmpeg_hls_command(
+            Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+            "http://127.0.0.1:8000/file?path=movie.mkv&source=remote",
+            Path("E:/dev/dropbox_browser/Temp/video_sessions/test/stream.m3u8"),
+            segment_base_url="/video/endpoints/session/file?id=test&name=",
+            subtitle_stream_index=4,
+            subtitle_stroke_enabled=False,
+            subtitle_shadow_enabled=False,
+        )
+
+        filter_graph = command[command.index("-filter_complex") + 1]
+        self.assertEqual(filter_graph, "[0:4]format=rgba[sub_main];[0:v:0][sub_main]overlay[vout]")
 
     def test_subtitle_window_end_seconds_adds_start_and_duration(self) -> None:
         self.assertEqual(subtitle_window_end_seconds(12.5, 30.0), 42.5)

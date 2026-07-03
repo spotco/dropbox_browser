@@ -1015,6 +1015,8 @@ function selectedBurnedInSubtitleStreamIndex(item, probePayload) {
 }
 
 function compatibilitySessionHasBurnedInSubtitles() {
+  var sessionStreamIndex = normalizeSubtitleStreamIndex(ctx.state.compatibilitySessionBurnedInSubtitleStreamIndex);
+  if (sessionStreamIndex !== null) return true;
   return normalizeSubtitleStreamIndex(ctx.state.compatibilitySubtitleStreamIndex) !== null;
 }
 

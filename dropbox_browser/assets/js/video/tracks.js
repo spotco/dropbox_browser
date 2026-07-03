@@ -1,4 +1,172 @@
 export function initTracks(ctx) {
+var SUBTITLE_STYLE_DEFAULTS = {
+  shadowEnabled: true,
+  strokeEnabled: true,
+  fontSizePx: 28,
+  offsetPx: 0,
+};
+var SUBTITLE_STYLE_SETTING_KEY = 'video-subtitle-style';
+var SUBTITLE_STYLE_SHADOW_VALUE = '2px 2px 0 rgba(0, 0, 0, 0.85), 0 0 6px rgba(0, 0, 0, 0.7)';
+var SUBTITLE_STYLE_STROKE_WIDTH_PX = 1.25;
+
+function cloneSubtitleStyleOptions(options) {
+  var source = options || SUBTITLE_STYLE_DEFAULTS;
+  return {
+    shadowEnabled: source.shadowEnabled !== false,
+    strokeEnabled: source.strokeEnabled !== false,
+    fontSizePx: clampSubtitleStyleNumber(source.fontSizePx, 10, 72, SUBTITLE_STYLE_DEFAULTS.fontSizePx),
+    offsetPx: clampSubtitleStyleNumber(source.offsetPx, -120, 120, SUBTITLE_STYLE_DEFAULTS.offsetPx),
+  };
+}
+
+function subtitleStyleOptionsEqual(left, right) {
+  var leftNormalized = cloneSubtitleStyleOptions(left);
+  var rightNormalized = cloneSubtitleStyleOptions(right);
+  return leftNormalized.shadowEnabled === rightNormalized.shadowEnabled
+    && leftNormalized.strokeEnabled === rightNormalized.strokeEnabled
+    && leftNormalized.fontSizePx === rightNormalized.fontSizePx
+    && leftNormalized.offsetPx === rightNormalized.offsetPx;
+}
+
+function burnedInSubtitleStyleOptionsEqual(left, right) {
+  var leftNormalized = cloneSubtitleStyleOptions(left);
+  var rightNormalized = cloneSubtitleStyleOptions(right);
+  return leftNormalized.shadowEnabled === rightNormalized.shadowEnabled
+    && leftNormalized.strokeEnabled === rightNormalized.strokeEnabled;
+}
+
+function clampSubtitleStyleNumber(value, minimum, maximum, fallback) {
+  var parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(minimum, Math.min(maximum, Math.round(parsed)));
+}
+
+function currentSubtitleStyleOptions() {
+  var shadowInput = ctx.els.subtitleShadowEnabledEl;
+  var strokeInput = ctx.els.subtitleStrokeEnabledEl;
+  var fontSizeInput = ctx.els.subtitleFontSizeInputEl;
+  var offsetInput = ctx.els.subtitleOffsetInputEl;
+  return cloneSubtitleStyleOptions({
+    shadowEnabled: !shadowInput || shadowInput.checked !== false,
+    strokeEnabled: !strokeInput || strokeInput.checked !== false,
+    fontSizePx: clampSubtitleStyleNumber(
+      fontSizeInput ? fontSizeInput.value : SUBTITLE_STYLE_DEFAULTS.fontSizePx,
+      10,
+      72,
+      SUBTITLE_STYLE_DEFAULTS.fontSizePx
+    ),
+    offsetPx: clampSubtitleStyleNumber(
+      offsetInput ? offsetInput.value : SUBTITLE_STYLE_DEFAULTS.offsetPx,
+      -120,
+      120,
+      SUBTITLE_STYLE_DEFAULTS.offsetPx
+    ),
+  });
+}
+
+function appliedSubtitleStyleOptions() {
+  return cloneSubtitleStyleOptions(ctx.state.subtitleStyleApplied || SUBTITLE_STYLE_DEFAULTS);
+}
+
+function readStoredSubtitleStyleOptions() {
+  if (!ctx || typeof ctx.readVideoSetting !== 'function') return cloneSubtitleStyleOptions(SUBTITLE_STYLE_DEFAULTS);
+  return cloneSubtitleStyleOptions(ctx.readVideoSetting(SUBTITLE_STYLE_SETTING_KEY, SUBTITLE_STYLE_DEFAULTS));
+}
+
+function persistSubtitleStyleOptions(options) {
+  if (!ctx || typeof ctx.writeVideoSetting !== 'function') return;
+  ctx.writeVideoSetting(SUBTITLE_STYLE_SETTING_KEY, cloneSubtitleStyleOptions(options));
+}
+
+function syncSubtitleStyleInputs(options) {
+  var nextOptions = options || SUBTITLE_STYLE_DEFAULTS;
+  if (ctx.els.subtitleShadowEnabledEl) ctx.els.subtitleShadowEnabledEl.checked = nextOptions.shadowEnabled !== false;
+  if (ctx.els.subtitleStrokeEnabledEl) ctx.els.subtitleStrokeEnabledEl.checked = nextOptions.strokeEnabled !== false;
+  if (ctx.els.subtitleFontSizeInputEl) ctx.els.subtitleFontSizeInputEl.value = String(nextOptions.fontSizePx);
+  if (ctx.els.subtitleOffsetInputEl) ctx.els.subtitleOffsetInputEl.value = String(nextOptions.offsetPx);
+}
+
+function applySubtitleStylePreview(options) {
+  var bodyStyle = ctx.body && ctx.body.style ? ctx.body.style : null;
+  var nextOptions = cloneSubtitleStyleOptions(options || currentSubtitleStyleOptions());
+  if (!bodyStyle || typeof bodyStyle.setProperty !== 'function') return nextOptions;
+  bodyStyle.setProperty('--video-subtitle-font-size', String(nextOptions.fontSizePx) + 'px');
+  bodyStyle.setProperty('--video-subtitle-offset', String(nextOptions.offsetPx) + 'px');
+  bodyStyle.setProperty(
+    '--video-subtitle-stroke-width',
+    nextOptions.strokeEnabled ? String(SUBTITLE_STYLE_STROKE_WIDTH_PX) + 'px' : '0px'
+  );
+  bodyStyle.setProperty(
+    '--video-subtitle-shadow',
+    nextOptions.shadowEnabled ? SUBTITLE_STYLE_SHADOW_VALUE : 'none'
+  );
+  return nextOptions;
+}
+
+function handleSubtitleStylePreviewChange() {
+  var nextOptions = currentSubtitleStyleOptions();
+  ctx.state.subtitleStyleDraft = cloneSubtitleStyleOptions(nextOptions);
+  syncSubtitleStyleInputs(nextOptions);
+  applySubtitleStylePreview(nextOptions);
+}
+
+async function handleSubtitleStyleApply() {
+  var nextOptions = currentSubtitleStyleOptions();
+  var previousApplied = appliedSubtitleStyleOptions();
+  if (subtitleStyleOptionsEqual(previousApplied, nextOptions)) {
+    ctx.setStatus('Subtitle style is already applied.');
+    return;
+  }
+  var active = ctx.activeQueueItem();
+  var probePayload = active ? (ctx.state.probeCache[active.path || ''] || null) : null;
+  var selectedSubtitleValue = ctx.els.subtitleTrackSelectEl && !ctx.els.subtitleTrackSelectEl.disabled
+    ? String(ctx.els.subtitleTrackSelectEl.value || '').trim()
+    : '';
+  var burnedInSelectedStreamIndex = null;
+  if (active && probePayload && selectedSubtitleValue) {
+    var selectedStream = ctx.subtitleStreamsForPayload(probePayload).find(function (stream) {
+      return String(stream && stream.index) === selectedSubtitleValue;
+    }) || null;
+    if (selectedStream && ctx.subtitleStreamRequiresBurnIn(selectedStream)) {
+      burnedInSelectedStreamIndex = ctx.normalizeSubtitleStreamIndex(selectedStream.index);
+      if (active.path) {
+        ctx.state.selectedSubtitleStreamIndexByPath[active.path] = burnedInSelectedStreamIndex;
+      }
+    }
+  }
+  if (burnedInSelectedStreamIndex === null && active && probePayload) {
+    burnedInSelectedStreamIndex = ctx.selectedBurnedInSubtitleStreamIndex(active, probePayload);
+  }
+  var hasBurnedInContext = burnedInSelectedStreamIndex !== null || ctx.compatibilitySessionHasBurnedInSubtitles();
+  var needsBurnedInRestart = hasBurnedInContext && !burnedInSubtitleStyleOptionsEqual(previousApplied, nextOptions);
+  ctx.state.subtitleStyleDraft = cloneSubtitleStyleOptions(nextOptions);
+  ctx.state.subtitleStyleApplied = cloneSubtitleStyleOptions(nextOptions);
+  persistSubtitleStyleOptions(nextOptions);
+  syncSubtitleStyleInputs(nextOptions);
+  applySubtitleStylePreview(nextOptions);
+  if (!needsBurnedInRestart) {
+    ctx.state.pendingSubtitleStyleApply = false;
+    ctx.setStatus(
+      hasBurnedInContext
+        ? 'Subtitle style applied. Burned-in subtitles restart only for shadow or stroke changes.'
+        : 'Subtitle style applied.'
+    );
+    return;
+  }
+  if (ctx.state.seekRestartInProgress) {
+    ctx.state.pendingSubtitleStyleApply = true;
+    ctx.setStatus('Subtitle style saved and will apply on the next burned-in compatibility restart.');
+    return;
+  }
+  ctx.state.pendingSubtitleStyleApply = false;
+  ctx.state.pendingAutoplay = true;
+  ctx.state.transportWantsPlay = true;
+  ctx.setStatus('Applying subtitle style to burned-in subtitles.');
+  await ctx.restartCompatibilityAt(ctx.currentGlobalPlaybackSeconds(), 'subtitle-style-apply', {
+    forceSessionRestart: true,
+  });
+}
+
 function persistAudioSelectionFromUi(item) {
   var select = ctx.els.audioTrackSelectEl;
   var probePayload;
@@ -496,6 +664,11 @@ async function handleSubtitleTrackChange() {
   ctx.renderSubtitleTrackSelector = renderSubtitleTrackSelector;
   ctx.handleAudioTrackChange = handleAudioTrackChange;
   ctx.handleSubtitleTrackChange = handleSubtitleTrackChange;
+  ctx.currentSubtitleStyleOptions = currentSubtitleStyleOptions;
+  ctx.appliedSubtitleStyleOptions = appliedSubtitleStyleOptions;
+  ctx.applySubtitleStylePreview = applySubtitleStylePreview;
+  ctx.syncSubtitleStyleInputs = syncSubtitleStyleInputs;
+  ctx.handleSubtitleStyleApply = handleSubtitleStyleApply;
 
   if (ctx.els.audioTrackSelectEl) {
     ctx.els.audioTrackSelectEl.addEventListener('change', function () {
@@ -507,4 +680,28 @@ async function handleSubtitleTrackChange() {
       void handleSubtitleTrackChange();
     });
   }
+  if (ctx.els.subtitleShadowEnabledEl) {
+    ctx.els.subtitleShadowEnabledEl.addEventListener('change', handleSubtitleStylePreviewChange);
+  }
+  if (ctx.els.subtitleStrokeEnabledEl) {
+    ctx.els.subtitleStrokeEnabledEl.addEventListener('change', handleSubtitleStylePreviewChange);
+  }
+  if (ctx.els.subtitleFontSizeInputEl) {
+    ctx.els.subtitleFontSizeInputEl.addEventListener('input', handleSubtitleStylePreviewChange);
+    ctx.els.subtitleFontSizeInputEl.addEventListener('change', handleSubtitleStylePreviewChange);
+  }
+  if (ctx.els.subtitleOffsetInputEl) {
+    ctx.els.subtitleOffsetInputEl.addEventListener('input', handleSubtitleStylePreviewChange);
+    ctx.els.subtitleOffsetInputEl.addEventListener('change', handleSubtitleStylePreviewChange);
+  }
+  if (ctx.els.subtitleStyleApplyButtonEl) {
+    ctx.els.subtitleStyleApplyButtonEl.addEventListener('click', function () {
+      void handleSubtitleStyleApply();
+    });
+  }
+  var initialSubtitleStyleOptions = readStoredSubtitleStyleOptions();
+  ctx.state.subtitleStyleDraft = cloneSubtitleStyleOptions(initialSubtitleStyleOptions);
+  ctx.state.subtitleStyleApplied = cloneSubtitleStyleOptions(initialSubtitleStyleOptions);
+  syncSubtitleStyleInputs(initialSubtitleStyleOptions);
+  applySubtitleStylePreview(initialSubtitleStyleOptions);
 }

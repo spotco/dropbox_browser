@@ -180,34 +180,34 @@ playback behavior, and be covered by e2e tests in embedded and fullscreen mode.
 
 ## Phase 7 - Subtitle Styling Controls
 
-- [ ] Add black subtitle drop shadows, enabled by default, for both WebVTT
+- [x] Add black subtitle drop shadows, enabled by default, for both WebVTT
       overlay subtitles and burned-in subtitles.
-- [ ] Make WebVTT and burned-in subtitle shadows look as similar as practical,
+- [x] Make WebVTT and burned-in subtitle shadows look as similar as practical,
       documenting any ffmpeg/subtitle-format limitation that prevents an exact
       match; pixel-identical rendering is not required.
-- [ ] Add subtitle styling controls in the tracks area below the subtitle track
+- [x] Add subtitle styling controls in the tracks area below the subtitle track
       section:
       drop shadow enable/disable checkbox, subtitle text size number input, and
       subtitle height-from-default number input that accepts negative values.
-- [ ] Use current shipped subtitle presentation as the default values, except
+- [x] Use current shipped subtitle presentation as the default values, except
       drop shadow should default to enabled.
-- [ ] Choose reasonable units/ranges for the number inputs that map cleanly to
+- [x] Choose reasonable units/ranges for the number inputs that map cleanly to
       both CSS WebVTT rendering and ffmpeg burn-in rendering.
-- [ ] Apply changes immediately to WebVTT overlay subtitles as controls change,
+- [x] Apply changes immediately to WebVTT overlay subtitles as controls change,
       without requiring playback/session restart.
-- [ ] Add an Apply button for subtitle styling changes.
-- [ ] Apply burned-in subtitle styling only when the Apply button is pressed,
+- [x] Add an Apply button for subtitle styling changes.
+- [x] Apply burned-in subtitle styling only when the Apply button is pressed,
       using the existing compatibility restart path when a burned-in subtitle
       session needs regeneration.
-- [ ] Persist subtitle styling settings only when the Apply button is pressed,
+- [x] Persist subtitle styling settings only when the Apply button is pressed,
       not on each live WebVTT preview change.
-- [ ] Persisted drop shadow, text size, and height offset settings apply to all
+- [x] Persisted drop shadow, text size, and height offset settings apply to all
       videos and subtitle modes, including future playback sessions.
-- [ ] Keep the settings shared across embedded and fullscreen playback, with
+- [x] Keep the settings shared across embedded and fullscreen playback, with
       matching visual behavior in both modes.
-- [ ] Keep the settings independent from subtitle track selection and audio
+- [x] Keep the settings independent from subtitle track selection and audio
       stream preferences.
-- [ ] Add JS, web, or e2e coverage for defaults, WebVTT live preview,
+- [x] Add JS, web, or e2e coverage for defaults, WebVTT live preview,
       Apply-triggered persistence, and burned-in restart/apply behavior.
 
 ## Phase 8 - Regression Checks
