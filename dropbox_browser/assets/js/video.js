@@ -16,6 +16,26 @@ import {initPane} from './video/pane.js';
   var pane = document.getElementById('video-player-pane');
   if (!pane) return;
 
+  function readVideoSetting(key, fallback) {
+    try {
+      if (typeof Settings === 'undefined' || !Settings || typeof Settings.get !== 'function') return fallback;
+      return Settings.get(key, fallback);
+    }
+    catch (_error) {
+      return fallback;
+    }
+  }
+
+  function writeVideoSetting(key, value) {
+    try {
+      if (typeof Settings === 'undefined' || !Settings || typeof Settings.set !== 'function') return;
+      Settings.set(key, value);
+    }
+    catch (_error) {
+      // Test contexts may provide partial Settings shims.
+    }
+  }
+
   var ctx = {
     pane: pane,
     els: {
@@ -42,6 +62,11 @@ import {initPane} from './video/pane.js';
       volumeSliderEl: document.getElementById('video-volume-slider'),
       fullscreenButton: document.getElementById('video-fullscreen-toggle'),
       pipButton: document.getElementById('video-pip-toggle'),
+      loopButton: document.getElementById('video-loop-toggle'),
+      previousButton: document.getElementById('video-previous'),
+      nextButton: document.getElementById('video-next'),
+      back15Button: document.getElementById('video-back-15'),
+      forward15Button: document.getElementById('video-forward-15'),
       progressSliderEl: document.getElementById('video-progress-slider'),
       elapsedTimeEl: document.getElementById('video-elapsed-time'),
       totalTimeEl: document.getElementById('video-total-time'),
@@ -76,6 +101,8 @@ import {initPane} from './video/pane.js';
       queue: [],
       selectedQueueIndex: -1,
       activeQueueIndex: -1,
+      loopQueue: false,
+      loopQueueSettingKey: 'video-loop-queue',
       loadingLibrary: false,
       loadingPlaybackStatus: false,
       playbackStatusLoaded: false,
@@ -186,6 +213,8 @@ import {initPane} from './video/pane.js';
     setStatus: function (text) {
       if (ctx.els.statusEl) ctx.els.statusEl.textContent = text;
     },
+    readVideoSetting: readVideoSetting,
+    writeVideoSetting: writeVideoSetting,
   };
 
   initShared(ctx);
@@ -202,6 +231,7 @@ import {initPane} from './video/pane.js';
   initPane(ctx);
 
   pane.setAttribute('data-video-player-ready', 'subtitles');
+  ctx.restoreVideoLoopQueue();
   ctx.state.audioTrackPreferenceByLayout = ctx.loadStoredTrackPreferences('dropbox-browser-video-audio-track-preferences');
   ctx.state.subtitleTrackPreferenceByLayout = ctx.loadStoredTrackPreferences('dropbox-browser-video-subtitle-track-preferences');
   ctx.updateCurrentFolder(ctx.currentFolderPath());
@@ -235,7 +265,11 @@ import {initPane} from './video/pane.js';
   });
 
   pane.addEventListener('video-playback-ended', function () {
-    ctx.state.activeQueueIndex = advanceQueueAfterPlaybackEnd(ctx.state.queue.length, ctx.state.activeQueueIndex);
+    ctx.state.activeQueueIndex = advanceQueueAfterPlaybackEnd(
+      ctx.state.queue.length,
+      ctx.state.activeQueueIndex,
+      ctx.state.loopQueue
+    );
     if (ctx.state.activeQueueIndex >= 0) {
       ctx.state.selectedQueueIndex = ctx.state.activeQueueIndex;
       ctx.state.pendingAutoplay = true;
@@ -244,5 +278,5 @@ import {initPane} from './video/pane.js';
     ctx.renderQueue();
   });
 
-  ctx.paneApi.syncPaneMode(Settings.get('bottom-pane-mode', 'server-log'));
+  ctx.paneApi.syncPaneMode(ctx.readVideoSetting('bottom-pane-mode', 'server-log'));
 }());

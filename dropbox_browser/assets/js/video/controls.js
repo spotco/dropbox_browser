@@ -1,5 +1,8 @@
 import {
+  clampCompatibilityRestartTargetSeconds,
+  nextQueueIndex,
   playbackDurationSeconds,
+  previousQueueIndex,
 } from '../video-core.js';
 import {
   CONTROLS_IDLE_HIDE_MS,
@@ -100,6 +103,9 @@ function resetPlaybackProgress() {
     ctx.setControlButtonState(ctx.els.pipButton, 'Picture in picture', VIDEO_ICONS.pipEnter);
     ctx.els.pipButton.disabled = true;
   }
+  syncLoopQueueButton();
+  syncQueueNavigationButtons(false);
+  syncSeekStepButtons(false, 0);
   if (ctx.els.progressSliderEl) {
     ctx.els.progressSliderEl.min = '0';
     ctx.els.progressSliderEl.max = '0';
@@ -130,6 +136,7 @@ function playbackShouldBeRunning() {
 function syncTransportControls() {
   if (!ctx.els.videoEl) return;
   var canControl = videoControlsAvailable();
+  var duration = currentPlaybackDurationSeconds();
   if (!canControl) {
     if (!ctx.state.loadingOverlayVisible && !ctx.state.controlsScrubReveal) {
       hideControlsOverlay();
@@ -189,6 +196,139 @@ function syncTransportControls() {
       isPipActive ? VIDEO_ICONS.pipExit : VIDEO_ICONS.pipEnter
     );
   }
+  syncLoopQueueButton();
+  syncQueueNavigationButtons(canControl);
+  syncSeekStepButtons(canControl, duration);
+}
+
+function syncLoopQueueButton() {
+  if (!ctx.els.loopButton) return;
+  var enabled = Boolean(ctx.state.loopQueue);
+  ctx.els.loopButton.disabled = false;
+  ctx.els.loopButton.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+  ctx.els.loopButton.classList.toggle('is-active', enabled);
+  ctx.setControlButtonState(
+    ctx.els.loopButton,
+    enabled ? 'Loop queue on' : 'Loop queue',
+    VIDEO_ICONS.loop
+  );
+}
+
+function restoreVideoLoopQueue() {
+  var key = ctx.state.loopQueueSettingKey || 'video-loop-queue';
+  var stored = typeof ctx.readVideoSetting === 'function'
+    ? ctx.readVideoSetting(key, false)
+    : false;
+  ctx.state.loopQueue = Boolean(stored);
+  syncLoopQueueButton();
+}
+
+function persistVideoLoopQueue() {
+  var key = ctx.state.loopQueueSettingKey || 'video-loop-queue';
+  if (typeof ctx.writeVideoSetting === 'function') {
+    ctx.writeVideoSetting(key, Boolean(ctx.state.loopQueue));
+  }
+}
+
+function toggleVideoLoopQueue() {
+  ctx.state.loopQueue = !ctx.state.loopQueue;
+  persistVideoLoopQueue();
+  syncLoopQueueButton();
+  syncTransportControls();
+}
+
+function currentPlaybackDurationSeconds() {
+  var active = ctx.activeQueueItem();
+  var probePayload = active ? ctx.state.probeCache[active.path || ''] || null : null;
+  return playbackDurationSeconds(
+    ctx.els.videoEl ? Number(ctx.els.videoEl.duration) : NaN,
+    probePayload,
+    ctx.state.playbackMode
+  );
+}
+
+function syncQueueNavigationButtons(canControl) {
+  var queueLength = ctx.state.queue.length;
+  var activeIndex = ctx.state.activeQueueIndex;
+  if (ctx.els.previousButton) {
+    ctx.els.previousButton.disabled = !canControl || previousQueueIndex(queueLength, activeIndex, ctx.state.loopQueue) < 0;
+    ctx.setControlButtonState(ctx.els.previousButton, 'Previous video', VIDEO_ICONS.previous);
+  }
+  if (ctx.els.nextButton) {
+    ctx.els.nextButton.disabled = !canControl || nextQueueIndex(queueLength, activeIndex, ctx.state.loopQueue) < 0;
+    ctx.setControlButtonState(ctx.els.nextButton, 'Next video', VIDEO_ICONS.next);
+  }
+}
+
+function syncSeekStepButtons(canControl, duration) {
+  var canSeek = canControl && Number.isFinite(Number(duration)) && Number(duration) > 0;
+  if (ctx.els.back15Button) {
+    ctx.els.back15Button.disabled = !canSeek;
+    ctx.setControlButtonState(ctx.els.back15Button, 'Back 15 seconds', VIDEO_ICONS.back15);
+  }
+  if (ctx.els.forward15Button) {
+    ctx.els.forward15Button.disabled = !canSeek;
+    ctx.setControlButtonState(ctx.els.forward15Button, 'Forward 15 seconds', VIDEO_ICONS.forward15);
+  }
+}
+
+function playQueueIndexFromControls(index) {
+  if (index < 0 || index >= ctx.state.queue.length) return;
+  ctx.state.activeQueueIndex = index;
+  ctx.state.selectedQueueIndex = index;
+  ctx.state.pendingAutoplay = true;
+  ctx.state.transportWantsPlay = true;
+  ctx.renderQueue();
+  revealControlsOverlay();
+}
+
+function playPreviousVideo() {
+  playQueueIndexFromControls(previousQueueIndex(
+    ctx.state.queue.length,
+    ctx.state.activeQueueIndex,
+    ctx.state.loopQueue
+  ));
+}
+
+function playNextVideo() {
+  playQueueIndexFromControls(nextQueueIndex(
+    ctx.state.queue.length,
+    ctx.state.activeQueueIndex,
+    ctx.state.loopQueue
+  ));
+}
+
+function seekBySeconds(deltaSeconds) {
+  if (!ctx.els.videoEl || !videoControlsAvailable()) return;
+  var duration = currentPlaybackDurationSeconds();
+  if (!Number.isFinite(duration) || duration <= 0) return;
+  var currentSeconds = ctx.currentGlobalPlaybackSeconds();
+  var target = Math.max(0, Math.min(duration, currentSeconds + deltaSeconds));
+  if (deltaSeconds > 0) {
+    target = clampCompatibilityRestartTargetSeconds(target, duration);
+  }
+  ctx.state.controlsScrubReveal = true;
+  revealControlsOverlay();
+  void ctx.restartCompatibilityAt(target, deltaSeconds < 0 ? 'step-back-15' : 'step-forward-15');
+}
+
+function eventTargetIsTextEntry(target) {
+  if (!target) return false;
+  var tagName = String(target.tagName || '').toLowerCase();
+  if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') return true;
+  return Boolean(target.isContentEditable);
+}
+
+function handleVideoSpaceKey(event) {
+  if (!event || event.key !== ' ') return;
+  var fullscreenHost = ctx.fullscreenHostElement();
+  var stageFullscreen = fullscreenHost && document.fullscreenElement === fullscreenHost;
+  if (!stageFullscreen && !ctx.state.paneActive) return;
+  if (!stageFullscreen && eventTargetIsTextEntry(event.target)) return;
+  if (!videoControlsAvailable()) return;
+  event.preventDefault();
+  toggleVideoPlayPause();
+  revealControlsOverlay();
 }
 
 function syncPlaybackProgress() {
@@ -341,6 +481,15 @@ async function togglePictureInPicture() {
   ctx.videoControlsAvailable = videoControlsAvailable;
   ctx.playbackShouldBeRunning = playbackShouldBeRunning;
   ctx.syncTransportControls = syncTransportControls;
+  ctx.syncLoopQueueButton = syncLoopQueueButton;
+  ctx.restoreVideoLoopQueue = restoreVideoLoopQueue;
+  ctx.persistVideoLoopQueue = persistVideoLoopQueue;
+  ctx.toggleVideoLoopQueue = toggleVideoLoopQueue;
+  ctx.syncQueueNavigationButtons = syncQueueNavigationButtons;
+  ctx.syncSeekStepButtons = syncSeekStepButtons;
+  ctx.playPreviousVideo = playPreviousVideo;
+  ctx.playNextVideo = playNextVideo;
+  ctx.seekVideoBySeconds = seekBySeconds;
   ctx.syncPlaybackProgress = syncPlaybackProgress;
   ctx.requestVideoPlay = requestVideoPlay;
   ctx.toggleVideoPlayPause = toggleVideoPlayPause;
@@ -418,6 +567,37 @@ async function togglePictureInPicture() {
       revealControlsOverlay();
     });
   }
+  if (ctx.els.loopButton) {
+    ctx.els.loopButton.addEventListener('click', function (event) {
+      event.stopPropagation();
+      toggleVideoLoopQueue();
+      revealControlsOverlay();
+    });
+  }
+  if (ctx.els.previousButton) {
+    ctx.els.previousButton.addEventListener('click', function (event) {
+      event.stopPropagation();
+      playPreviousVideo();
+    });
+  }
+  if (ctx.els.nextButton) {
+    ctx.els.nextButton.addEventListener('click', function (event) {
+      event.stopPropagation();
+      playNextVideo();
+    });
+  }
+  if (ctx.els.back15Button) {
+    ctx.els.back15Button.addEventListener('click', function (event) {
+      event.stopPropagation();
+      seekBySeconds(-15);
+    });
+  }
+  if (ctx.els.forward15Button) {
+    ctx.els.forward15Button.addEventListener('click', function (event) {
+      event.stopPropagation();
+      seekBySeconds(15);
+    });
+  }
   if (ctx.els.progressSliderEl) {
     ctx.els.progressSliderEl.addEventListener('input', function () {
       ctx.state.progressSliderActive = true;
@@ -481,6 +661,7 @@ async function togglePictureInPicture() {
     ctx.els.videoEl.addEventListener('volumechange', syncTransportControls);
     if (typeof document !== 'undefined') {
       document.addEventListener('fullscreenchange', syncTransportControls);
+      document.addEventListener('keydown', handleVideoSpaceKey);
     }
     ctx.els.videoEl.addEventListener('enterpictureinpicture', syncTransportControls);
     ctx.els.videoEl.addEventListener('leavepictureinpicture', syncTransportControls);
