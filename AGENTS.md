@@ -46,7 +46,8 @@ Load only the doc that matches the work:
 - `dropbox_browser/views.py` - server-rendered HTML/CSS/JS asset responses.
 - `tests/` - stdlib `unittest` tests with fake rclone and isolated temp/cache paths.
 - `Cache/`, `Temp/`, `.dropbox-browser-temp/` - generated local state, ignored by git.
-- `TODO_NOTES` - human-owned notes; do not edit unless explicitly requested.
+- `plans/TODO_NOTES` - human-owned active plan list and scratch notes; do not
+  read or edit unless explicitly requested.
 
 ## Hard Safety Rules
 
@@ -174,10 +175,13 @@ the smallest fix, rerun that test, then run the relevant group. See
   1. Check the current branch with `git branch --show-current`.
   2. Inspect `git status --short`.
   3. Stage only the files that belong to the requested work.
-  4. Leave unrelated local edits uncommitted unless the human explicitly asks
+  4. Include `plans/TODO_NOTES` in the commit when it has local changes and
+     the human is checking work into GitHub. Agents must still never read, edit,
+     or rewrite `plans/TODO_NOTES` unless the human explicitly asks.
+  5. Leave unrelated local edits uncommitted unless the human explicitly asks
      to include them.
-  5. Commit with a focused message.
-  6. Push the current branch to `origin` unless the human explicitly asks for a
+  6. Commit with a focused message.
+  7. Push the current branch to `origin` unless the human explicitly asks for a
      different branch or flow.
 - Do not waste time probing `.git/index.lock` unless a git command actually
   fails with an index-lock error. If that specific error happens, confirm there
@@ -187,4 +191,5 @@ the smallest fix, rerun that test, then run the relevant group. See
   asked.
 - Git may warn about `C:\Users\mooto/.config/git/ignore`; this has not blocked
   normal status, commit, or push operations.
-- TODO_NOTES is a human-edited file for notes - don't read it, edit it or modify its git status
+- `plans/TODO_NOTES` is human-edited. Do not read or edit it unless explicitly
+  requested. When checking work into GitHub, stage and commit it if it changed.
