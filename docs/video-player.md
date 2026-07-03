@@ -332,8 +332,21 @@ Two subtitle paths:
 - **Burned-in** — selected bitmap or burn-in-required tracks set
   `subtitle_stream_index` on session create; ffmpeg embeds subtitles in the HLS output.
 
+Subtitle styling is intentionally only approximate across those two paths. The
+WebVTT overlay uses browser CSS text rendering, while burned-in subtitle tracks
+are ffmpeg-composited subtitle bitmaps. The current burned-in styling path
+duplicates the subtitle raster into blackened copies for a 1 px outline plus a
+2 px drop shadow, then overlays the original subtitle image on top. That keeps
+the apparent stroke/shadow direction and weight close to the WebVTT overlay,
+but it cannot exactly match browser text antialiasing, outline joins, or blur
+behavior.
+
 The client may wait for subtitle preload before revealing playback when a sidecar
 track is selected at startup.
+
+Applied subtitle styling is shared across videos and pane modes, but the burned-in
+ffmpeg path currently only consumes the shadow and stroke toggles. Subtitle size
+and vertical offset remain WebVTT overlay controls for now.
 
 `subtitles.js` owns the subtitle mount contract. The active mounted state now
 lives in one explicit client object:

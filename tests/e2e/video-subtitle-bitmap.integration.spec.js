@@ -203,15 +203,70 @@ test("bitmap subtitle tracks restart compatibility playback instead of mounting 
   await expect(page.locator("#video-subtitle-track")).toHaveValue("3");
   await waitForSubtitleStreamIndex(page, 3);
 
-  const bitmapRestart = waitForSessionPost(
+  await ensureTrackPanelOpen(page);
+  await page.locator("#video-subtitle-shadow-enabled").uncheck();
+  await page.locator("#video-subtitle-stroke-enabled").uncheck();
+  await page.locator("#video-subtitle-font-size").fill("34");
+  await page.locator("#video-subtitle-offset").fill("-18");
+  await expect
+    .poll(async () => {
+      return page.evaluate(() => ({
+        strokeWidth: document.body.style.getPropertyValue("--video-subtitle-stroke-width").trim(),
+        fontSize: document.body.style.getPropertyValue("--video-subtitle-font-size").trim(),
+        offset: document.body.style.getPropertyValue("--video-subtitle-offset").trim(),
+      }));
+    }, { timeout: 5000 })
+    .toEqual({
+      strokeWidth: "0px",
+      fontSize: "34px",
+      offset: "-18px",
+    });
+
+  const bitmapRestartBeforeApply = waitForSessionPost(
     page,
-    (body) => body.includes("path=Videos%2Fbitmap.mkv") && body.includes("subtitle_stream_index=5"),
+    (body) => (
+      body.includes("path=Videos%2Fbitmap.mkv")
+      && body.includes("subtitle_stream_index=5")
+      && body.includes("subtitle_stroke_enabled=1")
+    ),
   );
   await selectTrackOption(page, "#video-subtitle-track", "5");
-  await bitmapRestart;
+  await bitmapRestartBeforeApply;
   await waitForVisibleVideo(page);
   await expect(page.locator("#video-subtitle-track")).toHaveValue("5");
   await expectNoMountedSubtitleTrack(page);
+
+  const bitmapRestartAfterApply = waitForSessionPost(
+    page,
+    (body) => body.includes("path=Videos%2Fbitmap.mkv"),
+  );
+  await page.locator("#video-subtitle-style-apply").click();
+  const bitmapApplyRequest = await bitmapRestartAfterApply;
+  expect(String(bitmapApplyRequest.postData() || "")).toContain("subtitle_stream_index=5");
+  expect(String(bitmapApplyRequest.postData() || "")).toContain("subtitle_stroke_enabled=0");
+  expect(String(bitmapApplyRequest.postData() || "")).toContain("subtitle_shadow_enabled=0");
+  await waitForVisibleVideo(page);
+  await expectNoMountedSubtitleTrack(page);
+
+  let styleOnlyRestartPosted = false;
+  const onStyleOnlyRestartRequest = (request) => {
+    if (request.method() !== "POST") return;
+    if (new URL(request.url()).pathname !== "/video/endpoints/session") return;
+    const body = String(request.postData() || "");
+    if (body.includes("path=Videos%2Fbitmap.mkv")) {
+      styleOnlyRestartPosted = true;
+    }
+  };
+  page.on("request", onStyleOnlyRestartRequest);
+  try {
+    await page.locator("#video-subtitle-font-size").fill("40");
+    await page.locator("#video-subtitle-offset").fill("-24");
+    await page.locator("#video-subtitle-style-apply").click();
+    await page.waitForTimeout(300);
+  } finally {
+    page.off("request", onStyleOnlyRestartRequest);
+  }
+  expect(styleOnlyRestartPosted).toBe(false);
 
   await scrubInSessionForward(page, 2);
   await expect(page.locator("#video-subtitle-track")).toHaveValue("5");

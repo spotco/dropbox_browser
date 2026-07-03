@@ -29,7 +29,7 @@ function createVideoCtx() {
       remove() {},
       toggle() {},
     },
-    style: {setProperty() {}},
+    style: {setProperty() {}, removeProperty() {}, getPropertyValue() { return ""; }},
     textTracks: [],
     querySelectorAll() {
       return [];
@@ -37,11 +37,15 @@ function createVideoCtx() {
     hidden: false,
     disabled: false,
     value: "0",
+    checked: true,
   });
 
   const ctx = {
     pane,
-    body: {dataset: {currentFolderPath: ""}},
+    body: {
+      dataset: {currentFolderPath: ""},
+      style: {setProperty() {}, removeProperty() {}, getPropertyValue() { return ""; }},
+    },
     els: {
       pathEl: makeEl(),
       statusEl: makeEl(),
@@ -68,6 +72,12 @@ function createVideoCtx() {
       totalTimeEl: makeEl(),
       audioTrackSelectEl: makeEl(),
       subtitleTrackSelectEl: makeEl(),
+      subtitleStyleControlsEl: makeEl(),
+      subtitleShadowEnabledEl: makeEl(),
+      subtitleStrokeEnabledEl: makeEl(),
+      subtitleFontSizeInputEl: makeEl(),
+      subtitleOffsetInputEl: makeEl(),
+      subtitleStyleApplyButtonEl: makeEl(),
       debugMetaEl: makeEl(),
       debugCurrentCueEl: makeEl(),
       debugNextCueEl: makeEl(),
@@ -118,11 +128,14 @@ function createVideoCtx() {
       compatibilitySubtitleStreamIndex: null,
       requestedSeekSeconds: null,
       seekRestartInProgress: false,
+      pendingSubtitleStyleApply: false,
       playbackSyncToken: 0,
       probeCache: Object.create(null),
       probeFailures: Object.create(null),
       selectedAudioStreamIndexByPath: Object.create(null),
       selectedSubtitleStreamIndexByPath: Object.create(null),
+      subtitleStyleDraft: null,
+      subtitleStyleApplied: null,
       audioTrackPreferenceByLayout: Object.create(null),
       subtitleTrackPreferenceByLayout: Object.create(null),
       subtitleFullVttCacheByPath: Object.create(null),

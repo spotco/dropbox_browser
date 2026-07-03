@@ -48,6 +48,10 @@ function createCtx(activeItem) {
       progressSliderEl: makeEl(),
       elapsedTimeEl: makeEl(),
       subtitleTrackSelectEl: makeEl(),
+      subtitleShadowEnabledEl: makeEl(),
+      subtitleStrokeEnabledEl: Object.assign(makeEl(), { checked: true }),
+      subtitleFontSizeInputEl: Object.assign(makeEl(), { value: "28" }),
+      subtitleOffsetInputEl: Object.assign(makeEl(), { value: "0" }),
     },
     state: {
       paneActive: true,
@@ -89,10 +93,13 @@ function createCtx(activeItem) {
       compatibilityPlaybackRevealPending: false,
       compatibilitySubtitleWaitStageActive: false,
       requestedSeekSeconds: null,
+      pendingSubtitleStyleApply: false,
       hlsController: null,
       probeCache: Object.create(null),
       selectedAudioStreamIndexByPath: Object.create(null),
       selectedSubtitleStreamIndexByPath: Object.create(null),
+      subtitleStyleDraft: null,
+      subtitleStyleApplied: null,
       subtitleTrackPreferenceByLayout: Object.create(null),
       subtitleFullVttCacheByPath: Object.create(null),
       subtitleWarmInFlightByPath: Object.create(null),
@@ -194,6 +201,22 @@ function createCtx(activeItem) {
     showPlaybackPlaceholder() {},
     resetPlaybackProgress() {},
     flushNativeSubtitleRenderSurface() {},
+    currentSubtitleStyleOptions() {
+      return {
+        shadowEnabled: true,
+        strokeEnabled: true,
+        fontSizePx: 34,
+        offsetPx: -18,
+      };
+    },
+    appliedSubtitleStyleOptions() {
+      return {
+        shadowEnabled: true,
+        strokeEnabled: true,
+        fontSizePx: 28,
+        offsetPx: 0,
+      };
+    },
   };
 }
 
@@ -247,6 +270,47 @@ test("createCompatibilitySession includes force_audio_transcode when requested",
   assert.match(requests[0], /audio_stream_index=2/);
   assert.match(requests[0], /start_time_seconds=18/);
   assert.match(requests[0], /force_audio_transcode=1/);
+});
+
+test("createCompatibilitySession uses applied subtitle styling for burned-in subtitle sessions", async () => {
+  const {initCompatibility} = await importModuleFromWorkspace("dropbox_browser/assets/js/video/compatibility.js");
+  const item = {path: "Videos/copy.mkv"};
+  const ctx = createCtx(item);
+  const requests = [];
+  ctx.currentSubtitleStyleOptions = function () {
+    return {
+      shadowEnabled: false,
+      strokeEnabled: false,
+      fontSizePx: 34,
+      offsetPx: -18,
+    };
+  };
+  ctx.appliedSubtitleStyleOptions = function () {
+    return {
+      shadowEnabled: true,
+      strokeEnabled: true,
+      fontSizePx: 28,
+      offsetPx: 0,
+    };
+  };
+  global.fetch = async function (_url, options) {
+    requests.push(String(options && options.body || ""));
+    return {
+      ok: true,
+      async json() {
+        return {status: "ok", session_id: "s1"};
+      },
+    };
+  };
+  global.window = { setTimeout, clearTimeout };
+  initCompatibility(ctx);
+
+  await ctx.createCompatibilitySession(item, 2, 18, 5, {});
+
+  assert.equal(requests.length, 1);
+  assert.match(requests[0], /subtitle_stream_index=5/);
+  assert.match(requests[0], /subtitle_stroke_enabled=1/);
+  assert.match(requests[0], /subtitle_shadow_enabled=1/);
 });
 
 test("copy-mode fatal HLS media error schedules forced-transcode recovery once", async () => {

@@ -1421,6 +1421,8 @@ def build_ffmpeg_hls_command(
     segment_base_url: str,
     audio_stream_index: int | None = None,
     subtitle_stream_index: int | None = None,
+    subtitle_stroke_enabled: bool = True,
+    subtitle_shadow_enabled: bool = True,
     start_time_seconds: float = 0.0,
     read_rate: float = 0.0,
     read_rate_initial_burst_seconds: float = 0.0,
@@ -1467,9 +1469,53 @@ def build_ffmpeg_hls_command(
             "0:v:0",
         ])
     else:
+        if subtitle_stroke_enabled and subtitle_shadow_enabled:
+            subtitle_filter = (
+                f"[0:{subtitle_stream_index}]format=rgba,split=6"
+                "[sub_main][sub_shadow_src][sub_stroke_left_src][sub_stroke_right_src]"
+                "[sub_stroke_up_src][sub_stroke_down_src];"
+                "[sub_shadow_src]colorchannelmixer=rr=0:gg=0:bb=0:aa=0.85[sub_shadow];"
+                "[sub_stroke_left_src]colorchannelmixer=rr=0:gg=0:bb=0:aa=0.9[sub_stroke_left];"
+                "[sub_stroke_right_src]colorchannelmixer=rr=0:gg=0:bb=0:aa=0.9[sub_stroke_right];"
+                "[sub_stroke_up_src]colorchannelmixer=rr=0:gg=0:bb=0:aa=0.9[sub_stroke_up];"
+                "[sub_stroke_down_src]colorchannelmixer=rr=0:gg=0:bb=0:aa=0.9[sub_stroke_down];"
+                "[0:v:0][sub_stroke_left]overlay=-1:0[tmp1];"
+                "[tmp1][sub_stroke_right]overlay=1:0[tmp2];"
+                "[tmp2][sub_stroke_up]overlay=0:-1[tmp3];"
+                "[tmp3][sub_stroke_down]overlay=0:1[tmp4];"
+                "[tmp4][sub_shadow]overlay=2:2[tmp5];"
+                "[tmp5][sub_main]overlay[vout]"
+            )
+        elif subtitle_stroke_enabled:
+            subtitle_filter = (
+                f"[0:{subtitle_stream_index}]format=rgba,split=5"
+                "[sub_main][sub_stroke_left_src][sub_stroke_right_src]"
+                "[sub_stroke_up_src][sub_stroke_down_src];"
+                "[sub_stroke_left_src]colorchannelmixer=rr=0:gg=0:bb=0:aa=0.9[sub_stroke_left];"
+                "[sub_stroke_right_src]colorchannelmixer=rr=0:gg=0:bb=0:aa=0.9[sub_stroke_right];"
+                "[sub_stroke_up_src]colorchannelmixer=rr=0:gg=0:bb=0:aa=0.9[sub_stroke_up];"
+                "[sub_stroke_down_src]colorchannelmixer=rr=0:gg=0:bb=0:aa=0.9[sub_stroke_down];"
+                "[0:v:0][sub_stroke_left]overlay=-1:0[tmp1];"
+                "[tmp1][sub_stroke_right]overlay=1:0[tmp2];"
+                "[tmp2][sub_stroke_up]overlay=0:-1[tmp3];"
+                "[tmp3][sub_stroke_down]overlay=0:1[tmp4];"
+                "[tmp4][sub_main]overlay[vout]"
+            )
+        elif subtitle_shadow_enabled:
+            subtitle_filter = (
+                f"[0:{subtitle_stream_index}]format=rgba,split=2[sub_main][sub_shadow_src];"
+                "[sub_shadow_src]colorchannelmixer=rr=0:gg=0:bb=0:aa=0.85[sub_shadow];"
+                "[0:v:0][sub_shadow]overlay=2:2[tmp];"
+                "[tmp][sub_main]overlay[vout]"
+            )
+        else:
+            subtitle_filter = (
+                f"[0:{subtitle_stream_index}]format=rgba[sub_main];"
+                "[0:v:0][sub_main]overlay[vout]"
+            )
         command.extend([
             "-filter_complex",
-            f"[0:v:0][0:{subtitle_stream_index}]overlay[vout]",
+            subtitle_filter,
             "-map",
             "[vout]",
         ])
@@ -1653,6 +1699,8 @@ class VideoSessionManager:
         file_size: int | None = None,
         audio_stream_index: int | None = None,
         subtitle_stream_index: int | None = None,
+        subtitle_stroke_enabled: bool = True,
+        subtitle_shadow_enabled: bool = True,
         start_time_seconds: float = 0.0,
         force_video_transcode: bool = False,
         force_audio_transcode: bool = False,
@@ -1701,6 +1749,8 @@ class VideoSessionManager:
             segment_base_url=segment_base_url,
             audio_stream_index=audio_stream_index,
             subtitle_stream_index=subtitle_stream_index,
+            subtitle_stroke_enabled=subtitle_stroke_enabled,
+            subtitle_shadow_enabled=subtitle_shadow_enabled,
             start_time_seconds=start_time_seconds,
             read_rate=float(getattr(video_config, "ffmpeg_read_rate", 0.0) or 0.0),
             read_rate_initial_burst_seconds=float(
@@ -1721,6 +1771,8 @@ class VideoSessionManager:
             path=rel_path,
             audio_stream_index=audio_stream_index,
             subtitle_stream_index=subtitle_stream_index,
+            subtitle_stroke_enabled=subtitle_stroke_enabled,
+            subtitle_shadow_enabled=subtitle_shadow_enabled,
             start_time_seconds=start_time_seconds,
             force_video_transcode=force_video_transcode,
             force_audio_transcode=force_audio_transcode,

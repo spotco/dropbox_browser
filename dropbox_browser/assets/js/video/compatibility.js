@@ -1024,14 +1024,21 @@ function attachCompatibilityVideo(playlistUrl, title, meta, startSeconds, surfac
 
 async function createCompatibilitySession(item, audioStreamIndex, startSeconds, subtitleStreamIndex, options) {
   var body = 'path=' + encodeURIComponent(item.path || '')
-      + '&source=remote'
-      + '&start_time_seconds=' + encodeURIComponent(String(Math.max(0, Number(startSeconds) || 0)));
-    if (typeof audioStreamIndex === 'number') {
-      body += '&audio_stream_index=' + encodeURIComponent(String(audioStreamIndex));
+    + '&source=remote'
+    + '&start_time_seconds=' + encodeURIComponent(String(Math.max(0, Number(startSeconds) || 0)));
+  var subtitleStyleOptions = typeof ctx.appliedSubtitleStyleOptions === 'function'
+    ? ctx.appliedSubtitleStyleOptions()
+    : null;
+  if (typeof audioStreamIndex === 'number') {
+    body += '&audio_stream_index=' + encodeURIComponent(String(audioStreamIndex));
+  }
+  if (typeof subtitleStreamIndex === 'number') {
+    body += '&subtitle_stream_index=' + encodeURIComponent(String(subtitleStreamIndex));
+    if (subtitleStyleOptions) {
+      body += '&subtitle_stroke_enabled=' + (subtitleStyleOptions.strokeEnabled ? '1' : '0');
+      body += '&subtitle_shadow_enabled=' + (subtitleStyleOptions.shadowEnabled ? '1' : '0');
     }
-    if (typeof subtitleStreamIndex === 'number') {
-      body += '&subtitle_stream_index=' + encodeURIComponent(String(subtitleStreamIndex));
-    }
+  }
   if (options && options.forceVideoTranscode) {
     body += '&force_video_transcode=1';
   }
@@ -1136,6 +1143,7 @@ async function restartCompatibilityAt(targetSeconds, reason, options) {
   clearCompatibilityRecoveryTimer();
   var forceVideoTranscode = Boolean(options && options.forceVideoTranscode);
   var forceAudioTranscode = Boolean(options && options.forceAudioTranscode);
+  var forceSessionRestart = Boolean(options && options.forceSessionRestart);
   var syncToken = ++ctx.state.playbackSyncToken;
   var rawTargetSeconds = Math.max(0, Number(targetSeconds) || 0);
   ctx.reportCompatibilitySeekTiming('restart_seek_started', {
@@ -1164,7 +1172,7 @@ async function restartCompatibilityAt(targetSeconds, reason, options) {
       });
     }
   }
-  var forceSessionRestart = (
+  forceSessionRestart = forceSessionRestart || (
     forceVideoTranscode
     || forceAudioTranscode
     || compatibilityRecoveryRequiresSessionRestart(reason || '')
@@ -1308,6 +1316,13 @@ async function restartCompatibilityAt(targetSeconds, reason, options) {
     ctx.state.compatibilitySubtitleStreamIndex = ctx.normalizeSubtitleStreamIndex(session.subtitle_stream_index);
     ctx.state.seekRestartInProgress = false;
     ctx.state.requestedSeekSeconds = null;
+    if (ctx.state.pendingSubtitleStyleApply) {
+      ctx.state.pendingSubtitleStyleApply = false;
+      void restartCompatibilityAt(ctx.currentGlobalPlaybackSeconds(), 'subtitle-style-apply-pending', {
+        forceSessionRestart: true,
+      });
+      return;
+    }
     if (shouldApplyDeferredCompatibilitySeek(deferredSeekSeconds, clampedTarget, 0.05)) {
       ctx.reportVideoDiagnostic({
         level: 'info',
