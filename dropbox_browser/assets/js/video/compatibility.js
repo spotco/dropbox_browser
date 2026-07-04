@@ -36,9 +36,10 @@ function scheduleCompatibilitySessionStatusPoll() {
 }
 
 async function pollCompatibilitySessionStatus() {
+  var localSessionId = String(ctx.state.compatibilitySessionId || '');
   if (
     !ctx.state.paneActive
-    || !ctx.state.compatibilitySessionId
+    || !localSessionId
     || ctx.state.playbackMode !== 'compatibility'
     || ctx.state.compatibilitySessionStatusRequestInFlight
   ) {
@@ -46,18 +47,27 @@ async function pollCompatibilitySessionStatus() {
   }
   ctx.state.compatibilitySessionStatusRequestInFlight = true;
   try {
-    var response = await fetch('/video/endpoints/status');
+    var response = await fetch('/video/endpoints/status?id=' + encodeURIComponent(localSessionId));
     if (!response.ok) return;
     var payload = await response.json();
-    var activeSession = payload && payload.active_session ? payload.active_session : null;
+    var sessions = payload && Array.isArray(payload.active_sessions) ? payload.active_sessions : [];
+    var localSession = sessions.length ? sessions[0] : null;
     if (
-      activeSession
-      && activeSession.session_id === ctx.state.compatibilitySessionId
-      && activeSession.path === ctx.state.compatibilitySessionPath
+      !localSession
+      && payload
+      && payload.active_session
+      && payload.active_session.session_id === localSessionId
+    ) {
+      localSession = payload.active_session;
+    }
+    if (
+      localSession
+      && localSession.session_id === localSessionId
+      && localSession.path === ctx.state.compatibilitySessionPath
     ) {
       ctx.state.compatibilityEncodedMediaEndSeconds = Math.max(
         ctx.state.compatibilityEncodedMediaEndSeconds || 0,
-        Number(activeSession.encoded_media_end_seconds) || 0
+        Number(localSession.encoded_media_end_seconds) || 0
       );
       ctx.syncPlaybackProgress();
     }
@@ -274,6 +284,18 @@ function requestCompatibilitySessionProgressReport(reason, options) {
   );
 }
 
+function staleProgressPayloadTargetsLocalSession(payload, expectedSessionId) {
+  if (!payload || payload.updated !== false) return false;
+  var localSessionId = String(ctx.state.compatibilitySessionId || '');
+  var payloadSessionId = payload && payload.session_id ? String(payload.session_id) : '';
+  var targetSessionId = expectedSessionId
+    ? String(expectedSessionId)
+    : localSessionId;
+  if (!localSessionId || !payloadSessionId || payloadSessionId !== localSessionId) return false;
+  if (targetSessionId && payloadSessionId !== targetSessionId) return false;
+  return true;
+}
+
 async function reportCompatibilitySessionProgress(reason, options) {
   var expectedSessionId = options && options.expectedSessionId ? String(options.expectedSessionId) : '';
   var expectedSyncToken = Number.isFinite(Number(options && options.expectedSyncToken))
@@ -290,6 +312,7 @@ async function reportCompatibilitySessionProgress(reason, options) {
   }
   ctx.state.compatibilitySessionProgressRequestInFlight = true;
   var body = 'id=' + encodeURIComponent(ctx.state.compatibilitySessionId || '')
+    + '&client_id=' + encodeURIComponent(ctx.state.videoClientId || '')
     + '&playback_seconds=' + encodeURIComponent(String(ctx.currentGlobalPlaybackSeconds()))
     + '&playback_media_seconds=' + encodeURIComponent(String(compatibilityMediaPlaybackSeconds()))
     + '&playback_state=' + encodeURIComponent(compatibilityPlaybackState())
@@ -302,11 +325,17 @@ async function reportCompatibilitySessionProgress(reason, options) {
     });
     if (!response.ok) return false;
     var payload = await response.json();
-    if (payload && payload.updated === false) return false;
+    if (payload && payload.updated === false) {
+      if (staleProgressPayloadTargetsLocalSession(payload, expectedSessionId)) {
+        handleMissingCompatibilitySession(String(payload.session_id || ''), payload, null);
+      }
+      return false;
+    }
     ctx.reportVideoDiagnostic({
       level: 'debug',
       message: 'Compatibility session progress reported',
       report_reason: reason || '',
+      client_id: ctx.state.videoClientId || '',
       playback_seconds: ctx.currentGlobalPlaybackSeconds(),
       playback_media_seconds: compatibilityMediaPlaybackSeconds(),
       playback_state: compatibilityPlaybackState(),
@@ -381,6 +410,99 @@ function isStaleOrMissingSegmentHlsError(data) {
   if (data.details === 'fragLoadError' || data.details === 'levelLoadError') return true;
   var reason = String(data.reason || (data.error && data.error.message) || '');
   return reason.indexOf('404') >= 0 || reason.indexOf('Not Found') >= 0;
+}
+
+function hlsErrorAssetUrl(data) {
+  if (data && data.frag && data.frag.url) return String(data.frag.url);
+  if (data && data.context && data.context.url) return String(data.context.url);
+  return '';
+}
+
+function compatibilitySessionMissingMessage(statusPayload) {
+  var sessionState = statusPayload && statusPayload.session_state
+    ? String(statusPayload.session_state)
+    : '';
+  var sessionStateMessage = statusPayload && statusPayload.session_state_message
+    ? String(statusPayload.session_state_message)
+    : '';
+  if (sessionStateMessage) return sessionStateMessage;
+  if (sessionState === 'stopped') return 'Video session was stopped.';
+  if (sessionState === 'expired') return 'Video session expired after being idle.';
+  if (sessionState === 'evicted') return 'Video session was evicted to free server capacity.';
+  return 'Video session is no longer available.';
+}
+
+function clearLocalCompatibilitySessionState() {
+  var sessionId = ctx.state.compatibilitySessionId || '';
+  clearCompatibilitySessionStatusPoll();
+  clearCompatibilitySessionProgressReport();
+  clearCompatibilityRecoveryTimer();
+  ctx.state.compatibilitySessionProgressPendingImmediate = false;
+  ctx.state.compatibilityProgressBurstUntilMs = 0;
+  ctx.state.compatibilitySessionId = '';
+  ctx.state.compatibilitySessionPath = '';
+  ctx.state.compatibilityAudioStreamIndex = null;
+  ctx.state.compatibilitySessionBurnedInSubtitleStreamIndex = null;
+  ctx.state.compatibilitySessionVideoMode = '';
+  ctx.state.compatibilitySessionVideoModeReason = '';
+  ctx.state.compatibilitySessionAudioMode = '';
+  ctx.state.compatibilitySessionAudioModeReason = '';
+  ctx.state.compatibilitySegmentDurationSeconds = 0;
+  ctx.state.compatibilityEncodedMediaEndSeconds = 0;
+  ctx.state.compatibilitySubtitleStreamIndex = null;
+  destroyHlsController();
+  return sessionId;
+}
+
+async function pollMissingCompatibilitySessionStatus(sessionId) {
+  var normalizedSessionId = String(sessionId || '');
+  if (!normalizedSessionId) return null;
+  try {
+    var response = await fetch('/video/endpoints/status?id=' + encodeURIComponent(normalizedSessionId));
+    if (!response.ok) return null;
+    var payload = await response.json();
+    var sessions = payload && Array.isArray(payload.active_sessions) ? payload.active_sessions : [];
+    if (sessions.length && sessions[0] && sessions[0].session_id === normalizedSessionId) {
+      return {
+        missing: false,
+        payload: sessions[0],
+      };
+    }
+    return {
+      missing: true,
+      payload: payload || null,
+    };
+  }
+  catch (_error) {
+    return null;
+  }
+}
+
+function handleMissingCompatibilitySession(sessionId, statusPayload, data) {
+  var active = ctx.activeQueueItem();
+  if (!active) return false;
+  var message = compatibilitySessionMissingMessage(statusPayload);
+  clearLocalCompatibilitySessionState();
+  ctx.state.pendingAutoplay = false;
+  ctx.state.transportWantsPlay = false;
+  ctx.state.seekRestartInProgress = false;
+  ctx.state.requestedSeekSeconds = null;
+  ctx.reportVideoDiagnostic({
+    level: 'warn',
+    message: 'Compatibility session missing for this browser',
+    session_id: sessionId || '',
+    session_state: statusPayload && statusPayload.session_state ? String(statusPayload.session_state) : '',
+    session_state_message: message,
+    hls_details: data && data.details || '',
+    hls_reason: data && (data.reason || data.error && data.error.message) || '',
+    hls_url: hlsErrorAssetUrl(data),
+  });
+  failCompatibilityPlayback(
+    active,
+    message,
+    'Compatibility playback stopped: ' + message
+  );
+  return true;
 }
 
 function compatibilityForcedVideoTranscodeRetryKey(itemPath, targetSeconds) {
@@ -527,7 +649,7 @@ function scheduleCompatibilityAudioCopyFallback(reason, targetSeconds, data) {
   return true;
 }
 
-function handleCompatibilityHlsError(data) {
+async function handleCompatibilityHlsError(data) {
   if (!data || !data.fatal) return;
   var active = ctx.activeQueueItem();
   if (!active || ctx.state.playbackMode !== 'compatibility') return;
@@ -535,6 +657,12 @@ function handleCompatibilityHlsError(data) {
 
   if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
     if (isStaleOrMissingSegmentHlsError(data)) {
+      var localSessionId = String(ctx.state.compatibilitySessionId || '');
+      var missingStatus = await pollMissingCompatibilitySessionStatus(localSessionId);
+      if (missingStatus && missingStatus.missing) {
+        handleMissingCompatibilitySession(localSessionId, missingStatus.payload, data);
+        return;
+      }
       scheduleCompatibilityRecovery('hls-missing-segment', ctx.currentGlobalPlaybackSeconds(), data);
       return;
     }
@@ -778,35 +906,31 @@ function hlsErrorTargetsCurrentSession(data) {
   return match[1] === sessionId;
 }
 
-async function stopCompatibilitySession() {
-  var sessionId = ctx.state.compatibilitySessionId;
-  clearCompatibilitySessionStatusPoll();
-  clearCompatibilitySessionProgressReport();
-  ctx.state.compatibilitySessionProgressPendingImmediate = false;
-  ctx.state.compatibilityProgressBurstUntilMs = 0;
-  ctx.state.compatibilitySessionId = '';
-  ctx.state.compatibilitySessionPath = '';
-  ctx.state.compatibilityAudioStreamIndex = null;
-  ctx.state.compatibilitySessionBurnedInSubtitleStreamIndex = null;
-    ctx.state.compatibilitySessionVideoMode = '';
-    ctx.state.compatibilitySessionVideoModeReason = '';
-    ctx.state.compatibilitySessionAudioMode = '';
-    ctx.state.compatibilitySessionAudioModeReason = '';
-    ctx.state.compatibilitySegmentDurationSeconds = 0;
-  ctx.state.compatibilityEncodedMediaEndSeconds = 0;
-  ctx.state.compatibilitySubtitleStreamIndex = null;
-  destroyHlsController();
-  if (!sessionId) return;
+async function postStopCompatibilitySession(sessionId) {
+  var clientId = ctx.state.videoClientId || '';
+  var normalizedSessionId = String(sessionId || '');
+  if (!normalizedSessionId) return;
   try {
     await fetch('/video/endpoints/session/stop', {
       method: 'POST',
       headers: {'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8'},
-      body: 'id=' + encodeURIComponent(sessionId),
+      body: 'id=' + encodeURIComponent(normalizedSessionId)
+        + '&client_id=' + encodeURIComponent(clientId),
     });
   }
   catch (_error) {
     return;
   }
+}
+
+async function stopCompatibilitySession(sessionIdOverride) {
+  var explicitSessionId = sessionIdOverride == null
+    ? ''
+    : String(sessionIdOverride || '');
+  var clearedSessionId = clearLocalCompatibilitySessionState();
+  var sessionId = explicitSessionId || clearedSessionId;
+  if (!sessionId) return;
+  await postStopCompatibilitySession(sessionId);
 }
 
 function attachCompatibilityVideo(playlistUrl, title, meta, startSeconds, surfaceSyncToken) {
@@ -981,7 +1105,7 @@ function attachCompatibilityVideo(playlistUrl, title, meta, startSeconds, surfac
         hls_reason: data && (data.reason || data.error && data.error.message) || '',
         hls_url: data && data.frag && data.frag.url ? data.frag.url : (data && data.context && data.context.url ? data.context.url : ''),
       });
-      handleCompatibilityHlsError(data);
+      void handleCompatibilityHlsError(data);
     });
     ctx.state.hlsController.attachMedia(ctx.els.videoEl);
     ctx.state.hlsController.loadSource(playlistUrl);
@@ -1025,6 +1149,7 @@ function attachCompatibilityVideo(playlistUrl, title, meta, startSeconds, surfac
 async function createCompatibilitySession(item, audioStreamIndex, startSeconds, subtitleStreamIndex, options) {
   var body = 'path=' + encodeURIComponent(item.path || '')
     + '&source=remote'
+    + '&client_id=' + encodeURIComponent(ctx.state.videoClientId || '')
     + '&start_time_seconds=' + encodeURIComponent(String(Math.max(0, Number(startSeconds) || 0)));
   var subtitleStyleOptions = typeof ctx.appliedSubtitleStyleOptions === 'function'
     ? ctx.appliedSubtitleStyleOptions()
@@ -1051,14 +1176,36 @@ async function createCompatibilitySession(item, audioStreamIndex, startSeconds, 
     body: body,
   });
   if (!response.ok) {
+    var errorPayload = null;
     var errorText = '';
     try {
-      errorText = await response.text();
+      if (response.headers && typeof response.headers.get === 'function') {
+        var contentType = String(response.headers.get('content-type') || '');
+        if (contentType.indexOf('application/json') >= 0) {
+          errorPayload = await response.json();
+        }
+        else {
+          errorText = await response.text();
+        }
+      }
+      else {
+        errorText = await response.text();
+      }
     }
     catch (_error) {
       errorText = '';
     }
-    throw new Error(errorText || 'Failed to start compatibility playback.');
+    var message = errorPayload && errorPayload.message
+      ? String(errorPayload.message)
+      : (errorText || 'Failed to start compatibility playback.');
+    var error = new Error(message);
+    if (errorPayload && errorPayload.error_code) {
+      error.videoErrorCode = String(errorPayload.error_code);
+    }
+    if (errorPayload && errorPayload.session_error_reason) {
+      error.videoSessionErrorReason = String(errorPayload.session_error_reason);
+    }
+    throw error;
   }
   return response.json();
 }
@@ -1264,7 +1411,7 @@ async function restartCompatibilityAt(targetSeconds, reason, options) {
       }
     );
     if (syncToken !== ctx.state.playbackSyncToken) {
-      await stopCompatibilitySession();
+      await postStopCompatibilitySession(session.session_id || '');
       return;
     }
     ctx.state.compatibilitySessionId = session.session_id || '';
@@ -1355,18 +1502,39 @@ async function restartCompatibilityAt(targetSeconds, reason, options) {
       reason || 'restart'
     );
   }
-  catch (_error) {
+  catch (error) {
     if (syncToken !== ctx.state.playbackSyncToken) return;
     ctx.state.compatibilitySessionId = '';
     ctx.state.compatibilitySubtitleStreamIndex = null;
     ctx.state.seekRestartInProgress = false;
     ctx.state.requestedSeekSeconds = null;
     ctx.state.playbackMode = 'compatibility';
+    if (error && error.videoErrorCode === 'session_cap_reached') {
+      var errorMessage = error && error.message
+        ? String(error.message)
+        : 'Video session limit reached.';
+      ctx.reportVideoDiagnostic({
+        level: 'warn',
+        message: 'Compatibility seek restart rejected by server capacity limit',
+        seek_reason: reason || '',
+        requested_time: clampedTarget,
+        error_message: errorMessage,
+        error_code: error.videoErrorCode || '',
+        session_error_reason: error.videoSessionErrorReason || '',
+      });
+      failCompatibilityPlayback(
+        active,
+        errorMessage,
+        'Compatibility playback could not start: ' + errorMessage
+      );
+      return;
+    }
     ctx.reportVideoDiagnostic({
       level: 'warn',
       message: 'Compatibility seek restart failed; scheduling recovery',
       seek_reason: reason || '',
       requested_time: clampedTarget,
+      error_message: error && error.message ? String(error.message) : '',
     });
     scheduleCompatibilityRecovery(reason || 'restart-failed', clampedTarget, null);
   }

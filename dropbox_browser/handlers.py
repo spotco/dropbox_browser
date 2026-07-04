@@ -66,6 +66,21 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
 
+    def _send_json_error(self, status: HTTPStatus, message: str, details: dict[str, object] | None = None) -> None:
+        payload: dict[str, object] = {
+            "status": "error",
+            "message": message,
+        }
+        if details:
+            payload.update(details)
+        body = _json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self._send_no_store_headers()
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     @property
     def app(self) -> DropboxBrowser:
         return self.server.app  # type: ignore[attr-defined]
@@ -1162,66 +1177,74 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def serve_video_endpoint_post(self, path: str) -> None:
-        endpoint = path.removeprefix(VIDEO_ENDPOINT_PREFIX)
-        params = self._read_form()
-        if endpoint == "session":
-            source = params.get("source", ["remote"])[0]
-            if source != "remote":
-                raise BrowserError(HTTPStatus.BAD_REQUEST, "Only remote video compatibility playback is supported.")
-            rel_path = clean_rel_path(params.get("path", [""])[0])
-            resolved_rel_path, file_size = self._resolve_remote_file(rel_path)
-            audio_stream_index_raw = params.get("audio_stream_index", [""])[0].strip()
-            audio_stream_index = int(audio_stream_index_raw) if audio_stream_index_raw else None
-            subtitle_stream_index_raw = params.get("subtitle_stream_index", [""])[0].strip()
-            subtitle_stream_index = int(subtitle_stream_index_raw) if subtitle_stream_index_raw else None
-            subtitle_stroke_enabled = params.get("subtitle_stroke_enabled", ["1"])[0].strip() != "0"
-            subtitle_shadow_enabled = params.get("subtitle_shadow_enabled", ["1"])[0].strip() != "0"
-            start_time_seconds = parse_video_start_seconds(params.get("start_time_seconds", [""])[0])
-            force_video_transcode = params.get("force_video_transcode", [""])[0].strip() == "1"
-            force_audio_transcode = params.get("force_audio_transcode", [""])[0].strip() == "1"
-            port = int(self.server.server_address[1])  # type: ignore[attr-defined]
-            base_url = f"http://127.0.0.1:{port}"
-            payload = video_session_manager(self.app).create_session(
-                rel_path=resolved_rel_path,
-                base_url=base_url,
-                file_size=file_size,
-                audio_stream_index=audio_stream_index,
-                subtitle_stream_index=subtitle_stream_index,
-                subtitle_stroke_enabled=subtitle_stroke_enabled,
-                subtitle_shadow_enabled=subtitle_shadow_enabled,
-                start_time_seconds=start_time_seconds,
-                force_video_transcode=force_video_transcode,
-                force_audio_transcode=force_audio_transcode,
-            )
-            status = HTTPStatus.OK
-        elif endpoint == "session/stop":
-            session_id = params.get("id", [""])[0].strip() or None
-            payload = video_session_manager(self.app).stop_session(session_id)
-            status = HTTPStatus.OK
-        elif endpoint == "session/progress":
-            session_id = params.get("id", [""])[0].strip()
-            if not session_id:
-                raise BrowserError(HTTPStatus.BAD_REQUEST, "Video session id is required.")
-            playback_seconds = parse_video_playback_seconds(params.get("playback_seconds", [""])[0])
-            media_seconds = parse_optional_video_playback_seconds(params.get("playback_media_seconds", [""])[0])
-            playback_state = parse_video_playback_state(params.get("playback_state", [""])[0])
-            playback_sync_token = parse_playback_sync_token(params.get("playback_sync_token", [""])[0])
-            payload = video_session_manager(self.app).update_session_progress(
-                session_id=session_id,
-                playback_seconds=playback_seconds,
-                media_seconds=media_seconds,
-                playback_state=playback_state,
-                playback_sync_token=playback_sync_token,
-            )
-            status = HTTPStatus.OK
-        elif endpoint == "cache/clear":
-            payload = {
-                "status": "ok",
-                "cleared": clear_video_disk_caches(self.app),
-            }
-            status = HTTPStatus.OK
-        else:
-            raise BrowserError(HTTPStatus.NOT_FOUND, "Video endpoint not found.")
+        try:
+            endpoint = path.removeprefix(VIDEO_ENDPOINT_PREFIX)
+            params = self._read_form()
+            if endpoint == "session":
+                source = params.get("source", ["remote"])[0]
+                if source != "remote":
+                    raise BrowserError(HTTPStatus.BAD_REQUEST, "Only remote video compatibility playback is supported.")
+                rel_path = clean_rel_path(params.get("path", [""])[0])
+                client_id = params.get("client_id", [""])[0].strip()[:128]
+                resolved_rel_path, file_size = self._resolve_remote_file(rel_path)
+                audio_stream_index_raw = params.get("audio_stream_index", [""])[0].strip()
+                audio_stream_index = int(audio_stream_index_raw) if audio_stream_index_raw else None
+                subtitle_stream_index_raw = params.get("subtitle_stream_index", [""])[0].strip()
+                subtitle_stream_index = int(subtitle_stream_index_raw) if subtitle_stream_index_raw else None
+                subtitle_stroke_enabled = params.get("subtitle_stroke_enabled", ["1"])[0].strip() != "0"
+                subtitle_shadow_enabled = params.get("subtitle_shadow_enabled", ["1"])[0].strip() != "0"
+                start_time_seconds = parse_video_start_seconds(params.get("start_time_seconds", [""])[0])
+                force_video_transcode = params.get("force_video_transcode", [""])[0].strip() == "1"
+                force_audio_transcode = params.get("force_audio_transcode", [""])[0].strip() == "1"
+                port = int(self.server.server_address[1])  # type: ignore[attr-defined]
+                base_url = f"http://127.0.0.1:{port}"
+                payload = video_session_manager(self.app).create_session(
+                    rel_path=resolved_rel_path,
+                    base_url=base_url,
+                    file_size=file_size,
+                    client_id=client_id,
+                    audio_stream_index=audio_stream_index,
+                    subtitle_stream_index=subtitle_stream_index,
+                    subtitle_stroke_enabled=subtitle_stroke_enabled,
+                    subtitle_shadow_enabled=subtitle_shadow_enabled,
+                    start_time_seconds=start_time_seconds,
+                    force_video_transcode=force_video_transcode,
+                    force_audio_transcode=force_audio_transcode,
+                )
+                status = HTTPStatus.OK
+            elif endpoint == "session/stop":
+                session_id = params.get("id", [""])[0].strip() or None
+                payload = video_session_manager(self.app).stop_session(session_id)
+                status = HTTPStatus.OK
+            elif endpoint == "session/progress":
+                session_id = params.get("id", [""])[0].strip()
+                if not session_id:
+                    raise BrowserError(HTTPStatus.BAD_REQUEST, "Video session id is required.")
+                client_id = params.get("client_id", [""])[0].strip()[:128]
+                playback_seconds = parse_video_playback_seconds(params.get("playback_seconds", [""])[0])
+                media_seconds = parse_optional_video_playback_seconds(params.get("playback_media_seconds", [""])[0])
+                playback_state = parse_video_playback_state(params.get("playback_state", [""])[0])
+                playback_sync_token = parse_playback_sync_token(params.get("playback_sync_token", [""])[0])
+                payload = video_session_manager(self.app).update_session_progress(
+                    session_id=session_id,
+                    playback_seconds=playback_seconds,
+                    media_seconds=media_seconds,
+                    playback_state=playback_state,
+                    playback_sync_token=playback_sync_token,
+                    client_id=client_id,
+                )
+                status = HTTPStatus.OK
+            elif endpoint == "cache/clear":
+                payload = {
+                    "status": "ok",
+                    "cleared": clear_video_disk_caches(self.app),
+                }
+                status = HTTPStatus.OK
+            else:
+                raise BrowserError(HTTPStatus.NOT_FOUND, "Video endpoint not found.")
+        except BrowserError as exc:
+            self._send_json_error(exc.status, exc.message, exc.details)
+            return
         body = _json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
