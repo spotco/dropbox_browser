@@ -120,17 +120,17 @@ stop/recreate the current compatibility session.
 
 - [x] Add config for maximum concurrent HLS sessions, for example
       `VideoMaxConcurrentSessions`, with a conservative default such as `2`.
-- [ ] Add config for idle TTL if current `HLS_SESSION_TTL_SECONDS` needs to be
+- [x] Add config for idle TTL if current `HLS_SESSION_TTL_SECONDS` needs to be
       exposed or tuned.
 - [x] Make `_cleanup_expired_locked()` scan every session and remove idle expired
       sessions.
 - [x] Decide and implement cap behavior:
       reject new session creation with `429 Too Many Requests` when all sessions
       are active, or evict only the oldest idle session.
-- [ ] Define "idle" using `last_accessed_at`, last progress report, and playback
+- [x] Define "idle" using `last_accessed_at`, last progress report, and playback
       state. Do not evict a recently playing session just because another browser
       starts playback.
-- [ ] Include eviction reason in server debug logs and client-visible errors.
+- [x] Include eviction reason in server debug logs and client-visible errors.
 - [ ] Add tests for cap reached, idle eviction, and active-session rejection.
 - [ ] Document CPU implications: two HEVC transcodes are two ffmpeg processes,
       not one shared encoder.
@@ -155,30 +155,30 @@ stop/recreate the current compatibility session.
 
 ## Phase 6 - Make The Client Session-Aware
 
-- [ ] Add a browser/tab playback client ID generated per page load and sent on
+- [x] Add a browser/tab playback client ID generated per page load and sent on
       session create/progress/stop. Use it for diagnostics and ownership display,
       not as a security boundary.
-- [ ] Update status polling in `compatibility.js` to ask for the local
+- [x] Update status polling in `compatibility.js` to ask for the local
       `compatibilitySessionId`.
-- [ ] Treat "my session is missing" as a distinct lifecycle event instead of a
+- [x] Treat "my session is missing" as a distinct lifecycle event instead of a
       generic HLS recoverable error.
-- [ ] Make progress POST responses actionable:
+- [x] Make progress POST responses actionable:
       if `updated: false` and the local session is missing, clear local timers
       and show a stopped/expired/evicted message.
-- [ ] Avoid using `active_session.session_id` as the authority for the current
+- [x] Avoid using `active_session.session_id` as the authority for the current
       browser. The local `compatibilitySessionId` is the authority.
-- [ ] Keep normal compatibility recovery for true segment lag within the local
+- [x] Keep normal compatibility recovery for true segment lag within the local
       session.
-- [ ] When a 404 arrives for a local HLS asset, poll `status?id=<local id>`
+- [x] When a 404 arrives for a local HLS asset, poll `status?id=<local id>`
       before auto-restarting. If the session is gone because of stop/expiry/cap,
       do not immediately create a replacement that can evict another viewer.
-- [ ] Ensure routine scrubbing restarts only the current browser's session by
+- [x] Ensure routine scrubbing restarts only the current browser's session by
       stopping its own ID and creating a replacement; it must not stop other IDs.
-- [ ] Update client diagnostics to include both `session_id` and `client_id`.
+- [x] Update client diagnostics to include both `session_id` and `client_id`.
 
 ## Phase 7 - Update Stop, Unload, And Cleanup Behavior
 
-- [ ] Keep `beforeunload` or `sendBeacon` stop behavior, but make it stop only
+- [x] Keep `beforeunload` or `sendBeacon` stop behavior, but make it stop only
       the local session ID.
 - [ ] Make pane deactivation and queue-item changes stop only the local session.
 - [ ] Confirm stale unload beacons from a previous page cannot stop a newly

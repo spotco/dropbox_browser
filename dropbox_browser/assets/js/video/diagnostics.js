@@ -21,6 +21,7 @@ function reportPlaybackTiming(milestone, fields) {
     elapsed_ms: elapsedMs,
     path: timing.path || '',
     reason: timing.reason || '',
+    client_id: ctx.state.videoClientId || '',
     session_id: ctx.state.compatibilitySessionId || '',
     playback_mode: ctx.state.playbackMode || '',
   });
@@ -37,6 +38,7 @@ function emitPlaybackTimingSummary(fields) {
   window.ClientLogger.log('video-timing', 'info', 'Playback timing summary', Object.assign({
     path: timing.path || '',
     reason: timing.reason || '',
+    client_id: ctx.state.videoClientId || '',
     session_id: ctx.state.compatibilitySessionId || '',
     milestones: Object.assign({}, timing.milestones),
     total_to_playing_ms: totalMs,
@@ -49,6 +51,7 @@ function reportVideoDiagnostic(fields) {
     var active = ctx.activeQueueItem();
     var details = Object.assign({}, fields || {}, {
       playback_mode: ctx.state.playbackMode || '',
+      client_id: ctx.state.videoClientId || '',
       session_id: ctx.state.compatibilitySessionId || '',
       path: active && active.path ? active.path : '',
       current_time: ctx.els.videoEl ? ctx.els.videoEl.currentTime || 0 : '',
@@ -83,6 +86,7 @@ function subtitleSyncContext(fields) {
   var mountState = ctx.state.subtitleMountState || {};
   return Object.assign({}, fields || {}, {
     playback_mode: ctx.state.playbackMode || '',
+    client_id: ctx.state.videoClientId || '',
     path: active && active.path ? active.path : '',
     media_current_time: ctx.els.videoEl ? ctx.els.videoEl.currentTime || 0 : '',
     global_current_time: ctx.currentGlobalPlaybackSeconds(),

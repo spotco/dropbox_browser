@@ -16,6 +16,16 @@ import {initPane} from './video/pane.js';
   var pane = document.getElementById('video-player-pane');
   if (!pane) return;
 
+  function createVideoClientId() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+      return 'video-client-' + window.crypto.randomUUID();
+    }
+    return 'video-client-'
+      + Date.now().toString(36)
+      + '-'
+      + Math.random().toString(36).slice(2, 10);
+  }
+
   function readVideoSetting(key, fallback) {
     try {
       if (typeof Settings === 'undefined' || !Settings || typeof Settings.get !== 'function') return fallback;
@@ -115,6 +125,7 @@ import {initPane} from './video/pane.js';
       compatibilityAvailable: false,
       ffmpegAvailable: false,
       ffprobeAvailable: false,
+      videoClientId: createVideoClientId(),
       backpressureThresholds: {
         lowWaterSeconds: 45,
         mediumWaterSeconds: 120,
@@ -270,7 +281,8 @@ import {initPane} from './video/pane.js';
 
   window.addEventListener('beforeunload', function () {
     ctx.clearCompatibilityRecoveryTimer();
-    void ctx.compatibilityApi.stopSession();
+    var unloadSessionId = String(ctx.state.compatibilitySessionId || '');
+    void ctx.compatibilityApi.stopSession(unloadSessionId);
   });
 
   pane.addEventListener('video-playback-ended', function () {
