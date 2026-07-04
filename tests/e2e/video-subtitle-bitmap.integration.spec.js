@@ -2,7 +2,8 @@ const fs = require("fs");
 const path = require("path");
 const { test, expect } = require("@playwright/test");
 
-process.env.PLAYWRIGHT_PORT = "8015";
+const workerPortOffset = Number(process.env.TEST_WORKER_INDEX || "0") * 100;
+process.env.PLAYWRIGHT_PORT = String(8015 + workerPortOffset);
 process.env.DROPBOX_BROWSER_E2E_FIXTURE = path.join(
   __dirname,
   "fixtures",
@@ -19,7 +20,7 @@ const hlsStubSource = fs.readFileSync(
 
 let server = null;
 
-test.describe.configure({ timeout: 90000 });
+test.describe.configure({ mode: "serial", timeout: 90000 });
 
 async function installHlsStub(page, { fragmentCount = 2 } = {}) {
   await page.addInitScript((count) => {

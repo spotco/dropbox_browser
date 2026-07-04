@@ -1,7 +1,8 @@
 const path = require("path");
 const { test, expect } = require("@playwright/test");
 
-process.env.PLAYWRIGHT_PORT = "8020";
+const workerPortOffset = Number(process.env.TEST_WORKER_INDEX || "0") * 100;
+process.env.PLAYWRIGHT_PORT = String(8020 + workerPortOffset);
 process.env.DROPBOX_BROWSER_E2E_FIXTURE = path.join(
   __dirname,
   "fixtures",
@@ -14,7 +15,7 @@ const baseURL = `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT}`;
 
 let server = null;
 
-test.describe.configure({ timeout: 120000 });
+test.describe.configure({ mode: "serial", timeout: 120000 });
 
 async function waitForCompatibilityReady(page) {
   await expect

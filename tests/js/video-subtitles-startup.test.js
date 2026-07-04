@@ -1124,6 +1124,55 @@ test("storeSubtitleWindowPayload expands scrubber coverage when a later backgrou
   ]);
 });
 
+test("storeFullSubtitleVtt upgrades scrubber coverage to full after an initial limited startup window", async () => {
+  const [{initShared}, {initSubtitles}] = await Promise.all([
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/shared.js"),
+    importModuleFromWorkspace("dropbox_browser/assets/js/video/subtitles.js"),
+  ]);
+  const item = {path: "movie.mp4"};
+  const ctx = createCtx(item);
+  const probePayload = {
+    subtitle_streams: [{index: 3, webvtt_compatible: true, language: "eng"}],
+    default_subtitle_stream_index: 3,
+  };
+  ctx.state.probeCache[item.path] = probePayload;
+  ctx.els.videoEl.duration = 600;
+  initSubtitles(ctx);
+  initShared(ctx);
+  ctx.syncPlaybackProgress = function () {
+    ctx.syncProcessedProgressTrack(600);
+  };
+
+  ctx.storeSubtitleWindowPayload(item.path, 3, {
+    status: "ok",
+    track: 3,
+    window_start_seconds: 0,
+    window_end_seconds: 3,
+    coverage_complete: false,
+    loaded_ranges: [{start_seconds: 0, end_seconds: 3}],
+    gap_action: "pause-until-ready",
+    window_status: "startup",
+    vtt: "WEBVTT\n\n00:00.000 --> 00:01.000\nHello\n",
+  }, {
+    background: true,
+  });
+
+  assert.equal(ctx.els.progressSliderEl.getAttribute("data-subtitle-coverage-state"), "limited");
+  assert.equal(ctx.els.progressSliderEl.style.getPropertyValue("--video-progress-subtitle-end"), "0.500%");
+
+  ctx.storeFullSubtitleVtt(
+    item.path,
+    3,
+    "WEBVTT\n\n00:00.000 --> 00:01.000\nHello\n\n09:58.000 --> 09:59.000\nWorld\n",
+  );
+
+  assert.equal(ctx.els.progressSliderEl.getAttribute("data-subtitle-coverage-state"), "full");
+  assert.equal(ctx.els.progressSliderEl.style.getPropertyValue("--video-progress-subtitle-start"), "0.000%");
+  assert.equal(ctx.els.progressSliderEl.style.getPropertyValue("--video-progress-subtitle-end"), "100.000%");
+  assert.equal(ctx.els.progressSliderEl.style.getPropertyValue("--video-progress-processed-start"), "0.000%");
+  assert.equal(ctx.els.progressSliderEl.style.getPropertyValue("--video-progress-processed-end"), "100.000%");
+});
+
 test("syncProcessedProgressTrack reports paused heavy throttle state and current loaded buffer ahead in debug lines", async () => {
   const [{initShared}] = await Promise.all([
     importModuleFromWorkspace("dropbox_browser/assets/js/video/shared.js"),

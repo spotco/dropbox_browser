@@ -296,6 +296,43 @@ class VideoToolsConfigTests(unittest.TestCase):
 
         self.assertEqual(video_config.ffmpeg_process_priority, "idle")
 
+    def test_load_video_tools_config_reads_max_concurrent_sessions(self) -> None:
+        with (
+            patch.object(config_module, "find_vendored_ffmpeg", return_value=None),
+            patch.object(config_module, "find_vendored_ffprobe", return_value=None),
+            patch.object(config_module.shutil, "which", side_effect=["C:/bin/ffmpeg.exe", "C:/bin/ffprobe.exe"]),
+        ):
+            video_config = config_module.load_video_tools_config({
+                "VideoMaxConcurrentSessions": "4",
+            })
+
+        self.assertEqual(video_config.max_concurrent_sessions, 4)
+
+    def test_load_video_tools_config_normalizes_invalid_max_concurrent_sessions(self) -> None:
+        with (
+            patch.object(config_module, "find_vendored_ffmpeg", return_value=None),
+            patch.object(config_module, "find_vendored_ffprobe", return_value=None),
+            patch.object(
+                config_module.shutil,
+                "which",
+                side_effect=[
+                    "C:/bin/ffmpeg.exe",
+                    "C:/bin/ffprobe.exe",
+                    "C:/bin/ffmpeg.exe",
+                    "C:/bin/ffprobe.exe",
+                ],
+            ),
+        ):
+            low_config = config_module.load_video_tools_config({
+                "VideoMaxConcurrentSessions": "0",
+            })
+            invalid_config = config_module.load_video_tools_config({
+                "VideoMaxConcurrentSessions": "oops",
+            })
+
+        self.assertEqual(low_config.max_concurrent_sessions, 1)
+        self.assertEqual(invalid_config.max_concurrent_sessions, 8)
+
     def test_load_video_tools_config_reads_backpressure_thresholds(self) -> None:
         with (
             patch.object(config_module, "find_vendored_ffmpeg", return_value=None),

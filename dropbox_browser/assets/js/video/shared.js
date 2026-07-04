@@ -183,6 +183,30 @@ function selectedSubtitleCoverageRangeForPlaybackTarget(duration, targetSeconds)
   return ctx.subtitleCoverageRangeForTarget(active.path || '', streamIndex, targetSeconds);
 }
 
+function fullSubtitleCoverageRangeForActiveItem(duration) {
+  if (ctx.state.playbackMode !== 'compatibility') return null;
+  var active = activeQueueItem();
+  if (!active || !active.path) return null;
+  var probePayload = ctx.state.probeCache[active.path || ''] || null;
+  if (!probePayload) return null;
+  if (!ctx.subtitlesEnabledForItem(active, probePayload)) return null;
+  if (ctx.selectedBurnedInSubtitleStreamIndex(active, probePayload) !== null) return null;
+  var streamIndex = ctx.resolvedSubtitleStreamIndex(active, probePayload);
+  if (streamIndex === '') return null;
+  if (
+    !Number.isFinite(Number(duration))
+    || Number(duration) <= 0
+    || typeof ctx.getCachedFullSubtitleVtt !== 'function'
+    || !ctx.getCachedFullSubtitleVtt(active.path || '', streamIndex)
+  ) {
+    return null;
+  }
+  return {
+    start_seconds: 0,
+    end_seconds: Number(duration),
+  };
+}
+
 function currentProgressDebugLines(durationOverride, targetSecondsOverride) {
   var active = activeQueueItem();
   var probePayload = active ? ctx.state.probeCache[active.path || ''] || null : null;
@@ -209,25 +233,10 @@ function currentProgressDebugLines(durationOverride, targetSecondsOverride) {
         ? Number(ctx.state.requestedSeekSeconds)
         : currentGlobalPlaybackSeconds()
     );
-  var subtitleCoverageRange = null;
+  var subtitleCoverageRange = fullSubtitleCoverageRangeForActiveItem(duration);
   var streamIndex = null;
   if (active && active.path && probePayload && typeof ctx.resolvedSubtitleStreamIndex === 'function') {
     streamIndex = ctx.resolvedSubtitleStreamIndex(active, probePayload);
-  }
-  if (
-    active
-    && active.path
-    && streamIndex !== ''
-    && streamIndex !== null
-    && Number.isFinite(duration)
-    && duration > 0
-    && typeof ctx.getCachedFullSubtitleVtt === 'function'
-    && ctx.getCachedFullSubtitleVtt(active.path || '', streamIndex)
-  ) {
-    subtitleCoverageRange = {
-      start_seconds: 0,
-      end_seconds: duration,
-    };
   }
   if (
     !subtitleCoverageRange
@@ -283,7 +292,8 @@ function syncProcessedProgressTrack(duration) {
   var focusSeconds = Number.isFinite(Number(ctx.state.requestedSeekSeconds))
     ? Number(ctx.state.requestedSeekSeconds)
     : currentGlobalPlaybackSeconds();
-  var subtitleCoverageRange = selectedSubtitleCoverageRangeForPlaybackTarget(duration, focusSeconds);
+  var subtitleCoverageRange = fullSubtitleCoverageRangeForActiveItem(duration)
+    || selectedSubtitleCoverageRangeForPlaybackTarget(duration, focusSeconds);
   var subtitleCoverageState = 'off';
   var subtitleStartPercent = 0;
   var subtitleEndPercent = 0;

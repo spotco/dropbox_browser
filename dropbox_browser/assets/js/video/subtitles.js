@@ -158,6 +158,9 @@ function storeFullSubtitleVtt(path, subtitleStreamIndex, subtitleText) {
   cache[String(subtitleStreamIndex)] = String(subtitleText || '');
   recordFullSubtitleCached(path, subtitleStreamIndex);
   maybeUpgradeMountedWindowToFullCache(path, subtitleStreamIndex);
+  if (typeof ctx.syncPlaybackProgress === 'function') {
+    ctx.syncPlaybackProgress();
+  }
 }
 
 function maybeUpgradeMountedWindowToFullCache(path, subtitleStreamIndex) {

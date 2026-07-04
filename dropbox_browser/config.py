@@ -25,6 +25,7 @@ _APP_CONFIG_DEFAULTS: dict = {
     "VideoFFmpegThreads": 2,
     "VideoFFmpegFilterThreads": 1,
     "VideoFFmpegProcessPriority": "below_normal",
+    "VideoMaxConcurrentSessions": 8,
     "VideoBackpressureLowWaterSeconds": 45.0,
     "VideoBackpressureMediumWaterSeconds": 120.0,
     "VideoBackpressureHighWaterSeconds": 300.0,
@@ -92,6 +93,7 @@ class VideoToolsConfig:
     ffmpeg_threads: int = 0
     ffmpeg_filter_threads: int = 0
     ffmpeg_process_priority: str = "below_normal"
+    max_concurrent_sessions: int = 8
     backpressure_low_water_seconds: float = 45.0
     backpressure_medium_water_seconds: float = 120.0
     backpressure_high_water_seconds: float = 300.0
@@ -345,6 +347,14 @@ def load_video_tools_config(app_config: dict | None = None) -> VideoToolsConfig:
                 _APP_CONFIG_DEFAULTS["VideoFFmpegProcessPriority"],
             ),
             default=str(_APP_CONFIG_DEFAULTS["VideoFFmpegProcessPriority"]),
+        ),
+        max_concurrent_sessions=max(
+            1,
+            _clamp_non_negative_int(
+                config.get("VideoMaxConcurrentSessions", _APP_CONFIG_DEFAULTS["VideoMaxConcurrentSessions"]),
+                default=int(_APP_CONFIG_DEFAULTS["VideoMaxConcurrentSessions"]),
+                maximum=_VIDEO_FFMPEG_THREADS_MAX,
+            ),
         ),
         backpressure_low_water_seconds=backpressure_low_water_seconds,
         backpressure_medium_water_seconds=backpressure_medium_water_seconds,
