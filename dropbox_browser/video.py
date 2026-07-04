@@ -132,6 +132,13 @@ def _release_subtitle_window_inflight(app: Any, cache_key: str, entry: dict[str,
             inflight.pop(cache_key, None)
 
 
+def _peek_subtitle_window_inflight(app: Any, cache_key: str) -> dict[str, object] | None:
+    with _subtitle_window_inflight_guard(app):
+        inflight = _subtitle_window_inflight_map(app)
+        entry = inflight.get(cache_key)
+        return entry if isinstance(entry, dict) else None
+
+
 def _subtitle_backfill_guard(app: Any) -> threading.Lock:
     guard = getattr(app, "_subtitle_backfill_guard", None)
     if isinstance(guard, _THREAD_LOCK_TYPE):
@@ -1683,11 +1690,15 @@ class VideoSessionManager:
         self.root_dir = _video_session_dir()
         self.root_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._active_session: VideoHlsSession | None = None
+        self._sessions: dict[str, VideoHlsSession] = {}
+        self._active_session_id: str | None = None
+        self._session_lifecycle: dict[str, dict[str, object]] = {}
+        self._pending_session_creations = 0
 
     def shutdown(self) -> None:
         with self._lock:
-            self._clear_active_locked()
+            for session_id in list(self._sessions):
+                self._remove_session_locked(session_id)
         if self.root_dir.exists():
             shutil.rmtree(self.root_dir, ignore_errors=True)
 
@@ -1709,153 +1720,185 @@ class VideoSessionManager:
         ffmpeg_exe = getattr(video_config, "ffmpeg_exe", None)
         if ffmpeg_exe is None:
             raise BrowserError(HTTPStatus.SERVICE_UNAVAILABLE, "ffmpeg is not available.")
+        max_session_count = int(getattr(video_config, "max_concurrent_sessions", 8) or 8)
+        if max_session_count <= 0:
+            max_session_count = 1
+        with self._lock:
+            self._cleanup_expired_locked()
+            active_count = len(self._sessions)
+            pending_count = self._pending_session_creations
+            if (active_count + pending_count) >= max_session_count:
+                log_video_debug(
+                    self.app,
+                    "session_cap_reached",
+                    path=rel_path,
+                    active_session_count=active_count,
+                    pending_session_count=pending_count,
+                    max_session_count=max_session_count,
+                )
+                raise BrowserError(
+                    HTTPStatus.TOO_MANY_REQUESTS,
+                    f"Video session limit reached ({max_session_count} max concurrent sessions).",
+                )
+            self._pending_session_creations += 1
+        reservation_active = True
 
-        probe_payload: dict[str, object] | None = None
         try:
-            probe_payload = probe_remote_media(
-                self.app,
+            probe_payload: dict[str, object] | None = None
+            try:
+                probe_payload = probe_remote_media(
+                    self.app,
+                    rel_path=rel_path,
+                    base_url=base_url,
+                    file_size=file_size,
+                )
+            except Exception:
+                probe_payload = None
+            video_mode, video_mode_reason = compatibility_video_mode_for_probe(
+                probe_payload,
+                subtitle_stream_index=subtitle_stream_index,
+                force_video_transcode=force_video_transcode,
+            )
+            audio_mode, audio_mode_reason = compatibility_audio_mode_for_probe(
+                probe_payload,
                 rel_path=rel_path,
-                base_url=base_url,
-                file_size=file_size,
+                audio_stream_index=audio_stream_index,
+                force_audio_transcode=force_audio_transcode,
             )
-        except Exception:
-            probe_payload = None
-        video_mode, video_mode_reason = compatibility_video_mode_for_probe(
-            probe_payload,
-            subtitle_stream_index=subtitle_stream_index,
-            force_video_transcode=force_video_transcode,
-        )
-        audio_mode, audio_mode_reason = compatibility_audio_mode_for_probe(
-            probe_payload,
-            rel_path=rel_path,
-            audio_stream_index=audio_stream_index,
-            force_audio_transcode=force_audio_transcode,
-        )
-        session_id = uuid.uuid4().hex
-        input_url = base_url + "/file?" + urlencode({
-            "path": rel_path,
-            "source": "remote",
-            "video_session_id": session_id,
-        })
-        create_started_at = time.monotonic()
-        session_dir = self.root_dir / session_id
-        session_dir.mkdir(parents=True, exist_ok=True)
-        playlist_path = session_dir / HLS_PLAYLIST_NAME
-        segment_base_url = "/video/endpoints/session/file?" + urlencode({"id": session_id, "name": ""})
-        command = build_ffmpeg_hls_command(
-            ffmpeg_exe,
-            input_url,
-            playlist_path,
-            segment_base_url=segment_base_url,
-            audio_stream_index=audio_stream_index,
-            subtitle_stream_index=subtitle_stream_index,
-            subtitle_stroke_enabled=subtitle_stroke_enabled,
-            subtitle_shadow_enabled=subtitle_shadow_enabled,
-            start_time_seconds=start_time_seconds,
-            read_rate=float(getattr(video_config, "ffmpeg_read_rate", 0.0) or 0.0),
-            read_rate_initial_burst_seconds=float(
-                getattr(video_config, "ffmpeg_initial_burst_seconds", 0.0) or 0.0
-            ),
-            read_rate_catchup=float(getattr(video_config, "ffmpeg_catchup_read_rate", 0.0) or 0.0),
-            threads=int(getattr(video_config, "ffmpeg_threads", 0) or 0),
-            filter_threads=int(getattr(video_config, "ffmpeg_filter_threads", 0) or 0),
-            copy_video=video_mode == "video_copy",
-            copy_audio=audio_mode == "audio_copy",
-        )
-        process_priority = str(getattr(video_config, "ffmpeg_process_priority", "below_normal") or "below_normal")
-        priority_popen_kwargs = ffmpeg_popen_kwargs_for_priority(process_priority)
-        log_video_debug(
-            self.app,
-            "session_create_start",
-            session_id=session_id,
-            path=rel_path,
-            audio_stream_index=audio_stream_index,
-            subtitle_stream_index=subtitle_stream_index,
-            subtitle_stroke_enabled=subtitle_stroke_enabled,
-            subtitle_shadow_enabled=subtitle_shadow_enabled,
-            start_time_seconds=start_time_seconds,
-            force_video_transcode=force_video_transcode,
-            force_audio_transcode=force_audio_transcode,
-            video_mode=video_mode,
-            video_mode_reason=video_mode_reason,
-            audio_mode=audio_mode,
-            audio_mode_reason=audio_mode_reason,
-            playlist=str(playlist_path),
-            command=command,
-            ffmpeg_process_priority=process_priority,
-        )
-        try:
-            process: subprocess.Popen[bytes] = subprocess.Popen(  # type: ignore[type-var]
-                command,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                cwd=session_dir,
-                **priority_popen_kwargs,
+            session_id = uuid.uuid4().hex
+            input_url = base_url + "/file?" + urlencode({
+                "path": rel_path,
+                "source": "remote",
+                "video_session_id": session_id,
+            })
+            create_started_at = time.monotonic()
+            session_dir = self.root_dir / session_id
+            session_dir.mkdir(parents=True, exist_ok=True)
+            playlist_path = session_dir / HLS_PLAYLIST_NAME
+            segment_base_url = "/video/endpoints/session/file?" + urlencode({"id": session_id, "name": ""})
+            command = build_ffmpeg_hls_command(
+                ffmpeg_exe,
+                input_url,
+                playlist_path,
+                segment_base_url=segment_base_url,
+                audio_stream_index=audio_stream_index,
+                subtitle_stream_index=subtitle_stream_index,
+                subtitle_stroke_enabled=subtitle_stroke_enabled,
+                subtitle_shadow_enabled=subtitle_shadow_enabled,
+                start_time_seconds=start_time_seconds,
+                read_rate=float(getattr(video_config, "ffmpeg_read_rate", 0.0) or 0.0),
+                read_rate_initial_burst_seconds=float(
+                    getattr(video_config, "ffmpeg_initial_burst_seconds", 0.0) or 0.0
+                ),
+                read_rate_catchup=float(getattr(video_config, "ffmpeg_catchup_read_rate", 0.0) or 0.0),
+                threads=int(getattr(video_config, "ffmpeg_threads", 0) or 0),
+                filter_threads=int(getattr(video_config, "ffmpeg_filter_threads", 0) or 0),
+                copy_video=video_mode == "video_copy",
+                copy_audio=audio_mode == "audio_copy",
             )
-        except FileNotFoundError as exc:
-            shutil.rmtree(session_dir, ignore_errors=True)
-            raise BrowserError(HTTPStatus.SERVICE_UNAVAILABLE, f"ffmpeg was not found: {exc}") from exc
+            process_priority = str(getattr(video_config, "ffmpeg_process_priority", "below_normal") or "below_normal")
+            priority_popen_kwargs = ffmpeg_popen_kwargs_for_priority(process_priority)
+            log_video_debug(
+                self.app,
+                "session_create_start",
+                session_id=session_id,
+                path=rel_path,
+                audio_stream_index=audio_stream_index,
+                subtitle_stream_index=subtitle_stream_index,
+                subtitle_stroke_enabled=subtitle_stroke_enabled,
+                subtitle_shadow_enabled=subtitle_shadow_enabled,
+                start_time_seconds=start_time_seconds,
+                force_video_transcode=force_video_transcode,
+                force_audio_transcode=force_audio_transcode,
+                video_mode=video_mode,
+                video_mode_reason=video_mode_reason,
+                audio_mode=audio_mode,
+                audio_mode_reason=audio_mode_reason,
+                playlist=str(playlist_path),
+                command=command,
+                ffmpeg_process_priority=process_priority,
+            )
+            try:
+                process: subprocess.Popen[bytes] = subprocess.Popen(  # type: ignore[type-var]
+                    command,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    cwd=session_dir,
+                    **priority_popen_kwargs,
+                )
+            except FileNotFoundError as exc:
+                shutil.rmtree(session_dir, ignore_errors=True)
+                raise BrowserError(HTTPStatus.SERVICE_UNAVAILABLE, f"ffmpeg was not found: {exc}") from exc
 
-        session = VideoHlsSession(
-            session_id=session_id,
-            rel_path=rel_path,
-            session_dir=session_dir,
-            playlist_path=playlist_path,
-            process=process,
-            command=command,
-            created_at=time.time(),
-            create_started_at=create_started_at,
-            last_accessed_at=time.time(),
-            audio_stream_index=audio_stream_index,
-            subtitle_stream_index=subtitle_stream_index,
-            start_time_seconds=start_time_seconds,
-            video_mode=video_mode,
-            video_mode_reason=video_mode_reason,
-            audio_mode=audio_mode,
-            audio_mode_reason=audio_mode_reason,
-        )
-        with self._lock:
-            self._cleanup_expired_locked()
-            self._clear_active_locked()
-            self._active_session = session
-        ready_timeout_seconds = (
-            HLS_READY_TIMEOUT_BURN_IN_SECONDS
-            if subtitle_stream_index is not None
-            else HLS_READY_TIMEOUT_SECONDS
-        )
-        if not self._wait_for_playlist(session, timeout_seconds=ready_timeout_seconds):
+            session = VideoHlsSession(
+                session_id=session_id,
+                rel_path=rel_path,
+                session_dir=session_dir,
+                playlist_path=playlist_path,
+                process=process,
+                command=command,
+                created_at=time.time(),
+                create_started_at=create_started_at,
+                last_accessed_at=time.time(),
+                audio_stream_index=audio_stream_index,
+                subtitle_stream_index=subtitle_stream_index,
+                start_time_seconds=start_time_seconds,
+                video_mode=video_mode,
+                video_mode_reason=video_mode_reason,
+                audio_mode=audio_mode,
+                audio_mode_reason=audio_mode_reason,
+            )
             with self._lock:
-                if self._active_session is session:
-                    self._clear_active_locked()
-            log_video_debug(self.app, "session_create_timeout", session_id=session_id, path=rel_path)
-            raise BrowserError(HTTPStatus.BAD_GATEWAY, "ffmpeg did not produce an HLS playlist in time.")
-        ready_elapsed_ms = round((time.monotonic() - session.create_started_at) * 1000, 3)
-        log_video_debug(
-            self.app,
-            "session_create_ready",
-            session_id=session_id,
-            path=rel_path,
-            playlist_bytes=session.playlist_path.stat().st_size if session.playlist_path.exists() else 0,
-            elapsed_ms=ready_elapsed_ms,
-        )
-        return self._session_payload(session, ready_elapsed_ms=ready_elapsed_ms)
+                self._cleanup_expired_locked()
+                self._sessions[session_id] = session
+                self._active_session_id = session_id
+                self._pending_session_creations = max(0, self._pending_session_creations - 1)
+                reservation_active = False
+            ready_timeout_seconds = (
+                HLS_READY_TIMEOUT_BURN_IN_SECONDS
+                if subtitle_stream_index is not None
+                else HLS_READY_TIMEOUT_SECONDS
+            )
+            try:
+                playlist_ready = self._wait_for_playlist(session, timeout_seconds=ready_timeout_seconds)
+            except BrowserError:
+                with self._lock:
+                    self._remove_session_locked(session_id, reason="create_failed")
+                raise
+            if not playlist_ready:
+                with self._lock:
+                    self._remove_session_locked(session_id, reason="create_timeout")
+                log_video_debug(self.app, "session_create_timeout", session_id=session_id, path=rel_path)
+                raise BrowserError(HTTPStatus.BAD_GATEWAY, "ffmpeg did not produce an HLS playlist in time.")
+            ready_elapsed_ms = round((time.monotonic() - session.create_started_at) * 1000, 3)
+            log_video_debug(
+                self.app,
+                "session_create_ready",
+                session_id=session_id,
+                path=rel_path,
+                playlist_bytes=session.playlist_path.stat().st_size if session.playlist_path.exists() else 0,
+                elapsed_ms=ready_elapsed_ms,
+            )
+            return self._session_payload(session, ready_elapsed_ms=ready_elapsed_ms)
+        finally:
+            if reservation_active:
+                with self._lock:
+                    self._pending_session_creations = max(0, self._pending_session_creations - 1)
 
-    def stop_active_session(self, session_id: str | None = None) -> dict[str, object]:
+    def stop_session(self, session_id: str | None = None) -> dict[str, object]:
         with self._lock:
             self._cleanup_expired_locked()
-            session = self._active_session
+            session = self._get_session_locked(session_id) if session_id else self._active_session_locked()
             if session is None:
                 return {"status": "ok", "stopped": False}
-            if session_id and session.session_id != session_id:
-                return {"status": "ok", "stopped": False}
-            self._clear_active_locked()
+            self._remove_session_locked(session.session_id, reason="stopped")
         return {"status": "ok", "stopped": True}
 
     def session_asset(self, session_id: str, name: str) -> tuple[Path, str]:
         with self._lock:
             self._cleanup_expired_locked()
-            session = self._active_session
-            if session is None or session.session_id != session_id:
+            session = self._get_session_locked(session_id)
+            if session is None:
                 log_video_debug(self.app, "asset_missing_session", session_id=session_id, name=name)
                 raise BrowserError(HTTPStatus.NOT_FOUND, "Video session not found.")
             asset_name = _safe_session_asset_name(name)
@@ -1881,10 +1924,11 @@ class VideoSessionManager:
             raise BrowserError(HTTPStatus.NOT_FOUND, "Video session asset not found.")
         wait_ms = round((time.monotonic() - wait_started) * 1000, 3)
         with self._lock:
-            if self._active_session is not session:
+            if self._get_session_locked(session.session_id) is not session:
                 log_video_debug(self.app, "asset_session_replaced", session_id=session_id, name=asset_path.name)
                 raise BrowserError(HTTPStatus.NOT_FOUND, "Video session not found.")
             session.touch()
+            self._active_session_id = session.session_id
         content_type = _session_asset_content_type(asset_path.name)
         if asset_path.suffix.casefold() == ".m3u8" or not existed_initially or wait_ms >= 1:
             playlist_info = _playlist_info(asset_path) if asset_path.suffix.casefold() == ".m3u8" else {}
@@ -1905,9 +1949,29 @@ class VideoSessionManager:
     def active_session_payload(self) -> dict[str, object] | None:
         with self._lock:
             self._cleanup_expired_locked()
-            if self._active_session is None:
+            session = self._active_session_locked()
+            if session is None:
                 return None
-            return self._session_payload(self._active_session)
+            return self._session_summary_payload(session)
+
+    def session_status_payload(self, session_id: str | None = None) -> dict[str, object]:
+        with self._lock:
+            self._cleanup_expired_locked()
+            active_session = self._active_session_locked()
+            active_sessions = self._session_summaries_locked(session_id)
+            if session_id:
+                active_session_payload = active_sessions[0] if active_sessions else None
+            else:
+                active_session_payload = (
+                    self._session_summary_payload(active_session)
+                    if active_session is not None
+                    else None
+                )
+            return {
+                "active_session": active_session_payload,
+                "active_sessions": active_sessions,
+                "session_count": len(active_sessions),
+            }
 
     def tagged_input_session(self, session_id: str | None, rel_path: str) -> VideoHlsSession | None:
         normalized_session_id = str(session_id or "").strip()
@@ -1916,14 +1980,14 @@ class VideoSessionManager:
         normalized_rel_path = clean_rel_path(rel_path)
         with self._lock:
             self._cleanup_expired_locked()
-            session = self._active_session
-            if session is None or session.session_id != normalized_session_id:
+            session = self._get_session_locked(normalized_session_id)
+            if session is None:
                 log_video_debug(
                     self.app,
                     "tagged_input_session_miss",
                     session_id=normalized_session_id,
                     rel_path=normalized_rel_path,
-                    reason="session_missing_or_inactive",
+                    reason="session_missing",
                 )
                 return None
             if clean_rel_path(session.rel_path) != normalized_rel_path:
@@ -1937,6 +2001,7 @@ class VideoSessionManager:
                 )
                 return None
             session.touch()
+            self._active_session_id = session.session_id
             log_video_debug(
                 self.app,
                 "tagged_input_session_match",
@@ -1952,11 +2017,9 @@ class VideoSessionManager:
         normalized_rel_path = clean_rel_path(rel_path)
         with self._lock:
             self._cleanup_expired_locked()
-            session = self._active_session
+            session = self._get_session_locked(normalized_session_id)
             if session is None:
                 return VideoInputThrottleDecision(cancel=True, throttle_mode="session_missing")
-            if session.session_id != normalized_session_id:
-                return VideoInputThrottleDecision(cancel=True, throttle_mode="session_replaced")
             if clean_rel_path(session.rel_path) != normalized_rel_path:
                 return VideoInputThrottleDecision(cancel=True, throttle_mode="path_mismatch")
             reported_playback_seconds = session.reported_playback_seconds
@@ -1982,13 +2045,18 @@ class VideoSessionManager:
         updated_at = time.time()
         with self._lock:
             self._cleanup_expired_locked()
-            session = self._active_session
-            if session is None or session.session_id != session_id:
+            session = self._get_session_locked(session_id)
+            if session is None:
+                active_session = self._active_session_locked()
+                session_state = self._session_state_for_missing_locked(session_id)
                 return {
                     "status": "ok",
                     "updated": False,
                     "stale": True,
-                    "active_session_id": session.session_id if session is not None else None,
+                    "session_id": session_id,
+                    "session_state": session_state,
+                    "stale_reason": session_state,
+                    "active_session_id": active_session.session_id if active_session is not None else None,
                 }
             session.reported_playback_seconds = float(playback_seconds)
             session.reported_media_seconds = None if media_seconds is None else float(media_seconds)
@@ -1996,6 +2064,7 @@ class VideoSessionManager:
             session.reported_playback_updated_at = updated_at
             session.reported_playback_sync_token = playback_sync_token
             session.touch()
+            self._active_session_id = session.session_id
             playback_payload = self._session_playback_payload(session)
         log_video_debug(
             self.app,
@@ -2126,17 +2195,22 @@ class VideoSessionManager:
             "client_playback": self._session_playback_payload(session),
         }
 
+    def _session_summary_payload(self, session: VideoHlsSession) -> dict[str, object]:
+        payload = self._session_payload(session)
+        payload["created_at"] = _format_video_timestamp(session.created_at)
+        payload["created_at_unix_ms"] = int(round(session.created_at * 1000))
+        payload["last_accessed_at"] = _format_video_timestamp(session.last_accessed_at)
+        payload["last_accessed_at_unix_ms"] = int(round(session.last_accessed_at * 1000))
+        payload["state"] = "active" if session.process.poll() is None else "stopped"
+        return payload
+
     def _session_playback_payload(self, session: VideoHlsSession) -> dict[str, object]:
         updated_at = session.reported_playback_updated_at
         return {
             "reported_seconds": session.reported_playback_seconds,
             "media_seconds": session.reported_media_seconds,
             "state": session.reported_playback_state,
-            "reported_at": (
-                time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(updated_at))
-                if updated_at is not None
-                else None
-            ),
+            "reported_at": _format_video_timestamp(updated_at),
             "reported_at_unix_ms": int(round(updated_at * 1000)) if updated_at is not None else None,
             "playback_sync_token": session.reported_playback_sync_token,
         }
@@ -2182,7 +2256,7 @@ class VideoSessionManager:
         deadline = time.monotonic() + wait_timeout_seconds
         while time.monotonic() < deadline:
             with self._lock:
-                if self._active_session is not session:
+                if self._get_session_locked(session.session_id) is not session:
                     return False
             if asset_path.is_file():
                 return True
@@ -2200,17 +2274,47 @@ class VideoSessionManager:
         return asset_path.is_file()
 
     def _cleanup_expired_locked(self) -> None:
-        session = self._active_session
-        if session is None:
-            return
-        if (time.time() - session.last_accessed_at) > HLS_SESSION_TTL_SECONDS:
-            self._clear_active_locked()
+        expired_ids = [
+            session_id
+            for session_id, session in self._sessions.items()
+            if (time.time() - session.last_accessed_at) > HLS_SESSION_TTL_SECONDS
+        ]
+        for session_id in expired_ids:
+            self._remove_session_locked(session_id, reason="expired")
 
-    def _clear_active_locked(self) -> None:
-        session = self._active_session
-        self._active_session = None
+    def _active_session_locked(self) -> VideoHlsSession | None:
+        if self._active_session_id:
+            session = self._sessions.get(self._active_session_id)
+            if session is not None:
+                return session
+        if not self._sessions:
+            self._active_session_id = None
+            return None
+        session = max(self._sessions.values(), key=lambda item: item.last_accessed_at)
+        self._active_session_id = session.session_id
+        return session
+
+    def _get_session_locked(self, session_id: str | None) -> VideoHlsSession | None:
+        normalized_session_id = str(session_id or "").strip()
+        if not normalized_session_id:
+            return None
+        return self._sessions.get(normalized_session_id)
+
+    def _remove_session_locked(self, session_id: str, reason: str = "removed") -> None:
+        session = self._sessions.pop(session_id, None)
+        if self._active_session_id == session_id:
+            self._active_session_id = None
         if session is None:
             return
+        self._session_lifecycle[session_id] = {
+            "reason": reason,
+            "removed_at": time.time(),
+            "path": session.rel_path,
+        }
+        log_video_debug(self.app, "session_removed", session_id=session_id, reason=reason, path=session.rel_path)
+        self._stop_session_resources(session)
+
+    def _stop_session_resources(self, session: VideoHlsSession) -> None:
         if session.process.poll() is None:
             try:
                 session.process.kill()
@@ -2226,6 +2330,34 @@ class VideoSessionManager:
             except OSError:
                 pass
         shutil.rmtree(session.session_dir, ignore_errors=True)
+
+    def _session_summaries_locked(self, session_id: str | None = None) -> list[dict[str, object]]:
+        if session_id is not None:
+            session = self._get_session_locked(session_id)
+            if session is None:
+                return []
+            return [self._session_summary_payload(session)]
+        sessions = sorted(
+            self._sessions.values(),
+            key=lambda item: (item.last_accessed_at, item.created_at),
+            reverse=True,
+        )
+        return [self._session_summary_payload(session) for session in sessions]
+
+    def _session_state_for_missing_locked(self, session_id: str) -> str:
+        lifecycle = self._session_lifecycle.get(session_id)
+        if lifecycle is None:
+            return "missing"
+        reason = str(lifecycle.get("reason") or "missing").strip().casefold()
+        if reason in {"stopped", "expired", "evicted"}:
+            return reason
+        return "missing"
+
+
+def _format_video_timestamp(timestamp: float | None) -> str | None:
+    if timestamp is None:
+        return None
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(timestamp))
 
 
 def _safe_session_asset_name(name: str) -> str:
@@ -2930,51 +3062,72 @@ def extract_remote_subtitle_window_to_webvtt(
         event = inflight_entry.get("event")
         if isinstance(event, _THREAD_EVENT_TYPE):
             event.wait()
-        cached_window_body = _read_subtitle_cache(app, cached_window_key)
-        manifest = read_subtitle_window_manifest(
+    cached_window_body = _read_subtitle_cache(app, cached_window_key)
+    manifest = read_subtitle_window_manifest(
+        app,
+        rel_path=rel_path,
+        subtitle_stream_index=subtitle_stream_index,
+        file_size=file_size,
+    )
+    if cached_window_body is not None:
+        # A concurrent request can observe the cached VTT body before the owner
+        # has finished writing the updated coverage manifest. If the window is
+        # not yet covered and an inflight extraction still exists, wait for it
+        # to finish so cache-hit callers see the finalized manifest.
+        coverage_ranges = manifest.get("coverage_ranges", [])
+        if not subtitle_window_is_covered(
+            coverage_ranges,
+            window_start_seconds=float(window_request["window_start_seconds"]),
+            window_end_seconds=float(window_request["window_end_seconds"]),
+        ):
+            inflight_entry = _peek_subtitle_window_inflight(app, cached_window_key)
+            event = inflight_entry.get("event") if isinstance(inflight_entry, dict) else None
+            if isinstance(event, _THREAD_EVENT_TYPE):
+                event.wait()
+                cached_window_body = _read_subtitle_cache(app, cached_window_key)
+                manifest = read_subtitle_window_manifest(
+                    app,
+                    rel_path=rel_path,
+                    subtitle_stream_index=subtitle_stream_index,
+                    file_size=file_size,
+                )
+        cached_window_text = cached_window_body.decode("utf-8", "replace")
+        coverage_ranges = manifest.get("coverage_ranges", [])
+        return_payload = _subtitle_window_payload(
+            rel_path=clean_path,
+            subtitle_stream_index=subtitle_stream_index,
+            file_size=file_size,
+            language=language,
+            window_request=window_request,
+            media_duration_seconds=media_duration_seconds,
+            coverage_ranges=coverage_ranges,
+            vtt_text=cached_window_text,
+            cache_hit=True,
+        )
+        backfill_scheduled = _maybe_schedule_subtitle_window_backfill(
             app,
             rel_path=rel_path,
             subtitle_stream_index=subtitle_stream_index,
+            base_url=base_url,
             file_size=file_size,
+            media_duration_seconds=media_duration_seconds,
+            window_request=window_request,
+            response_payload=return_payload,
+            window_status=str(window_request.get("window_status") or ""),
         )
-        if cached_window_body is not None:
-            cached_window_text = cached_window_body.decode("utf-8", "replace")
-            coverage_ranges = manifest.get("coverage_ranges", [])
-            return_payload = _subtitle_window_payload(
-                rel_path=clean_path,
-                subtitle_stream_index=subtitle_stream_index,
-                file_size=file_size,
-                language=language,
-                window_request=window_request,
-                media_duration_seconds=media_duration_seconds,
-                coverage_ranges=coverage_ranges,
-                vtt_text=cached_window_text,
-                cache_hit=True,
-            )
-            backfill_scheduled = _maybe_schedule_subtitle_window_backfill(
-                app,
-                rel_path=rel_path,
-                subtitle_stream_index=subtitle_stream_index,
-                base_url=base_url,
-                file_size=file_size,
-                media_duration_seconds=media_duration_seconds,
-                window_request=window_request,
-                response_payload=return_payload,
-                window_status=str(window_request.get("window_status") or ""),
-            )
-            _log_subtitle_window_request(
-                app,
-                rel_path=clean_path,
-                subtitle_stream_index=subtitle_stream_index,
-                requested_window_status=requested_window_status,
-                window_request=window_request,
-                cache_hit=True,
-                inflight_waited=True,
-                request_started_at=request_started_at,
-                response_payload=return_payload,
-                background_backfill_scheduled=backfill_scheduled,
-            )
-            return return_payload
+        _log_subtitle_window_request(
+            app,
+            rel_path=clean_path,
+            subtitle_stream_index=subtitle_stream_index,
+            requested_window_status=requested_window_status,
+            window_request=window_request,
+            cache_hit=True,
+            inflight_waited=True,
+            request_started_at=request_started_at,
+            response_payload=return_payload,
+            background_backfill_scheduled=backfill_scheduled,
+        )
+        return return_payload
         error = inflight_entry.get("error")
         if isinstance(error, BaseException):
             raise error
@@ -3542,7 +3695,8 @@ def handle_video_get(app: Any, path: str, query: str) -> tuple[HTTPStatus, dict]
             if video_config is not None
             else False
         )
-        session_payload = video_session_manager(app).active_session_payload()
+        status_session_id = params.get("id", [""])[0]
+        session_status = video_session_manager(app).session_status_payload(status_session_id or None)
         return HTTPStatus.OK, {
             "status": "ok",
             "ffmpeg_available": ffmpeg_exe is not None,
@@ -3559,7 +3713,10 @@ def handle_video_get(app: Any, path: str, query: str) -> tuple[HTTPStatus, dict]
                 "high_water_seconds": float(getattr(video_config, "backpressure_high_water_seconds", 300.0) or 0.0),
                 "max_water_seconds": float(getattr(video_config, "backpressure_max_water_seconds", 600.0) or 0.0),
             },
-            "active_session": session_payload,
+            "max_session_count": int(getattr(video_config, "max_concurrent_sessions", 8) or 8),
+            "active_session": session_status["active_session"],
+            "active_sessions": session_status["active_sessions"],
+            "session_count": session_status["session_count"],
         }
 
     raise BrowserError(HTTPStatus.NOT_FOUND, "Video endpoint not found.")

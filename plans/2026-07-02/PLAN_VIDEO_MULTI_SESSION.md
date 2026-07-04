@@ -64,67 +64,67 @@ stop/recreate the current compatibility session.
 
 ## Phase 1 - Lock The Existing Failure With Tests
 
-- [ ] Add a server test that creates two HLS sessions for different paths and
+- [x] Add a server test that creates two HLS sessions for different paths and
       proves the first session currently becomes unavailable.
-- [ ] Add the desired-behavior version of that test: after session B is created,
+- [x] Add the desired-behavior version of that test: after session B is created,
       session A's playlist and segment URLs still return `200`.
-- [ ] Add a tagged input test proving a session's `/file?...video_session_id=A`
+- [x] Add a tagged input test proving a session's `/file?...video_session_id=A`
       lookup should still match after session B exists.
-- [ ] Add a progress test proving `POST /video/endpoints/session/progress` updates
+- [x] Add a progress test proving `POST /video/endpoints/session/progress` updates
       the session named by `id`, not whichever session was created last.
-- [ ] Add a stop test proving `POST /video/endpoints/session/stop&id=A` stops
+- [x] Add a stop test proving `POST /video/endpoints/session/stop&id=A` stops
       only A and leaves B available.
-- [ ] Keep any current single-session behavior tests, but rename or rewrite them
+- [x] Keep any current single-session behavior tests, but rename or rewrite them
       so they assert the new lifecycle policy rather than accidental replacement.
 
 ## Phase 2 - Replace Global Active Session With A Session Registry
 
-- [ ] Replace `_active_session: VideoHlsSession | None` with
+- [x] Replace `_active_session: VideoHlsSession | None` with
       `_sessions: dict[str, VideoHlsSession]`.
-- [ ] Add helper methods:
+- [x] Add helper methods:
       `_get_session_locked(session_id)`,
       `_remove_session_locked(session_id, reason)`,
       `_stop_session_resources(session)`, and
       `_session_summaries_locked()`.
-- [ ] Make `shutdown()` stop and remove every session before deleting
+- [x] Make `shutdown()` stop and remove every session before deleting
       `Temp/video_sessions/`.
-- [ ] Change `create_session()` so it registers the new session without clearing
+- [x] Change `create_session()` so it registers the new session without clearing
       unrelated sessions.
-- [ ] On create failure or playlist timeout, remove only the new session.
-- [ ] Ensure all session directory cleanup is idempotent and never deletes the
+- [x] On create failure or playlist timeout, remove only the new session.
+- [x] Ensure all session directory cleanup is idempotent and never deletes the
       session root while other sessions are still active.
 - [ ] Keep lock hold times short: do not wait for playlist/assets or block on
       process IO while holding the registry lock except during brief removal.
 
 ## Phase 3 - Make Session Lookup Truly Per-ID
 
-- [ ] Update `session_asset(session_id, name)` to look up that exact session in
+- [x] Update `session_asset(session_id, name)` to look up that exact session in
       `_sessions`.
-- [ ] Update `_wait_for_asset()` to check whether that exact session ID is still
+- [x] Update `_wait_for_asset()` to check whether that exact session ID is still
       present, not whether it is still globally active.
-- [ ] Update `tagged_input_session()` to match `session_id` and `rel_path` against
+- [x] Update `tagged_input_session()` to match `session_id` and `rel_path` against
       `_sessions[session_id]`.
-- [ ] Update `tagged_input_throttle_decision()` to compute encode-ahead from the
+- [x] Update `tagged_input_throttle_decision()` to compute encode-ahead from the
       named session and return `session_missing`, `path_mismatch`, or throttling
       for only that session.
-- [ ] Update `update_session_progress()` to mutate `_sessions[session_id]`.
-- [ ] Keep stale progress harmless, but include enough response fields for the
+- [x] Update `update_session_progress()` to mutate `_sessions[session_id]`.
+- [x] Keep stale progress harmless, but include enough response fields for the
       client to tell whether the session is missing, stopped, expired, or evicted.
-- [ ] Rename `stop_active_session()` to a session-scoped API internally, while
+- [x] Rename `stop_active_session()` to a session-scoped API internally, while
       keeping the HTTP endpoint path stable for compatibility.
-- [ ] Keep `active_session_payload()` temporarily as a compatibility alias that
+- [x] Keep `active_session_payload()` temporarily as a compatibility alias that
       returns the most recently accessed session, then migrate clients/tests to
       plural status.
 
 ## Phase 4 - Define Resource Limits And Eviction
 
-- [ ] Add config for maximum concurrent HLS sessions, for example
+- [x] Add config for maximum concurrent HLS sessions, for example
       `VideoMaxConcurrentSessions`, with a conservative default such as `2`.
 - [ ] Add config for idle TTL if current `HLS_SESSION_TTL_SECONDS` needs to be
       exposed or tuned.
-- [ ] Make `_cleanup_expired_locked()` scan every session and remove idle expired
+- [x] Make `_cleanup_expired_locked()` scan every session and remove idle expired
       sessions.
-- [ ] Decide and implement cap behavior:
+- [x] Decide and implement cap behavior:
       reject new session creation with `429 Too Many Requests` when all sessions
       are active, or evict only the oldest idle session.
 - [ ] Define "idle" using `last_accessed_at`, last progress report, and playback
@@ -137,20 +137,20 @@ stop/recreate the current compatibility session.
 
 ## Phase 5 - Expand Status Contracts
 
-- [ ] Change `/video/endpoints/status` to return `active_sessions: []` with one
+- [x] Change `/video/endpoints/status` to return `active_sessions: []` with one
       summary per session.
-- [ ] Keep `active_session` in the payload for one release as a backward-compatible
+- [x] Keep `active_session` in the payload for one release as a backward-compatible
       field, choosing the most recently accessed session.
-- [ ] Add query support such as `status?id=<session_id>` so a client can cheaply
+- [x] Add query support such as `status?id=<session_id>` so a client can cheaply
       poll its own session.
-- [ ] Include per-session fields:
+- [x] Include per-session fields:
       `session_id`, `path`, `start_time_seconds`, `encoded_media_end_seconds`,
       `video_mode`, `audio_mode`, `ffmpeg_pid`, `created_at`, `last_accessed_at`,
       `client_playback`, and a lifecycle `state`.
-- [ ] Include aggregate fields:
+- [x] Include aggregate fields:
       `session_count`, `max_session_count`, `backpressure_thresholds`, and
       compatibility availability.
-- [ ] Add tests for empty status, one-session status, multi-session status, and
+- [x] Add tests for empty status, one-session status, multi-session status, and
       status-by-ID for missing sessions.
 
 ## Phase 6 - Make The Client Session-Aware
@@ -208,12 +208,12 @@ stop/recreate the current compatibility session.
 
 ## Phase 9 - Regression Commands
 
-- [ ] Run `python -m tests.run video -v`.
+- [x] Run `python -m tests.run video -v`.
 - [ ] Run `python -m tests.run streaming -v` because tagged ffmpeg input uses
       `/file`.
 - [ ] Run `python -m tests.run web -v` for asset/status endpoint contracts.
-- [ ] Run `npm run test:js` for video client helper behavior.
-- [ ] Run the video Playwright coverage with `npx playwright test --grep video`
+- [x] Run `npm run test:js` for video client helper behavior.
+- [x] Run the video Playwright coverage with `npx playwright test --grep video`
       before merging broad client changes.
 - [ ] Run `python -m unittest discover -s tests -v` before checkin because the
       session registry changes shared server lifecycle behavior.

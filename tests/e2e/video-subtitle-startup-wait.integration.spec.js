@@ -2,7 +2,8 @@ const fs = require("fs");
 const path = require("path");
 const { test, expect } = require("@playwright/test");
 
-process.env.PLAYWRIGHT_PORT = "8014";
+const workerPortOffset = Number(process.env.TEST_WORKER_INDEX || "0") * 100;
+process.env.PLAYWRIGHT_PORT = String(8014 + workerPortOffset);
 process.env.DROPBOX_BROWSER_E2E_FIXTURE = path.join(
   __dirname,
   "fixtures",
@@ -17,7 +18,7 @@ const hlsStubSource = fs.readFileSync(
   "utf8",
 );
 
-test.describe.configure({ timeout: 90000 });
+test.describe.configure({ mode: "serial", timeout: 90000 });
 
 function isClosedRouteError(error) {
   const message = error && error.message ? String(error.message) : "";

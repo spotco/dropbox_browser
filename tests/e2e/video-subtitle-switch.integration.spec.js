@@ -2,7 +2,8 @@ const fs = require("fs");
 const path = require("path");
 const { test, expect } = require("@playwright/test");
 
-process.env.PLAYWRIGHT_PORT = "8013";
+const workerPortOffset = Number(process.env.TEST_WORKER_INDEX || "0") * 100;
+process.env.PLAYWRIGHT_PORT = String(8013 + workerPortOffset);
 process.env.DROPBOX_BROWSER_E2E_FIXTURE = path.join(
   __dirname,
   "fixtures",
@@ -55,7 +56,7 @@ async function fulfillJsonRoute(route, response, payload) {
   });
 }
 
-test.describe.configure({ timeout: 90000 });
+test.describe.configure({ mode: "serial", timeout: 90000 });
 
 async function installHlsStub(page, {
   fragmentCount = 2,
@@ -419,9 +420,18 @@ async function clearActiveVideoSessionAndCache(page) {
   const statusResponse = await page.request.get("/video/endpoints/status");
   expect(statusResponse.ok()).toBe(true);
   const statusPayload = await statusResponse.json();
-  if (statusPayload && statusPayload.active_session && statusPayload.active_session.session_id) {
+  const sessionIds = [];
+  if (statusPayload && Array.isArray(statusPayload.active_sessions)) {
+    statusPayload.active_sessions.forEach((session) => {
+      if (session && session.session_id) sessionIds.push(String(session.session_id));
+    });
+  }
+  if (!sessionIds.length && statusPayload && statusPayload.active_session && statusPayload.active_session.session_id) {
+    sessionIds.push(String(statusPayload.active_session.session_id));
+  }
+  for (const sessionId of sessionIds) {
     const stopResponse = await page.request.post("/video/endpoints/session/stop", {
-      data: { id: statusPayload.active_session.session_id },
+      data: { id: sessionId },
     });
     expect(stopResponse.ok()).toBe(true);
   }
@@ -1331,10 +1341,12 @@ test.beforeAll(async () => {
 });
 
 test.beforeEach(async ({ page }) => {
+  await clearActiveVideoSessionAndCache(page);
   await clearStoredTrackPreferences(page);
 });
 
 test.afterEach(async ({ page }) => {
+  await clearActiveVideoSessionAndCache(page);
   await page.unrouteAll({ behavior: "ignoreErrors" });
 });
 
