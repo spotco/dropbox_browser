@@ -1484,6 +1484,18 @@ async function restartCompatibilityAt(targetSeconds, reason, options) {
       void restartCompatibilityAt(Number(deferredSeekSeconds), 'scrub-deferred');
       return;
     }
+    if (ctx.state.pendingSubtitleTrackChange) {
+      ctx.state.pendingSubtitleTrackChange = false;
+      ctx.reportVideoDiagnostic({
+        level: 'info',
+        message: 'Replaying deferred subtitle track change after compatibility restart',
+        seek_reason: reason || '',
+        requested_time: clampedTarget,
+        session_id: session.session_id || '',
+        subtitle_stream_index: session.subtitle_stream_index,
+      });
+      void ctx.handleSubtitleTrackChange();
+    }
     ctx.reportVideoDiagnostic(Object.assign(
       {
         level: 'info',
