@@ -344,76 +344,6 @@ class VideoEndpointTests(AppTestCase):
                 "playback_seconds": "5",
                 "playback_state": "playing",
             })
-            payload = server.get_json("/video/endpoints/status")
-
-        self.assertEqual(payload["session_count"], 2)
-        self.assertEqual(
-            [item["session_id"] for item in payload["active_sessions"]],
-            [first["session_id"], second["session_id"]],
-        )
-        active_session = payload["active_session"]
-        assert active_session is not None
-        self.assertEqual(active_session["session_id"], first["session_id"])
-
-    def test_status_endpoint_prefers_recent_playback_activity_over_stale_access_time(self) -> None:
-        rclone = SimulatedRclone({
-            "dropbox:": [SimulatedLsjsonResponse(items=[
-                {
-                    "Name": "movie.mp4",
-                    "Path": "movie.mp4",
-                    "IsDir": False,
-                    "Size": 10,
-                    "ModTime": "2024-01-01T12:00:00Z",
-                },
-                {
-                    "Name": "other.mp4",
-                    "Path": "other.mp4",
-                    "IsDir": False,
-                    "Size": 12,
-                    "ModTime": "2024-01-01T12:00:01Z",
-                },
-            ])],
-            "dropbox:movie.mp4": [SimulatedLsjsonResponse(items=[{
-                "Name": "movie.mp4",
-                "Path": "movie.mp4",
-                "IsDir": False,
-                "Size": 10,
-            }])],
-            "dropbox:other.mp4": [SimulatedLsjsonResponse(items=[{
-                "Name": "other.mp4",
-                "Path": "other.mp4",
-                "IsDir": False,
-                "Size": 12,
-            }])],
-        }, cat_data={
-            "dropbox:movie.mp4": b"0123456789",
-            "dropbox:other.mp4": b"abcdefghijkl",
-        })
-        app = self._build_app(
-            rclone,
-            local_root=None,
-            video_tools_config=VideoToolsConfig(
-                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
-                ffprobe_exe=Path("C:/tools/ffprobe/bin/ffprobe.exe"),
-            ),
-        )
-
-        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
-            if not is_ffmpeg_hls_spawn(command):
-                return FakeFfmpegProcess(command)
-            playlist_path = Path(command[-1])
-            write_hls_session_fixture(playlist_path)
-            return FakeFfmpegProcess(command)
-
-        with TestServer(app) as server, patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen):
-            first = server.post_json("/video/endpoints/session", {
-                "path": "movie.mp4",
-                "source": "remote",
-            })
-            second = server.post_json("/video/endpoints/session", {
-                "path": "other.mp4",
-                "source": "remote",
-            })
             manager = video_session_manager(app)
             now = time.time()
             with manager._lock:
@@ -428,7 +358,10 @@ class VideoEndpointTests(AppTestCase):
                 second_session.reported_playback_state = "unknown"
                 second_session.reported_playback_updated_at = None
             payload = server.get_json("/video/endpoints/status")
+            filtered_payload = server.get_json("/video/endpoints/status?id=" + first["session_id"])
+            missing_payload = server.get_json("/video/endpoints/status?id=missing")
 
+        self.assertEqual(payload["session_count"], 2)
         self.assertEqual(
             [item["session_id"] for item in payload["active_sessions"]],
             [first["session_id"], second["session_id"]],
@@ -436,68 +369,6 @@ class VideoEndpointTests(AppTestCase):
         active_session = payload["active_session"]
         assert active_session is not None
         self.assertEqual(active_session["session_id"], first["session_id"])
-
-    def test_status_endpoint_can_filter_to_one_session_id_and_missing_ids(self) -> None:
-        rclone = SimulatedRclone({
-            "dropbox:": [SimulatedLsjsonResponse(items=[
-                {
-                    "Name": "movie.mp4",
-                    "Path": "movie.mp4",
-                    "IsDir": False,
-                    "Size": 10,
-                    "ModTime": "2024-01-01T12:00:00Z",
-                },
-                {
-                    "Name": "other.mp4",
-                    "Path": "other.mp4",
-                    "IsDir": False,
-                    "Size": 12,
-                    "ModTime": "2024-01-01T12:00:01Z",
-                },
-            ])],
-            "dropbox:movie.mp4": [SimulatedLsjsonResponse(items=[{
-                "Name": "movie.mp4",
-                "Path": "movie.mp4",
-                "IsDir": False,
-                "Size": 10,
-            }])],
-            "dropbox:other.mp4": [SimulatedLsjsonResponse(items=[{
-                "Name": "other.mp4",
-                "Path": "other.mp4",
-                "IsDir": False,
-                "Size": 12,
-            }])],
-        }, cat_data={
-            "dropbox:movie.mp4": b"0123456789",
-            "dropbox:other.mp4": b"abcdefghijkl",
-        })
-        app = self._build_app(
-            rclone,
-            local_root=None,
-            video_tools_config=VideoToolsConfig(
-                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
-                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
-            ),
-        )
-
-        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
-            if not is_ffmpeg_hls_spawn(command):
-                return FakeFfmpegProcess(command)
-            playlist_path = Path(command[-1])
-            write_hls_session_fixture(playlist_path)
-            return FakeFfmpegProcess(command)
-
-        with TestServer(app) as server, patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen):
-            first = server.post_json("/video/endpoints/session", {
-                "path": "movie.mp4",
-                "source": "remote",
-            })
-            server.post_json("/video/endpoints/session", {
-                "path": "other.mp4",
-                "source": "remote",
-            })
-            filtered_payload = server.get_json("/video/endpoints/status?id=" + first["session_id"])
-            missing_payload = server.get_json("/video/endpoints/status?id=missing")
 
         self.assertEqual(filtered_payload["query_keys"], ["id"])
         self.assertEqual(filtered_payload["session_count"], 1)
@@ -1360,6 +1231,12 @@ class VideoEndpointTests(AppTestCase):
                     "path": "third.mp4",
                     "source": "remote",
                 })
+            first_playlist = server.get_text(first["playlist_url"])
+            with urlopen(server.base_url + first["asset_root"] + "segment_00000.m4s", timeout=5) as response:
+                first_segment = response.read()
+            second_playlist = server.get_text(second["playlist_url"])
+            with urlopen(server.base_url + second["asset_root"] + "segment_00000.m4s", timeout=5) as response:
+                second_segment = response.read()
             status_payload = server.get_json("/video/endpoints/status")
 
         self.assertEqual(ctx.exception.code, 429)
@@ -1372,81 +1249,10 @@ class VideoEndpointTests(AppTestCase):
         self.assertEqual(len(spawned), 2)
         self.assertEqual(status_payload["session_count"], 2)
         self.assertEqual(status_payload["max_session_count"], 2)
-        ctx.exception.close()
-
-    def test_session_cap_rejection_does_not_stop_existing_active_sessions(self) -> None:
-        rclone = SimulatedRclone({
-            "dropbox:": [SimulatedLsjsonResponse(items=[
-                {
-                    "Name": "movie.mp4",
-                    "Path": "movie.mp4",
-                    "IsDir": False,
-                    "Size": 10,
-                    "ModTime": "2024-01-01T12:00:00Z",
-                },
-                {
-                    "Name": "other.mp4",
-                    "Path": "other.mp4",
-                    "IsDir": False,
-                    "Size": 12,
-                    "ModTime": "2024-01-01T12:00:01Z",
-                },
-            ])],
-            "dropbox:movie.mp4": [SimulatedLsjsonResponse(items=[{
-                "Name": "movie.mp4",
-                "Path": "movie.mp4",
-                "IsDir": False,
-                "Size": 10,
-            }])],
-            "dropbox:other.mp4": [SimulatedLsjsonResponse(items=[{
-                "Name": "other.mp4",
-                "Path": "other.mp4",
-                "IsDir": False,
-                "Size": 12,
-            }])],
-        }, cat_data={
-            "dropbox:movie.mp4": b"0123456789",
-            "dropbox:other.mp4": b"abcdefghijkl",
-        })
-        app = self._build_app(
-            rclone,
-            local_root=None,
-            video_tools_config=VideoToolsConfig(
-                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
-                ffprobe_exe=Path("C:/tools/ffprobe/bin/ffprobe.exe"),
-                max_concurrent_sessions=1,
-            ),
-        )
-
-        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
-            if not is_ffmpeg_hls_spawn(command):
-                return FakeFfmpegProcess(command)
-            playlist_path = Path(command[-1])
-            write_hls_session_fixture(playlist_path)
-            return FakeFfmpegProcess(command)
-
-        with TestServer(app) as server, patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen):
-            first = server.post_json("/video/endpoints/session", {
-                "path": "movie.mp4",
-                "source": "remote",
-            })
-            server.post_json("/video/endpoints/session/progress", {
-                "id": first["session_id"],
-                "playback_seconds": "9",
-                "playback_state": "playing",
-            })
-            with self.assertRaises(HTTPError) as ctx:
-                server.post_json("/video/endpoints/session", {
-                    "path": "other.mp4",
-                    "source": "remote",
-                })
-            first_playlist = server.get_text(first["playlist_url"])
-            with urlopen(server.base_url + first["asset_root"] + "segment_00000.m4s", timeout=5) as response:
-                first_segment = response.read()
-
-        self.assertEqual(ctx.exception.code, 429)
         self.assertIn("#EXTM3U", first_playlist)
         self.assertEqual(first_segment, b"segment0")
+        self.assertIn("#EXTM3U", second_playlist)
+        self.assertEqual(second_segment, b"segment0")
         ctx.exception.close()
 
     def test_session_endpoint_evicts_oldest_idle_session_when_capacity_is_full(self) -> None:
@@ -2181,103 +1987,32 @@ class VideoEndpointTests(AppTestCase):
         with TestServer(app) as server, patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen):
             first = server.post_json("/video/endpoints/session", {
                 "path": "movie.mp4",
-                "source": "remote",
-            })
-            second = server.post_json("/video/endpoints/session", {
-                "path": "other.mp4",
-                "source": "remote",
-            })
-            stop_payload = server.post_json("/video/endpoints/session/stop", {
-                "id": first["session_id"],
-            })
-            with self.assertRaises(HTTPError) as first_ctx:
-                urlopen(server.base_url + first["asset_root"] + "segment_00000.m4s", timeout=5)
-            second_playlist = server.get_text(second["playlist_url"])
-        self.assertEqual(stop_payload, {"status": "ok", "stopped": True})
-        self.assertEqual(first_ctx.exception.code, 404)
-        self.assertIn("#EXTM3U", second_playlist)
-        first_ctx.exception.close()
-
-    def test_stale_unload_stop_for_old_session_does_not_stop_newer_session(self) -> None:
-        rclone = SimulatedRclone({
-            "dropbox:": [SimulatedLsjsonResponse(items=[
-                {
-                    "Name": "movie.mp4",
-                    "Path": "movie.mp4",
-                    "IsDir": False,
-                    "Size": 10,
-                    "ModTime": "2024-01-01T12:00:00Z",
-                },
-                {
-                    "Name": "other.mp4",
-                    "Path": "other.mp4",
-                    "IsDir": False,
-                    "Size": 12,
-                    "ModTime": "2024-01-01T12:00:01Z",
-                },
-            ])],
-            "dropbox:movie.mp4": [SimulatedLsjsonResponse(items=[{
-                "Name": "movie.mp4",
-                "Path": "movie.mp4",
-                "IsDir": False,
-                "Size": 10,
-            }])],
-            "dropbox:other.mp4": [SimulatedLsjsonResponse(items=[{
-                "Name": "other.mp4",
-                "Path": "other.mp4",
-                "IsDir": False,
-                "Size": 12,
-            }])],
-        }, cat_data={
-            "dropbox:movie.mp4": b"0123456789",
-            "dropbox:other.mp4": b"abcdefghijkl",
-        })
-        app = self._build_app(
-            rclone,
-            local_root=None,
-            video_tools_config=VideoToolsConfig(
-                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
-                ffprobe_exe=Path("C:/tools/ffprobe/bin/ffprobe.exe"),
-            ),
-        )
-
-        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
-            if not is_ffmpeg_hls_spawn(command):
-                return FakeFfmpegProcess(command)
-            playlist_path = Path(command[-1])
-            write_hls_session_fixture(playlist_path)
-            return FakeFfmpegProcess(command)
-
-        with TestServer(app) as server, patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen):
-            old_session = server.post_json("/video/endpoints/session", {
-                "path": "movie.mp4",
                 "client_id": "client-old-page",
                 "source": "remote",
             })
-            new_session = server.post_json("/video/endpoints/session", {
+            second = server.post_json("/video/endpoints/session", {
                 "path": "other.mp4",
                 "client_id": "client-new-browser",
                 "source": "remote",
             })
             stop_payload = server.post_json("/video/endpoints/session/stop", {
-                "id": old_session["session_id"],
+                "id": first["session_id"],
                 "client_id": "client-old-page",
             })
-            with self.assertRaises(HTTPError) as old_ctx:
-                urlopen(server.base_url + old_session["asset_root"] + "segment_00000.m4s", timeout=5)
-            new_playlist = server.get_text(new_session["playlist_url"])
-            with urlopen(server.base_url + new_session["asset_root"] + "segment_00000.m4s", timeout=5) as response:
-                new_segment = response.read()
+            with self.assertRaises(HTTPError) as first_ctx:
+                urlopen(server.base_url + first["asset_root"] + "segment_00000.m4s", timeout=5)
+            second_playlist = server.get_text(second["playlist_url"])
+            with urlopen(server.base_url + second["asset_root"] + "segment_00000.m4s", timeout=5) as response:
+                second_segment = response.read()
             status_payload = server.get_json("/video/endpoints/status")
-
         self.assertEqual(stop_payload, {"status": "ok", "stopped": True})
-        self.assertEqual(old_ctx.exception.code, 404)
-        self.assertIn("#EXTM3U", new_playlist)
-        self.assertEqual(new_segment, b"segment0")
+        self.assertEqual(first_ctx.exception.code, 404)
+        self.assertIn("#EXTM3U", second_playlist)
+        self.assertEqual(second_segment, b"segment0")
         self.assertEqual(len(status_payload["active_sessions"]), 1)
-        self.assertEqual(status_payload["active_sessions"][0]["session_id"], new_session["session_id"])
+        self.assertEqual(status_payload["active_sessions"][0]["session_id"], second["session_id"])
         self.assertEqual(status_payload["active_sessions"][0]["client_id"], "client-new-browser")
-        old_ctx.exception.close()
+        first_ctx.exception.close()
 
     def test_stop_session_releases_registry_lock_before_waiting_for_ffmpeg_exit(self) -> None:
         rclone = self._remote_media_rclone()

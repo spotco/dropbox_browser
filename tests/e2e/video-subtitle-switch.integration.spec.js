@@ -1487,19 +1487,6 @@ test("video controls seek backward and forward by 15 seconds in embedded playbac
   await clickVideoControl(page, "video-forward-15");
   await expectPlaybackNearSeconds(page, 18, 1);
   await expectControlsOverlayVisible(page);
-});
-
-test("video keyboard shortcuts seek backward and forward by 15 seconds with arrow keys", async ({ page }) => {
-  test.setTimeout(90000);
-
-  await installHlsStub(page, { fragmentCount: 4, playlistFragmentCount: 5 });
-  await openVideoPane(page);
-
-  const seekSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fseek-window.mkv"));
-  await playLibraryFile(page, "seek-window.mkv");
-  await seekSession;
-  await waitForScrubberReady(page);
-  await pausePlayback(page);
   await page.locator("#video-playback-surface").click();
 
   await setMediaPlaybackTime(page, 18);
@@ -1625,6 +1612,12 @@ test("video controls stay visible and usable in fullscreen", async ({ page }) =>
       await document.exitFullscreen();
     }
   });
+  await expect
+    .poll(async () => readFullscreenPlaybackState(page), { timeout: 10000 })
+    .toMatchObject({
+      fullscreenElementId: "",
+      fullscreenLabel: "Fullscreen",
+    });
 });
 
 test("video playback loads tracks, switches tracks, and hides video before subtitle teardown", async ({ page }) => {
@@ -1673,6 +1666,13 @@ test("video playback loads tracks, switches tracks, and hides video before subti
     subtitleValue: "3",
   });
   await waitForSubtitleStreamIndex(page, 3);
+  await waitForMountedSubtitleTrackReady(page, 3);
+  await setPlaybackTimeForSubtitleChecks(page, 1);
+  await waitForDisplayedSubtitleText(page, "ALPHA-SUBTITLE-ENG");
+  await waitForSubtitleOverlayMarkup(page, {
+    tagName: "i",
+    expectedText: "ALPHA-SUBTITLE-ENG",
+  });
   await expect(page.locator("#video-player-status")).not.toContainText("Compatibility playback failed");
 
   await selectTrackOption(page, "#video-subtitle-track", "4");
@@ -1682,6 +1682,10 @@ test("video playback loads tracks, switches tracks, and hides video before subti
   await setPlaybackTimeForSubtitleChecks(page, 1);
   await waitForDisplayedSubtitleText(page, "ALPHA-SUBTITLE-FRA");
   await waitForNativeSubtitleCueText(page, "ALPHA-SUBTITLE-FRA");
+  await waitForSubtitleOverlayMarkup(page, {
+    tagName: "b",
+    expectedText: "ALPHA-SUBTITLE-FRA",
+  });
   await page.waitForTimeout(500);
 
   await page.evaluate(() => {
@@ -1790,38 +1794,6 @@ test("empty successful subtitle batch preload falls back to per-track extraction
   await setPlaybackTimeForSubtitleChecks(page, 1);
   await waitForDisplayedSubtitleText(page, "ALPHA-SUBTITLE-ENG");
   await waitForNativeSubtitleCueText(page, "ALPHA-SUBTITLE-ENG");
-});
-
-test("WebVTT formatting tags render in the subtitle overlay", async ({ page }) => {
-  test.setTimeout(90000);
-
-  await openVideoPane(page);
-
-  const initialSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
-  await playLibraryFile(page, "alpha.mkv");
-  await initialSession;
-
-  await expectTrackSelectors(page, {
-    audioOptionCount: 2,
-    subtitleOptionCount: 4,
-    audioValue: "1",
-    subtitleValue: "3",
-  });
-  await waitForSubtitleStreamIndex(page, 3);
-  await waitForMountedSubtitleTrackReady(page, 3);
-  await waitForDisplayedSubtitleText(page, "ALPHA-SUBTITLE-ENG");
-  await waitForSubtitleOverlayMarkup(page, {
-    tagName: "i",
-    expectedText: "ALPHA-SUBTITLE-ENG",
-  });
-
-  await selectTrackOption(page, "#video-subtitle-track", "4");
-  await waitForSubtitleStreamIndex(page, 4);
-  await waitForDisplayedSubtitleText(page, "ALPHA-SUBTITLE-FRA");
-  await waitForSubtitleOverlayMarkup(page, {
-    tagName: "b",
-    expectedText: "ALPHA-SUBTITLE-FRA",
-  });
 });
 
 test("WebVTT subtitle debug timing stays aligned after in-session scrub remount", async ({ page }) => {
@@ -2969,6 +2941,20 @@ test("video controls follow standard hover and idle visibility behavior", async 
 
   await surface.hover({ position: { x: 56, y: 56 } });
   await expectControlsOverlayVisible(page);
+
+  const box = await surface.boundingBox();
+  expect(box).not.toBeNull();
+
+  await page.mouse.move(box.x + (box.width / 2), box.y + (box.height / 2));
+  await expectControlsOverlayVisible(page);
+
+  try {
+    await startSyntheticControlsPointerStorm(page);
+    await page.waitForTimeout(3200);
+    await expectControlsOverlayHidden(page);
+  } finally {
+    await stopSyntheticControlsPointerStorm(page);
+  }
 });
 
 test("video fullscreen keeps the scrubber overlay visible and functional", async ({ page }) => {
@@ -3042,35 +3028,6 @@ test("video fullscreen keeps the scrubber overlay visible and functional", async
       fullscreenElementId: "",
       fullscreenLabel: "Fullscreen",
     });
-});
-
-test("video controls hide after idle even when pointermove repeats while playing", async ({ page }) => {
-  test.setTimeout(90000);
-
-  await installHlsStub(page);
-  await openVideoPane(page);
-
-  const alphaSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
-  await playLibraryFile(page, "alpha.mkv");
-  await alphaSession;
-  await waitForVisibleVideo(page);
-  await waitForPlaybackSurfaceWithoutOverlay(page);
-  await expectPlayToggleState(page, "Pause");
-
-  const surface = page.locator("#video-playback-surface");
-  const box = await surface.boundingBox();
-  expect(box).not.toBeNull();
-
-  await page.mouse.move(box.x + (box.width / 2), box.y + (box.height / 2));
-  await expectControlsOverlayVisible(page);
-
-  try {
-    await startSyntheticControlsPointerStorm(page);
-    await page.waitForTimeout(3200);
-    await expectControlsOverlayHidden(page);
-  } finally {
-    await stopSyntheticControlsPointerStorm(page);
-  }
 });
 
 
