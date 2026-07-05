@@ -39,6 +39,8 @@ from dropbox_browser.video import (
     build_subtitle_window_response,
     build_subtitle_cache_key,
     build_subtitle_window_manifest_key,
+    classify_ass_subtitle_text,
+    classify_subtitle_stream_rendering,
     clamp_subtitle_window,
     expand_subtitle_window_for_extraction,
     extracted_webvtt_needs_absolute_offset,
@@ -4454,6 +4456,96 @@ class VideoEndpointTests(AppTestCase):
     def test_subtitle_codec_supports_webvtt_rejects_bitmap_codecs(self) -> None:
         self.assertTrue(subtitle_codec_supports_webvtt("ass"))
         self.assertFalse(subtitle_codec_supports_webvtt("hdmv_pgs_subtitle"))
+
+    def test_classify_ass_subtitle_text_accepts_simple_dialogue(self) -> None:
+        classification, reason = classify_ass_subtitle_text(
+            """[Script Info]
+Title: Simple
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,40,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,0,2,20,20,20,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,Hello there
+Dialogue: 0,0:00:04.00,0:00:06.00,Default,,0,0,0,,How are you?
+"""
+        )
+        self.assertEqual(classification, "simple_webvtt")
+        self.assertEqual(reason, "ass_plain_dialogue")
+
+    def test_classify_ass_subtitle_text_rejects_vector_drawing_mode(self) -> None:
+        classification, reason = classify_ass_subtitle_text(
+            """[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,{\\p1}m 0 0 l 50 0 50 20 0 20{\\p0}
+"""
+        )
+        self.assertEqual(classification, "advanced_ass")
+        self.assertEqual(reason, "ass_drawing_mode")
+
+    def test_classify_ass_subtitle_text_rejects_positioned_signs(self) -> None:
+        classification, reason = classify_ass_subtitle_text(
+            """[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:49.00,0:00:51.00,Default,,0,0,0,,{\\pos(1210,94)\\frz3.2}Logo
+"""
+        )
+        self.assertEqual(classification, "advanced_ass")
+        self.assertEqual(reason, "ass_advanced_override")
+
+    def test_classify_ass_subtitle_text_rejects_transform_and_fade_markup(self) -> None:
+        classification, reason = classify_ass_subtitle_text(
+            """[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:23:47.00,0:23:49.00,Default,,0,0,0,,{\\fad(100,250)\\t(0,500,\\frz-4)}Mine and Mine Alone
+"""
+        )
+        self.assertEqual(classification, "advanced_ass")
+        self.assertEqual(reason, "ass_advanced_override")
+
+    def test_classify_ass_subtitle_text_rejects_literal_brace_markup_patterns(self) -> None:
+        classification, reason = classify_ass_subtitle_text(
+            """[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:23:47.00,0:23:49.00,Default,,0,0,0,,{*}Mine and Mine Alone{*All Mine}
+"""
+        )
+        self.assertEqual(classification, "advanced_ass")
+        self.assertEqual(reason, "ass_literal_brace_markup")
+
+    def test_classify_ass_subtitle_text_rejects_overlapping_layered_events(self) -> None:
+        classification, reason = classify_ass_subtitle_text(
+            """[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 1,0:00:10.00,0:00:12.00,Default,,0,0,0,,Top sign
+Dialogue: 0,0:00:11.00,0:00:13.00,Default,,0,0,0,,Plain dialogue
+"""
+        )
+        self.assertEqual(classification, "advanced_ass")
+        self.assertEqual(reason, "ass_overlapping_layered_events")
+
+    def test_classify_subtitle_stream_rendering_keeps_subrip_on_sidecar_path(self) -> None:
+        rendering = classify_subtitle_stream_rendering({
+            "index": 4,
+            "codec_name": "subrip",
+        })
+        self.assertEqual(rendering["subtitle_render_mode"], "sidecar_webvtt")
+        self.assertTrue(rendering["webvtt_conversion_safe"])
+        self.assertFalse(rendering["burn_in_required"])
+        self.assertIsNone(rendering["ass_render_classification"])
+
+    def test_classify_subtitle_stream_rendering_marks_unclassified_ass_for_burn_in(self) -> None:
+        rendering = classify_subtitle_stream_rendering({
+            "index": 4,
+            "codec_name": "ass",
+        })
+        self.assertEqual(rendering["subtitle_render_mode"], "burn_in")
+        self.assertFalse(rendering["webvtt_conversion_safe"])
+        self.assertTrue(rendering["burn_in_required"])
+        self.assertEqual(rendering["ass_render_classification"], "unknown_ass")
+        self.assertEqual(rendering["subtitle_render_reason"], "ass_track_copy_failed")
 
     def test_subtitles_all_endpoint_skips_bitmap_tracks(self) -> None:
         rclone = self._remote_media_rclone()
