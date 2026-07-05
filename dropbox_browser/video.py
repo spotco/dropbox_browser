@@ -313,6 +313,50 @@ _AAC_COPY_SAFE_EXTENSIONS = frozenset({
     ".m4v",
     ".mp4",
 })
+_ASS_SUBTITLE_CODECS = frozenset({
+    "ass",
+    "ssa",
+})
+_ASS_STYLE_SECTION_NAMES = frozenset({
+    "[v4 styles]",
+    "[v4+ styles]",
+})
+_ASS_EVENT_TYPES = frozenset({
+    "dialogue",
+    "comment",
+})
+_ASS_ADVANCED_OVERRIDE_PATTERN = re.compile(
+    r"\\(?:"
+    r"an\d+|"
+    r"be\d*|"
+    r"blur\d*|"
+    r"bord\d*|"
+    r"clip|"
+    r"fad|"
+    r"fade|"
+    r"fax|"
+    r"fay|"
+    r"fn|"
+    r"fr(?:x|y|z)?\d*|"
+    r"fsc(?:x|y)\d*|"
+    r"fsp\d*|"
+    r"iclip|"
+    r"move|"
+    r"org|"
+    r"pbo\d*|"
+    r"pos|"
+    r"q\d+|"
+    r"shad\d*|"
+    r"t(?:\(|\b)|"
+    r"xbord\d*|"
+    r"xshad\d*|"
+    r"ybord\d*|"
+    r"yshad\d*"
+    r")",
+    re.IGNORECASE,
+)
+_ASS_DRAWING_OVERRIDE_PATTERN = re.compile(r"\\p\s*[1-9]\d*", re.IGNORECASE)
+_ASS_LITERAL_BRACE_MARKUP_PATTERN = re.compile(r"\{(?!\\)[^}]+\}")
 
 
 def video_stream_supports_h264_copy(stream_data: dict[str, object]) -> tuple[bool, str]:
@@ -407,6 +451,10 @@ def subtitle_codec_supports_webvtt(codec_name: object) -> bool:
     return codec_name.casefold() not in _WEBVTT_INCOMPATIBLE_SUBTITLE_CODECS
 
 
+def subtitle_codec_is_ass(codec_name: object) -> bool:
+    return isinstance(codec_name, str) and codec_name.strip().casefold() in _ASS_SUBTITLE_CODECS
+
+
 def _stream_index_value(value: object) -> int | None:
     try:
         return int(value)
@@ -414,8 +462,215 @@ def _stream_index_value(value: object) -> int | None:
         return None
 
 
+def _ass_split_fields(payload: str, field_count: int) -> list[str]:
+    if field_count <= 1:
+        return [payload]
+    values = payload.split(",", field_count - 1)
+    if len(values) < field_count:
+        values.extend([""] * (field_count - len(values)))
+    return [value.strip() for value in values[:field_count]]
+
+
+def _ass_parse_section_fields(line: str) -> list[str]:
+    _, _, raw_fields = line.partition(":")
+    return [field.strip().casefold() for field in raw_fields.split(",") if field.strip()]
+
+
+def _ass_parse_row(line: str, field_names: list[str]) -> dict[str, str] | None:
+    _, _, raw_values = line.partition(":")
+    if not field_names:
+        return None
+    values = _ass_split_fields(raw_values.lstrip(), len(field_names))
+    if len(values) != len(field_names):
+        return None
+    return dict(zip(field_names, values))
+
+
+def _ass_event_time_seconds(raw_value: str) -> float | None:
+    parts = str(raw_value or "").strip().split(":")
+    if len(parts) != 3:
+        return None
+    try:
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        seconds = float(parts[2])
+    except (TypeError, ValueError):
+        return None
+    return (hours * 3600.0) + (minutes * 60.0) + seconds
+
+
+def classify_ass_subtitle_text(ass_text: str) -> tuple[str, str]:
+    text = str(ass_text or "").lstrip("\ufeff")
+    if not text.strip():
+        return "unknown_ass", "ass_text_empty"
+
+    section_name = ""
+    style_fields: list[str] = []
+    event_fields: list[str] = []
+    event_rows: list[tuple[float, float, int, bool]] = []
+    found_event_row = False
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(";"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section_name = line.casefold()
+            continue
+
+        lower_line = line.casefold()
+        if section_name in _ASS_STYLE_SECTION_NAMES:
+            if lower_line.startswith("format:"):
+                style_fields = _ass_parse_section_fields(line)
+                continue
+            if lower_line.startswith("style:"):
+                style_row = _ass_parse_row(line, style_fields)
+                if style_row is None:
+                    continue
+                style_name = str(style_row.get("name") or "").strip()
+                if style_name and style_name.casefold() != "default":
+                    return "advanced_ass", "ass_non_default_style"
+                font_name = str(style_row.get("fontname") or "").strip()
+                if font_name and font_name.casefold() not in {"arial"}:
+                    return "advanced_ass", "ass_custom_font"
+                continue
+
+        if section_name != "[events]":
+            continue
+        if lower_line.startswith("format:"):
+            event_fields = _ass_parse_section_fields(line)
+            continue
+
+        event_type, separator, _ = line.partition(":")
+        if not separator or event_type.strip().casefold() not in _ASS_EVENT_TYPES:
+            continue
+        event_row = _ass_parse_row(line, event_fields)
+        if event_row is None:
+            return "unknown_ass", "ass_event_parse_failed"
+
+        found_event_row = True
+        style_name = str(event_row.get("style") or "").strip()
+        if style_name and style_name.casefold() != "default":
+            return "advanced_ass", "ass_event_uses_non_default_style"
+
+        effect = str(event_row.get("effect") or "").strip()
+        if effect:
+            return "advanced_ass", "ass_event_effect"
+
+        body = str(event_row.get("text") or "")
+        if _ASS_DRAWING_OVERRIDE_PATTERN.search(body):
+            return "advanced_ass", "ass_drawing_mode"
+        if _ASS_ADVANCED_OVERRIDE_PATTERN.search(body):
+            return "advanced_ass", "ass_advanced_override"
+        if _ASS_LITERAL_BRACE_MARKUP_PATTERN.search(body):
+            return "advanced_ass", "ass_literal_brace_markup"
+
+        layer_value = _stream_index_value(event_row.get("layer"))
+        start_seconds = _ass_event_time_seconds(str(event_row.get("start") or ""))
+        end_seconds = _ass_event_time_seconds(str(event_row.get("end") or ""))
+        if start_seconds is not None and end_seconds is not None:
+            has_non_plain_features = bool(effect) or (layer_value is not None and layer_value > 0)
+            event_rows.append((start_seconds, end_seconds, layer_value or 0, has_non_plain_features))
+
+    if not found_event_row:
+        return "unknown_ass", "ass_events_missing"
+
+    sorted_rows = sorted(event_rows, key=lambda item: (item[0], item[1], item[2]))
+    active_rows: list[tuple[float, float, int, bool]] = []
+    for row in sorted_rows:
+        start_seconds, end_seconds, _, has_non_plain_features = row
+        active_rows = [item for item in active_rows if item[1] > start_seconds]
+        if active_rows and (
+            has_non_plain_features
+            or any(active_row[3] for active_row in active_rows)
+        ):
+            return "advanced_ass", "ass_overlapping_layered_events"
+        active_rows.append(row)
+
+    return "simple_webvtt", "ass_plain_dialogue"
+
+
+def _copy_subtitle_track_text(
+    ffmpeg_exe: Path,
+    input_url: str,
+    subtitle_stream_index: int,
+    codec_name: object,
+) -> str | None:
+    suffix = subtitle_codec_copy_suffix(codec_name)
+    if suffix is None:
+        return None
+    temp_path = SUBTITLE_CACHE_DIR / f"classify_{uuid.uuid4().hex}_{subtitle_stream_index}{suffix}"
+    temp_path.parent.mkdir(parents=True, exist_ok=True)
+    command = build_ffmpeg_subtitle_copy_command(
+        ffmpeg_exe,
+        input_url,
+        subtitle_stream_index,
+        temp_path,
+    )
+    try:
+        try:
+            _run_subprocess_capture(
+                command,
+                not_found_message="ffmpeg was not found",
+                failure_message="ffmpeg failed to copy subtitle track.",
+            )
+        except BrowserError:
+            return None
+        try:
+            return temp_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def classify_subtitle_stream_rendering(
+    subtitle_stream: dict[str, object],
+    *,
+    ffmpeg_exe: Path | None = None,
+    input_url: str | None = None,
+) -> dict[str, object]:
+    codec_name = subtitle_stream.get("codec_name")
+    if not subtitle_codec_supports_webvtt(codec_name):
+        return {
+            "subtitle_render_mode": "burn_in",
+            "webvtt_conversion_safe": False,
+            "burn_in_required": True,
+            "subtitle_render_reason": "bitmap_subtitle_requires_burn_in",
+            "ass_render_classification": None,
+        }
+    if not subtitle_codec_is_ass(codec_name):
+        return {
+            "subtitle_render_mode": "sidecar_webvtt",
+            "webvtt_conversion_safe": True,
+            "burn_in_required": False,
+            "subtitle_render_reason": "text_subtitle_codec_webvtt_safe",
+            "ass_render_classification": None,
+        }
+
+    subtitle_stream_index = _stream_index_value(subtitle_stream.get("index"))
+    ass_text = None
+    if ffmpeg_exe is not None and input_url and subtitle_stream_index is not None:
+        ass_text = _copy_subtitle_track_text(ffmpeg_exe, input_url, subtitle_stream_index, codec_name)
+    if ass_text is None:
+        classification, reason = "unknown_ass", "ass_track_copy_failed"
+    else:
+        classification, reason = classify_ass_subtitle_text(ass_text)
+    return {
+        "subtitle_render_mode": "sidecar_webvtt" if classification == "simple_webvtt" else "burn_in",
+        "webvtt_conversion_safe": classification == "simple_webvtt",
+        "burn_in_required": classification != "simple_webvtt",
+        "subtitle_render_reason": reason,
+        "ass_render_classification": classification,
+    }
+
+
 def _subtitle_stream(stream_data: dict[str, object]) -> dict[str, object]:
     result = _base_stream(stream_data)
+    result.update(classify_subtitle_stream_rendering(result))
     result.update({
         "codec_tag_string": stream_data.get("codec_tag_string"),
         "webvtt_compatible": subtitle_codec_supports_webvtt(stream_data.get("codec_name")),

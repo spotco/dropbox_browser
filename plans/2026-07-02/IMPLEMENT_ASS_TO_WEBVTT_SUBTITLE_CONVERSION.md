@@ -68,32 +68,32 @@ on what WebVTT can safely preserve.
 
 ## Step 1 - Confirm Existing Subtitle Contracts
 
-- [ ] Read `docs/video-player.md` before changing video or subtitle behavior.
-- [ ] Inspect `dropbox_browser/video.py` subtitle probing, extraction, and HLS
+- [x] Read `docs/video-player.md` before changing video or subtitle behavior.
+- [x] Inspect `dropbox_browser/video.py` subtitle probing, extraction, and HLS
   session command construction.
-- [ ] Inspect `dropbox_browser/assets/js/video/subtitles.js`,
+- [x] Inspect `dropbox_browser/assets/js/video/subtitles.js`,
   `tracks.js`, `compatibility.js`, and `playback.js` for current selected-track
   and restart behavior.
-- [ ] Confirm how bitmap subtitle tracks currently become burn-in-required.
-- [ ] Confirm whether the probe payload can add fields without breaking current
+- [x] Confirm how bitmap subtitle tracks currently become burn-in-required.
+- [x] Confirm whether the probe payload can add fields without breaking current
   tests or client code.
 
 ## Step 2 - Add ASS Capability Classification
 
-- [ ] Add a small server-side classifier for subtitle tracks in
+- [x] Add a small server-side classifier for subtitle tracks in
   `dropbox_browser/video.py`.
-- [ ] Classify non-ASS text tracks as existing WebVTT-compatible behavior.
-- [ ] Classify ASS/SSA tracks as `simple_webvtt`, `advanced_ass`, or
+- [x] Classify non-ASS text tracks as existing WebVTT-compatible behavior.
+- [x] Classify ASS/SSA tracks as `simple_webvtt`, `advanced_ass`, or
   `unknown_ass` based on extracted ASS event/style features.
-- [ ] Treat drawing mode (`\p1`, `\p2`, etc.) as advanced ASS.
-- [ ] Treat explicit positioning, movement, clipping, transforms, fades, blur,
+- [x] Treat drawing mode (`\p1`, `\p2`, etc.) as advanced ASS.
+- [x] Treat explicit positioning, movement, clipping, transforms, fades, blur,
   borders, scaling, rotation, custom fonts, and non-default styles as advanced
   ASS unless proven safe.
-- [ ] Treat overlapping signs/layered events as advanced ASS when they are not
+- [x] Treat overlapping signs/layered events as advanced ASS when they are not
   plain dialogue.
-- [ ] Keep the classifier conservative: false positives should burn in
+- [x] Keep the classifier conservative: false positives should burn in
   subtitles, while false negatives can leak bad text.
-- [ ] Add unit tests for simple dialogue ASS, vector drawing ASS, positioned
+- [x] Add unit tests for simple dialogue ASS, vector drawing ASS, positioned
   signs, transform/fade markup, and the Fruits Basket logo/title patterns.
 
 ## Step 3 - Extend Probe Payload And UI Track Metadata
