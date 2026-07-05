@@ -706,6 +706,36 @@ async function waitForSubtitleOverlayMarkup(page, { tagName, expectedText }) {
     });
 }
 
+async function waitForSubtitleOverlayText(page, expectedText) {
+  await expect
+    .poll(async () => {
+      return page.evaluate(() => {
+        const overlay = document.getElementById("video-subtitle-overlay");
+        if (!overlay || overlay.hidden) return "";
+        return String(overlay.textContent || "").trim();
+      });
+    }, { timeout: 10000 })
+    .toContain(expectedText);
+}
+
+async function readSubtitleOverlayState(page) {
+  return page.evaluate(() => {
+    const overlay = document.getElementById("video-subtitle-overlay");
+    if (!overlay) {
+      return {
+        hidden: true,
+        text: "",
+        html: "",
+      };
+    }
+    return {
+      hidden: Boolean(overlay.hidden),
+      text: String(overlay.textContent || "").trim(),
+      html: String(overlay.innerHTML || ""),
+    };
+  });
+}
+
 async function waitForNativeSubtitleCueText(page, expectedText) {
   await expect
     .poll(async () => {
@@ -1794,6 +1824,93 @@ test("empty successful subtitle batch preload falls back to per-track extraction
   await setPlaybackTimeForSubtitleChecks(page, 1);
   await waitForDisplayedSubtitleText(page, "ALPHA-SUBTITLE-ENG");
   await waitForNativeSubtitleCueText(page, "ALPHA-SUBTITLE-ENG");
+});
+
+test("ASS subtitles are converted into clean browser-rendered WebVTT cues", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await installHlsStub(page);
+  await openVideoPane(page);
+
+  const probeResponse = await page.request.get("/video/endpoints/probe?path=Videos%2Fass-fruits.mkv&source=remote");
+  expect(probeResponse.ok()).toBe(true);
+  const probePayload = await probeResponse.json();
+  expect(probePayload.subtitle_streams).toHaveLength(1);
+  expect(probePayload.subtitle_streams[0].codec_name).toBe("ass");
+  expect(probePayload.default_subtitle_stream_index).toBe(3);
+
+  const allSubtitlesResponse = await page.request.get("/video/endpoints/subtitles/all?path=Videos%2Fass-fruits.mkv&source=remote");
+  expect(allSubtitlesResponse.ok()).toBe(true);
+  const allSubtitlesPayload = await allSubtitlesResponse.json();
+  expect(Object.keys(allSubtitlesPayload.tracks)).toEqual(["3"]);
+  const assVtt = String(allSubtitlesPayload.tracks["3"].vtt || "");
+  expect(assVtt).toContain("Logo");
+  expect(assVtt).toContain("Mine and Mine Alone");
+  expect(assVtt).toContain("First line\nSecond line");
+  expect(assVtt).toContain("<i>Italic</i><b>Bold</b><u>Underline</u>");
+  expect(assVtt).not.toContain("\\pos");
+  expect(assVtt).not.toContain("\\fad");
+  expect(assVtt).not.toContain("{*");
+  expect(assVtt).not.toContain("m 0 0 l 50 0 50 20 0 20");
+
+  const initialSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fass-fruits.mkv"));
+  await playLibraryFile(page, "ass-fruits.mkv");
+  await initialSession;
+
+  await expectTrackSelectors(page, {
+    audioOptionCount: 2,
+    subtitleOptionCount: 2,
+    audioValue: "1",
+    subtitleValue: "3",
+  });
+  await waitForSubtitleStreamIndex(page, 3);
+  await waitForMountedSubtitleTrackReady(page, 3);
+
+  await setPlaybackTimeForSubtitleChecks(page, 1.0);
+  await waitForDisplayedSubtitleText(page, "Logo");
+  await waitForNativeSubtitleCueText(page, "Logo");
+  await waitForSubtitleOverlayText(page, "Logo");
+  let overlayState = await readSubtitleOverlayState(page);
+  expect(overlayState.text).toContain("Logo");
+  expect(overlayState.html).not.toContain("\\pos");
+  expect(overlayState.html).not.toContain("frz3.2");
+
+  await setPlaybackTimeForSubtitleChecks(page, 2.3);
+  await waitForDisplayedSubtitleToClear(page);
+  await expectNativeSubtitleSurfaceClearOf(page, ["Logo", "Mine and Mine Alone", "First line", "Italic"]);
+
+  await setPlaybackTimeForSubtitleChecks(page, 3.4);
+  await waitForDisplayedSubtitleText(page, "Mine and Mine Alone");
+  await waitForNativeSubtitleCueText(page, "Mine and Mine Alone");
+  await waitForSubtitleOverlayText(page, "Mine and Mine Alone");
+  overlayState = await readSubtitleOverlayState(page);
+  expect(overlayState.text).toContain("Mine and Mine Alone");
+  expect(overlayState.html).not.toContain("\\fad");
+  expect(overlayState.html).not.toContain("{*");
+
+  await setPlaybackTimeForSubtitleChecks(page, 5.2);
+  await waitForDisplayedSubtitleText(page, "First line");
+  await waitForNativeSubtitleCueText(page, "First line");
+  await waitForSubtitleOverlayText(page, "Second line");
+  overlayState = await readSubtitleOverlayState(page);
+  expect(overlayState.text).toContain("First line");
+  expect(overlayState.text).toContain("Second line");
+
+  await setPlaybackTimeForSubtitleChecks(page, 6.8);
+  await waitForDisplayedSubtitleText(page, "Italic");
+  await waitForNativeSubtitleCueText(page, "Italic");
+  await waitForSubtitleOverlayMarkup(page, {
+    tagName: "i",
+    expectedText: "Italic",
+  });
+  await waitForSubtitleOverlayMarkup(page, {
+    tagName: "b",
+    expectedText: "Bold",
+  });
+  await waitForSubtitleOverlayMarkup(page, {
+    tagName: "u",
+    expectedText: "Underline",
+  });
 });
 
 test("WebVTT subtitle debug timing stays aligned after in-session scrub remount", async ({ page }) => {

@@ -46,6 +46,27 @@ def write_srt(path: Path, cues: list[tuple[str, str]]) -> None:
     path.write_text("\n".join(blocks), encoding="utf-8")
 
 
+def write_ass(path: Path, cues: list[tuple[str, str, str]]) -> None:
+    lines = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        "PlayResX: 1920",
+        "PlayResY: 1080",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, "
+        "Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, "
+        "MarginR, MarginV, Encoding",
+        "Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,0,2,40,40,40,1",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+    for start, end, text in cues:
+        lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def resolve_bitmap_sample_path(output_path: Path) -> Path:
     override_source = os.environ.get("DROPBOX_BROWSER_E2E_BITMAP_SOURCE_URL", "").strip()
     if override_source:
@@ -195,6 +216,79 @@ def generate_video_file(
     )
 
 
+def generate_ass_video_file(
+    output_path: Path,
+    *,
+    english_audio_title: str,
+    japanese_audio_title: str,
+    ass_subtitle_title: str,
+    english_frequency: str,
+    japanese_frequency: str,
+    ass_cues: list[tuple[str, str, str]],
+    duration_seconds: str = "10",
+) -> None:
+    work_dir = output_path.parent
+    ass_path = work_dir / f"{output_path.stem}.eng.ass"
+    write_ass(ass_path, ass_cues)
+    run_checked(
+        [
+            str(FFMPEG_EXE),
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"color=c=black:s=640x360:d={duration_seconds}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency={english_frequency}:duration={duration_seconds}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency={japanese_frequency}:duration={duration_seconds}",
+            "-i",
+            str(ass_path),
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-map",
+            "2:a:0",
+            "-map",
+            "3:0",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-c:s",
+            "ass",
+            "-t",
+            str(duration_seconds),
+            "-metadata:s:a:0",
+            "language=eng",
+            "-metadata:s:a:0",
+            f"title={english_audio_title}",
+            "-metadata:s:a:1",
+            "language=jpn",
+            "-metadata:s:a:1",
+            f"title={japanese_audio_title}",
+            "-metadata:s:s:0",
+            "language=eng",
+            "-metadata:s:s:0",
+            f"title={ass_subtitle_title}",
+            "-disposition:a:0",
+            "default",
+            "-disposition:a:1",
+            "0",
+            "-disposition:s:0",
+            "default",
+            str(output_path),
+        ]
+    )
+
+
 def probe_output(path: Path) -> dict[str, Any]:
     proc = run_checked(
         [
@@ -211,14 +305,13 @@ def probe_output(path: Path) -> dict[str, Any]:
     return json.loads(proc.stdout.decode("utf-8"))
 
 
-def validate_generated_file(path: Path) -> None:
+def validate_generated_file(path: Path, expected_codecs: list[str]) -> None:
     payload = probe_output(path)
     streams = payload.get("streams")
     if not isinstance(streams, list):
         raise SystemExit(f"Generated fixture missing streams: {path}")
     codec_names = [str(stream.get("codec_name") or "") for stream in streams if isinstance(stream, dict)]
-    expected = ["h264", "aac", "aac", "subrip", "subrip", "hdmv_pgs_subtitle"]
-    if codec_names[: len(expected)] != expected:
+    if codec_names[: len(expected_codecs)] != expected_codecs:
         raise SystemExit(f"Unexpected generated stream layout for {path}: {codec_names}")
 
 
@@ -349,7 +442,26 @@ def main() -> int:
             english_cues=spec.get("english_cues"),
             french_cues=spec.get("french_cues"),
         )
-        validate_generated_file(output_path)
+        validate_generated_file(output_path, ["h264", "aac", "aac", "subrip", "subrip", "hdmv_pgs_subtitle"])
+
+    ass_output_path = videos_dir / "ass-fruits.mkv"
+    generate_ass_video_file(
+        ass_output_path,
+        english_audio_title="ASS Fruits English Audio",
+        japanese_audio_title="ASS Fruits Japanese Audio",
+        ass_subtitle_title="ASS Fruits Basket Text",
+        english_frequency="610",
+        japanese_frequency="830",
+        duration_seconds="10",
+        ass_cues=[
+            ("0:00:00.40", "0:00:01.80", "{\\pos(1210,94)\\frz3.2}Logo"),
+            ("0:00:02.00", "0:00:02.80", "{\\p1}m 0 0 l 50 0 50 20 0 20{\\p0}"),
+            ("0:00:03.00", "0:00:04.60", "{\\fad(100,250)\\t(0,500,\\frz-4)}Mine and Mine Alone{*All Mine}"),
+            ("0:00:04.80", "0:00:06.20", "First line\\NSecond line"),
+            ("0:00:06.40", "0:00:07.80", "{\\i1}Italic{\\i0} {\\b1}Bold{\\b0} {\\u1}Underline{\\u0}"),
+        ],
+    )
+    validate_generated_file(ass_output_path, ["h264", "aac", "aac", "ass"])
 
     fixture = {
         "scenario": "video-player-generated-media",
@@ -368,6 +480,12 @@ def main() -> int:
                 }
                 for spec in video_specs
             ],
+            {
+                "path": "Videos/ass-fruits.mkv",
+                "type": "file",
+                "file_path": str(ass_output_path.resolve()),
+                "mod_time": "2024-01-01T12:00:01Z",
+            },
         ],
         "video": {
             "use_real_media": True,
