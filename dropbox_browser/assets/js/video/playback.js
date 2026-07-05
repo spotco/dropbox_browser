@@ -16,6 +16,7 @@ function resetPlaybackSurface() {
   ctx.state.compatibilitySessionAudioModeReason = '';
   ctx.state.requestedSeekSeconds = null;
   ctx.state.seekRestartInProgress = false;
+  ctx.state.pendingSubtitleTrackChange = false;
   ctx.state.compatibilitySessionProgressPendingImmediate = false;
   ctx.state.compatibilityProgressBurstUntilMs = 0;
   ctx.resetPlaybackProgress();

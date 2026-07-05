@@ -225,3 +225,49 @@ test("subtitle style Apply with unchanged values is a no-op", async () => {
   assert.equal(ctx.restartCalls.length, 0);
   assert.equal(ctx.lastStatus, "Subtitle style is already applied.");
 });
+
+test("subtitle track change during seek restart defers replay until playback seek completes", async () => {
+  const { initTracks } = await importModuleFromWorkspace("dropbox_browser/assets/js/video/tracks.js");
+  const item = {path: "movie.mp4"};
+  const ctx = createCtx({ disallowRestart: true });
+  const probePayload = {
+    subtitle_streams: [
+      {index: 3, webvtt_compatible: true, language: "eng", title: "English"},
+      {index: 5, webvtt_compatible: false, language: "eng", title: "Bitmap"},
+    ],
+    default_subtitle_stream_index: 3,
+  };
+  ctx.state.probeCache[item.path] = probePayload;
+  ctx.state.selectedSubtitleStreamIndexByPath[item.path] = 3;
+  ctx.state.seekRestartInProgress = true;
+  ctx.els.subtitleTrackSelectEl = makeEl();
+  ctx.els.subtitleTrackSelectEl.value = "5";
+  ctx.els.subtitleTrackSelectEl.disabled = false;
+  ctx.subtitleStreamsForPayload = function (payload) {
+    return Array.isArray(payload && payload.subtitle_streams) ? payload.subtitle_streams : [];
+  };
+  ctx.normalizeSubtitleStreamIndex = function (value) {
+    if (value === "" || value === null || value === undefined) return null;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+  };
+  ctx.selectedSubtitleStream = function (active, payload) {
+    const selected = ctx.state.selectedSubtitleStreamIndexByPath[active.path] || "";
+    return ctx.subtitleStreamsForPayload(payload).find((stream) => Number(stream.index) === Number(selected)) || null;
+  };
+  ctx.subtitleStreamRequiresBurnIn = function (stream) {
+    return Boolean(stream && stream.webvtt_compatible === false);
+  };
+  ctx.persistSubtitleSelectionFromUi = function () {};
+  ctx.activeQueueItem = function () {
+    return item;
+  };
+
+  initTracks(ctx);
+  await ctx.handleSubtitleTrackChange();
+
+  assert.equal(ctx.state.selectedSubtitleStreamIndexByPath[item.path], 5);
+  assert.equal(ctx.state.pendingSubtitleTrackChange, true);
+  assert.equal(ctx.restartCalls.length, 0);
+  assert.equal(ctx.lastStatus, "Subtitle track will load when playback seek completes.");
+});

@@ -590,6 +590,7 @@ async function handleSubtitleTrackChange() {
     return;
   }
   if (ctx.state.seekRestartInProgress) {
+    ctx.state.pendingSubtitleTrackChange = true;
     ctx.setStatus('Subtitle track will load when playback seek completes.');
     return;
   }

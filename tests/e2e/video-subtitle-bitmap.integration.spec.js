@@ -66,6 +66,20 @@ async function waitForVisibleVideo(page) {
     .toBe(true);
 }
 
+async function waitForLoadingOverlayHidden(page) {
+  await expect
+    .poll(async () => {
+      return page.evaluate(() => {
+        const loading = document.getElementById("video-loading-overlay");
+        if (!loading) return true;
+        if (loading.hidden) return true;
+        const style = window.getComputedStyle(loading);
+        return style.display === "none" || style.visibility === "hidden" || style.opacity === "0";
+      });
+    }, { timeout: 15000 })
+    .toBe(true);
+}
+
 async function waitForSubtitleStreamIndex(page, streamIndex) {
   const selector = `track[data-video-subtitle-stream-index="${streamIndex}"]`;
   await expect
@@ -293,4 +307,92 @@ test("bitmap subtitle tracks restart compatibility playback instead of mounting 
   const subtitleResponse = await page.request.get("/video/endpoints/subtitles?path=Videos%2Fbitmap.mkv&source=remote&track=3");
   expect(subtitleResponse.ok()).toBe(true);
   expect(await subtitleResponse.text()).toContain("BITMAP-TEXT-SUBTITLE");
+});
+
+test("changing from WebVTT to burned-in subtitles during seek restart replays the mode change and clears loading", async ({ page }) => {
+  test.setTimeout(60000);
+
+  const sessionPosts = [];
+  page.on("request", (request) => {
+    if (request.method() !== "POST") return;
+    if (new URL(request.url()).pathname !== "/video/endpoints/session") return;
+    sessionPosts.push(String(request.postData() || ""));
+  });
+
+  await page.route("**/video/endpoints/session", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    const body = String(route.request().postData() || "");
+    if (!body.includes("path=Videos%2Fbitmap.mkv")) {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    const payload = await response.json();
+    const startSeconds = Number(new URLSearchParams(body).get("start_time_seconds"));
+    if (startSeconds === 0) {
+      payload.encoded_media_end_seconds = 2;
+    }
+    if (startSeconds > 0 && !body.includes("subtitle_stream_index=5")) {
+      await page.waitForTimeout(500);
+    }
+    await route.fulfill({
+      status: response.status(),
+      headers: response.headers(),
+      contentType: "application/json",
+      body: JSON.stringify(payload),
+    });
+  });
+
+  await installHlsStub(page, { fragmentCount: 4 });
+  await page.goto("/?path=Videos");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await page.locator("#bottom-pane-mode").selectOption("video-player");
+  await expect(page.locator("#video-player-pane")).toBeVisible();
+  await waitForCompatibilityReady(page);
+
+  const row = page
+    .locator("#video-library-list .video-library-row")
+    .filter({ has: page.locator(".video-row-title", { hasText: "bitmap.mkv" }) })
+    .first();
+  await expect(row).toBeVisible();
+
+  const initialSession = waitForSessionPost(page, (body) => (
+    body.includes("path=Videos%2Fbitmap.mkv")
+    && body.includes("start_time_seconds=0")
+  ));
+  await row.dblclick();
+  await initialSession;
+  await waitForVisibleVideo(page);
+  await waitForSubtitleStreamIndex(page, 3);
+
+  await page.locator("#video-progress-slider").evaluate((element) => {
+    element.value = "7";
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await page.waitForTimeout(150);
+
+  await selectTrackOption(page, "#video-subtitle-track", "5");
+  await page.locator("#video-progress-slider").evaluate((element) => {
+    element.value = "7.5";
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+
+  await expect
+    .poll(() => sessionPosts.some((body) => {
+      if (!body.includes("path=Videos%2Fbitmap.mkv")) return false;
+      if (!body.includes("subtitle_stream_index=5")) return false;
+      const startSeconds = Number(new URLSearchParams(body).get("start_time_seconds"));
+      return Number.isFinite(startSeconds) && startSeconds > 0;
+    }), { timeout: 15000 })
+    .toBe(true);
+
+  await waitForLoadingOverlayHidden(page);
+  await waitForVisibleVideo(page);
+  await expect(page.locator("#video-subtitle-track")).toHaveValue("5");
+  await expectNoMountedSubtitleTrack(page);
 });
