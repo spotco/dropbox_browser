@@ -1695,11 +1695,13 @@ class VideoSessionManager:
         self._active_session_id: str | None = None
         self._session_lifecycle: dict[str, dict[str, object]] = {}
         self._pending_session_creations = 0
+        self._deferred_session_stops: list[VideoHlsSession] = []
 
     def shutdown(self) -> None:
         with self._lock:
             for session_id in list(self._sessions):
                 self._remove_session_locked(session_id)
+        self._drain_deferred_session_stops()
         if self.root_dir.exists():
             shutil.rmtree(self.root_dir, ignore_errors=True)
 
@@ -1725,32 +1727,40 @@ class VideoSessionManager:
         max_session_count = int(getattr(video_config, "max_concurrent_sessions", 8) or 8)
         if max_session_count <= 0:
             max_session_count = 1
+        evicted_session_id: str | None = None
         with self._lock:
             self._cleanup_expired_locked()
             active_count = len(self._sessions)
             pending_count = self._pending_session_creations
             if (active_count + pending_count) >= max_session_count:
-                log_video_debug(
-                    self.app,
-                    "session_cap_reached",
-                    path=rel_path,
-                    active_session_count=active_count,
-                    pending_session_count=pending_count,
-                    max_session_count=max_session_count,
-                    rejection_reason="all_sessions_active",
-                )
-                raise BrowserError(
-                    HTTPStatus.TOO_MANY_REQUESTS,
-                    f"Video session limit reached ({max_session_count} max concurrent sessions; all session slots are currently active).",
-                    details={
-                        "error_code": "session_cap_reached",
-                        "session_error_reason": "all_sessions_active",
-                        "max_session_count": max_session_count,
-                        "active_session_count": active_count,
-                        "pending_session_count": pending_count,
-                    },
-                )
+                evictable_session = self._oldest_idle_session_locked()
+                if evictable_session is not None:
+                    evicted_session_id = evictable_session.session_id
+                    self._remove_session_locked(evictable_session.session_id, reason="evicted")
+                    active_count = len(self._sessions)
+                if (active_count + pending_count) >= max_session_count:
+                    log_video_debug(
+                        self.app,
+                        "session_cap_reached",
+                        path=rel_path,
+                        active_session_count=active_count,
+                        pending_session_count=pending_count,
+                        max_session_count=max_session_count,
+                        rejection_reason="all_sessions_active",
+                    )
+                    raise BrowserError(
+                        HTTPStatus.TOO_MANY_REQUESTS,
+                        f"Video session limit reached ({max_session_count} max concurrent sessions; all session slots are currently active).",
+                        details={
+                            "error_code": "session_cap_reached",
+                            "session_error_reason": "all_sessions_active",
+                            "max_session_count": max_session_count,
+                            "active_session_count": active_count,
+                            "pending_session_count": pending_count,
+                        },
+                    )
             self._pending_session_creations += 1
+        self._drain_deferred_session_stops()
         reservation_active = True
 
         try:
@@ -1824,6 +1834,7 @@ class VideoSessionManager:
                 video_mode_reason=video_mode_reason,
                 audio_mode=audio_mode,
                 audio_mode_reason=audio_mode_reason,
+                evicted_session_id=evicted_session_id,
                 playlist=str(playlist_path),
                 command=command,
                 ffmpeg_process_priority=process_priority,
@@ -1865,6 +1876,7 @@ class VideoSessionManager:
                 self._active_session_id = session_id
                 self._pending_session_creations = max(0, self._pending_session_creations - 1)
                 reservation_active = False
+            self._drain_deferred_session_stops()
             ready_timeout_seconds = (
                 HLS_READY_TIMEOUT_BURN_IN_SECONDS
                 if subtitle_stream_index is not None
@@ -1875,10 +1887,12 @@ class VideoSessionManager:
             except BrowserError:
                 with self._lock:
                     self._remove_session_locked(session_id, reason="create_failed")
+                self._drain_deferred_session_stops()
                 raise
             if not playlist_ready:
                 with self._lock:
                     self._remove_session_locked(session_id, reason="create_timeout")
+                self._drain_deferred_session_stops()
                 log_video_debug(self.app, "session_create_timeout", session_id=session_id, path=rel_path)
                 raise BrowserError(HTTPStatus.BAD_GATEWAY, "ffmpeg did not produce an HLS playlist in time.")
             ready_elapsed_ms = round((time.monotonic() - session.create_started_at) * 1000, 3)
@@ -1895,17 +1909,22 @@ class VideoSessionManager:
             if reservation_active:
                 with self._lock:
                     self._pending_session_creations = max(0, self._pending_session_creations - 1)
+            self._drain_deferred_session_stops()
 
     def stop_session(self, session_id: str | None = None) -> dict[str, object]:
         with self._lock:
             self._cleanup_expired_locked()
             session = self._get_session_locked(session_id) if session_id else self._active_session_locked()
             if session is None:
-                return {"status": "ok", "stopped": False}
-            self._remove_session_locked(session.session_id, reason="stopped")
-        return {"status": "ok", "stopped": True}
+                result = {"status": "ok", "stopped": False}
+            else:
+                self._remove_session_locked(session.session_id, reason="stopped")
+                result = {"status": "ok", "stopped": True}
+        self._drain_deferred_session_stops()
+        return result
 
     def session_asset(self, session_id: str, name: str) -> tuple[Path, str]:
+        asset_error: BrowserError | None = None
         with self._lock:
             self._cleanup_expired_locked()
             session = self._get_session_locked(session_id)
@@ -1919,7 +1938,7 @@ class VideoSessionManager:
                     session_state=missing_payload["session_state"],
                     session_state_message=missing_payload["session_state_message"],
                 )
-                raise BrowserError(
+                asset_error = BrowserError(
                     HTTPStatus.NOT_FOUND,
                     str(missing_payload["session_state_message"]),
                     details={
@@ -1928,12 +1947,21 @@ class VideoSessionManager:
                     },
                 )
             asset_name = _safe_session_asset_name(name)
-            asset_path = (session.session_dir / asset_name).resolve()
+            asset_path = (
+                (session.session_dir / asset_name).resolve()
+                if session is not None
+                else Path()
+            )
             try:
-                asset_path.relative_to(session.session_dir.resolve())
-            except ValueError as exc:
+                if session is not None:
+                    asset_path.relative_to(session.session_dir.resolve())
+            except ValueError:
                 log_video_debug(self.app, "asset_bad_path", session_id=session_id, name=name)
-                raise BrowserError(HTTPStatus.NOT_FOUND, "Video session asset not found.") from exc
+                asset_error = BrowserError(HTTPStatus.NOT_FOUND, "Video session asset not found.")
+        self._drain_deferred_session_stops()
+        if asset_error is not None:
+            raise asset_error
+        assert session is not None
         existed_initially = asset_path.is_file()
         wait_started = time.monotonic()
         if not self._wait_for_asset(session, asset_path):
@@ -1992,8 +2020,11 @@ class VideoSessionManager:
             self._cleanup_expired_locked()
             session = self._active_session_locked()
             if session is None:
-                return None
-            return self._session_summary_payload(session)
+                payload = None
+            else:
+                payload = self._session_summary_payload(session)
+        self._drain_deferred_session_stops()
+        return payload
 
     def session_status_payload(self, session_id: str | None = None) -> dict[str, object]:
         with self._lock:
@@ -2008,11 +2039,13 @@ class VideoSessionManager:
                     if active_session is not None
                     else None
                 )
-            return {
+            payload = {
                 "active_session": active_session_payload,
                 "active_sessions": active_sessions,
                 "session_count": len(active_sessions),
             }
+        self._drain_deferred_session_stops()
+        return payload
 
     def tagged_input_session(self, session_id: str | None, rel_path: str) -> VideoHlsSession | None:
         normalized_session_id = str(session_id or "").strip()
@@ -2030,8 +2063,8 @@ class VideoSessionManager:
                     rel_path=normalized_rel_path,
                     reason="session_missing",
                 )
-                return None
-            if clean_rel_path(session.rel_path) != normalized_rel_path:
+                matched_session = None
+            elif clean_rel_path(session.rel_path) != normalized_rel_path:
                 log_video_debug(
                     self.app,
                     "tagged_input_session_miss",
@@ -2040,16 +2073,19 @@ class VideoSessionManager:
                     active_rel_path=clean_rel_path(session.rel_path),
                     reason="path_mismatch",
                 )
-                return None
-            session.touch()
-            self._active_session_id = session.session_id
-            log_video_debug(
-                self.app,
-                "tagged_input_session_match",
-                session_id=normalized_session_id,
-                rel_path=normalized_rel_path,
-            )
-            return session
+                matched_session = None
+            else:
+                session.touch()
+                self._active_session_id = session.session_id
+                log_video_debug(
+                    self.app,
+                    "tagged_input_session_match",
+                    session_id=normalized_session_id,
+                    rel_path=normalized_rel_path,
+                )
+                matched_session = session
+        self._drain_deferred_session_stops()
+        return matched_session
 
     def tagged_input_throttle_decision(self, session_id: str | None, rel_path: str) -> VideoInputThrottleDecision:
         normalized_session_id = str(session_id or "").strip()
@@ -2060,19 +2096,22 @@ class VideoSessionManager:
             self._cleanup_expired_locked()
             session = self._get_session_locked(normalized_session_id)
             if session is None:
-                return VideoInputThrottleDecision(cancel=True, throttle_mode="session_missing")
-            if clean_rel_path(session.rel_path) != normalized_rel_path:
-                return VideoInputThrottleDecision(cancel=True, throttle_mode="path_mismatch")
-            reported_playback_seconds = session.reported_playback_seconds
-            ahead_seconds = None
-            if reported_playback_seconds is not None:
-                ahead_seconds = max(
-                    0.0,
-                    session.start_time_seconds
-                    + self._encoded_media_end_seconds(session)
-                    - float(reported_playback_seconds),
-                )
-            return self._backpressure_decision_for_session(session, ahead_seconds=ahead_seconds)
+                decision = VideoInputThrottleDecision(cancel=True, throttle_mode="session_missing")
+            elif clean_rel_path(session.rel_path) != normalized_rel_path:
+                decision = VideoInputThrottleDecision(cancel=True, throttle_mode="path_mismatch")
+            else:
+                reported_playback_seconds = session.reported_playback_seconds
+                ahead_seconds = None
+                if reported_playback_seconds is not None:
+                    ahead_seconds = max(
+                        0.0,
+                        session.start_time_seconds
+                        + self._encoded_media_end_seconds(session)
+                        - float(reported_playback_seconds),
+                    )
+                decision = self._backpressure_decision_for_session(session, ahead_seconds=ahead_seconds)
+        self._drain_deferred_session_stops()
+        return decision
 
     def update_session_progress(
         self,
@@ -2091,7 +2130,7 @@ class VideoSessionManager:
             if session is None:
                 active_session = self._active_session_locked()
                 missing_payload = self._session_missing_payload_locked(session_id)
-                return {
+                payload = {
                     "status": "ok",
                     "updated": False,
                     "stale": True,
@@ -2101,14 +2140,25 @@ class VideoSessionManager:
                     "stale_reason": missing_payload["session_state"],
                     "active_session_id": active_session.session_id if active_session is not None else None,
                 }
-            session.reported_playback_seconds = float(playback_seconds)
-            session.reported_media_seconds = None if media_seconds is None else float(media_seconds)
-            session.reported_playback_state = str(playback_state or "unknown")
-            session.reported_playback_updated_at = updated_at
-            session.reported_playback_sync_token = playback_sync_token
-            session.touch()
-            self._active_session_id = session.session_id
-            playback_payload = self._session_playback_payload(session)
+            else:
+                session.reported_playback_seconds = float(playback_seconds)
+                session.reported_media_seconds = None if media_seconds is None else float(media_seconds)
+                session.reported_playback_state = str(playback_state or "unknown")
+                session.reported_playback_updated_at = updated_at
+                session.reported_playback_sync_token = playback_sync_token
+                session.touch()
+                self._active_session_id = session.session_id
+                playback_payload = self._session_playback_payload(session)
+                payload = {
+                    "status": "ok",
+                    "updated": True,
+                    "stale": False,
+                    "session_id": session_id,
+                    "client_playback": playback_payload,
+                }
+        self._drain_deferred_session_stops()
+        if not payload.get("updated"):
+            return payload
         log_video_debug(
             self.app,
             "session_progress_update",
@@ -2119,13 +2169,7 @@ class VideoSessionManager:
             playback_state=str(playback_state or "unknown"),
             playback_sync_token=playback_sync_token,
         )
-        return {
-            "status": "ok",
-            "updated": True,
-            "stale": False,
-            "session_id": session_id,
-            "client_playback": playback_payload,
-        }
+        return payload
 
     def _encoded_media_end_seconds(self, session: VideoHlsSession) -> float:
         if not session.playlist_path.is_file():
@@ -2320,10 +2364,7 @@ class VideoSessionManager:
         return asset_path.is_file()
 
     def _cleanup_expired_locked(self) -> None:
-        session_idle_ttl_seconds = float(
-            getattr(getattr(self.app, "video_tools_config", None), "session_idle_ttl_seconds", HLS_SESSION_TTL_SECONDS)
-            or HLS_SESSION_TTL_SECONDS
-        )
+        session_idle_ttl_seconds = self._session_idle_ttl_seconds()
         expired_ids = [
             session_id
             for session_id, session in self._sessions.items()
@@ -2332,12 +2373,45 @@ class VideoSessionManager:
         for session_id in expired_ids:
             self._remove_session_locked(session_id, reason="expired")
 
+    def _session_idle_ttl_seconds(self) -> float:
+        return float(
+            getattr(getattr(self.app, "video_tools_config", None), "session_idle_ttl_seconds", HLS_SESSION_TTL_SECONDS)
+            or HLS_SESSION_TTL_SECONDS
+        )
+
     def _session_activity_at_locked(self, session: VideoHlsSession) -> float:
         activity_at = float(session.last_accessed_at or 0.0)
         playback_state = str(session.reported_playback_state or "unknown").strip().casefold()
         if playback_state in {"playing", "paused"} and session.reported_playback_updated_at is not None:
             activity_at = max(activity_at, float(session.reported_playback_updated_at))
         return activity_at
+
+    def _session_is_recently_active_locked(self, session: VideoHlsSession, now: float | None = None) -> bool:
+        playback_state = str(session.reported_playback_state or "unknown").strip().casefold()
+        if playback_state not in {"playing", "paused"}:
+            return False
+        updated_at = session.reported_playback_updated_at
+        if updated_at is None:
+            return False
+        if now is None:
+            now = time.time()
+        return (float(now) - float(updated_at)) <= self._session_idle_ttl_seconds()
+
+    def _oldest_idle_session_locked(self) -> VideoHlsSession | None:
+        if not self._sessions:
+            return None
+        now = time.time()
+        idle_sessions = [
+            session
+            for session in self._sessions.values()
+            if not self._session_is_recently_active_locked(session, now=now)
+        ]
+        if not idle_sessions:
+            return None
+        return min(
+            idle_sessions,
+            key=lambda item: (self._session_activity_at_locked(item), item.created_at),
+        )
 
     def _active_session_locked(self) -> VideoHlsSession | None:
         if not self._sessions:
@@ -2368,7 +2442,14 @@ class VideoSessionManager:
             "path": session.rel_path,
         }
         log_video_debug(self.app, "session_removed", session_id=session_id, reason=reason, path=session.rel_path)
-        self._stop_session_resources(session)
+        self._deferred_session_stops.append(session)
+
+    def _drain_deferred_session_stops(self) -> None:
+        with self._lock:
+            sessions = self._deferred_session_stops
+            self._deferred_session_stops = []
+        for session in sessions:
+            self._stop_session_resources(session)
 
     def _stop_session_resources(self, session: VideoHlsSession) -> None:
         if session.process.poll() is None:

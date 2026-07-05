@@ -927,10 +927,12 @@ async function stopCompatibilitySession(sessionIdOverride) {
   var explicitSessionId = sessionIdOverride == null
     ? ''
     : String(sessionIdOverride || '');
-  var clearedSessionId = clearLocalCompatibilitySessionState();
-  var sessionId = explicitSessionId || clearedSessionId;
+  var sessionId = explicitSessionId || String(ctx.state.compatibilitySessionId || '');
   if (!sessionId) return;
   await postStopCompatibilitySession(sessionId);
+  if (String(ctx.state.compatibilitySessionId || '') === sessionId) {
+    clearLocalCompatibilitySessionState();
+  }
 }
 
 function attachCompatibilityVideo(playlistUrl, title, meta, startSeconds, surfaceSyncToken) {
@@ -1578,6 +1580,7 @@ async function restartCompatibilityAt(targetSeconds, reason, options) {
   ctx.reportCompatibilitySessionProgress = reportCompatibilitySessionProgress;
   ctx.attachCompatibilityVideo = attachCompatibilityVideo;
   ctx.createCompatibilitySession = createCompatibilitySession;
+  ctx.postStopCompatibilitySession = postStopCompatibilitySession;
   ctx.trySeekCompatibilityInSession = trySeekCompatibilityInSession;
   ctx.restartCompatibilityAt = restartCompatibilityAt;
   ctx.stopCompatibilitySession = stopCompatibilitySession;

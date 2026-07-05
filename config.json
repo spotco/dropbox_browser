@@ -7,6 +7,7 @@
   "VideoFFmpegThreads": 2,
   "VideoFFmpegFilterThreads": 1,
   "VideoFFmpegProcessPriority": "below_normal",
+  "VideoSessionIdleTTLSeconds": 900,
   "VideoBackpressureLowWaterSeconds": 45.0,
   "VideoBackpressureMediumWaterSeconds": 120.0,
   "VideoBackpressureHighWaterSeconds": 300.0,

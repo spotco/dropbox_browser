@@ -32,12 +32,13 @@ async function syncPlaybackForActiveItem() {
   ctx.clearCompatibilityRecoveryTimer();
   var syncToken = ++ctx.state.playbackSyncToken;
   if (!active) {
+    var localSessionId = String(ctx.state.compatibilitySessionId || '');
     ctx.state.playbackMode = 'none';
     ctx.state.pendingAutoplay = false;
     ctx.state.transportWantsPlay = false;
     ctx.renderAudioTrackSelector(null, null);
     ctx.renderSubtitleTrackSelector(null, null);
-    await ctx.stopCompatibilitySession();
+    await ctx.stopCompatibilitySession(localSessionId);
     resetPlaybackSurface();
     ctx.showPlaybackPlaceholder(
       'No video selected',
@@ -63,12 +64,13 @@ async function syncPlaybackForActiveItem() {
   ctx.showPlaybackPlaceholder(ctx.activeItemTitle(active), '');
 
   if (!ctx.state.compatibilityAvailable) {
+    var unavailableSessionId = String(ctx.state.compatibilitySessionId || '');
     ctx.state.pendingAutoplay = false;
     ctx.state.transportWantsPlay = false;
     ctx.state.playbackMode = 'compatibility-unavailable';
     ctx.renderAudioTrackSelector(active, null);
     ctx.renderSubtitleTrackSelector(active, null);
-    await ctx.stopCompatibilitySession();
+    await ctx.stopCompatibilitySession(unavailableSessionId);
     if (syncToken !== ctx.state.playbackSyncToken) return;
     ctx.showPlaybackPlaceholder(ctx.activeItemTitle(active), ctx.compatibilityNeededMeta(active));
     ctx.setStatus(ctx.compatibilityNeededStatus());
@@ -106,7 +108,7 @@ async function syncPlaybackForActiveItem() {
     ctx.reportPlaybackTiming('session_create_requested');
     var session = await ctx.createCompatibilitySession(active, audioStreamIndex, 0, burnedInSubtitleStreamIndex);
     if (syncToken !== ctx.state.playbackSyncToken) {
-      await ctx.stopCompatibilitySession();
+      await ctx.postStopCompatibilitySession(session.session_id || '');
       return;
     }
     ctx.state.compatibilitySessionId = session.session_id || '';

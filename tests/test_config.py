@@ -48,6 +48,7 @@ class ConfigDefaultsTests(unittest.TestCase):
         self.assertEqual(config["VideoFFmpegThreads"], 2)
         self.assertEqual(config["VideoFFmpegFilterThreads"], 1)
         self.assertEqual(config["VideoFFmpegProcessPriority"], "below_normal")
+        self.assertEqual(config["VideoSessionIdleTTLSeconds"], 15 * 60)
         self.assertEqual(config["VideoBackpressureLowWaterSeconds"], 45.0)
         self.assertEqual(config["VideoBackpressureMediumWaterSeconds"], 120.0)
         self.assertEqual(config["VideoBackpressureHighWaterSeconds"], 300.0)
@@ -69,6 +70,7 @@ class ConfigDefaultsTests(unittest.TestCase):
         self.assertEqual(config["VideoFFmpegThreads"], 2)
         self.assertEqual(config["VideoFFmpegFilterThreads"], 1)
         self.assertEqual(config["VideoFFmpegProcessPriority"], "below_normal")
+        self.assertEqual(config["VideoSessionIdleTTLSeconds"], 15 * 60)
         self.assertEqual(config["VideoBackpressureLowWaterSeconds"], 45.0)
         self.assertEqual(config["VideoBackpressureMediumWaterSeconds"], 120.0)
         self.assertEqual(config["VideoBackpressureHighWaterSeconds"], 300.0)
@@ -308,6 +310,18 @@ class VideoToolsConfigTests(unittest.TestCase):
 
         self.assertEqual(video_config.max_concurrent_sessions, 4)
 
+    def test_load_video_tools_config_reads_session_idle_ttl_seconds(self) -> None:
+        with (
+            patch.object(config_module, "find_vendored_ffmpeg", return_value=None),
+            patch.object(config_module, "find_vendored_ffprobe", return_value=None),
+            patch.object(config_module.shutil, "which", side_effect=["C:/bin/ffmpeg.exe", "C:/bin/ffprobe.exe"]),
+        ):
+            video_config = config_module.load_video_tools_config({
+                "VideoSessionIdleTTLSeconds": "120",
+            })
+
+        self.assertEqual(video_config.session_idle_ttl_seconds, 120.0)
+
     def test_load_video_tools_config_normalizes_invalid_max_concurrent_sessions(self) -> None:
         with (
             patch.object(config_module, "find_vendored_ffmpeg", return_value=None),
@@ -332,6 +346,31 @@ class VideoToolsConfigTests(unittest.TestCase):
 
         self.assertEqual(low_config.max_concurrent_sessions, 1)
         self.assertEqual(invalid_config.max_concurrent_sessions, 8)
+
+    def test_load_video_tools_config_normalizes_invalid_session_idle_ttl_seconds(self) -> None:
+        with (
+            patch.object(config_module, "find_vendored_ffmpeg", return_value=None),
+            patch.object(config_module, "find_vendored_ffprobe", return_value=None),
+            patch.object(
+                config_module.shutil,
+                "which",
+                side_effect=[
+                    "C:/bin/ffmpeg.exe",
+                    "C:/bin/ffprobe.exe",
+                    "C:/bin/ffmpeg.exe",
+                    "C:/bin/ffprobe.exe",
+                ],
+            ),
+        ):
+            low_config = config_module.load_video_tools_config({
+                "VideoSessionIdleTTLSeconds": "0",
+            })
+            invalid_config = config_module.load_video_tools_config({
+                "VideoSessionIdleTTLSeconds": "oops",
+            })
+
+        self.assertEqual(low_config.session_idle_ttl_seconds, 1.0)
+        self.assertEqual(invalid_config.session_idle_ttl_seconds, 15 * 60.0)
 
     def test_load_video_tools_config_reads_backpressure_thresholds(self) -> None:
         with (

@@ -1,17 +1,17 @@
 (done) - plans/2026-07-02/video_player_additional_controls.md
 (almost done) - - plans/2026-07-02/PLAN_VIDEO_MULTI_SESSION.md
 
-- subtitle stroke doesnt look good
-- size number inputs cant type or click
-- tracks section default size larger (fit subtitle style)
-
-code review on full plan
+- go through all the video related tests. look for ones that are redundant, or could otherwise be merged such that the test suite completes faster, but without losing any covered behaviour. give me your summary of the changes you would make to improve the test suite.
 
 - plans/2026-07-02/IMPLEMENT_ASS_TO_WEBVTT_SUBTITLE_CONVERSION.md
 
 --- video player features
 
-- drop shadow on subtitle text (both webvtt and burnin)
+- subtitle stroke doesnt look good
+- size number inputs cant type or click
+- tracks section default size larger (fit subtitle style)
+
+- need to have resizable window size (full window mode?)
 
 - current folder/ queue panel
 	make it shared with music player functionality, all the same functionality

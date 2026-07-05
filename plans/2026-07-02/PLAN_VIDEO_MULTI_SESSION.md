@@ -93,7 +93,7 @@ stop/recreate the current compatibility session.
 - [x] On create failure or playlist timeout, remove only the new session.
 - [x] Ensure all session directory cleanup is idempotent and never deletes the
       session root while other sessions are still active.
-- [ ] Keep lock hold times short: do not wait for playlist/assets or block on
+- [x] Keep lock hold times short: do not wait for playlist/assets or block on
       process IO while holding the registry lock except during brief removal.
 
 ## Phase 3 - Make Session Lookup Truly Per-ID
@@ -131,8 +131,8 @@ stop/recreate the current compatibility session.
       state. Do not evict a recently playing session just because another browser
       starts playback.
 - [x] Include eviction reason in server debug logs and client-visible errors.
-- [ ] Add tests for cap reached, idle eviction, and active-session rejection.
-- [ ] Document CPU implications: two HEVC transcodes are two ffmpeg processes,
+- [x] Add tests for cap reached, idle eviction, and active-session rejection.
+- [x] Document CPU implications: two HEVC transcodes are two ffmpeg processes,
       not one shared encoder.
 
 ## Phase 5 - Expand Status Contracts
@@ -180,10 +180,10 @@ stop/recreate the current compatibility session.
 
 - [x] Keep `beforeunload` or `sendBeacon` stop behavior, but make it stop only
       the local session ID.
-- [ ] Make pane deactivation and queue-item changes stop only the local session.
-- [ ] Confirm stale unload beacons from a previous page cannot stop a newly
+- [x] Make pane deactivation and queue-item changes stop only the local session.
+- [x] Confirm stale unload beacons from a previous page cannot stop a newly
       created session from another browser.
-- [ ] Confirm `stopCompatibilitySession()` clears local state only after the
+- [x] Confirm `stopCompatibilitySession()` clears local state only after the
       server acknowledges or the request has been attempted.
 - [ ] Add tests around stop requests with missing, stale, and foreign session IDs.
 
@@ -193,7 +193,7 @@ stop/recreate the current compatibility session.
       `session_registered`, `session_stopped`, `session_expired`,
       `session_evicted`, `session_cap_reached`, and per-session tagged input
       throttle/cancel decisions.
-- [ ] Update `docs/video-player.md` to describe multi-session lifecycle,
+- [x] Update `docs/video-player.md` to describe multi-session lifecycle,
       plural status payloads, cap behavior, and resource costs.
 - [ ] Update any benchmark or debug scripts that assume one active session.
 - [ ] Add a manual validation checklist:

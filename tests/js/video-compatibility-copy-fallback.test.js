@@ -143,6 +143,7 @@ function createCtx(activeItem) {
       this._lastStatus = String(message || "");
     },
     setPlaybackSummary() {},
+    renderAudioTrackSelector() {},
     showLoadingOverlay() {},
     loadingOverlayCopy() {
       return {};
@@ -169,6 +170,13 @@ function createCtx(activeItem) {
       return false;
     },
     renderSubtitleTrackSelector() {},
+    resetSubtitlesForActiveItemChange() {},
+    compatibilityNeededMeta() {
+      return "Compatibility playback required.";
+    },
+    compatibilityNeededStatus() {
+      return "Compatibility playback required.";
+    },
     persistSubtitleSelectionFromUi() {},
     clearSubtitleTrack() {},
     showPlaybackVideo() {},
@@ -190,6 +198,7 @@ function createCtx(activeItem) {
       return { duration_seconds: 120 };
     },
     stopCompatibilitySession: async function () {},
+    postStopCompatibilitySession: async function () {},
     attachCompatibilityVideo() {},
     normalizeSubtitleStreamIndex(value) {
       return value == null ? null : Number(value);
@@ -207,6 +216,10 @@ function createCtx(activeItem) {
       };
     },
     resetPlaybackProgress() {},
+    clearCompatibilityRecoveryTimer() {},
+    clearCompatibilitySessionStatusPoll() {},
+    clearCompatibilitySessionProgressReport() {},
+    resetCompatibilityRecoveryState() {},
     flushNativeSubtitleRenderSurface() {},
     currentSubtitleStyleOptions() {
       return {
@@ -938,6 +951,50 @@ test("stopCompatibilitySession posts session id and client id", async () => {
   assert.match(requests[0].body, /client_id=client-123/);
 });
 
+test("stopCompatibilitySession keeps local session state until stop request settles", async () => {
+  const {initCompatibility} = await importModuleFromWorkspace("dropbox_browser/assets/js/video/compatibility.js");
+  const item = {path: "Videos/copy.mkv"};
+  const ctx = createCtx(item);
+  const requests = [];
+  var resolveFetch;
+  global.fetch = function (url, options) {
+    requests.push({url: String(url || ""), body: String(options && options.body || "")});
+    return new Promise(function (resolve) {
+      resolveFetch = resolve;
+    });
+  };
+  global.window = { setTimeout, clearTimeout };
+  initCompatibility(ctx);
+
+  const stopPromise = ctx.stopCompatibilitySession();
+
+  assert.equal(requests.length, 1);
+  assert.equal(ctx.state.compatibilitySessionId, "session-1");
+  resolveFetch({ ok: true, async json() { return {status: "ok"}; } });
+  await stopPromise;
+
+  assert.equal(ctx.state.compatibilitySessionId, "");
+});
+
+test("stopCompatibilitySession leaves newer local session state intact after stopping stale snapshot", async () => {
+  const {initCompatibility} = await importModuleFromWorkspace("dropbox_browser/assets/js/video/compatibility.js");
+  const item = {path: "Videos/copy.mkv"};
+  const ctx = createCtx(item);
+  const requests = [];
+  global.fetch = async function (url, options) {
+    requests.push({url: String(url || ""), body: String(options && options.body || "")});
+    ctx.state.compatibilitySessionId = "session-newer";
+    return { ok: true, async json() { return {status: "ok"}; } };
+  };
+  global.window = { setTimeout, clearTimeout };
+  initCompatibility(ctx);
+
+  await ctx.stopCompatibilitySession("session-stale");
+
+  assert.equal(requests.length, 1);
+  assert.equal(ctx.state.compatibilitySessionId, "session-newer");
+});
+
 test("stopCompatibilitySession can stop an explicit session id snapshot", async () => {
   const {initCompatibility} = await importModuleFromWorkspace("dropbox_browser/assets/js/video/compatibility.js");
   const item = {path: "Videos/copy.mkv"};
@@ -958,6 +1015,59 @@ test("stopCompatibilitySession can stop an explicit session id snapshot", async 
   assert.match(requests[0].body, /id=session-beforeunload/);
   assert.doesNotMatch(requests[0].body, /id=session-newer/);
   assert.match(requests[0].body, /client_id=client-123/);
+});
+
+test("playback stale session create stops only the returned stale session id", async () => {
+  const {initPlayback} = await importModuleFromWorkspace("dropbox_browser/assets/js/video/playback.js");
+  const item = {path: "Videos/copy.mkv"};
+  const ctx = createCtx(item);
+  ctx.state.playbackStatusLoaded = true;
+  const stoppedSessionIds = [];
+  ctx.postStopCompatibilitySession = async function (sessionId) {
+    stoppedSessionIds.push(String(sessionId || ""));
+  };
+  ctx.createCompatibilitySession = async function () {
+    ctx.state.playbackSyncToken = 9;
+    ctx.state.compatibilitySessionId = "session-newer";
+    return {
+      status: "ok",
+      session_id: "session-stale-created",
+      playlist_url: "/video/endpoints/session/file?id=session-stale-created&name=stream.m3u8",
+      start_time_seconds: 0,
+      encoded_media_end_seconds: 0,
+      hls_segment_duration_seconds: 6,
+      session_create_elapsed_ms: 1,
+      video_mode: "video_copy",
+      video_mode_reason: "selected_h264_stream_copy_safe",
+      audio_mode: "audio_transcode",
+      audio_mode_reason: "audio_copy_not_supported",
+      subtitle_stream_index: null,
+    };
+  };
+  initPlayback(ctx);
+
+  await ctx.playbackApi.syncForActiveItem();
+
+  assert.deepEqual(stoppedSessionIds, ["session-stale-created"]);
+  assert.equal(ctx.state.compatibilitySessionId, "session-newer");
+});
+
+test("pane deactivation stops the local session id snapshot", async () => {
+  const {initPane} = await importModuleFromWorkspace("dropbox_browser/assets/js/video/pane.js");
+  const item = {path: "Videos/copy.mkv"};
+  const ctx = createCtx(item);
+  ctx.pane = makeEl();
+  const stoppedSessionIds = [];
+  ctx.stopCompatibilitySession = async function (sessionId) {
+    stoppedSessionIds.push(String(sessionId || ""));
+  };
+  ctx.resetPlaybackSurface = function () {};
+  initPane(ctx);
+  ctx.state.compatibilitySessionId = "session-before-pane-close";
+
+  ctx.paneApi.syncPaneMode("server-log");
+
+  assert.deepEqual(stoppedSessionIds, ["session-before-pane-close"]);
 });
 
 test("compatibility status polling requests the local session id and updates local encoded range", async () => {
