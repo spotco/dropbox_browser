@@ -4,7 +4,8 @@ function syncPaneMode(mode) {
   ctx.state.paneActive = active;
   ctx.pane.setAttribute('data-video-pane-active', active ? '1' : '0');
   if (!active) {
-    void ctx.stopCompatibilitySession();
+    var localSessionId = String(ctx.state.compatibilitySessionId || '');
+    void ctx.stopCompatibilitySession(localSessionId);
     ctx.resetPlaybackSurface();
     ctx.renderAudioTrackSelector(null, null);
     ctx.renderSubtitleTrackSelector(null, null);

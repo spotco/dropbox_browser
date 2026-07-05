@@ -63,6 +63,12 @@ Video-related config in `config.json` / `config_local.json`:
   `-filter_complex_threads` value, mainly useful for burned-in subtitle sessions.
 - `VideoFFmpegProcessPriority` — Windows-only ffmpeg process priority:
   `below_normal` by default, with `idle` and `normal` also accepted.
+- `VideoMaxConcurrentSessions` — maximum number of concurrent HLS sessions the
+  server will keep alive before it must evict an idle session or reject a new
+  session request.
+- `VideoSessionIdleTtlSeconds` — idle lifetime used for session expiry and for
+  deciding whether an older session is still active enough to protect from cap
+  eviction.
 - `VideoBackpressureLowWaterSeconds` — ahead-buffer point below which future
   server-side throttling should stay unthrottled.
 - `VideoBackpressureMediumWaterSeconds` — middle watermark for mild throttling.
@@ -84,6 +90,11 @@ thread defaults were chosen because they kept the Surface Book 3 HEVC transcode
 case above realtime while reducing CPU compared with auto-thread pacing.
 On Windows, process priority can make the desktop more responsive while ffmpeg
 runs. It does not reduce total encode work; it only changes scheduling priority.
+Concurrent compatibility sessions are not a shared encoder pool. Two HEVC
+transcodes mean two separate ffmpeg processes doing separate decode/encode work,
+and a burned-in subtitle transcode adds filter work on top of that. Session caps
+therefore control real additive CPU, memory, and remote-read pressure rather
+than virtual bookkeeping.
 The backpressure thresholds are config-driven now even though throttle
 enforcement lands in later phases. They are normalized into a nondecreasing
 `low <= medium <= high <= max` sequence so weak-machine tuning does not require
@@ -102,14 +113,14 @@ All routes are under `/video/endpoints/`.
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `library?path=` | List video files in a remote folder |
-| GET | `status` | Report ffmpeg/ffprobe availability and active session summary |
+| GET | `status` | Report ffmpeg/ffprobe availability plus session summaries and aggregate limits |
 | GET | `probe?path=` | Return ffprobe metadata (streams, duration, codecs) |
 | GET | `subtitles?path=&track=` | Extract one subtitle stream to WebVTT |
 | GET | `subtitles/all?path=` | Batch-extract all WebVTT-compatible subtitle tracks |
 | GET | `session/file?id=&name=` | Serve HLS playlist, init segment, or media segment |
 | POST | `session` | Create a new HLS compatibility session |
-| POST | `session/progress` | Update active-session playback position and paused/playing state |
-| POST | `session/stop` | Stop the active session and clean up ffmpeg |
+| POST | `session/progress` | Update one session's playback position and paused/playing state |
+| POST | `session/stop` | Stop one session and clean up its ffmpeg process |
 
 Session creation (`POST /video/endpoints/session`) accepts form fields:
 
@@ -125,16 +136,17 @@ Session creation (`POST /video/endpoints/session`) accepts form fields:
 
 Playback progress updates (`POST /video/endpoints/session/progress`) accept:
 
-- `id` — active session id
+- `id` — session id
 - `playback_seconds` — current global playback time in seconds
-- `playback_media_seconds` — current `<video>` media time relative to the active HLS session start
+- `playback_media_seconds` — current `<video>` media time relative to that HLS session start
 - `playback_state` — `playing`, `paused`, or `unknown`
 - `playback_sync_token` — optional client sync token for stale-update suppression
 
 The server builds an ffmpeg command that reads from the local `/file` URL for the
 remote path, writes fMP4 HLS into `Temp/video_sessions/<uuid>/`, and returns a
-playlist URL under `/video/endpoints/session/file`. Only one active session is
-kept at a time; creating a new session stops the previous one.
+playlist URL under `/video/endpoints/session/file`. Sessions are tracked by
+session id, not by one global active owner, so multiple browsers or tabs can
+keep separate HLS sessions alive at the same time.
 
 When probe metadata says the selected video stream is browser/HLS-safe H.264 and
 no burned-in subtitle stream is selected, the server uses `-c:v copy` and omits
@@ -150,12 +162,16 @@ payloads and diagnostics include `audio_mode` (`audio_copy` or
 `audio_transcode`) plus `audio_mode_reason`.
 
 `GET /video/endpoints/status` is polled by the client during playback to learn
-`encoded_media_end_seconds` for the active session (how far ffmpeg has encoded
-ahead of the session start). The payload now also exposes configured
-`backpressure_thresholds`, plus `active_session.client_playback` with the last
-reported global playback seconds, media playback seconds, paused/playing state, report timestamp, and
-optional client sync token. Session replacement leaves stale progress POSTs
-harmless: the endpoint returns `updated: false` instead of mutating a newer
+`encoded_media_end_seconds` for the relevant session (how far ffmpeg has encoded
+ahead of that session start). The payload returns `active_sessions` with one
+summary per live session, aggregate fields such as `session_count`,
+`max_session_count`, and configured `backpressure_thresholds`, plus a temporary
+`active_session` compatibility alias for the most recently active session. Each
+session summary includes `client_playback` with the last reported global
+playback seconds, media playback seconds, paused/playing state, report
+timestamp, and optional client sync token. Stale progress POSTs stay harmless:
+the endpoint returns `updated: false` plus a session lifecycle state such as
+`missing`, `stopped`, `expired`, or `evicted` instead of mutating another
 session.
 
 ### HLS Session Lifecycle
@@ -164,19 +180,33 @@ session.
 
 1. Resolves the remote file path and builds an input URL (`/file?path=...&source=remote`).
    ffmpeg-tagged input requests also include `video_session_id=<session_id>` so
-   the `/file` route can associate remote reads with only the active matching
+   the `/file` route can associate remote reads with only the matching
    HLS session.
    Tagged requests now run through a session-aware copy loop that preserves
    ordinary `/file` behavior for untagged callers, computes encode-ahead from
-   the active session state, and aborts promptly if the tagged session is
-   replaced.
+   the owning session state, and aborts promptly if that tagged session is
+   stopped, expired, evicted, or otherwise removed.
 2. Spawns ffmpeg with `build_ffmpeg_hls_command(...)`, optionally adding
    ffmpeg input pacing flags before `-i` when `VideoFFmpegReadRate` is enabled.
    On Windows, ffmpeg is started with the configured process priority.
 3. Waits for `stream.m3u8` to become ready (longer timeout when burned-in subtitles are requested).
 4. Serves playlist and segment files through `session/file`.
 5. Rewrites the playlist's `#EXT-X-MAP` URI and injects `#EXT-X-START` when serving `.m3u8`.
-6. Stops ffmpeg and deletes session directories on `session/stop`, session replace, expiry, or shutdown.
+6. Stops ffmpeg and deletes session directories on `session/stop`, idle expiry,
+   cap eviction, create failure, or shutdown.
+
+Session limit policy is deliberate:
+
+- If the configured session cap has free capacity, the new session is registered.
+- If the cap is full but the oldest session is idle, that idle session is
+  evicted and the new session is allowed to start.
+- If the cap is full and every slot is still recently active, the server rejects
+  the new request with `429 Too Many Requests` and
+  `session_error_reason=all_sessions_active`.
+- "Idle" is based on a combination of `last_accessed_at`, recent progress
+  reports, and playback state. A session with recent `playing` or `paused`
+  progress is protected from cap eviction even if another browser starts
+  playback.
 
 Segment duration is 6 seconds (`HLS_SEGMENT_DURATION_SECONDS`), shared with the
 client pure module `video/compatibility-core.js`.

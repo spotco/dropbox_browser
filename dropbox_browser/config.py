@@ -26,6 +26,7 @@ _APP_CONFIG_DEFAULTS: dict = {
     "VideoFFmpegFilterThreads": 1,
     "VideoFFmpegProcessPriority": "below_normal",
     "VideoMaxConcurrentSessions": 8,
+    "VideoSessionIdleTTLSeconds": 15 * 60,
     "VideoBackpressureLowWaterSeconds": 45.0,
     "VideoBackpressureMediumWaterSeconds": 120.0,
     "VideoBackpressureHighWaterSeconds": 300.0,
@@ -68,6 +69,7 @@ _APP_CONFIG_DEFAULTS: dict = {
 _VIDEO_FFMPEG_READ_RATE_MAX = 16.0
 _VIDEO_FFMPEG_INITIAL_BURST_SECONDS_MAX = 600.0
 _VIDEO_FFMPEG_THREADS_MAX = 64
+_VIDEO_SESSION_IDLE_TTL_SECONDS_MAX = 7 * 24 * 60 * 60.0
 _VIDEO_BACKPRESSURE_SECONDS_MAX = 24 * 60 * 60.0
 _VIDEO_FFMPEG_PROCESS_PRIORITIES = {"idle", "below_normal", "normal"}
 
@@ -94,6 +96,7 @@ class VideoToolsConfig:
     ffmpeg_filter_threads: int = 0
     ffmpeg_process_priority: str = "below_normal"
     max_concurrent_sessions: int = 8
+    session_idle_ttl_seconds: float = 15 * 60.0
     backpressure_low_water_seconds: float = 45.0
     backpressure_medium_water_seconds: float = 120.0
     backpressure_high_water_seconds: float = 300.0
@@ -354,6 +357,14 @@ def load_video_tools_config(app_config: dict | None = None) -> VideoToolsConfig:
                 config.get("VideoMaxConcurrentSessions", _APP_CONFIG_DEFAULTS["VideoMaxConcurrentSessions"]),
                 default=int(_APP_CONFIG_DEFAULTS["VideoMaxConcurrentSessions"]),
                 maximum=_VIDEO_FFMPEG_THREADS_MAX,
+            ),
+        ),
+        session_idle_ttl_seconds=max(
+            1.0,
+            _clamp_non_negative_float(
+                config.get("VideoSessionIdleTTLSeconds", _APP_CONFIG_DEFAULTS["VideoSessionIdleTTLSeconds"]),
+                default=float(_APP_CONFIG_DEFAULTS["VideoSessionIdleTTLSeconds"]),
+                maximum=_VIDEO_SESSION_IDLE_TTL_SECONDS_MAX,
             ),
         ),
         backpressure_low_water_seconds=backpressure_low_water_seconds,
