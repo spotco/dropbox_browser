@@ -34,9 +34,9 @@ VIDEO_SESSION_DIR = TEMP_DIR / "video_sessions"
 SUBTITLE_CACHE_DIR = TEMP_DIR / "subtitle_cache"
 HEADER_CACHE_SUBDIR = "video_header_cache"
 PROBE_CACHE_SUBDIR = "probe_cache"
-SUBTITLE_CACHE_VERSION = "webvtt-v1"
-SUBTITLE_WINDOW_CACHE_VERSION = "webvtt-window-v1"
-SUBTITLE_WINDOW_MANIFEST_VERSION = "webvtt-window-manifest-v1"
+SUBTITLE_CACHE_VERSION = "webvtt-v2-ass-cleanup"
+SUBTITLE_WINDOW_CACHE_VERSION = "webvtt-window-v2-ass-cleanup"
+SUBTITLE_WINDOW_MANIFEST_VERSION = "webvtt-window-manifest-v2-ass-cleanup"
 PROBE_CACHE_VERSION = "ffprobe-v3"
 HEADER_CACHE_VERSION = "header-v1"
 DEFAULT_PROBE_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60.0
@@ -222,6 +222,47 @@ def log_video_debug(app: Any, event: str, **fields: object) -> None:
         return
 
 
+def _log_subtitle_conversion_debug(
+    app: Any | None,
+    *,
+    event: str,
+    rel_path: str,
+    subtitle_stream_index: int | None,
+    codec_name: object,
+    subtitle_path: Path | None = None,
+    conversion_mode: str = "",
+    start_time_seconds: float = 0.0,
+    duration_seconds: float | None = None,
+    raw_subtitle_text: str | None = None,
+    converted_webvtt_text: str | None = None,
+    reason: str = "",
+) -> None:
+    if app is None:
+        return
+    log_video_debug(
+        app,
+        event,
+        rel_path=clean_rel_path(rel_path),
+        subtitle_stream_index=(
+            int(subtitle_stream_index)
+            if subtitle_stream_index is not None
+            else None
+        ),
+        codec_name=(None if codec_name is None else str(codec_name)),
+        subtitle_path=(str(subtitle_path) if subtitle_path is not None else ""),
+        conversion_mode=str(conversion_mode or ""),
+        start_time_seconds=float(start_time_seconds),
+        duration_seconds=(
+            None
+            if duration_seconds is None
+            else float(duration_seconds)
+        ),
+        raw_subtitle_text=("" if raw_subtitle_text is None else str(raw_subtitle_text)),
+        converted_webvtt_text=("" if converted_webvtt_text is None else str(converted_webvtt_text)),
+        reason=str(reason or ""),
+    )
+
+
 def _stream_title(tags: dict[str, object]) -> str | None:
     title = tags.get("title")
     return title if isinstance(title, str) and title.strip() else None
@@ -317,46 +358,15 @@ _ASS_SUBTITLE_CODECS = frozenset({
     "ass",
     "ssa",
 })
-_ASS_STYLE_SECTION_NAMES = frozenset({
-    "[v4 styles]",
-    "[v4+ styles]",
-})
 _ASS_EVENT_TYPES = frozenset({
     "dialogue",
-    "comment",
 })
-_ASS_ADVANCED_OVERRIDE_PATTERN = re.compile(
-    r"\\(?:"
-    r"an\d+|"
-    r"be\d*|"
-    r"blur\d*|"
-    r"bord\d*|"
-    r"clip|"
-    r"fad|"
-    r"fade|"
-    r"fax|"
-    r"fay|"
-    r"fn|"
-    r"fr(?:x|y|z)?\d*|"
-    r"fsc(?:x|y)\d*|"
-    r"fsp\d*|"
-    r"iclip|"
-    r"move|"
-    r"org|"
-    r"pbo\d*|"
-    r"pos|"
-    r"q\d+|"
-    r"shad\d*|"
-    r"t(?:\(|\b)|"
-    r"xbord\d*|"
-    r"xshad\d*|"
-    r"ybord\d*|"
-    r"yshad\d*"
-    r")",
-    re.IGNORECASE,
-)
 _ASS_DRAWING_OVERRIDE_PATTERN = re.compile(r"\\p\s*[1-9]\d*", re.IGNORECASE)
-_ASS_LITERAL_BRACE_MARKUP_PATTERN = re.compile(r"\{(?!\\)[^}]+\}")
+_ASS_DRAWING_MODE_OVERRIDE_RE = re.compile(r"\\p\s*(-?\d+)", re.IGNORECASE)
+_ASS_OVERRIDE_BLOCK_RE = re.compile(r"\{[^}]*\}")
+_ASS_DRAWING_TEXT_ONLY_RE = re.compile(r"^[mnlbspc\s0-9\.\-]+$", re.IGNORECASE)
+_ASS_SIMPLE_STYLE_TAGS = ("b", "i", "u")
+_ASS_SIMPLE_STYLE_OVERRIDE_RE = re.compile(r"\\([biur])(?:\s*([^\s\\{}]+))?", re.IGNORECASE)
 
 
 def video_stream_supports_h264_copy(stream_data: dict[str, object]) -> tuple[bool, str]:
@@ -451,10 +461,6 @@ def subtitle_codec_supports_webvtt(codec_name: object) -> bool:
     return codec_name.casefold() not in _WEBVTT_INCOMPATIBLE_SUBTITLE_CODECS
 
 
-def subtitle_codec_is_ass(codec_name: object) -> bool:
-    return isinstance(codec_name, str) and codec_name.strip().casefold() in _ASS_SUBTITLE_CODECS
-
-
 def _stream_index_value(value: object) -> int | None:
     try:
         return int(value)
@@ -499,16 +505,98 @@ def _ass_event_time_seconds(raw_value: str) -> float | None:
     return (hours * 3600.0) + (minutes * 60.0) + seconds
 
 
-def classify_ass_subtitle_text(ass_text: str) -> tuple[str, str]:
+def _ass_simple_style_state() -> dict[str, bool]:
+    return {tag_name: False for tag_name in _ASS_SIMPLE_STYLE_TAGS}
+
+
+def _ass_normalize_text_segment(text: str) -> str:
+    normalized = str(text or "").replace("\\N", "\n").replace("\\n", "\n").replace("\\h", " ")
+    normalized = normalized.replace("\r", "")
+    normalized_lines = [
+        re.sub(r"[ \t]+", " ", line).strip()
+        for line in normalized.split("\n")
+    ]
+    return "\n".join(line for line in normalized_lines if line)
+
+
+def _append_ass_style_transitions(parts: list[str], current_state: dict[str, bool], next_state: dict[str, bool]) -> None:
+    for tag_name in reversed(_ASS_SIMPLE_STYLE_TAGS):
+        if current_state[tag_name] and not next_state[tag_name]:
+            parts.append(f"</{tag_name}>")
+    for tag_name in _ASS_SIMPLE_STYLE_TAGS:
+        if next_state[tag_name] and not current_state[tag_name]:
+            parts.append(f"<{tag_name}>")
+
+
+def _parse_ass_override_block(content: str, current_state: dict[str, bool], drawing_mode: int) -> tuple[dict[str, bool], int]:
+    next_state = dict(current_state)
+    for match in _ASS_SIMPLE_STYLE_OVERRIDE_RE.finditer(content):
+        tag_name = str(match.group(1) or "").lower()
+        raw_value = str(match.group(2) or "").strip()
+        if tag_name == "r":
+            next_state = _ass_simple_style_state()
+            continue
+        if tag_name not in next_state:
+            continue
+        if not raw_value:
+            next_state[tag_name] = True
+            continue
+        try:
+            next_state[tag_name] = int(raw_value) != 0
+        except ValueError:
+            next_state[tag_name] = False
+    for match in _ASS_DRAWING_MODE_OVERRIDE_RE.finditer(content):
+        raw_value = str(match.group(1) or "").strip()
+        try:
+            drawing_mode = max(0, int(raw_value))
+        except ValueError:
+            continue
+    return next_state, drawing_mode
+
+
+def _clean_ass_dialogue_text(raw_text: str) -> str:
+    text = str(raw_text or "")
+    parts: list[str] = []
+    current_state = _ass_simple_style_state()
+    drawing_mode = 0
+    cursor = 0
+    for match in _ASS_OVERRIDE_BLOCK_RE.finditer(text):
+        if match.start() > cursor and drawing_mode <= 0:
+            segment = _ass_normalize_text_segment(text[cursor:match.start()])
+            if segment:
+                parts.append(segment)
+        override_content = match.group(0)[1:-1]
+        next_state, drawing_mode = _parse_ass_override_block(override_content, current_state, drawing_mode)
+        _append_ass_style_transitions(parts, current_state, next_state)
+        current_state = next_state
+        cursor = match.end()
+    if cursor < len(text) and drawing_mode <= 0:
+        segment = _ass_normalize_text_segment(text[cursor:])
+        if segment:
+            parts.append(segment)
+    _append_ass_style_transitions(parts, current_state, _ass_simple_style_state())
+    cleaned = "".join(parts).strip()
+    cleaned_lines = [line for line in cleaned.split("\n") if line.strip()]
+    return "\n".join(cleaned_lines).strip()
+
+
+def _ass_text_is_drawing_only(raw_text: str, cleaned_text: str) -> bool:
+    if not _ASS_DRAWING_OVERRIDE_PATTERN.search(str(raw_text or "")):
+        return False
+    candidate = " ".join(str(cleaned_text or "").split()).strip()
+    if not candidate:
+        return True
+    return bool(_ASS_DRAWING_TEXT_ONLY_RE.fullmatch(candidate))
+
+
+def convert_ass_text_to_webvtt(ass_text: str) -> bytes:
     text = str(ass_text or "").lstrip("\ufeff")
     if not text.strip():
-        return "unknown_ass", "ass_text_empty"
+        return b"WEBVTT\n\n"
 
     section_name = ""
-    style_fields: list[str] = []
     event_fields: list[str] = []
-    event_rows: list[tuple[float, float, int, bool]] = []
-    found_event_row = False
+    cues: list[str] = []
 
     for raw_line in text.splitlines():
         line = raw_line.strip()
@@ -517,26 +605,9 @@ def classify_ass_subtitle_text(ass_text: str) -> tuple[str, str]:
         if line.startswith("[") and line.endswith("]"):
             section_name = line.casefold()
             continue
-
-        lower_line = line.casefold()
-        if section_name in _ASS_STYLE_SECTION_NAMES:
-            if lower_line.startswith("format:"):
-                style_fields = _ass_parse_section_fields(line)
-                continue
-            if lower_line.startswith("style:"):
-                style_row = _ass_parse_row(line, style_fields)
-                if style_row is None:
-                    continue
-                style_name = str(style_row.get("name") or "").strip()
-                if style_name and style_name.casefold() != "default":
-                    return "advanced_ass", "ass_non_default_style"
-                font_name = str(style_row.get("fontname") or "").strip()
-                if font_name and font_name.casefold() not in {"arial"}:
-                    return "advanced_ass", "ass_custom_font"
-                continue
-
         if section_name != "[events]":
             continue
+        lower_line = line.casefold()
         if lower_line.startswith("format:"):
             event_fields = _ass_parse_section_fields(line)
             continue
@@ -546,131 +617,31 @@ def classify_ass_subtitle_text(ass_text: str) -> tuple[str, str]:
             continue
         event_row = _ass_parse_row(line, event_fields)
         if event_row is None:
-            return "unknown_ass", "ass_event_parse_failed"
+            continue
 
-        found_event_row = True
-        style_name = str(event_row.get("style") or "").strip()
-        if style_name and style_name.casefold() != "default":
-            return "advanced_ass", "ass_event_uses_non_default_style"
-
-        effect = str(event_row.get("effect") or "").strip()
-        if effect:
-            return "advanced_ass", "ass_event_effect"
-
-        body = str(event_row.get("text") or "")
-        if _ASS_DRAWING_OVERRIDE_PATTERN.search(body):
-            return "advanced_ass", "ass_drawing_mode"
-        if _ASS_ADVANCED_OVERRIDE_PATTERN.search(body):
-            return "advanced_ass", "ass_advanced_override"
-        if _ASS_LITERAL_BRACE_MARKUP_PATTERN.search(body):
-            return "advanced_ass", "ass_literal_brace_markup"
-
-        layer_value = _stream_index_value(event_row.get("layer"))
         start_seconds = _ass_event_time_seconds(str(event_row.get("start") or ""))
         end_seconds = _ass_event_time_seconds(str(event_row.get("end") or ""))
-        if start_seconds is not None and end_seconds is not None:
-            has_non_plain_features = bool(effect) or (layer_value is not None and layer_value > 0)
-            event_rows.append((start_seconds, end_seconds, layer_value or 0, has_non_plain_features))
+        if start_seconds is None or end_seconds is None or end_seconds <= start_seconds:
+            continue
 
-    if not found_event_row:
-        return "unknown_ass", "ass_events_missing"
+        raw_body = str(event_row.get("text") or "")
+        cleaned_body = _clean_ass_dialogue_text(raw_body)
+        if not cleaned_body:
+            continue
+        if _ass_text_is_drawing_only(raw_body, cleaned_body):
+            continue
 
-    sorted_rows = sorted(event_rows, key=lambda item: (item[0], item[1], item[2]))
-    active_rows: list[tuple[float, float, int, bool]] = []
-    for row in sorted_rows:
-        start_seconds, end_seconds, _, has_non_plain_features = row
-        active_rows = [item for item in active_rows if item[1] > start_seconds]
-        if active_rows and (
-            has_non_plain_features
-            or any(active_row[3] for active_row in active_rows)
-        ):
-            return "advanced_ass", "ass_overlapping_layered_events"
-        active_rows.append(row)
+        cues.append(
+            f"{_format_vtt_timestamp(start_seconds)} --> {_format_vtt_timestamp(end_seconds)}\n{cleaned_body}"
+        )
 
-    return "simple_webvtt", "ass_plain_dialogue"
-
-
-def _copy_subtitle_track_text(
-    ffmpeg_exe: Path,
-    input_url: str,
-    subtitle_stream_index: int,
-    codec_name: object,
-) -> str | None:
-    suffix = subtitle_codec_copy_suffix(codec_name)
-    if suffix is None:
-        return None
-    temp_path = SUBTITLE_CACHE_DIR / f"classify_{uuid.uuid4().hex}_{subtitle_stream_index}{suffix}"
-    temp_path.parent.mkdir(parents=True, exist_ok=True)
-    command = build_ffmpeg_subtitle_copy_command(
-        ffmpeg_exe,
-        input_url,
-        subtitle_stream_index,
-        temp_path,
-    )
-    try:
-        try:
-            _run_subprocess_capture(
-                command,
-                not_found_message="ffmpeg was not found",
-                failure_message="ffmpeg failed to copy subtitle track.",
-            )
-        except BrowserError:
-            return None
-        try:
-            return temp_path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return None
-    finally:
-        try:
-            temp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-
-
-def classify_subtitle_stream_rendering(
-    subtitle_stream: dict[str, object],
-    *,
-    ffmpeg_exe: Path | None = None,
-    input_url: str | None = None,
-) -> dict[str, object]:
-    codec_name = subtitle_stream.get("codec_name")
-    if not subtitle_codec_supports_webvtt(codec_name):
-        return {
-            "subtitle_render_mode": "burn_in",
-            "webvtt_conversion_safe": False,
-            "burn_in_required": True,
-            "subtitle_render_reason": "bitmap_subtitle_requires_burn_in",
-            "ass_render_classification": None,
-        }
-    if not subtitle_codec_is_ass(codec_name):
-        return {
-            "subtitle_render_mode": "sidecar_webvtt",
-            "webvtt_conversion_safe": True,
-            "burn_in_required": False,
-            "subtitle_render_reason": "text_subtitle_codec_webvtt_safe",
-            "ass_render_classification": None,
-        }
-
-    subtitle_stream_index = _stream_index_value(subtitle_stream.get("index"))
-    ass_text = None
-    if ffmpeg_exe is not None and input_url and subtitle_stream_index is not None:
-        ass_text = _copy_subtitle_track_text(ffmpeg_exe, input_url, subtitle_stream_index, codec_name)
-    if ass_text is None:
-        classification, reason = "unknown_ass", "ass_track_copy_failed"
-    else:
-        classification, reason = classify_ass_subtitle_text(ass_text)
-    return {
-        "subtitle_render_mode": "sidecar_webvtt" if classification == "simple_webvtt" else "burn_in",
-        "webvtt_conversion_safe": classification == "simple_webvtt",
-        "burn_in_required": classification != "simple_webvtt",
-        "subtitle_render_reason": reason,
-        "ass_render_classification": classification,
-    }
+    if not cues:
+        return b"WEBVTT\n\n"
+    return ("WEBVTT\n\n" + "\n\n".join(cues) + "\n").encode("utf-8")
 
 
 def _subtitle_stream(stream_data: dict[str, object]) -> dict[str, object]:
     result = _base_stream(stream_data)
-    result.update(classify_subtitle_stream_rendering(result))
     result.update({
         "codec_tag_string": stream_data.get("codec_tag_string"),
         "webvtt_compatible": subtitle_codec_supports_webvtt(stream_data.get("codec_name")),
@@ -3318,6 +3289,14 @@ def extract_remote_subtitles_to_webvtt(
     if track_info is None:
         raise BrowserError(HTTPStatus.BAD_REQUEST, "Subtitle track was not found in probe metadata.")
     if not subtitle_codec_supports_webvtt(track_info.get("codec_name")):
+        _log_subtitle_conversion_debug(
+            app,
+            event="subtitle_track_rejected_for_webvtt",
+            rel_path=rel_path,
+            subtitle_stream_index=subtitle_stream_index,
+            codec_name=track_info.get("codec_name"),
+            reason="subtitle_track_cannot_be_converted_to_webvtt",
+        )
         raise BrowserError(HTTPStatus.BAD_REQUEST, "Subtitle track cannot be converted to WebVTT.")
     cache_key = build_subtitle_cache_key(
         rel_path=rel_path,
@@ -3332,6 +3311,8 @@ def extract_remote_subtitles_to_webvtt(
         ffmpeg_exe,
         input_url,
         subtitle_stream_index,
+        app=app,
+        rel_path=rel_path,
         codec_name=track_info.get("codec_name"),
     )
     if body is None:
@@ -3384,6 +3365,14 @@ def extract_remote_subtitle_window_to_webvtt(
     if track_info is None:
         raise BrowserError(HTTPStatus.BAD_REQUEST, "Subtitle track was not found in probe metadata.")
     if not subtitle_codec_supports_webvtt(track_info.get("codec_name")):
+        _log_subtitle_conversion_debug(
+            app,
+            event="subtitle_track_rejected_for_webvtt",
+            rel_path=rel_path,
+            subtitle_stream_index=subtitle_stream_index,
+            codec_name=track_info.get("codec_name"),
+            reason="subtitle_track_cannot_be_converted_to_webvtt",
+        )
         raise BrowserError(HTTPStatus.BAD_REQUEST, "Subtitle track cannot be converted to WebVTT.")
     language = str(track_info.get("language") or "")
     window_request = build_subtitle_window_request(
@@ -3547,6 +3536,8 @@ def extract_remote_subtitle_window_to_webvtt(
             ffmpeg_exe,
             input_url,
             subtitle_stream_index,
+            app=app,
+            rel_path=rel_path,
             codec_name=track_info.get("codec_name"),
             start_time_seconds=float(extraction_window["window_start_seconds"]),
             duration_seconds=float(extraction_window["window_duration_seconds"]),
@@ -3821,9 +3812,62 @@ def _run_subprocess_capture(
 def _convert_subtitle_file_to_webvtt(
     ffmpeg_exe: Path,
     subtitle_path: Path,
+    *,
+    app: Any | None = None,
+    rel_path: str = "",
+    subtitle_stream_index: int | None = None,
+    codec_name: object = None,
+    start_time_seconds: float = 0.0,
+    duration_seconds: float | None = None,
 ) -> bytes:
-    if subtitle_path.suffix.casefold() == ".vtt":
-        return subtitle_path.read_bytes()
+    suffix = subtitle_path.suffix.casefold()
+    raw_body = subtitle_path.read_bytes()
+    if raw_body.lstrip().startswith(b"WEBVTT"):
+        _log_subtitle_conversion_debug(
+            app,
+            event="subtitle_conversion_debug",
+            rel_path=rel_path,
+            subtitle_stream_index=subtitle_stream_index,
+            codec_name=codec_name,
+            subtitle_path=subtitle_path,
+            conversion_mode="webvtt_passthrough",
+            start_time_seconds=start_time_seconds,
+            duration_seconds=duration_seconds,
+            raw_subtitle_text=raw_body.decode("utf-8", "replace"),
+            converted_webvtt_text=raw_body.decode("utf-8", "replace"),
+        )
+        return raw_body
+    if suffix == ".vtt":
+        _log_subtitle_conversion_debug(
+            app,
+            event="subtitle_conversion_debug",
+            rel_path=rel_path,
+            subtitle_stream_index=subtitle_stream_index,
+            codec_name=codec_name,
+            subtitle_path=subtitle_path,
+            conversion_mode="vtt_suffix_passthrough",
+            start_time_seconds=start_time_seconds,
+            duration_seconds=duration_seconds,
+            raw_subtitle_text=raw_body.decode("utf-8", "replace"),
+            converted_webvtt_text=raw_body.decode("utf-8", "replace"),
+        )
+        return raw_body
+    if suffix in {".ass", ".ssa"}:
+        converted = convert_ass_text_to_webvtt(raw_body.decode("utf-8", "replace"))
+        _log_subtitle_conversion_debug(
+            app,
+            event="subtitle_conversion_debug",
+            rel_path=rel_path,
+            subtitle_stream_index=subtitle_stream_index,
+            codec_name=codec_name,
+            subtitle_path=subtitle_path,
+            conversion_mode="ass_parser",
+            start_time_seconds=start_time_seconds,
+            duration_seconds=duration_seconds,
+            raw_subtitle_text=raw_body.decode("utf-8", "replace"),
+            converted_webvtt_text=converted.decode("utf-8", "replace"),
+        )
+        return converted
     command = [
         str(ffmpeg_exe),
         "-v",
@@ -3834,11 +3878,25 @@ def _convert_subtitle_file_to_webvtt(
         "webvtt",
         "-",
     ]
-    return _run_subprocess_capture(
+    converted = _run_subprocess_capture(
         command,
         not_found_message="ffmpeg was not found",
         failure_message="ffmpeg failed to convert subtitles to WebVTT.",
     )
+    _log_subtitle_conversion_debug(
+        app,
+        event="subtitle_conversion_debug",
+        rel_path=rel_path,
+        subtitle_stream_index=subtitle_stream_index,
+        codec_name=codec_name,
+        subtitle_path=subtitle_path,
+        conversion_mode="ffmpeg_text_to_webvtt",
+        start_time_seconds=start_time_seconds,
+        duration_seconds=duration_seconds,
+        raw_subtitle_text=raw_body.decode("utf-8", "replace"),
+        converted_webvtt_text=converted.decode("utf-8", "replace"),
+    )
+    return converted
 
 
 def _extract_subtitle_via_copy_then_convert(
@@ -3847,6 +3905,8 @@ def _extract_subtitle_via_copy_then_convert(
     subtitle_stream_index: int,
     codec_name: object,
     *,
+    app: Any | None = None,
+    rel_path: str = "",
     start_time_seconds: float = 0.0,
     duration_seconds: float | None = None,
 ) -> bytes | None:
@@ -3869,7 +3929,16 @@ def _extract_subtitle_via_copy_then_convert(
             not_found_message="ffmpeg was not found",
             failure_message="ffmpeg failed to copy subtitle track.",
         )
-        return _convert_subtitle_file_to_webvtt(ffmpeg_exe, temp_path)
+        return _convert_subtitle_file_to_webvtt(
+            ffmpeg_exe,
+            temp_path,
+            app=app,
+            rel_path=rel_path,
+            subtitle_stream_index=subtitle_stream_index,
+            codec_name=codec_name,
+            start_time_seconds=start_time_seconds,
+            duration_seconds=duration_seconds,
+        )
     finally:
         try:
             temp_path.unlink(missing_ok=True)
@@ -3882,6 +3951,8 @@ def _run_ffmpeg_single_webvtt(
     input_url: str,
     subtitle_stream_index: int,
     *,
+    app: Any | None = None,
+    rel_path: str = "",
     codec_name: object = None,
     start_time_seconds: float = 0.0,
     duration_seconds: float | None = None,
@@ -3891,6 +3962,8 @@ def _run_ffmpeg_single_webvtt(
         input_url,
         subtitle_stream_index,
         codec_name,
+        app=app,
+        rel_path=rel_path,
         start_time_seconds=start_time_seconds,
         duration_seconds=duration_seconds,
     )
@@ -3914,6 +3987,17 @@ def _run_ffmpeg_single_webvtt(
         return None
     if proc.returncode != 0:
         return None
+    _log_subtitle_conversion_debug(
+        app,
+        event="subtitle_conversion_debug",
+        rel_path=rel_path,
+        subtitle_stream_index=subtitle_stream_index,
+        codec_name=codec_name,
+        conversion_mode="ffmpeg_direct_webvtt",
+        start_time_seconds=start_time_seconds,
+        duration_seconds=duration_seconds,
+        converted_webvtt_text=proc.stdout.decode("utf-8", "replace"),
+    )
     return proc.stdout
 
 
@@ -3921,6 +4005,9 @@ def _run_ffmpeg_batch_webvtt(
     ffmpeg_exe: Path,
     input_url: str,
     missing_rows: list[dict[str, object]],
+    *,
+    app: Any | None = None,
+    rel_path: str = "",
 ) -> dict[int, bytes] | None:
     if not missing_rows:
         return {}
@@ -3963,7 +4050,14 @@ def _run_ffmpeg_batch_webvtt(
             if subtitle_stream_index is None:
                 return None
             try:
-                body = _convert_subtitle_file_to_webvtt(ffmpeg_exe, temp_path)
+                body = _convert_subtitle_file_to_webvtt(
+                    ffmpeg_exe,
+                    temp_path,
+                    app=app,
+                    rel_path=rel_path,
+                    subtitle_stream_index=subtitle_stream_index,
+                    codec_name=row.get("codec_name"),
+                )
             except (BrowserError, OSError):
                 return None
             if body:
@@ -4033,6 +4127,8 @@ def extract_all_remote_subtitles_to_webvtt(
             ffmpeg_exe,
             input_url,
             missing_rows,
+            app=app,
+            rel_path=rel_path,
         )
         if batch_results is None:
             log_video_debug(
@@ -4049,6 +4145,8 @@ def extract_all_remote_subtitles_to_webvtt(
                     ffmpeg_exe,
                     input_url,
                     subtitle_stream_index,
+                    app=app,
+                    rel_path=rel_path,
                     codec_name=row.get("codec_name"),
                 )
                 if body is None:
