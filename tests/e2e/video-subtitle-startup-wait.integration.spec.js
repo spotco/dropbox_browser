@@ -102,6 +102,24 @@ test.beforeEach(async ({ page }) => {
 
 test.afterEach(async ({ page }) => {
   await page.unrouteAll({ behavior: "ignoreErrors" });
+  const statusResponse = await page.request.get("/video/endpoints/status");
+  if (!statusResponse.ok()) return;
+  const statusPayload = await statusResponse.json();
+  const sessionIds = [];
+  if (statusPayload && Array.isArray(statusPayload.active_sessions)) {
+    statusPayload.active_sessions.forEach((session) => {
+      if (session && session.session_id) sessionIds.push(String(session.session_id));
+    });
+  }
+  if (!sessionIds.length && statusPayload && statusPayload.active_session && statusPayload.active_session.session_id) {
+    sessionIds.push(String(statusPayload.active_session.session_id));
+  }
+  for (const sessionId of sessionIds) {
+    const stopResponse = await page.request.post("/video/endpoints/session/stop", {
+      data: { id: sessionId },
+    });
+    expect(stopResponse.ok()).toBe(true);
+  }
 });
 
 test.afterAll(async () => {
@@ -324,11 +342,79 @@ async function waitForMountedSubtitleTrack(page, streamIndex) {
     });
 }
 
-test("compatibility playback waits for delayed subtitle extraction before starting", async ({ page }) => {
+test("compatibility playback shows subtitle-wait during natural delayed subtitle extraction", async ({ page }) => {
   test.setTimeout(90000);
 
   await installHlsStub(page);
   await openVideoPane(page);
+
+  const alphaRow = await libraryRow(page, "alpha.mkv");
+  const initialSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
+  await alphaRow.dblclick();
+  await initialSession;
+  await waitForLoadingOverlayVisible(page);
+  await expect
+    .poll(async () => readSubtitleSelectorState(page), { timeout: 10000 })
+    .toMatchObject({
+      value: "3",
+      options: expect.arrayContaining([
+        expect.objectContaining({ value: "3" }),
+      ]),
+    });
+
+  await expect
+    .poll(async () => {
+      const history = await readOverlayHistory(page);
+      return history.some((entry) => {
+        return entry.visible && (
+          String(entry.loadingReason || "") === "subtitle-wait"
+          || String(entry.title || "").includes("Waiting for subtitles")
+          || String(entry.meta || "").includes("Waiting for subtitles")
+        );
+      });
+    }, { timeout: 10000 })
+    .toBe(true);
+
+  const overlayHistory = await readOverlayHistory(page);
+  expect(overlayHistory.some((entry) => entry.visible && entry.loadingReason === "subtitle-wait")).toBe(true);
+  const duringWaitPlayback = await readPlaybackState(page);
+  expect(duringWaitPlayback).toMatchObject({
+    paused: true,
+    currentTime: 0,
+  });
+
+  await waitForMountedSubtitleTrack(page, 3);
+  await waitForLoadingOverlayHidden(page);
+  await waitForVisibleVideo(page);
+  await expectPlayToggleState(page, "Pause");
+});
+
+test("compatibility playback reaches full subtitle coverage after delayed subtitle extraction", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await page.route("**/video/endpoints/subtitles/window?**path=Videos%2Falpha.mkv**", async (route) => {
+    let response;
+    try {
+      response = await route.fetch();
+    } catch (error) {
+      if (isClosedRouteError(error)) return;
+      throw error;
+    }
+    const payload = await response.json();
+    payload.loaded_ranges = [{ start_seconds: 0, end_seconds: 3 }];
+    payload.window_end_seconds = 3;
+    await route.fulfill({
+      status: response.status(),
+      headers: response.headers(),
+      contentType: "application/json",
+      body: JSON.stringify(payload),
+    });
+  });
+
+  await installHlsStub(page);
+  await openVideoPane(page);
+  const clearResponse = await page.request.post("/video/endpoints/cache/clear");
+  expect(clearResponse.ok()).toBe(true);
 
   const alphaRow = await libraryRow(page, "alpha.mkv");
   const initialSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
@@ -368,40 +454,6 @@ test("compatibility playback waits for delayed subtitle extraction before starti
   await waitForLoadingOverlayHidden(page);
   await waitForVisibleVideo(page);
   await expectPlayToggleState(page, "Pause");
-});
-
-test("startup scrubber reflects full cached subtitle coverage after delayed extraction finishes", async ({ page }) => {
-  test.setTimeout(90000);
-
-  await page.route("**/video/endpoints/subtitles/window?**path=Videos%2Falpha.mkv**", async (route) => {
-    let response;
-    try {
-      response = await route.fetch();
-    } catch (error) {
-      if (isClosedRouteError(error)) return;
-      throw error;
-    }
-    const payload = await response.json();
-    payload.loaded_ranges = [{ start_seconds: 0, end_seconds: 3 }];
-    payload.window_end_seconds = 3;
-    await route.fulfill({
-      status: response.status(),
-      headers: response.headers(),
-      contentType: "application/json",
-      body: JSON.stringify(payload),
-    });
-  });
-
-  await installHlsStub(page);
-  await openVideoPane(page);
-  const clearResponse = await page.request.post("/video/endpoints/cache/clear");
-  expect(clearResponse.ok()).toBe(true);
-
-  const initialSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
-  await (await libraryRow(page, "alpha.mkv")).dblclick();
-  await initialSession;
-  await waitForMountedSubtitleTrack(page, 3);
-  await waitForLoadingOverlayHidden(page);
 
   await expect
     .poll(async () => readProgressCoverageState(page), { timeout: 10000 })
