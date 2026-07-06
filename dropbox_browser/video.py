@@ -1702,6 +1702,9 @@ def build_ffmpeg_hls_command(
             "0:v:0",
         ])
     else:
+        # Burned-in styling currently supports stroke and shadow toggles only.
+        # Subtitle size and vertical offset are WebVTT overlay controls and are
+        # not yet applied to the ffmpeg overlay filter graph.
         if subtitle_stroke_enabled and subtitle_shadow_enabled:
             subtitle_filter = (
                 f"[0:{subtitle_stream_index}]format=rgba,split=6"

@@ -77,6 +77,7 @@ function createVideoCtx() {
       subtitleStrokeEnabledEl: makeEl(),
       subtitleFontSizeInputEl: makeEl(),
       subtitleOffsetInputEl: makeEl(),
+      subtitleStyleResetButtonEl: makeEl(),
       subtitleStyleApplyButtonEl: makeEl(),
       debugMetaEl: makeEl(),
       debugCurrentCueEl: makeEl(),
