@@ -90,6 +90,7 @@ import {initPane} from './video/pane.js';
       subtitleStrokeEnabledEl: document.getElementById('video-subtitle-stroke-enabled'),
       subtitleFontSizeInputEl: document.getElementById('video-subtitle-font-size'),
       subtitleOffsetInputEl: document.getElementById('video-subtitle-offset'),
+      subtitleStyleResetButtonEl: document.getElementById('video-subtitle-style-reset'),
       subtitleStyleApplyButtonEl: document.getElementById('video-subtitle-style-apply'),
       debugPanelEl: document.getElementById('video-debug-panel'),
       debugActionsEl: document.getElementById('video-debug-actions'),

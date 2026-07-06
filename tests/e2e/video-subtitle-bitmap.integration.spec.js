@@ -226,15 +226,15 @@ test("bitmap subtitle tracks restart compatibility playback instead of mounting 
   await expect
     .poll(async () => {
       return page.evaluate(() => ({
-        strokeWidth: document.body.style.getPropertyValue("--video-subtitle-stroke-width").trim(),
+        shadow: document.body.style.getPropertyValue("--video-subtitle-shadow").trim(),
         fontSize: document.body.style.getPropertyValue("--video-subtitle-font-size").trim(),
         offset: document.body.style.getPropertyValue("--video-subtitle-offset").trim(),
       }));
     }, { timeout: 5000 })
     .toEqual({
-      strokeWidth: "0px",
-      fontSize: "34px",
-      offset: "-18px",
+      shadow: "none",
+      fontSize: "28px",
+      offset: "0px",
     });
 
   const bitmapRestartBeforeApply = waitForSessionPost(

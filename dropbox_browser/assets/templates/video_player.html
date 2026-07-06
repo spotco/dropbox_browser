@@ -139,30 +139,49 @@
           </label>
           <section id="video-subtitle-style-controls" class="video-subtitle-style-section" aria-labelledby="video-subtitle-style-title">
             <div id="video-subtitle-style-title" class="video-subtitle-style-title">Subtitle Style</div>
-            <label class="video-subtitle-style-checkbox" for="video-subtitle-shadow-enabled">
-              <input type="checkbox" id="video-subtitle-shadow-enabled" checked>
-              <span>Enable drop shadow</span>
-            </label>
-            <label class="video-subtitle-style-checkbox" for="video-subtitle-stroke-enabled">
-              <input type="checkbox" id="video-subtitle-stroke-enabled" checked>
-              <span>Enable text stroke</span>
-            </label>
-            <label class="video-control-field" for="video-subtitle-font-size">
-              <span class="video-control-label">Text Size</span>
-              <span class="video-control-input-with-unit">
-                <input type="number" id="video-subtitle-font-size" min="10" max="72" step="1" value="28" inputmode="numeric">
-                <span class="video-control-unit">px</span>
-              </span>
-            </label>
-            <label class="video-control-field" for="video-subtitle-offset">
-              <span class="video-control-label">Height Offset</span>
-              <span class="video-control-input-with-unit">
-                <input type="number" id="video-subtitle-offset" min="-120" max="120" step="1" value="0" inputmode="numeric" aria-describedby="video-subtitle-offset-help">
-                <span class="video-control-unit">px</span>
-              </span>
-            </label>
-            <p id="video-subtitle-offset-help" class="video-subtitle-style-help">Negative values move subtitles up; positive values move them down.</p>
+            <div class="video-subtitle-style-checkbox-row">
+              <label class="video-subtitle-style-checkbox" for="video-subtitle-shadow-enabled">
+                <input type="checkbox" id="video-subtitle-shadow-enabled" checked>
+                <span>Enable drop shadow</span>
+              </label>
+              <label class="video-subtitle-style-checkbox" for="video-subtitle-stroke-enabled">
+                <input type="checkbox" id="video-subtitle-stroke-enabled" checked>
+                <span>Enable text stroke</span>
+              </label>
+            </div>
+            <div class="video-subtitle-style-number-row">
+              <label class="video-control-field video-subtitle-style-number-field" for="video-subtitle-font-size">
+                <span class="video-control-label">Text Size</span>
+                <span class="video-control-input-with-unit">
+                  <span class="video-control-number-field">
+                    <input type="text" class="video-control-number-input" id="video-subtitle-font-size" value="28" inputmode="numeric" autocomplete="off" spellcheck="false">
+                    <span class="video-control-number-steppers" aria-hidden="true">
+                      <button type="button" class="video-control-number-step" data-target="video-subtitle-font-size" data-step="-1" tabindex="-1" aria-label="Decrease text size">−</button>
+                      <button type="button" class="video-control-number-step" data-target="video-subtitle-font-size" data-step="1" tabindex="-1" aria-label="Increase text size">+</button>
+                    </span>
+                  </span>
+                  <span class="video-control-unit">px</span>
+                </span>
+              </label>
+              <label class="video-control-field video-subtitle-style-number-field" for="video-subtitle-offset">
+                <span class="video-control-label">Height Offset</span>
+                <span class="video-control-input-with-unit">
+                  <span class="video-control-number-field">
+                    <input type="text" class="video-control-number-input" id="video-subtitle-offset" value="0" inputmode="numeric" autocomplete="off" spellcheck="false" aria-describedby="video-subtitle-offset-help">
+                    <span class="video-control-number-steppers" aria-hidden="true">
+                      <button type="button" class="video-control-number-step" data-target="video-subtitle-offset" data-step="-1" tabindex="-1" aria-label="Move subtitles down">−</button>
+                      <button type="button" class="video-control-number-step" data-target="video-subtitle-offset" data-step="1" tabindex="-1" aria-label="Move subtitles up">+</button>
+                    </span>
+                  </span>
+                  <span class="video-control-unit">px</span>
+                </span>
+              </label>
+            </div>
+            <p id="video-subtitle-offset-help" class="video-subtitle-style-help">Positive values move subtitles up; negative values move them down. WebVTT overlay only; burned-in subtitles ignore size and offset.</p>
             <div class="video-subtitle-style-actions">
+              <button type="button" id="video-subtitle-style-reset" class="video-subtitle-style-reset-button" aria-label="Reset default subtitle style" title="Reset default subtitle style">
+                Reset Default Style
+              </button>
               <button type="button" id="video-subtitle-style-apply" class="video-subtitle-style-apply-button" aria-label="Apply subtitle style" title="Apply subtitle style">
                 Apply Subtitle Style
               </button>

@@ -125,19 +125,16 @@ test("initTracks restores persisted subtitle style options on startup", async ()
   assert.deepEqual(ctx.state.subtitleStyleDraft, ctx.state.subtitleStyleApplied);
   assert.equal(ctx.bodyStyleValues["--video-subtitle-font-size"], "36px");
   assert.equal(ctx.bodyStyleValues["--video-subtitle-offset"], "-14px");
-  assert.equal(ctx.bodyStyleValues["--video-subtitle-stroke-width"], "0px");
   assert.equal(ctx.bodyStyleValues["--video-subtitle-shadow"], "none");
 });
 
-test("subtitle style preview changes stay local until Apply is pressed", async () => {
+test("subtitle style number inputs stay local until Apply is pressed", async () => {
   const { initTracks } = await importModuleFromWorkspace("dropbox_browser/assets/js/video/tracks.js");
   const ctx = createCtx({ disallowRestart: true });
 
   initTracks(ctx);
-  ctx.els.subtitleStrokeEnabledEl.checked = true;
   ctx.els.subtitleFontSizeInputEl.value = "42";
   ctx.els.subtitleOffsetInputEl.value = "-20";
-  ctx.els.subtitleFontSizeInputEl.listeners.input();
 
   assert.equal(ctx.writes.length, 0);
   assert.deepEqual(ctx.state.subtitleStyleApplied, {
@@ -146,15 +143,8 @@ test("subtitle style preview changes stay local until Apply is pressed", async (
     fontSizePx: 36,
     offsetPx: -14,
   });
-  assert.deepEqual(ctx.state.subtitleStyleDraft, {
-    shadowEnabled: false,
-    strokeEnabled: true,
-    fontSizePx: 42,
-    offsetPx: -20,
-  });
-  assert.equal(ctx.bodyStyleValues["--video-subtitle-font-size"], "42px");
-  assert.equal(ctx.bodyStyleValues["--video-subtitle-offset"], "-20px");
-  assert.equal(ctx.bodyStyleValues["--video-subtitle-stroke-width"], "1.25px");
+  assert.equal(ctx.bodyStyleValues["--video-subtitle-font-size"], "36px");
+  assert.equal(ctx.bodyStyleValues["--video-subtitle-offset"], "-14px");
 
   await ctx.handleSubtitleStyleApply();
 
@@ -163,13 +153,42 @@ test("subtitle style preview changes stay local until Apply is pressed", async (
     "video-subtitle-style",
     {
       shadowEnabled: false,
-      strokeEnabled: true,
+      strokeEnabled: false,
       fontSizePx: 42,
       offsetPx: -20,
     },
   ]);
   assert.deepEqual(ctx.state.subtitleStyleApplied, ctx.state.subtitleStyleDraft);
   assert.equal(ctx.lastStatus, "Subtitle style applied.");
+});
+
+test("subtitle style checkbox preview uses applied size and offset values", async () => {
+  const { initTracks } = await importModuleFromWorkspace("dropbox_browser/assets/js/video/tracks.js");
+  const ctx = createCtx({ disallowRestart: true });
+
+  initTracks(ctx);
+  ctx.els.subtitleStrokeEnabledEl.checked = true;
+  ctx.els.subtitleFontSizeInputEl.value = "42";
+  ctx.els.subtitleOffsetInputEl.value = "-20";
+  ctx.els.subtitleStrokeEnabledEl.listeners.change();
+
+  assert.equal(ctx.writes.length, 0);
+  assert.deepEqual(ctx.state.subtitleStyleDraft, {
+    shadowEnabled: false,
+    strokeEnabled: true,
+    fontSizePx: 42,
+    offsetPx: -20,
+  });
+  assert.equal(ctx.bodyStyleValues["--video-subtitle-font-size"], "36px");
+  assert.equal(ctx.bodyStyleValues["--video-subtitle-offset"], "-14px");
+  assert.match(
+    ctx.bodyStyleValues["--video-subtitle-shadow"],
+    /-1\.25px -1\.25px 0 rgba\(0, 0, 0, 0\.94\)/
+  );
+  assert.doesNotMatch(
+    ctx.bodyStyleValues["--video-subtitle-shadow"],
+    /0 2px 10px rgba\(0, 0, 0, 0\.55\)/
+  );
 });
 
 test("subtitle style Apply skips burned-in restart for size and offset only changes", async () => {
@@ -181,7 +200,6 @@ test("subtitle style Apply skips burned-in restart for size and offset only chan
   initTracks(ctx);
   ctx.els.subtitleFontSizeInputEl.value = "44";
   ctx.els.subtitleOffsetInputEl.value = "-22";
-  ctx.els.subtitleOffsetInputEl.listeners.input();
 
   await ctx.handleSubtitleStyleApply();
 
@@ -212,6 +230,59 @@ test("subtitle style Apply restarts burned-in playback for shadow changes", asyn
     { forceSessionRestart: true },
   ]);
   assert.equal(ctx.lastStatus, "Applying subtitle style to burned-in subtitles.");
+});
+
+test("subtitle style Apply accepts values outside the old input limits", async () => {
+  const { initTracks } = await importModuleFromWorkspace("dropbox_browser/assets/js/video/tracks.js");
+  const ctx = createCtx({ disallowRestart: true });
+
+  initTracks(ctx);
+  ctx.els.subtitleFontSizeInputEl.value = "120";
+  ctx.els.subtitleOffsetInputEl.value = "-240";
+
+  await ctx.handleSubtitleStyleApply();
+
+  assert.deepEqual(ctx.writes[0][1], {
+    shadowEnabled: false,
+    strokeEnabled: false,
+    fontSizePx: 120,
+    offsetPx: -240,
+  });
+  assert.equal(ctx.bodyStyleValues["--video-subtitle-font-size"], "120px");
+  assert.equal(ctx.bodyStyleValues["--video-subtitle-offset"], "-240px");
+});
+
+test("subtitle style Reset restores defaults and applies them", async () => {
+  const { initTracks } = await importModuleFromWorkspace("dropbox_browser/assets/js/video/tracks.js");
+  const ctx = createCtx({ disallowRestart: true });
+
+  initTracks(ctx);
+  ctx.els.subtitleShadowEnabledEl.checked = false;
+  ctx.els.subtitleStrokeEnabledEl.checked = false;
+  ctx.els.subtitleFontSizeInputEl.value = "52";
+  ctx.els.subtitleOffsetInputEl.value = "-30";
+  await ctx.handleSubtitleStyleApply();
+
+  await ctx.handleSubtitleStyleReset();
+
+  assert.equal(ctx.els.subtitleShadowEnabledEl.checked, true);
+  assert.equal(ctx.els.subtitleStrokeEnabledEl.checked, true);
+  assert.equal(ctx.els.subtitleFontSizeInputEl.value, "28");
+  assert.equal(ctx.els.subtitleOffsetInputEl.value, "0");
+  assert.deepEqual(ctx.state.subtitleStyleApplied, {
+    shadowEnabled: true,
+    strokeEnabled: true,
+    fontSizePx: 28,
+    offsetPx: 0,
+  });
+  assert.equal(ctx.bodyStyleValues["--video-subtitle-font-size"], "28px");
+  assert.equal(ctx.bodyStyleValues["--video-subtitle-offset"], "0px");
+  assert.match(
+    ctx.bodyStyleValues["--video-subtitle-shadow"],
+    /0 2px 10px rgba\(0, 0, 0, 0\.55\)/
+  );
+  assert.equal(ctx.writes[ctx.writes.length - 1][0], "video-subtitle-style");
+  assert.deepEqual(ctx.writes[ctx.writes.length - 1][1], ctx.state.subtitleStyleApplied);
 });
 
 test("subtitle style Apply with unchanged values is a no-op", async () => {

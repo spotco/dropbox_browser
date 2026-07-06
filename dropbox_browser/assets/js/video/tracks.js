@@ -6,16 +6,39 @@ var SUBTITLE_STYLE_DEFAULTS = {
   offsetPx: 0,
 };
 var SUBTITLE_STYLE_SETTING_KEY = 'video-subtitle-style';
-var SUBTITLE_STYLE_SHADOW_VALUE = '2px 2px 0 rgba(0, 0, 0, 0.85), 0 0 6px rgba(0, 0, 0, 0.7)';
-var SUBTITLE_STYLE_STROKE_WIDTH_PX = 1.25;
+var SUBTITLE_STYLE_OUTLINE_OFFSET_PX = 1.25;
+var SUBTITLE_STYLE_OUTLINE_COLOR = 'rgba(0, 0, 0, 0.94)';
+var SUBTITLE_STYLE_DROP_SHADOW_VALUE = '0 2px 10px rgba(0, 0, 0, 0.55)';
+
+function buildSubtitleOutlineShadowValue() {
+  var offset = String(SUBTITLE_STYLE_OUTLINE_OFFSET_PX) + 'px';
+  var color = SUBTITLE_STYLE_OUTLINE_COLOR;
+  return [
+    '-' + offset + ' -' + offset + ' 0 ' + color,
+    offset + ' -' + offset + ' 0 ' + color,
+    '-' + offset + ' ' + offset + ' 0 ' + color,
+    offset + ' ' + offset + ' 0 ' + color,
+    '0 -' + offset + ' 0 ' + color,
+    '0 ' + offset + ' 0 ' + color,
+    '-' + offset + ' 0 0 ' + color,
+    offset + ' 0 0 ' + color,
+  ].join(', ');
+}
+
+function buildSubtitleShadowValue(strokeEnabled, shadowEnabled) {
+  var parts = [];
+  if (strokeEnabled) parts.push(buildSubtitleOutlineShadowValue());
+  if (shadowEnabled) parts.push(SUBTITLE_STYLE_DROP_SHADOW_VALUE);
+  return parts.length ? parts.join(', ') : 'none';
+}
 
 function cloneSubtitleStyleOptions(options) {
   var source = options || SUBTITLE_STYLE_DEFAULTS;
   return {
     shadowEnabled: source.shadowEnabled !== false,
     strokeEnabled: source.strokeEnabled !== false,
-    fontSizePx: clampSubtitleStyleNumber(source.fontSizePx, 10, 72, SUBTITLE_STYLE_DEFAULTS.fontSizePx),
-    offsetPx: clampSubtitleStyleNumber(source.offsetPx, -120, 120, SUBTITLE_STYLE_DEFAULTS.offsetPx),
+    fontSizePx: parseSubtitleStyleNumber(source.fontSizePx, SUBTITLE_STYLE_DEFAULTS.fontSizePx),
+    offsetPx: parseSubtitleStyleNumber(source.offsetPx, SUBTITLE_STYLE_DEFAULTS.offsetPx),
   };
 }
 
@@ -28,6 +51,8 @@ function subtitleStyleOptionsEqual(left, right) {
     && leftNormalized.offsetPx === rightNormalized.offsetPx;
 }
 
+// Burned-in ffmpeg sessions only consume shadow and stroke toggles.
+// fontSizePx and offsetPx apply to the WebVTT overlay CSS variables only.
 function burnedInSubtitleStyleOptionsEqual(left, right) {
   var leftNormalized = cloneSubtitleStyleOptions(left);
   var rightNormalized = cloneSubtitleStyleOptions(right);
@@ -35,31 +60,38 @@ function burnedInSubtitleStyleOptionsEqual(left, right) {
     && leftNormalized.strokeEnabled === rightNormalized.strokeEnabled;
 }
 
-function clampSubtitleStyleNumber(value, minimum, maximum, fallback) {
+function parseSubtitleStyleNumber(value, fallback) {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === 'string' && !value.trim()) return fallback;
   var parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
-  return Math.max(minimum, Math.min(maximum, Math.round(parsed)));
+  return Math.round(parsed);
+}
+
+function readSubtitleStyleCheckboxOptions() {
+  var shadowInput = ctx.els.subtitleShadowEnabledEl;
+  var strokeInput = ctx.els.subtitleStrokeEnabledEl;
+  return {
+    shadowEnabled: !shadowInput || shadowInput.checked !== false,
+    strokeEnabled: !strokeInput || strokeInput.checked !== false,
+  };
 }
 
 function currentSubtitleStyleOptions() {
-  var shadowInput = ctx.els.subtitleShadowEnabledEl;
-  var strokeInput = ctx.els.subtitleStrokeEnabledEl;
+  var checkboxOptions = readSubtitleStyleCheckboxOptions();
   var fontSizeInput = ctx.els.subtitleFontSizeInputEl;
   var offsetInput = ctx.els.subtitleOffsetInputEl;
+  var appliedOptions = appliedSubtitleStyleOptions();
   return cloneSubtitleStyleOptions({
-    shadowEnabled: !shadowInput || shadowInput.checked !== false,
-    strokeEnabled: !strokeInput || strokeInput.checked !== false,
-    fontSizePx: clampSubtitleStyleNumber(
-      fontSizeInput ? fontSizeInput.value : SUBTITLE_STYLE_DEFAULTS.fontSizePx,
-      10,
-      72,
-      SUBTITLE_STYLE_DEFAULTS.fontSizePx
+    shadowEnabled: checkboxOptions.shadowEnabled,
+    strokeEnabled: checkboxOptions.strokeEnabled,
+    fontSizePx: parseSubtitleStyleNumber(
+      fontSizeInput ? fontSizeInput.value : appliedOptions.fontSizePx,
+      appliedOptions.fontSizePx
     ),
-    offsetPx: clampSubtitleStyleNumber(
-      offsetInput ? offsetInput.value : SUBTITLE_STYLE_DEFAULTS.offsetPx,
-      -120,
-      120,
-      SUBTITLE_STYLE_DEFAULTS.offsetPx
+    offsetPx: parseSubtitleStyleNumber(
+      offsetInput ? offsetInput.value : appliedOptions.offsetPx,
+      appliedOptions.offsetPx
     ),
   });
 }
@@ -90,24 +122,66 @@ function applySubtitleStylePreview(options) {
   var bodyStyle = ctx.body && ctx.body.style ? ctx.body.style : null;
   var nextOptions = cloneSubtitleStyleOptions(options || currentSubtitleStyleOptions());
   if (!bodyStyle || typeof bodyStyle.setProperty !== 'function') return nextOptions;
+  // Positive offsetPx moves the WebVTT overlay up via bottom: calc(8% + offset).
   bodyStyle.setProperty('--video-subtitle-font-size', String(nextOptions.fontSizePx) + 'px');
   bodyStyle.setProperty('--video-subtitle-offset', String(nextOptions.offsetPx) + 'px');
   bodyStyle.setProperty(
-    '--video-subtitle-stroke-width',
-    nextOptions.strokeEnabled ? String(SUBTITLE_STYLE_STROKE_WIDTH_PX) + 'px' : '0px'
-  );
-  bodyStyle.setProperty(
     '--video-subtitle-shadow',
-    nextOptions.shadowEnabled ? SUBTITLE_STYLE_SHADOW_VALUE : 'none'
+    buildSubtitleShadowValue(nextOptions.strokeEnabled, nextOptions.shadowEnabled)
   );
   return nextOptions;
 }
 
-function handleSubtitleStylePreviewChange() {
-  var nextOptions = currentSubtitleStyleOptions();
-  ctx.state.subtitleStyleDraft = cloneSubtitleStyleOptions(nextOptions);
-  syncSubtitleStyleInputs(nextOptions);
-  applySubtitleStylePreview(nextOptions);
+function handleSubtitleStyleCheckboxPreviewChange() {
+  var appliedOptions = appliedSubtitleStyleOptions();
+  var checkboxOptions = readSubtitleStyleCheckboxOptions();
+  var previewOptions = cloneSubtitleStyleOptions({
+    shadowEnabled: checkboxOptions.shadowEnabled,
+    strokeEnabled: checkboxOptions.strokeEnabled,
+    fontSizePx: appliedOptions.fontSizePx,
+    offsetPx: appliedOptions.offsetPx,
+  });
+  ctx.state.subtitleStyleDraft = cloneSubtitleStyleOptions(currentSubtitleStyleOptions());
+  applySubtitleStylePreview(previewOptions);
+}
+
+function adjustSubtitleStyleNumberInput(inputEl, fallbackValue, delta) {
+  if (!inputEl || !Number.isFinite(delta)) return;
+  var nextValue = parseSubtitleStyleNumber(inputEl.value, fallbackValue) + delta;
+  inputEl.value = String(nextValue);
+}
+
+function handleSubtitleStyleNumberStep(event) {
+  var button = event && event.currentTarget ? event.currentTarget : null;
+  var targetId;
+  var stepValue;
+  var inputEl;
+  var appliedOptions;
+  if (!button || typeof button.getAttribute !== 'function') return;
+  targetId = String(button.getAttribute('data-target') || '').trim();
+  stepValue = Number(button.getAttribute('data-step'));
+  if (!targetId || !Number.isFinite(stepValue)) return;
+  if (targetId === 'video-subtitle-font-size') {
+    inputEl = ctx.els.subtitleFontSizeInputEl;
+    appliedOptions = appliedSubtitleStyleOptions();
+    adjustSubtitleStyleNumberInput(inputEl, appliedOptions.fontSizePx, stepValue);
+    return;
+  }
+  if (targetId === 'video-subtitle-offset') {
+    inputEl = ctx.els.subtitleOffsetInputEl;
+    appliedOptions = appliedSubtitleStyleOptions();
+    adjustSubtitleStyleNumberInput(inputEl, appliedOptions.offsetPx, stepValue);
+  }
+}
+
+function defaultSubtitleStyleOptions() {
+  return cloneSubtitleStyleOptions(SUBTITLE_STYLE_DEFAULTS);
+}
+
+async function handleSubtitleStyleReset() {
+  var defaultOptions = defaultSubtitleStyleOptions();
+  syncSubtitleStyleInputs(defaultOptions);
+  await handleSubtitleStyleApply();
 }
 
 async function handleSubtitleStyleApply() {
@@ -670,6 +744,7 @@ async function handleSubtitleTrackChange() {
   ctx.applySubtitleStylePreview = applySubtitleStylePreview;
   ctx.syncSubtitleStyleInputs = syncSubtitleStyleInputs;
   ctx.handleSubtitleStyleApply = handleSubtitleStyleApply;
+  ctx.handleSubtitleStyleReset = handleSubtitleStyleReset;
 
   if (ctx.els.audioTrackSelectEl) {
     ctx.els.audioTrackSelectEl.addEventListener('change', function () {
@@ -682,18 +757,21 @@ async function handleSubtitleTrackChange() {
     });
   }
   if (ctx.els.subtitleShadowEnabledEl) {
-    ctx.els.subtitleShadowEnabledEl.addEventListener('change', handleSubtitleStylePreviewChange);
+    ctx.els.subtitleShadowEnabledEl.addEventListener('change', handleSubtitleStyleCheckboxPreviewChange);
   }
   if (ctx.els.subtitleStrokeEnabledEl) {
-    ctx.els.subtitleStrokeEnabledEl.addEventListener('change', handleSubtitleStylePreviewChange);
+    ctx.els.subtitleStrokeEnabledEl.addEventListener('change', handleSubtitleStyleCheckboxPreviewChange);
   }
-  if (ctx.els.subtitleFontSizeInputEl) {
-    ctx.els.subtitleFontSizeInputEl.addEventListener('input', handleSubtitleStylePreviewChange);
-    ctx.els.subtitleFontSizeInputEl.addEventListener('change', handleSubtitleStylePreviewChange);
+  if (ctx.els.subtitleStyleControlsEl) {
+    var stepButtons = ctx.els.subtitleStyleControlsEl.querySelectorAll('.video-control-number-step');
+    stepButtons.forEach(function (button) {
+      button.addEventListener('click', handleSubtitleStyleNumberStep);
+    });
   }
-  if (ctx.els.subtitleOffsetInputEl) {
-    ctx.els.subtitleOffsetInputEl.addEventListener('input', handleSubtitleStylePreviewChange);
-    ctx.els.subtitleOffsetInputEl.addEventListener('change', handleSubtitleStylePreviewChange);
+  if (ctx.els.subtitleStyleResetButtonEl) {
+    ctx.els.subtitleStyleResetButtonEl.addEventListener('click', function () {
+      void handleSubtitleStyleReset();
+    });
   }
   if (ctx.els.subtitleStyleApplyButtonEl) {
     ctx.els.subtitleStyleApplyButtonEl.addEventListener('click', function () {
