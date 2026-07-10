@@ -2235,6 +2235,53 @@ test("scrub beyond tracked encoded range restarts when seekable overstates durat
   expect(postsAfterScrub.some((body) => /start_time_seconds=0(?:&|$)/.test(body))).toBe(false);
 });
 
+test("fairy-tail-like PGS burned-in subtitle session creates successfully", async ({ page }) => {
+  test.setTimeout(90000);
+
+  const clearResponse = await page.request.post("/video/endpoints/cache/clear");
+  expect(clearResponse.ok()).toBe(true);
+
+  const probeResponse = await page.request.get("/video/endpoints/probe?path=Videos%2Ffairy-tail-like.mkv&source=remote");
+  expect(probeResponse.ok()).toBe(true);
+  const probePayload = await probeResponse.json();
+  expect(probePayload.video_streams.map((stream) => stream.codec_name)).toEqual(["hevc"]);
+  expect(probePayload.audio_streams.map((stream) => stream.codec_name)).toEqual(["opus", "opus"]);
+  expect(probePayload.subtitle_streams.map((stream) => stream.codec_name)).toEqual([
+    "hdmv_pgs_subtitle",
+    "hdmv_pgs_subtitle",
+  ]);
+  expect(probePayload.default_audio_stream_index).toBe(1);
+  expect(probePayload.default_subtitle_stream_index).toBe(null);
+  expect(probePayload.subtitle_off_default).toBe(true);
+
+  const sessionResponse = await page.request.post("/video/endpoints/session", {
+    form: {
+      path: "Videos/fairy-tail-like.mkv",
+      source: "remote",
+      audio_stream_index: "2",
+      subtitle_stream_index: "4",
+      subtitle_shadow_enabled: "1",
+      subtitle_stroke_enabled: "1",
+      start_time_seconds: "0",
+    },
+  });
+  expect(sessionResponse.ok()).toBe(true);
+
+  const sessionPayload = await sessionResponse.json();
+  expect(sessionPayload.video_mode).toBe("video_transcode");
+  expect(sessionPayload.video_mode_reason).toBe("subtitle_burn_in_requires_filter");
+  expect(sessionPayload.audio_mode).toBe("audio_transcode");
+  expect(sessionPayload.audio_mode_reason).toBe("audio_codec_not_aac");
+  expect(Number(sessionPayload.encoded_media_end_seconds) || 0).toBeGreaterThan(0);
+
+  const stopResponse = await page.request.post("/video/endpoints/session/stop", {
+    form: {
+      id: String(sessionPayload.session_id || ""),
+    },
+  });
+  expect(stopResponse.ok()).toBe(true);
+});
+
 test("displayed loaded seek band matches actual instant-seek range during real HLS playback", async ({ page }) => {
   test.setTimeout(120000);
 

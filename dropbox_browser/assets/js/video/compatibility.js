@@ -923,12 +923,16 @@ async function postStopCompatibilitySession(sessionId) {
   }
 }
 
-async function stopCompatibilitySession(sessionIdOverride) {
+async function stopCompatibilitySession(sessionIdOverride, options) {
   var explicitSessionId = sessionIdOverride == null
     ? ''
     : String(sessionIdOverride || '');
   var sessionId = explicitSessionId || String(ctx.state.compatibilitySessionId || '');
   if (!sessionId) return;
+  var clearLocalFirst = Boolean(options && options.clearLocalFirst);
+  if (clearLocalFirst && String(ctx.state.compatibilitySessionId || '') === sessionId) {
+    clearLocalCompatibilitySessionState();
+  }
   await postStopCompatibilitySession(sessionId);
   if (String(ctx.state.compatibilitySessionId || '') === sessionId) {
     clearLocalCompatibilitySessionState();
@@ -1395,7 +1399,7 @@ async function restartCompatibilityAt(targetSeconds, reason, options) {
     ctx.setStatus('Could not inspect video tracks.');
     return;
   }
-  await stopCompatibilitySession();
+  await stopCompatibilitySession('', {clearLocalFirst: true});
   if (syncToken !== ctx.state.playbackSyncToken) return;
   var audioStreamIndex = ctx.selectedAudioStreamIndex(active, probePayload);
   var burnedInSubtitleStreamIndex = ctx.selectedBurnedInSubtitleStreamIndex(active, probePayload);

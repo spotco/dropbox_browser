@@ -76,18 +76,17 @@ Video-related config in `config.json` / `config_local.json`:
 - `VideoBackpressureMaxWaterSeconds` — max watermark where future server-side
   input pausing can stop background encode-ahead work.
 
-Current shipped defaults are tuned from the checked-in CPU benchmark matrix:
-`readrate=1.1`, `initial_burst=18`, `catchup=1.3`, `threads=2`,
-`filter_threads=1`, Windows priority `below_normal`, and backpressure
-thresholds `45 / 120 / 300 / 600` seconds.
+Current shipped defaults are tuned from playback and CPU benchmark checks:
+`readrate=1.1`, `initial_burst=18`, `catchup=1.3`, automatic ffmpeg thread
+counts, Windows priority `below_normal`, and backpressure thresholds
+`45 / 120 / 300 / 600` seconds.
 
 Pacing values are clamped conservatively in config loading. A read rate of `0`
 or blank disables ffmpeg input pacing entirely and omits the related flags.
 Thread values of `0` or blank keep ffmpeg's automatic thread behavior. Lower
 fixed thread counts can reduce peak CPU use, but may make realtime encoding
-impossible on slower machines or more complex files. The shipped `2 / 1`
-thread defaults were chosen because they kept the Surface Book 3 HEVC transcode
-case above realtime while reducing CPU compared with auto-thread pacing.
+impossible on slower machines or more complex files. Fixed values are best kept
+as local tuning overrides after checking the affected playback cases.
 On Windows, process priority can make the desktop more responsive while ffmpeg
 runs. It does not reduce total encode work; it only changes scheduling priority.
 Concurrent compatibility sessions are not a shared encoder pool. Two HEVC

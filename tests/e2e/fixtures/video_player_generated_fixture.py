@@ -289,6 +289,92 @@ def generate_ass_video_file(
     )
 
 
+def generate_fairy_tail_like_video_file(
+    output_path: Path,
+    *,
+    english_audio_title: str,
+    japanese_audio_title: str,
+    signs_subtitle_title: str,
+    full_subtitle_title: str,
+    english_frequency: str,
+    japanese_frequency: str,
+    bitmap_sample_path: Path,
+    duration_seconds: str = "90",
+    subtitle_offset_seconds: str = "45",
+) -> None:
+    run_checked(
+        [
+            str(FFMPEG_EXE),
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"color=c=black:s=640x360:d={duration_seconds}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency={english_frequency}:duration={duration_seconds}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency={japanese_frequency}:duration={duration_seconds}",
+            "-itsoffset",
+            str(subtitle_offset_seconds),
+            "-i",
+            str(bitmap_sample_path),
+            "-itsoffset",
+            str(subtitle_offset_seconds),
+            "-i",
+            str(bitmap_sample_path),
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-map",
+            "2:a:0",
+            "-map",
+            "3:0",
+            "-map",
+            "4:0",
+            "-c:v",
+            "libx265",
+            "-pix_fmt",
+            "yuv420p10le",
+            "-c:a",
+            "libopus",
+            "-c:s",
+            "copy",
+            "-t",
+            str(duration_seconds),
+            "-metadata:s:a:0",
+            "language=eng",
+            "-metadata:s:a:0",
+            f"title={english_audio_title}",
+            "-metadata:s:a:1",
+            "language=jpn",
+            "-metadata:s:a:1",
+            f"title={japanese_audio_title}",
+            "-metadata:s:s:0",
+            "language=eng",
+            "-metadata:s:s:0",
+            f"title={signs_subtitle_title}",
+            "-metadata:s:s:1",
+            "language=eng",
+            "-metadata:s:s:1",
+            f"title={full_subtitle_title}",
+            "-disposition:a:0",
+            "default",
+            "-disposition:a:1",
+            "0",
+            "-disposition:s:0",
+            "0",
+            "-disposition:s:1",
+            "0",
+            str(output_path),
+        ]
+    )
+
+
 def probe_output(path: Path) -> dict[str, Any]:
     proc = run_checked(
         [
@@ -444,6 +530,24 @@ def main() -> int:
         )
         validate_generated_file(output_path, ["h264", "aac", "aac", "subrip", "subrip", "hdmv_pgs_subtitle"])
 
+    fairy_tail_like_output_path = videos_dir / "fairy-tail-like.mkv"
+    generate_fairy_tail_like_video_file(
+        fairy_tail_like_output_path,
+        english_audio_title="[Synthetic] Stereo (Opus 112Kbps)",
+        japanese_audio_title="[Synthetic] Stereo (Opus 112Kbps)",
+        signs_subtitle_title="English [PGS] Signs & Songs",
+        full_subtitle_title="English [PGS] Full",
+        english_frequency="460",
+        japanese_frequency="680",
+        bitmap_sample_path=bitmap_sample_path,
+        duration_seconds="90",
+        subtitle_offset_seconds="45",
+    )
+    validate_generated_file(
+        fairy_tail_like_output_path,
+        ["hevc", "opus", "opus", "hdmv_pgs_subtitle", "hdmv_pgs_subtitle"],
+    )
+
     ass_output_path = videos_dir / "ass-fruits.mkv"
     generate_ass_video_file(
         ass_output_path,
@@ -484,6 +588,12 @@ def main() -> int:
                 "path": "Videos/ass-fruits.mkv",
                 "type": "file",
                 "file_path": str(ass_output_path.resolve()),
+                "mod_time": "2024-01-01T12:00:01Z",
+            },
+            {
+                "path": "Videos/fairy-tail-like.mkv",
+                "type": "file",
+                "file_path": str(fairy_tail_like_output_path.resolve()),
                 "mod_time": "2024-01-01T12:00:01Z",
             },
         ],
