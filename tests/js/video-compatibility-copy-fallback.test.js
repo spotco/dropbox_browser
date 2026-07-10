@@ -951,7 +951,7 @@ test("stopCompatibilitySession posts session id and client id", async () => {
   assert.match(requests[0].body, /client_id=client-123/);
 });
 
-test("stopCompatibilitySession keeps local session state until stop request settles", async () => {
+test("stopCompatibilitySession can clear local session state before the stop request settles", async () => {
   const {initCompatibility} = await importModuleFromWorkspace("dropbox_browser/assets/js/video/compatibility.js");
   const item = {path: "Videos/copy.mkv"};
   const ctx = createCtx(item);
@@ -966,10 +966,10 @@ test("stopCompatibilitySession keeps local session state until stop request sett
   global.window = { setTimeout, clearTimeout };
   initCompatibility(ctx);
 
-  const stopPromise = ctx.stopCompatibilitySession();
+  const stopPromise = ctx.stopCompatibilitySession("", {clearLocalFirst: true});
 
   assert.equal(requests.length, 1);
-  assert.equal(ctx.state.compatibilitySessionId, "session-1");
+  assert.equal(ctx.state.compatibilitySessionId, "");
   resolveFetch({ ok: true, async json() { return {status: "ok"}; } });
   await stopPromise;
 
