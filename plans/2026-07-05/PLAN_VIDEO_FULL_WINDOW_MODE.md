@@ -133,81 +133,92 @@ change) to reach library, queue, track panel, or debug panel.
 
 ## Phase 1 - Define Layout And State Contracts
 
-- [ ] Add session state fields in `video.js` init state:
+- [x] Add session state fields in `video.js` init state:
       `fullWindowActive` (boolean) and `preferredExpandedMode`
       (`'fullscreen'` default).
-- [ ] Add `savedLogPanelHeight` (number|null) for restore on full-window exit.
-- [ ] Document the body class name and which DOM regions are hidden in each mode.
-- [ ] Decide the exact full-window CSS selector strategy:
+- [x] Add `savedLogPanelHeight` (number|null) for restore on full-window exit.
+- [x] Document the body class name and which DOM regions are hidden in each mode.
+- [x] Decide the exact full-window CSS selector strategy:
       - body class for page-level hiding (`header`, `main`)
       - pane/shell classes for video-internal column hiding
       - stage class or ancestor selector for subtitle full-size parity with
         `:fullscreen`
-- [ ] Confirm mutual exclusion rules between full window and native fullscreen.
+- [x] Confirm mutual exclusion rules between full window and native fullscreen.
+
+Decisions locked in `docs/video-player.md` ("Playback Layout Modes"):
+
+- Body class: `video-full-window-mode`
+- Pane/shell marker: `#video-player-pane.video-full-window` (or shell ancestor)
+- Stage/subtitle parity: `.video-playback-stage.video-full-window` (or ancestor)
+  matching existing `:fullscreen` subtitle scale rules
+- Mutual exclusion: exit the other expanded mode before entering either;
+  double-click from expanded always returns to embedded only
 
 ## Phase 2 - Replace PiP With Full Window Toggle
 
-- [ ] Repurpose `#video-pip-toggle` in `video_player.html`:
-      stable id may remain for minimal churn or rename to
-      `#video-full-window-toggle`; update labels to `Full window` /
+- [x] Repurpose `#video-pip-toggle` in `video_player.html`:
+      renamed to `#video-full-window-toggle`; labels `Full window` /
       `Exit full window`.
-- [ ] Add vendored icons, for example:
+- [x] Add vendored icons:
       `video-full-window-enter.svg`, `video-full-window-exit.svg`.
-- [ ] Register icon paths in `VIDEO_ICONS` (`constants.js`); remove unused PiP
-      icon constants if nothing else references them.
-- [ ] Replace `togglePictureInPicture` with `toggleFullWindowMode` in
-      `controls.js`.
-- [ ] Update `syncTransportControls` to drive the new button from
+- [x] Register icon paths in `VIDEO_ICONS` (`constants.js`); removed PiP
+      icon constants and unused PiP SVG assets.
+- [x] Replace `togglePictureInPicture` with `toggleFullWindowMode` in
+      `controls.js` (plus `applyFullWindowLayoutClasses` for body/pane/stage
+      class toggles; layout CSS still Phase 3).
+- [x] Update `syncTransportControls` to drive the new button from
       `ctx.state.fullWindowActive` instead of `document.pictureInPictureElement`.
-- [ ] Remove PiP event listeners (`enterpictureinpicture`,
+- [x] Remove PiP event listeners (`enterpictureinpicture`,
       `leavepictureinpicture`) and PiP availability checks.
-- [ ] Rename `pipButton` DOM ref in `video.js` if the element id changes.
+- [x] Rename `pipButton` DOM ref to `fullWindowButton` in `video.js`.
 
 ## Phase 3 - Full Window Layout CSS
 
-- [ ] Add `app.css` rules for `body.video-full-window-mode`:
+- [x] Add `app.css` rules for `body.video-full-window-mode`:
       hide `header` and `main`; prevent browse scrollbars from affecting layout.
-- [ ] Add `video.css` rules for full-window shell/stage layout:
+- [x] Add `video.css` rules for full-window shell/stage layout:
       single-column playback-only shell
       hide library/queue/header/track/debug surfaces
       playback pane and surface stretch to available height
       stage drops embedded `aspect-ratio` constraint and grows via flex
-- [ ] Add subtitle overlay / `::cue` full-size rules for full-window stage,
+- [x] Add subtitle overlay / `::cue` full-size rules for full-window stage,
       matching existing `:fullscreen` typography scale.
-- [ ] Ensure embedded-mode subtitle 65% scaling does not apply in full window.
-- [ ] Keep existing `.video-playback-stage:fullscreen` rules unchanged.
+- [x] Ensure embedded-mode subtitle 65% scaling does not apply in full window.
+- [x] Keep existing `.video-playback-stage:fullscreen` rules unchanged.
 
 ## Phase 4 - Height Save/Restore And Resize Integration
 
-- [ ] On full-window enter:
-      save current computed `--log-panel-height`
-      force panel height to viewport fill (`100vh`)
+- [x] On full-window enter:
+      save current computed `--log-panel-height` (`ctx.state.savedLogPanelHeight`)
+      force panel height to viewport fill via `DropboxBrowserLogPanel.applyFullWindowHeight`
       disable `#log-resizer` / grip interaction while active
-- [ ] On full-window exit:
-      restore saved height through the existing log-height helper path in `log.js`
-      or a small shared helper callable from `controls.js`
+- [x] On full-window exit:
+      restore saved height through `DropboxBrowserLogPanel.setVideoFullWindowActive(false)`
+      / `applyHeight` in `log.js`
       re-enable pane resizing
-- [ ] On `window.resize` while full window is active, keep height at viewport
+- [x] On `window.resize` while full window is active, keep height at viewport
       fill (override normal clamp/restore behavior until exit).
-- [ ] Ensure `log.js` resize handler does not fight full-window forced height.
+- [x] Ensure `log.js` resize handler does not fight full-window forced height.
 
 ## Phase 5 - Lifecycle, Fullscreen Coordination, And Double-Click
 
-- [ ] Export small helpers from `controls.js` (or `pane.js` if cleaner):
-      `enterFullWindow`, `exitFullWindow`, `isFullWindowActive`
+- [x] Export small helpers from `controls.js`:
+      `enterFullWindow`, `exitFullWindow`, `isFullWindowActive`,
       `enterPreferredExpandedMode`, `exitToEmbeddedPlaybackLayout`
-- [ ] Update `toggleVideoFullscreen` to exit full window before requesting native
+      (plus `enterNativeFullscreen`, `handlePlaybackSurfaceDoubleClick`).
+- [x] Update `toggleVideoFullscreen` to exit full window before requesting native
       fullscreen; set `preferredExpandedMode = 'fullscreen'`.
-- [ ] Update `toggleFullWindowMode` to exit native fullscreen before entering
+- [x] Update `toggleFullWindowMode` to exit native fullscreen before entering
       full window; set `preferredExpandedMode = 'full-window'`.
-- [ ] Replace dblclick handler on `#video-playback-surface`:
+- [x] Replace dblclick handler on `#video-playback-surface`:
       embedded -> preferred expanded mode
       full window or native fullscreen -> embedded only
-- [ ] Extend `videoKeyboardShortcutAllowed` so shortcuts work in full window
-      (today shortcuts allow native fullscreen or `paneActive`).
-- [ ] Exit full window from `pane.js` `syncPaneMode` when video pane deactivates.
-- [ ] Exit full window on `bottom-pane-mode-changed` away from `video-player`.
-- [ ] Listen for `fullscreenchange` and treat native fullscreen exit via browser
+- [x] Extend `videoKeyboardShortcutAllowed` so shortcuts work in full window
+      (native fullscreen, full window, or `paneActive`).
+- [x] Exit full window from `pane.js` `syncPaneMode` when video pane deactivates.
+- [x] Exit full window on `bottom-pane-mode-changed` away from `video-player`
+      (via existing `syncPaneMode` path).
+- [x] Listen for `fullscreenchange` and treat native fullscreen exit via browser
       UI as return to embedded unless full window was explicitly entered.
 
 ## Phase 6 - Tests And Contracts
