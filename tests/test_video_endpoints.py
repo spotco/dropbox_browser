@@ -5,11 +5,12 @@ import io
 import threading
 import time
 import unittest
+from http.client import IncompleteRead
 from http import HTTPStatus
 from pathlib import Path
 from subprocess import CompletedProcess
 from urllib.error import HTTPError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 from unittest.mock import patch
 
 from dropbox_browser.config import VideoToolsConfig
@@ -75,10 +76,10 @@ from dropbox_browser.video import (
 
 try:
     from tests.app_test_support import AppTestCase
-    from tests.support import SimulatedLsjsonResponse, SimulatedRclone, TestServer
+    from tests.support import SimulatedLsjsonResponse, SimulatedRclone, TestServer, wait_until
 except ImportError:
     from app_test_support import AppTestCase
-    from support import SimulatedLsjsonResponse, SimulatedRclone, TestServer
+    from support import SimulatedLsjsonResponse, SimulatedRclone, TestServer, wait_until
 
 
 def write_hls_session_fixture(
@@ -154,6 +155,15 @@ class BlockingWaitFakeFfmpegProcess(FakeFfmpegProcess):
 
 
 class VideoEndpointTests(AppTestCase):
+    def _read_video_debug_records(self, debug_path: Path) -> list[dict[str, object]]:
+        if not debug_path.exists():
+            return []
+        return [
+            json.loads(line)
+            for line in debug_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+
     def test_library_endpoint_returns_child_folders_and_supported_video_files(self) -> None:
         rclone = self._build_video_library_rclone()
         app = self._build_app(rclone, local_root=None)
@@ -1639,6 +1649,252 @@ class VideoEndpointTests(AppTestCase):
         self.assertEqual(near_edge_seek.sleep_seconds, 0.0)
         self.assertEqual(near_edge_seek.ahead_seconds, 3.0)
 
+    def test_tagged_file_range_request_logs_request_and_completion_diagnostics(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        app.video_debug_logs = True
+        events: list[dict[str, object]] = []
+
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            if not is_ffmpeg_hls_spawn(command):
+                return FakeFfmpegProcess(command)
+            playlist_path = Path(command[-1])
+            write_hls_session_fixture(playlist_path, segment_count=2)
+            return FakeFfmpegProcess(command)
+
+        def capture_debug(_app, event, **fields):
+            events.append({"event": event, **fields})
+
+        with (
+            TestServer(app) as server,
+            patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen),
+            patch("dropbox_browser.handlers.log_video_debug", side_effect=capture_debug),
+            patch("dropbox_browser.video.log_video_debug", side_effect=capture_debug),
+        ):
+            payload = server.post_json("/video/endpoints/session", {
+                "path": "movie.mp4",
+                "source": "remote",
+            })
+            request = Request(
+                server.base_url + "/file?path=movie.mp4&source=remote&video_session_id=" + payload["session_id"],
+                headers={"Range": "bytes=3-6"},
+            )
+            with urlopen(request, timeout=5) as response:
+                body = response.read()
+                status = response.status
+
+        self.assertEqual(status, HTTPStatus.PARTIAL_CONTENT)
+        self.assertEqual(body, b"3456")
+        wait_until(
+            lambda: any(row.get("event") == "tagged_input_http_complete" for row in events),
+            description="tagged range request completion event",
+        )
+        request_event = next(row for row in events if row.get("event") == "tagged_input_http_request")
+        complete_event = next(row for row in events if row.get("event") == "tagged_input_http_complete")
+        self.assertEqual(request_event["session_id"], payload["session_id"])
+        self.assertEqual(request_event["requested_rel_path"], "movie.mp4")
+        self.assertEqual(request_event["range_header"], "bytes=3-6")
+        self.assertFalse(request_event["head_only"])
+        self.assertEqual(complete_event["session_id"], payload["session_id"])
+        self.assertEqual(complete_event["requested_rel_path"], "movie.mp4")
+        self.assertEqual(complete_event["rel_path"], "movie.mp4")
+        self.assertEqual(complete_event["validation_result"], "matched")
+        self.assertEqual(complete_event["selected_start"], 3)
+        self.assertEqual(complete_event["selected_count"], 4)
+        self.assertEqual(complete_event["file_size"], 10)
+        self.assertEqual(complete_event["range_header"], "bytes=3-6")
+        self.assertEqual(complete_event["rclone_command_form"], "cat_offset_count")
+        self.assertEqual(complete_event["bytes_copied"], 4)
+        self.assertEqual(complete_event["outcome"], "completed")
+        self.assertIsInstance(complete_event["remote_resolution_ms"], float)
+        self.assertIsInstance(complete_event["open_cat_duration_ms"], float)
+        self.assertIsInstance(complete_event["open_cat_to_first_byte_ms"], float)
+        self.assertIsInstance(complete_event["stream_duration_ms"], float)
+
+    def test_tagged_file_request_without_range_logs_full_request_shape(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        app.video_debug_logs = True
+        events: list[dict[str, object]] = []
+
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            if not is_ffmpeg_hls_spawn(command):
+                return FakeFfmpegProcess(command)
+            playlist_path = Path(command[-1])
+            write_hls_session_fixture(playlist_path, segment_count=2)
+            return FakeFfmpegProcess(command)
+
+        def capture_debug(_app, event, **fields):
+            events.append({"event": event, **fields})
+
+        with (
+            TestServer(app) as server,
+            patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen),
+            patch("dropbox_browser.handlers.log_video_debug", side_effect=capture_debug),
+            patch("dropbox_browser.video.log_video_debug", side_effect=capture_debug),
+        ):
+            payload = server.post_json("/video/endpoints/session", {
+                "path": "movie.mp4",
+                "source": "remote",
+            })
+            with urlopen(
+                server.base_url + "/file?path=movie.mp4&source=remote&video_session_id=" + payload["session_id"],
+                timeout=5,
+            ) as response:
+                body = response.read()
+                status = response.status
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(body, b"0123456789")
+        wait_until(
+            lambda: any(row.get("event") == "tagged_input_http_complete" for row in events),
+            description="tagged full request completion event",
+        )
+        complete_event = next(row for row in events if row.get("event") == "tagged_input_http_complete")
+        self.assertEqual(complete_event["range_header"], "")
+        self.assertEqual(complete_event["selected_start"], 0)
+        self.assertEqual(complete_event["selected_count"], 10)
+        self.assertEqual(complete_event["rclone_command_form"], "cat_full")
+        self.assertEqual(complete_event["bytes_copied"], 10)
+        self.assertEqual(complete_event["outcome"], "completed")
+
+    def test_tagged_file_request_logs_missing_session_validation_result(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(rclone, local_root=None)
+        app.video_debug_logs = True
+        events: list[dict[str, object]] = []
+
+        def capture_debug(_app, event, **fields):
+            events.append({"event": event, **fields})
+
+        with (
+            TestServer(app) as server,
+            patch("dropbox_browser.handlers.log_video_debug", side_effect=capture_debug),
+            patch("dropbox_browser.video.log_video_debug", side_effect=capture_debug),
+        ):
+            with urlopen(server.base_url + "/file?path=movie.mp4&source=remote&video_session_id=missing", timeout=5) as response:
+                status = response.status
+                try:
+                    body = response.read()
+                except IncompleteRead as exc:
+                    body = exc.partial
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(body, b"")
+        wait_until(
+            lambda: any(row.get("event") == "tagged_input_http_complete" for row in events),
+            description="missing tagged session completion event",
+        )
+        complete_event = next(row for row in events if row.get("event") == "tagged_input_http_complete")
+        self.assertEqual(complete_event["validation_result"], "session_missing")
+        self.assertEqual(complete_event["selected_start"], 0)
+        self.assertEqual(complete_event["selected_count"], 10)
+        self.assertEqual(complete_event["bytes_copied"], 0)
+        self.assertEqual(complete_event["outcome"], "stream_cancelled")
+
+    def test_tagged_file_request_logs_path_mismatch_validation_result(self) -> None:
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[
+                {
+                    "Name": "movie.mp4",
+                    "Path": "movie.mp4",
+                    "IsDir": False,
+                    "Size": 10,
+                    "ModTime": "2024-01-01T12:00:00Z",
+                },
+                {
+                    "Name": "other.mp4",
+                    "Path": "other.mp4",
+                    "IsDir": False,
+                    "Size": 12,
+                    "ModTime": "2024-01-01T12:00:01Z",
+                },
+            ])],
+            "dropbox:movie.mp4": [SimulatedLsjsonResponse(items=[{
+                "Name": "movie.mp4",
+                "Path": "movie.mp4",
+                "IsDir": False,
+                "Size": 10,
+            }])],
+            "dropbox:other.mp4": [SimulatedLsjsonResponse(items=[{
+                "Name": "other.mp4",
+                "Path": "other.mp4",
+                "IsDir": False,
+                "Size": 12,
+            }])],
+        }, cat_data={
+            "dropbox:movie.mp4": b"0123456789",
+            "dropbox:other.mp4": b"abcdefghijkl",
+        })
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        app.video_debug_logs = True
+        events: list[dict[str, object]] = []
+
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            if not is_ffmpeg_hls_spawn(command):
+                return FakeFfmpegProcess(command)
+            playlist_path = Path(command[-1])
+            write_hls_session_fixture(playlist_path, segment_count=2)
+            return FakeFfmpegProcess(command)
+
+        def capture_debug(_app, event, **fields):
+            events.append({"event": event, **fields})
+
+        with (
+            TestServer(app) as server,
+            patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen),
+            patch("dropbox_browser.handlers.log_video_debug", side_effect=capture_debug),
+            patch("dropbox_browser.video.log_video_debug", side_effect=capture_debug),
+        ):
+            payload = server.post_json("/video/endpoints/session", {
+                "path": "movie.mp4",
+                "source": "remote",
+            })
+            with urlopen(
+                server.base_url + "/file?path=other.mp4&source=remote&video_session_id=" + payload["session_id"],
+                timeout=5,
+            ) as response:
+                status = response.status
+                try:
+                    body = response.read()
+                except IncompleteRead as exc:
+                    body = exc.partial
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(body, b"")
+        wait_until(
+            lambda: any(row.get("event") == "tagged_input_http_complete" for row in events),
+            description="path mismatch tagged completion event",
+        )
+        complete_event = next(row for row in events if row.get("event") == "tagged_input_http_complete")
+        self.assertEqual(complete_event["requested_rel_path"], "other.mp4")
+        self.assertEqual(complete_event["rel_path"], "other.mp4")
+        self.assertEqual(complete_event["validation_result"], "path_mismatch")
+        self.assertEqual(complete_event["selected_count"], 12)
+        self.assertEqual(complete_event["bytes_copied"], 0)
+        self.assertEqual(complete_event["outcome"], "stream_cancelled")
+
     def test_plain_file_streaming_stays_unchanged_when_active_video_session_exists(self) -> None:
         rclone = self._remote_media_rclone()
         app = self._build_app(
@@ -1698,6 +1954,7 @@ class VideoEndpointTests(AppTestCase):
                 "path": "movie.mp4",
                 "source": "remote",
             })
+            rclone.calls.clear()
             with urlopen(
                 server.base_url
                 + "/file?path=movie.mp4&source=remote&video_session_id="
@@ -1711,6 +1968,52 @@ class VideoEndpointTests(AppTestCase):
         self.assertEqual(status, HTTPStatus.OK)
         self.assertEqual(body, b"0123456789")
         self.assertEqual(headers["Content-Length"], "10")
+        self.assertTrue(any(
+            call["args"] == ("cat", "--", "dropbox:movie.mp4")
+            for call in rclone.calls
+        ))
+        self.assertFalse(any(call["args"][0] == "lsjson" for call in rclone.calls))
+
+    def test_tagged_file_streaming_stops_cleanly_after_session_stop(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            if not is_ffmpeg_hls_spawn(command):
+                return FakeFfmpegProcess(command)
+            playlist_path = Path(command[-1])
+            write_hls_session_fixture(playlist_path)
+            return FakeFfmpegProcess(command)
+
+        with TestServer(app) as server, patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen):
+            payload = server.post_json("/video/endpoints/session", {
+                "path": "movie.mp4",
+                "source": "remote",
+            })
+            server.post_json("/video/endpoints/session/stop", {
+                "id": payload["session_id"],
+            })
+            with urlopen(
+                server.base_url
+                + "/file?path=movie.mp4&source=remote&video_session_id="
+                + payload["session_id"],
+                timeout=5,
+            ) as response:
+                status = response.status
+                try:
+                    body = response.read()
+                except IncompleteRead as exc:
+                    body = exc.partial
+
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(body, b"")
 
     def test_session_asset_endpoint_serves_playlist_and_segment_files(self) -> None:
         rclone = self._remote_media_rclone()
@@ -2775,6 +3078,7 @@ class VideoEndpointTests(AppTestCase):
         session = VideoHlsSession(
             session_id="test",
             rel_path="movie.mp4",
+            file_size=10,
             session_dir=session_dir,
             playlist_path=playlist_path,
             process=FakeFfmpegProcess([]),

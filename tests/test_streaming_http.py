@@ -10,7 +10,10 @@ from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+from unittest.mock import patch
 
+from dropbox_browser import handlers as handlers_module
+from dropbox_browser.config import VideoToolsConfig
 from dropbox_browser.errors import BrowserError
 from dropbox_browser.foldercache import DIFF_CACHE_SCHEMA_VERSION
 from dropbox_browser.listingcache import ListingCacheManager
@@ -22,6 +25,43 @@ try:
 except ImportError:
     from app_test_support import AppTestCase, PreloadedFolderCache, RecordingFolderCache
     from support import SimulatedLsjsonResponse, SimulatedRclone, TestServer, remote_dir_item, remote_file_item, wait_until
+
+
+class _StreamingFakeFfmpegProcess:
+    def __init__(self, command: list[str]) -> None:
+        self.command = command
+        self.stdout = None
+        self.stderr = None
+        self.returncode = None
+        self.killed = False
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout: float | None = None) -> int:
+        if self.returncode is None:
+            self.returncode = 0
+        return self.returncode
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+
+
+def _write_streaming_hls_session_fixture(playlist_path: Path) -> None:
+    playlist_path.parent.mkdir(parents=True, exist_ok=True)
+    playlist_path.write_text(
+        "#EXTM3U\n"
+        '#EXT-X-MAP:URI="init.mp4"\n'
+        "#EXTINF:6,\n"
+        "segment_00000.m4s\n"
+        "#EXTINF:6,\n"
+        "segment_00001.m4s\n",
+        encoding="utf-8",
+    )
+    (playlist_path.parent / "init.mp4").write_bytes(b"init")
+    (playlist_path.parent / "segment_00000.m4s").write_bytes(b"segment0")
+    (playlist_path.parent / "segment_00001.m4s").write_bytes(b"segment1")
 
 
 
@@ -343,6 +383,136 @@ class StreamingHttpTests(AppTestCase):
             call["args"] == ("lsjson", "--stat", "--no-modtime", "--no-mimetype", "--", "dropbox:movie.mp4")
             for call in rclone.calls
         ))
+
+    def test_tagged_remote_file_range_uses_session_metadata_without_restat(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            workers=1,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            playlist_path = Path(command[-1])
+            _write_streaming_hls_session_fixture(playlist_path)
+            return _StreamingFakeFfmpegProcess(command)
+
+        with TestServer(app) as server, patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen):
+            payload = server.post_json("/video/endpoints/session", {
+                "path": "movie.mp4",
+                "source": "remote",
+            })
+            rclone.calls.clear()
+            request = Request(
+                server.base_url + "/file?path=movie.mp4&source=remote&video_session_id=" + payload["session_id"],
+                headers={"Range": "bytes=3-6"},
+            )
+            with urlopen(request, timeout=5) as response:
+                body = response.read()
+                status = response.status
+                headers = response.headers
+
+        self.assertEqual(status, HTTPStatus.PARTIAL_CONTENT)
+        self.assertEqual(body, b"3456")
+        self.assertEqual(headers["Content-Range"], "bytes 3-6/10")
+        self.assertTrue(any(
+            call["args"] == ("cat", "--offset", "3", "--count", "4", "--", "dropbox:movie.mp4")
+            for call in rclone.calls
+        ))
+        self.assertFalse(any(call["args"][0] == "lsjson" for call in rclone.calls))
+
+    def test_tagged_remote_file_invalid_range_uses_session_metadata_without_restat(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            workers=1,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            playlist_path = Path(command[-1])
+            _write_streaming_hls_session_fixture(playlist_path)
+            return _StreamingFakeFfmpegProcess(command)
+
+        with TestServer(app) as server, patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen):
+            payload = server.post_json("/video/endpoints/session", {
+                "path": "movie.mp4",
+                "source": "remote",
+            })
+            rclone.calls.clear()
+            request = Request(
+                server.base_url + "/file?path=movie.mp4&source=remote&video_session_id=" + payload["session_id"],
+                headers={"Range": "bytes=99-"},
+            )
+            with self.assertRaises(HTTPError) as raised:
+                urlopen(request, timeout=5)
+
+        self.assertEqual(raised.exception.code, HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+        self.assertEqual(raised.exception.headers["Content-Range"], "bytes */10")
+        try:
+            self.assertEqual(raised.exception.read(), b"")
+        finally:
+            raised.exception.close()
+        self.assertFalse(any(call["args"][0] == "cat" for call in rclone.calls))
+        self.assertFalse(any(call["args"][0] == "lsjson" for call in rclone.calls))
+
+    def test_tagged_remote_file_uses_tagged_copy_buffer_constant(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            workers=1,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            playlist_path = Path(command[-1])
+            _write_streaming_hls_session_fixture(playlist_path)
+            return _StreamingFakeFfmpegProcess(command)
+
+        with TestServer(app) as server, patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen):
+            payload = server.post_json("/video/endpoints/session", {
+                "path": "movie.mp4",
+                "source": "remote",
+            })
+            rclone.calls.clear()
+            buffer_sizes: list[int] = []
+
+            def fake_copy_exact_with_throttle(src, dst, count, *, decision_fn, sleep_fn=time.sleep, buffer_size=1024 * 1024):
+                buffer_sizes.append(buffer_size)
+                chunk = src.read(count)
+                if chunk:
+                    dst.write(chunk)
+                return handlers_module.StreamCopyStats(
+                    bytes_copied=(0 if chunk is None else len(chunk)),
+                    sleep_seconds_total=0.0,
+                    decision_samples=1,
+                    last_throttle_mode="unthrottled",
+                    last_ahead_seconds=None,
+                )
+
+            with patch.object(handlers_module, "copy_exact_with_throttle", side_effect=fake_copy_exact_with_throttle):
+                request = Request(
+                    server.base_url + "/file?path=movie.mp4&source=remote&video_session_id=" + payload["session_id"],
+                    headers={"Range": "bytes=0-3"},
+                )
+                with urlopen(request, timeout=5) as response:
+                    body = response.read()
+
+        self.assertEqual(body, b"0123")
+        self.assertEqual(buffer_sizes, [handlers_module.TAGGED_INPUT_COPY_BUFFER_SIZE])
+        self.assertEqual(handlers_module.TAGGED_INPUT_COPY_BUFFER_SIZE, 2 * 1024 * 1024)
 
     def test_download_route_supports_byte_ranges_and_attachment_disposition(self) -> None:
         rclone = self._remote_media_rclone()

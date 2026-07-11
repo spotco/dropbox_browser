@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
 import subprocess
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Literal
 
 from . import logoutput, logstore
 from .config import TEMP_DIR
@@ -488,10 +488,20 @@ class RcloneClient:
         *,
         offset: int | None = None,
         count: int | None = None,
+        remote_form: Literal["files-from", "direct"] = "files-from",
     ) -> tuple[list[str], Path | None]:
         args = ["cat"]
         temp_list_path: Path | None = None
         if _is_remote_target(target):
+            if remote_form == "direct":
+                if offset is not None:
+                    args += ["--offset", str(offset)]
+                if count is not None:
+                    args += ["--count", str(count)]
+                args += ["--", target]
+                return self.command(*args), None
+            if remote_form != "files-from":
+                raise ValueError(f"Unsupported remote_form: {remote_form}")
             remote_name, rel_path = target.split(":", 1)
             root_target = remote_name + ":"
             TEMP_DIR.mkdir(parents=True, exist_ok=True)
@@ -520,8 +530,20 @@ class RcloneClient:
         args += ["--", target]
         return self.command(*args), None
 
-    def open_cat(self, target: str, offset: int | None = None, count: int | None = None) -> subprocess.Popen[bytes]:
-        cmd, temp_list_path = self._cat_command_for_target(target, offset=offset, count=count)
+    def open_cat(
+        self,
+        target: str,
+        offset: int | None = None,
+        count: int | None = None,
+        *,
+        remote_form: Literal["files-from", "direct"] = "files-from",
+    ) -> subprocess.Popen[bytes]:
+        cmd, temp_list_path = self._cat_command_for_target(
+            target,
+            offset=offset,
+            count=count,
+            remote_form=remote_form,
+        )
         logstore_id, logoutput_id = self._log_start(cmd)
         started_at = time.monotonic()
         try:

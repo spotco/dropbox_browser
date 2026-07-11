@@ -1881,6 +1881,7 @@ def _library_file_row(rel_path: str, row: dict[str, object]) -> dict[str, object
 class VideoHlsSession:
     session_id: str
     rel_path: str
+    file_size: int | None
     session_dir: Path
     playlist_path: Path
     process: subprocess.Popen[bytes]
@@ -1912,6 +1913,14 @@ class VideoInputThrottleDecision:
     sleep_seconds: float = 0.0
     throttle_mode: str = "unthrottled"
     ahead_seconds: float | None = None
+
+
+@dataclass(frozen=True)
+class TaggedInputFileMetadata:
+    session_id: str
+    rel_path: str
+    file_size: int
+    session: VideoHlsSession
 
 
 class VideoSessionManager:
@@ -2083,6 +2092,7 @@ class VideoSessionManager:
             session = VideoHlsSession(
                 session_id=session_id,
                 rel_path=rel_path,
+                file_size=(None if file_size is None else int(file_size)),
                 session_dir=session_dir,
                 playlist_path=playlist_path,
                 process=process,
@@ -2277,9 +2287,17 @@ class VideoSessionManager:
         return payload
 
     def tagged_input_session(self, session_id: str | None, rel_path: str) -> VideoHlsSession | None:
+        matched_session, _reason = self.tagged_input_session_status(session_id, rel_path)
+        return matched_session
+
+    def tagged_input_file_metadata(
+        self,
+        session_id: str | None,
+        rel_path: str,
+    ) -> tuple[TaggedInputFileMetadata | None, str]:
         normalized_session_id = str(session_id or "").strip()
         if not normalized_session_id:
-            return None
+            return None, "untagged"
         normalized_rel_path = clean_rel_path(rel_path)
         with self._lock:
             self._cleanup_expired_locked()
@@ -2292,7 +2310,8 @@ class VideoSessionManager:
                     rel_path=normalized_rel_path,
                     reason="session_missing",
                 )
-                matched_session = None
+                metadata = None
+                reason = "session_missing"
             elif clean_rel_path(session.rel_path) != normalized_rel_path:
                 log_video_debug(
                     self.app,
@@ -2302,19 +2321,41 @@ class VideoSessionManager:
                     active_rel_path=clean_rel_path(session.rel_path),
                     reason="path_mismatch",
                 )
-                matched_session = None
+                metadata = None
+                reason = "path_mismatch"
+            elif session.file_size is None:
+                log_video_debug(
+                    self.app,
+                    "tagged_input_session_miss",
+                    session_id=normalized_session_id,
+                    rel_path=normalized_rel_path,
+                    reason="metadata_missing",
+                )
+                metadata = None
+                reason = "metadata_missing"
             else:
                 session.touch()
                 self._active_session_id = session.session_id
+                canonical_rel_path = clean_rel_path(session.rel_path)
                 log_video_debug(
                     self.app,
                     "tagged_input_session_match",
                     session_id=normalized_session_id,
-                    rel_path=normalized_rel_path,
+                    rel_path=canonical_rel_path,
                 )
-                matched_session = session
+                metadata = TaggedInputFileMetadata(
+                    session_id=session.session_id,
+                    rel_path=canonical_rel_path,
+                    file_size=int(session.file_size),
+                    session=session,
+                )
+                reason = "matched"
         self._drain_deferred_session_stops()
-        return matched_session
+        return metadata, reason
+
+    def tagged_input_session_status(self, session_id: str | None, rel_path: str) -> tuple[VideoHlsSession | None, str]:
+        metadata, reason = self.tagged_input_file_metadata(session_id, rel_path)
+        return (None if metadata is None else metadata.session), reason
 
     def tagged_input_throttle_decision(self, session_id: str | None, rel_path: str) -> VideoInputThrottleDecision:
         normalized_session_id = str(session_id or "").strip()

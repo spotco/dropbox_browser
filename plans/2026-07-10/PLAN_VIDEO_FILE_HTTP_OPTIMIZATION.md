@@ -53,21 +53,21 @@ ceiling without evidence.
 
 ## Step 1 - Capture Baseline Measurements
 
-- [ ] Enable `LogVideoDebug` for a controlled baseline run and preserve any
+- [x] Enable `LogVideoDebug` for a controlled baseline run and preserve any
       existing unrelated debug log.
-- [ ] Start the normal production configuration and record the branch, commit,
+- [x] Start the normal production configuration and record the branch, commit,
       machine, remote, pacing settings, and probe-cache state.
-- [ ] Run `misc/benchmark_video_startup.py` with at least three iterations and
+- [x] Run `misc/benchmark_video_startup.py` with at least three iterations and
       `--sample-seconds 0` for the existing HEVC Eureka and AV1 Fruits Basket
       samples. Include a H.264/AAC copy sample when available.
-- [ ] Save each raw run under
+- [x] Save each raw run under
       `Temp/video_benchmarks/file-http-baseline-2026-07-10-<sample>.jsonl`.
-- [ ] Record median `session_create_ms`, `server_session_create_ms`,
+- [x] Record median `session_create_ms`, `server_session_create_ms`,
       `asset_fetch_ms`, and `total_startup_ms` in a machine-local companion
       note; retain individual samples to expose variance.
-- [ ] Capture the matching `Temp/video_debug.jsonl` interval so every tagged
+- [x] Capture the matching `Temp/video_debug.jsonl` interval so every tagged
       `/file` request, Range value, and ffmpeg command can later be compared.
-- [ ] Confirm the baseline still uses
+- [x] Confirm the baseline still uses
       `/file?...&video_session_id=<id>` and that the known Matroska/PGS sample
       starts successfully.
 
@@ -84,87 +84,99 @@ python misc/benchmark_video_startup.py `
 
 ## Step 2 - Add Tagged `/file` Range Instrumentation
 
-- [ ] In `handlers.py`, identify tagged ffmpeg input before generic remote-file
+- [x] In `handlers.py`, identify tagged ffmpeg input before generic remote-file
       resolution and start a monotonic request timer.
-- [ ] Emit structured video-debug events for: request path/session id, Range
+- [x] Emit structured video-debug events for: request path/session id, Range
       header, session/path validation result, remote-resolution duration,
       selected start/count, `open_cat()` duration to first byte, rclone command
       form, bytes copied, stream duration, and terminal outcome.
-- [ ] Keep diagnostics behind `LogVideoDebug`; avoid logging data payloads or
+- [x] Keep diagnostics behind `LogVideoDebug`; avoid logging data payloads or
       unbounded high-frequency events.
-- [ ] Add focused tests for tagged event fields, invalid/mismatched sessions,
+- [x] Add focused tests for tagged event fields, invalid/mismatched sessions,
       ordinary ranges, and absent Range headers.
-- [ ] Run `python -m tests.run video -v` and `python -m tests.run streaming -v`.
+- [x] Run `python -m tests.run video -v` and `python -m tests.run streaming -v`.
 
 ## Step 3 - Diagnose And Set Gates
 
-- [ ] Repeat one short benchmark pass with instrumentation enabled and group
+- [x] Repeat one short benchmark pass with instrumentation enabled and group
       tagged requests by session id.
-- [ ] Measure request count, duplicate ranges, total resolution time, median
+- [x] Measure request count, duplicate ranges, total resolution time, median
       `open_cat()` to first byte, bytes per request, and relay time.
-- [ ] Select only evidence-backed work:
+- [x] Select only evidence-backed work:
       - session metadata reuse when resolution is at least ~100 ms or causes
         `stat`/listing activity;
       - direct rclone target experiment when process/setup time is material;
       - buffer trial only when transfer/relay time is material;
       - prefix cache only for repeated overlapping early ranges.
-- [ ] Write the chosen gates and observed values beside the baseline artifacts;
+- [x] Write the chosen gates and observed values beside the baseline artifacts;
       do not begin a disk-cache or temp-file branch on speculation.
 
 ## Step 4 - Reuse Session Metadata And Narrow Tagged Requests
 
-- [ ] Extend `VideoHlsSession` creation/probe state with the canonical remote
+- [x] Extend `VideoHlsSession` creation/probe state with the canonical remote
       relative path and resolved size needed by its ffmpeg input, without
       weakening session lifecycle cleanup.
-- [ ] Add a small tagged-input helper in the module that owns session lookup to
+- [x] Add a small tagged-input helper in the module that owns session lookup to
       validate `video_session_id`, compare the normalized requested path with
       the session path, and return metadata only for a live matching session.
-- [ ] Route valid tagged `/file` requests through a narrow handler that uses
+- [x] Route valid tagged `/file` requests through a narrow handler that uses
       that metadata, parses Range, calls `open_cat(offset, count)`, and streams
       with the existing session-aware backpressure semantics.
-- [ ] Keep the generic `_resolve_remote_file()` path for untagged `/file`,
+- [x] Keep the generic `_resolve_remote_file()` path for untagged `/file`,
       failed session lookup, and explicitly supported fallback cases.
-- [ ] Add tests proving tagged requests skip redundant resolution, reject a
+- [x] Add tests proving tagged requests skip redundant resolution, reject a
       mismatched path/session pair, preserve 206/416 behavior, and stop cleanly
       on session expiry/eviction.
-- [ ] Run `python -m tests.run video -v`, `python -m tests.run streaming -v`,
+- [x] Run `python -m tests.run video -v`, `python -m tests.run streaming -v`,
       and `python -m tests.run rclone -v`.
 
 ## Step 5 - Evaluate And Apply Per-Request Setup Improvements
 
-- [ ] Add a focused `RcloneClient.open_cat()` test matrix for spaces, Unicode,
+- [x] Add a focused `RcloneClient.open_cat()` test matrix for spaces, Unicode,
       brackets, apostrophes, and Windows-renamed names using both the current
       `--files-from` form and a candidate direct target form.
-- [ ] Change tagged input to direct `rclone cat -- remote:path` only if the
+- [x] Change tagged input to direct `rclone cat -- remote:path` only if the
       matrix and a real Dropbox smoke test prove exact behavior; otherwise
       retain `--files-from` and document the measured setup cost.
-- [ ] Make tagged copy-buffer size an internal, bounded constant and benchmark
+- [x] Make tagged copy-buffer size an internal, bounded constant and benchmark
       1, 2, 4, and 8 MiB using identical request ranges. Keep 1 MiB when the
       result is within measurement noise; do not broaden the change to untagged
       downloads.
-- [ ] Add tests for the selected rclone command form, cleanup of any temporary
+- [x] Add tests for the selected rclone command form, cleanup of any temporary
       files-from artifact, exact range arguments, and the chosen tagged buffer
       path.
-- [ ] Run `python -m tests.run rclone -v`, `python -m tests.run streaming -v`,
+- [x] Run `python -m tests.run rclone -v`, `python -m tests.run streaming -v`,
       and `python -m tests.run video -v`.
 
 ## Step 6 - Implement A Prefix Cache Only When Range Traces Justify It
 
-- [ ] Proceed only if Step 3 demonstrates repeated overlapping reads within a
+- [x] Proceed only if Step 3 demonstrates repeated overlapping reads within a
       defined early prefix and estimates enough saved remote requests to exceed
       the added complexity.
-- [ ] Define explicit per-session cache limits: prefix byte cap, total disk
+      **Decision (2026-07-11): do not implement.** Step 3 gate remains unmet
+      after re-evaluation of Eureka, Fruits Basket, Conan, and Fairy Tail tagged
+      range traces. Pattern is one Matroska open/seek/restart with partial
+      early overlap, not repeated prefix churn; partial hits would not eliminate
+      the restart remote read. Written decision:
+      `Temp/video_benchmarks/file-http-step6-2026-07-11-prefix-cache-decision.md`.
+- [x] Define explicit per-session cache limits: prefix byte cap, total disk
       budget, concurrency behavior, fill timeout, and cleanup on stop, expiry,
       eviction, create failure, and shutdown.
-- [ ] Populate a partial prefix file under the existing session Temp directory
+      **Skipped — gate not met.**
+- [x] Populate a partial prefix file under the existing session Temp directory
       with atomic visibility rules; never expose bytes beyond the verified
       cached length.
-- [ ] Serve fully cached tagged ranges locally and fall back to
+      **Skipped — gate not met.**
+- [x] Serve fully cached tagged ranges locally and fall back to
       `rclone cat --offset/--count` for uncached or partially cached ranges.
-- [ ] Add tests for cache hit/miss, partial reads, concurrent readers, failed
+      **Skipped — gate not met.**
+- [x] Add tests for cache hit/miss, partial reads, concurrent readers, failed
       fill, session cleanup, and range headers spanning cached and remote data.
-- [ ] Run `python -m tests.run video -v`, `python -m tests.run streaming -v`,
+      **Skipped — gate not met; no prefix-cache code landed.**
+- [x] Run `python -m tests.run video -v`, `python -m tests.run streaming -v`,
       and a manual Fairy Tail startup/seek smoke test.
+      Regression groups run after the skip decision; Fairy Tail manual smoke is
+      deferred with Step 9 measurement (no cache behavior to smoke-test).
 
 ## Step 7 - Consider A Seekable Temp File Only As A Separate Experiment
 
