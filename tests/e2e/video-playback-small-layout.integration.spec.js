@@ -315,7 +315,7 @@ test("playback pane keeps a usable embedded stage and scrolls vertically at smal
       "video-loop-toggle",
       "video-previous",
       "video-next",
-      "video-pip-toggle",
+      "video-full-window-toggle",
       "video-fullscreen-toggle",
     ];
     const rects = Object.fromEntries(controlOrder.map((id) => [id, rectFor(id)]));
@@ -352,12 +352,12 @@ test("playback pane keeps a usable embedded stage and scrolls vertically at smal
         || rects["video-back-15"].bottom <= rects["video-forward-15"].top + 1,
       forward15BeforeMute: rects["video-forward-15"].right <= rects["video-mute-toggle"].left + 1
         || rects["video-forward-15"].bottom <= rects["video-mute-toggle"].top + 1,
-      nextBeforePip: rects["video-next"].right <= rects["video-pip-toggle"].left + 1
-        || rects["video-next"].bottom <= rects["video-pip-toggle"].top + 1,
-      forward15BeforePip: rects["video-forward-15"].right <= rects["video-pip-toggle"].left + 1
-        || rects["video-forward-15"].bottom <= rects["video-pip-toggle"].top + 1,
-      pipBeforeFullscreen: rects["video-pip-toggle"].right <= rects["video-fullscreen-toggle"].left + 1
-        || rects["video-pip-toggle"].bottom <= rects["video-fullscreen-toggle"].top + 1,
+      nextBeforeFullWindow: rects["video-next"].right <= rects["video-full-window-toggle"].left + 1
+        || rects["video-next"].bottom <= rects["video-full-window-toggle"].top + 1,
+      forward15BeforeFullWindow: rects["video-forward-15"].right <= rects["video-full-window-toggle"].left + 1
+        || rects["video-forward-15"].bottom <= rects["video-full-window-toggle"].top + 1,
+      fullWindowBeforeFullscreen: rects["video-full-window-toggle"].right <= rects["video-fullscreen-toggle"].left + 1
+        || rects["video-full-window-toggle"].bottom <= rects["video-fullscreen-toggle"].top + 1,
     };
   });
 
@@ -370,9 +370,9 @@ test("playback pane keeps a usable embedded stage and scrolls vertically at smal
   expect(controlsMetrics.previousBeforeNext).toBe(true);
   expect(controlsMetrics.back15BeforeForward15).toBe(true);
   expect(controlsMetrics.forward15BeforeMute).toBe(true);
-  expect(controlsMetrics.nextBeforePip).toBe(true);
-  expect(controlsMetrics.forward15BeforePip).toBe(true);
-  expect(controlsMetrics.pipBeforeFullscreen).toBe(true);
+  expect(controlsMetrics.nextBeforeFullWindow).toBe(true);
+  expect(controlsMetrics.forward15BeforeFullWindow).toBe(true);
+  expect(controlsMetrics.fullWindowBeforeFullscreen).toBe(true);
   for (const id of controlsMetrics.controlOrder) {
     expect(controlsMetrics.rects[id].width).toBeGreaterThan(0);
     expect(controlsMetrics.rects[id].height).toBeGreaterThan(0);
