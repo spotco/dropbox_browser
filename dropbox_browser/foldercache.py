@@ -152,7 +152,11 @@ class FolderCacheManager:
         self._generation: dict[str, int] = {}
         self._abandoned: set[str] = set()
         self._progress_by_epoch: dict[float, dict[str, int]] = {}
-        self._dirty_cache_writes: dict[str, bool] = {}
+        # path → (write_as_complete, write_epoch). Epoch advances on every dirty
+        # mark so a deferred flush can detect that a newer in-memory state exists
+        # and must not clobber disk with a stale partial snapshot.
+        self._dirty_cache_writes: dict[str, tuple[bool, int]] = {}
+        self._cache_write_epoch: dict[str, int] = {}
         self._state = FolderAccumulationState(
             direct_done=self._direct_done,
             abandoned=self._abandoned,
@@ -382,10 +386,34 @@ class FolderCacheManager:
     def _mark_cache_dirty_locked(self, remote_path: str, complete: bool) -> None:
         """Mark one cache record for disk flush after the lock is released."""
         previous = self._dirty_cache_writes.get(remote_path)
-        self._dirty_cache_writes[remote_path] = bool(complete or previous)
+        previous_complete = bool(previous[0]) if previous is not None else False
+        epoch = self._cache_write_epoch.get(remote_path, 0) + 1
+        self._cache_write_epoch[remote_path] = epoch
+        self._dirty_cache_writes[remote_path] = (bool(complete or previous_complete), epoch)
+
+    def _is_disk_complete_locked(self, remote_path: str) -> bool:
+        """Whether the current in-memory state should be written as complete."""
+        if remote_path not in self._acc or remote_path in self._abandoned:
+            return False
+        if remote_path not in self._direct_done or self._pending_children.get(remote_path):
+            return False
+        acc = self._acc[remote_path]
+        if self.local_root is None:
+            return True
+        if acc.get("diff_status") in {DIFF_HAS_DIFFS, DIFF_DROPBOX_ONLY}:
+            return True
+        return bool(acc.get("diff_complete"))
 
     def _flush_dirty_cache_writes(self) -> None:
-        """Write pending cache snapshots without holding the manager lock."""
+        """Write pending cache snapshots without holding the manager lock.
+
+        Snapshots are taken under the lock, then written outside it so HTTP and
+        worker threads are not blocked on disk I/O. Because another worker may
+        finalize the same path between snapshot and write (classic parent
+        partial flush vs child completion race), each write carries an epoch.
+        Stale epochs are skipped or repaired so a late partial cannot clobber a
+        newer complete record on disk.
+        """
         while True:
             with self._lock:
                 if not self._dirty_cache_writes:
@@ -393,11 +421,34 @@ class FolderCacheManager:
                 pending = self._dirty_cache_writes
                 self._dirty_cache_writes = {}
                 snapshots = [
-                    (remote_path, self._cache_record_data_locked(remote_path, complete))
-                    for remote_path, complete in pending.items()
+                    (remote_path, self._cache_record_data_locked(remote_path, complete), epoch)
+                    for remote_path, (complete, epoch) in pending.items()
                 ]
-            for remote_path, data in snapshots:
+            for remote_path, data, epoch in snapshots:
+                with self._lock:
+                    if self._cache_write_epoch.get(remote_path, 0) != epoch:
+                        self._trace_locked(
+                            "cache_write_skipped_stale",
+                            remote_path,
+                            write_epoch=epoch,
+                            current_epoch=self._cache_write_epoch.get(remote_path, 0),
+                        )
+                        continue
                 self._write_cache_record(remote_path, data)
+                with self._lock:
+                    if self._cache_write_epoch.get(remote_path, 0) != epoch:
+                        # Lost the race between the pre-write check and the
+                        # disk write. Force a fresh snapshot of current state.
+                        self._mark_cache_dirty_locked(
+                            remote_path,
+                            self._is_disk_complete_locked(remote_path),
+                        )
+                        self._trace_locked(
+                            "cache_write_repaired_stale",
+                            remote_path,
+                            write_epoch=epoch,
+                            current_epoch=self._cache_write_epoch.get(remote_path, 0),
+                        )
 
     def prime_direct_listing(self, remote_path: str, items: list[dict], page_time: float | None = None) -> None:
         """Seed direct child metadata from a foreground listing.
@@ -597,60 +648,75 @@ class FolderCacheManager:
             self._trace("request_skipped_cached", remote_path, page_epoch=page_time)
             return False
         enqueue_refresh = False
+        flush_complete = False
         with self._lock:
             if self._shutdown:
                 return False
             if remote_path in self._direct_done:
                 # Its direct listing has already been fetched in this process.
-                # If child work is still finishing, do not start a second
-                # direct lsjson.  Abandoned folders were canceled on an older
-                # page and must be allowed to restart cleanly.
+                # If child work is still finishing, try to attach already-complete
+                # children before giving up. Abandoned folders were canceled on
+                # an older page and must be allowed to restart cleanly.
                 if self._pending_children.get(remote_path) and remote_path not in self._abandoned:
-                    self._trace_locked("request_deduplicated", remote_path, page_epoch=page_time)
-                    return False
-                self._abandoned.discard(remote_path)
-                self._direct_done.pop(remote_path, None)
-                self._pending_children.pop(remote_path, None)
-                self._child_contrib.pop(remote_path, None)
-            current_page_time = self._in_progress.get(remote_path)
-            if current_page_time is not None:
-                active = self._active_jobs.get(remote_path)
-                if active is not None and active.cancel_token.cancelled:
-                    previous = self._reschedule_after_cancel.get(remote_path, 0.0)
-                    self._reschedule_after_cancel[remote_path] = max(previous, page_time)
-                    self._trace_locked("request_rescheduled", remote_path, page_epoch=page_time)
-                elif page_time > current_page_time:
-                    self._in_progress[remote_path] = page_time
-                    if active is None:
-                        removed = self._queue.remove_matching(
-                            lambda item: isinstance(item, FolderJob) and item.remote_path == remote_path
-                        )
-                        self._advance_page_time(page_time)
-                        self._record_dispatched(page_time)
+                    self._repair_complete_children_locked(remote_path)
+                    if self._pending_children.get(remote_path) and remote_path not in self._abandoned:
+                        self._trace_locked("request_deduplicated", remote_path, page_epoch=page_time)
+                        return False
+                if remote_path not in self._abandoned and self._is_disk_complete_locked(remote_path):
+                    # In-memory subtree is already complete (possibly after
+                    # repair) but disk still shows partial — common after a
+                    # stale deferred flush. Rewrite complete without recompute.
+                    self._mark_cache_dirty_locked(remote_path, True)
+                    self._trace_locked("request_flushed_complete", remote_path, page_epoch=page_time)
+                    flush_complete = True
+                else:
+                    self._abandoned.discard(remote_path)
+                    self._direct_done.pop(remote_path, None)
+                    self._pending_children.pop(remote_path, None)
+                    self._child_contrib.pop(remote_path, None)
+            if not flush_complete:
+                current_page_time = self._in_progress.get(remote_path)
+                if current_page_time is not None:
+                    active = self._active_jobs.get(remote_path)
+                    if active is not None and active.cancel_token.cancelled:
+                        previous = self._reschedule_after_cancel.get(remote_path, 0.0)
+                        self._reschedule_after_cancel[remote_path] = max(previous, page_time)
+                        self._trace_locked("request_rescheduled", remote_path, page_epoch=page_time)
+                    elif page_time > current_page_time:
+                        self._in_progress[remote_path] = page_time
+                        if active is None:
+                            removed = self._queue.remove_matching(
+                                lambda item: isinstance(item, FolderJob) and item.remote_path == remote_path
+                            )
+                            self._advance_page_time(page_time)
+                            self._record_dispatched(page_time)
+                            self._trace_locked(
+                                "request_reenqueued",
+                                remote_path,
+                                page_epoch=page_time,
+                                removed_jobs=len(removed),
+                            )
+                            enqueue_refresh = True
+                        else:
+                            self._trace_locked("request_refreshed", remote_path, page_epoch=page_time)
+                    else:
                         self._trace_locked(
-                            "request_reenqueued",
+                            "request_deduplicated",
                             remote_path,
                             page_epoch=page_time,
-                            removed_jobs=len(removed),
+                            owner_page_epoch=current_page_time,
+                            active=active is not None,
                         )
-                        enqueue_refresh = True
-                    else:
-                        self._trace_locked("request_refreshed", remote_path, page_epoch=page_time)
+                    if not enqueue_refresh:
+                        return False
                 else:
-                    self._trace_locked(
-                        "request_deduplicated",
-                        remote_path,
-                        page_epoch=page_time,
-                        owner_page_epoch=current_page_time,
-                        active=active is not None,
-                    )
-                if not enqueue_refresh:
-                    return False
-            else:
-                self._in_progress[remote_path] = page_time
-                self._advance_page_time(page_time)
-                self._record_dispatched(page_time)
-                self._trace_locked("request_enqueued", remote_path, page_epoch=page_time)
+                    self._in_progress[remote_path] = page_time
+                    self._advance_page_time(page_time)
+                    self._record_dispatched(page_time)
+                    self._trace_locked("request_enqueued", remote_path, page_epoch=page_time)
+        if flush_complete:
+            self._flush_dirty_cache_writes()
+            return False
         self._queue_job(
             FolderJob.create(remote_path, page_time, breadth_depth),
             "request_reenqueue" if enqueue_refresh else "request",
@@ -769,6 +835,10 @@ class FolderCacheManager:
                 if already_done:
                     clear_in_progress = True
                     with self._lock:
+                        # Direct listing is done, but a concurrent child may
+                        # have finished without the parent attach path running.
+                        # Repair pending children before skipping the job.
+                        self._repair_complete_children_locked(remote_path)
                         self._record_completed(effective_page_time)
                         self._trace_locked("job_skipped_complete", remote_path, page_epoch=effective_page_time)
                     continue
@@ -947,8 +1017,27 @@ class FolderCacheManager:
                 self._parent[sf] = remote_path
                 # Clear stale contribution so re-compute deltas start from zero.
                 self._child_contrib.pop(sf, None)
+                # Prefer a live under-lock completeness check over the pre-lock
+                # disk snapshot: a child can finish (memory and/or disk) between
+                # the snapshot and this critical section.
                 cached = sf_cached[sf]
-                if sf not in self._in_progress and cached is not None and cached.get("complete"):
+                memory_complete = (
+                    sf in self._acc
+                    and sf in self._direct_done
+                    and not self._pending_children.get(sf)
+                    and sf not in self._abandoned
+                    and (
+                        self.local_root is None
+                        or self._acc[sf].get("diff_complete")
+                        or self._acc[sf].get("diff_status") in {DIFF_HAS_DIFFS, DIFF_DROPBOX_ONLY}
+                    )
+                )
+                disk_complete = (
+                    sf not in self._in_progress
+                    and cached is not None
+                    and cached.get("complete")
+                )
+                if disk_complete and not memory_complete:
                     # Reuse existing complete cache — incorporate immediately.
                     self._acc[sf] = {
                         "size": cached.get("size") or 0,
@@ -969,24 +1058,16 @@ class FolderCacheManager:
                         self._note_diff(remote_path, cached.get("first_diff_path") or sf)
                     # sf is already fully done — do not add to pending_children.
                     self._state.on_subtree_complete(sf)
+                elif memory_complete:
+                    # Child finished as an independent request (or under the
+                    # lock race with the pre-lock snapshot) before this parent
+                    # registered pending state. Attach now.
+                    self._state.propagate(sf)
+                    if self._acc.get(sf, {}).get("diff_status") in {DIFF_HAS_DIFFS, DIFF_DROPBOX_ONLY}:
+                        self._note_diff(remote_path, self._acc[sf].get("first_diff_path") or sf)
+                    self._state.on_subtree_complete(sf)
                 else:
                     self._pending_children[remote_path].add(sf)
-                    if (
-                        sf in self._acc
-                        and sf in self._direct_done
-                        and not self._pending_children.get(sf)
-                        and sf not in self._abandoned
-                    ):
-                        # The child may have completed as an independent page
-                        # request before this parent registered it. Attach its
-                        # already-complete contribution now so the parent does
-                        # not wait forever for a completion callback that has
-                        # already happened.
-                        self._state.propagate(sf)
-                        if self._acc.get(sf, {}).get("diff_status") in {DIFF_HAS_DIFFS, DIFF_DROPBOX_ONLY}:
-                            self._note_diff(remote_path, self._acc[sf].get("first_diff_path") or sf)
-                        self._state.on_subtree_complete(sf)
-                        continue
                     if sf in self._direct_done and not self._pending_children.get(sf):
                         # A previously canceled child can be left with direct
                         # metadata but no pending descendants. Clear that
@@ -1011,6 +1092,34 @@ class FolderCacheManager:
             )
             self._maybe_complete(remote_path)
         return True
+
+    def _repair_complete_children_locked(self, remote_path: str) -> None:
+        """Attach already-complete pending children and finalize when possible.
+
+        Used when a job is skipped as already-done for its direct listing so a
+        stuck ``pending_children`` set cannot leave the parent partial forever.
+        Lock must be held.
+        """
+        pending = self._pending_children.get(remote_path)
+        if pending:
+            for sf in list(pending):
+                if (
+                    sf in self._acc
+                    and sf in self._direct_done
+                    and not self._pending_children.get(sf)
+                    and sf not in self._abandoned
+                    and (
+                        self.local_root is None
+                        or self._acc[sf].get("diff_complete")
+                        or self._acc[sf].get("diff_status") in {DIFF_HAS_DIFFS, DIFF_DROPBOX_ONLY}
+                    )
+                ):
+                    self._state.propagate(sf)
+                    if self._acc.get(sf, {}).get("diff_status") in {DIFF_HAS_DIFFS, DIFF_DROPBOX_ONLY}:
+                        self._note_diff(remote_path, self._acc[sf].get("first_diff_path") or sf)
+                    self._state.on_subtree_complete(sf)
+        if remote_path in self._direct_done and not self._pending_children.get(remote_path):
+            self._maybe_complete(remote_path)
 
     # ------------------------------------------------------------------
     # Propagation helpers  (all require lock to be held)

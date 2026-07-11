@@ -90,6 +90,213 @@ class FolderInfoWorkerTests(AppTestCase):
         self.assertTrue(any(event["event"] == "job_queued" for event in events))
         self.assertTrue(any(event["event"] == "subtree_complete" and event.get("remote_path") == "dropbox:sub" for event in events))
 
+    def test_stale_parent_partial_flush_does_not_clobber_completed_root(self) -> None:
+        """Parent partial disk flush must not overwrite a newer complete root.
+
+        Reproduces the multi-worker race behind the full-suite flake where
+        ``sub`` finishes and finalizes root in memory, then a deferred partial
+        root write clobbers disk. ``/folder-info`` reads disk only and does not
+        re-queue ``partial`` paths, so the poll would hang forever.
+        """
+        local_root = self.create_local_root({
+            "shared.txt": b"root data",
+            "sub/child.txt": b"child data",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[
+                remote_file_item("shared.txt", local_root / "shared.txt"),
+                remote_dir_item("sub"),
+            ])],
+            "dropbox:sub": [SimulatedLsjsonResponse(items=[
+                remote_file_item("child.txt", local_root / "sub" / "child.txt"),
+            ])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=2)
+        cache = app.folder_cache
+        assert cache is not None
+
+        incomplete_root_write_started = threading.Event()
+        incomplete_root_write_release = threading.Event()
+        original_write = foldercache_module.write_json_atomic
+        incomplete_root_writes = {"count": 0}
+
+        def gated_write(path: Path, data: dict) -> None:
+            if data.get("remote_path") == "dropbox:" and not data.get("complete"):
+                incomplete_root_writes["count"] += 1
+                # Gate only the first partial root flush so the parent worker
+                # blocks in disk I/O while the child worker finalizes root.
+                if incomplete_root_writes["count"] == 1:
+                    incomplete_root_write_started.set()
+                    if not incomplete_root_write_release.wait(timeout=5):
+                        raise AssertionError("Timed out waiting to release incomplete root cache write")
+            original_write(path, data)
+
+        with patch.object(foldercache_module, "write_json_atomic", side_effect=gated_write):
+            cache.request("dropbox:", time.time())
+            wait_until(
+                incomplete_root_write_started.is_set,
+                description="incomplete root cache write to start",
+            )
+            wait_until(
+                lambda: (cache.get("dropbox:sub") or {}).get("complete"),
+                description="child folder completion while parent flush is gated",
+            )
+            # Child completion should have finalized root in memory (and ideally
+            # already written a complete root record around the gated partial).
+            wait_until(
+                lambda: (
+                    (cache._acc.get("dropbox:") or {}).get("diff_complete")
+                    and not cache._pending_children.get("dropbox:")
+                ),
+                description="root in-memory completion via child subtree",
+            )
+            incomplete_root_write_release.set()
+            root_data = wait_until(
+                lambda: cache.get("dropbox:") if (cache.get("dropbox:") or {}).get("complete") else None,
+                description="root remains complete after stale partial flush attempt",
+            )
+
+        self.assertTrue(root_data.get("complete"))
+        self.assertTrue(root_data.get("diff_complete"))
+        self.assertEqual(root_data.get("diff_status"), "synced")
+        self.assertEqual(root_data.get("size"), len(b"root data") + len(b"child data"))
+        self.assertEqual(root_data.get("file_count"), 2)
+        events = self.read_trace_events()
+        self.assertTrue(
+            any(event["event"] == "subtree_complete" and event.get("remote_path") == "dropbox:sub" for event in events),
+        )
+        self.assertTrue(
+            any(event["event"] == "subtree_complete" and event.get("remote_path") == "dropbox:" for event in events),
+        )
+
+    def test_folder_info_rerequests_partial_current_when_children_complete(self) -> None:
+        """``/folder-info`` re-requests a stuck partial current when children are done.
+
+        Simulates a coherent in-memory root that lost a disk race (partial on
+        disk, complete in memory). Polling with complete children must nudge
+        the current folder so subsequent polls observe complete totals.
+        """
+        local_root = self.create_local_root({
+            "shared.txt": b"root data",
+            "sub/child.txt": b"child data",
+        })
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[
+                remote_file_item("shared.txt", local_root / "shared.txt"),
+                remote_dir_item("sub"),
+            ])],
+            "dropbox:sub": [SimulatedLsjsonResponse(items=[
+                remote_file_item("child.txt", local_root / "sub" / "child.txt"),
+            ])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=2)
+        cache = app.folder_cache
+        assert cache is not None
+
+        with TestServer(app) as server:
+            self._browse_listing(server)
+            self._wait_folder_info(
+                server,
+                paths=["sub"],
+                current="",
+                predicate=lambda data: (
+                    data.get("sub", {}).get("complete")
+                    and data.get("", {}).get("complete")
+                    and data.get("", {}).get("diff_complete")
+                ),
+            )
+
+            complete_root = cache.get("dropbox:") or {}
+            self.assertTrue(complete_root.get("complete"))
+            stuck = dict(complete_root)
+            stuck["complete"] = False
+            stuck["diff_complete"] = False
+            stuck["diff_status"] = "loading"
+            stuck["size"] = len(b"root data")
+            stuck["file_count"] = 1
+            foldercache_module.write_json_atomic(cache._cache_path("dropbox:"), stuck)
+            self.assertFalse((cache.get("dropbox:") or {}).get("complete"))
+            self.assertEqual((cache.get("dropbox:") or {}).get("size"), len(b"root data"))
+
+            first = server.get_json("/folder-info?paths=sub&current=")["results"]
+            self.assertTrue(first["sub"]["complete"])
+            # Response body was built before the safety-net re-request.
+            self.assertEqual(first[""]["status"], "partial")
+            self.assertFalse(first[""]["complete"])
+
+            # Re-request should have repaired disk from complete in-memory state.
+            healed_disk = wait_until(
+                lambda: cache.get("dropbox:") if (cache.get("dropbox:") or {}).get("complete") else None,
+                description="root disk healed after folder-info re-request",
+            )
+            second = server.get_json("/folder-info?paths=sub&current=")["results"]
+
+        self.assertTrue(healed_disk.get("complete"))
+        self.assertEqual(healed_disk.get("size"), len(b"root data") + len(b"child data"))
+        self.assertTrue(second[""]["complete"])
+        self.assertTrue(second[""]["diff_complete"])
+        self.assertEqual(second[""]["size_sort_value"], len(b"root data") + len(b"child data"))
+        self.assertEqual(second[""]["count_display"], "2 files")
+        events = self.read_trace_events()
+        self.assertTrue(
+            any(
+                event["event"] == "folder_info_poll" and event.get("stuck_parent_reenqueued")
+                for event in events
+            ),
+        )
+        self.assertTrue(
+            any(
+                event["event"] == "request_flushed_complete" and event.get("remote_path") == "dropbox:"
+                for event in events
+            ),
+        )
+
+    def test_folder_info_does_not_rerequest_partial_current_while_children_incomplete(self) -> None:
+        """Safety net must not thrash while a polled child is still incomplete."""
+        local_root = self.create_local_root({
+            "shared.txt": b"root data",
+            "slow/child.txt": b"slow child",
+        })
+        slow_started = threading.Event()
+        slow_release = threading.Event()
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[
+                remote_file_item("shared.txt", local_root / "shared.txt"),
+                remote_dir_item("slow"),
+            ])],
+            "dropbox:slow": [SimulatedLsjsonResponse(
+                items=[remote_file_item("child.txt", local_root / "slow" / "child.txt")],
+                wait_event=slow_release,
+                started_event=slow_started,
+            )],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=2)
+
+        with TestServer(app) as server:
+            self._browse_listing(server)
+            wait_until(slow_started.is_set, description="slow child listing to start")
+            # Root may already be partial; child is still calculating.
+            mid = server.get_json("/folder-info?paths=slow&current=")["results"]
+            self.assertFalse(mid.get("slow", {}).get("complete", False))
+            slow_release.set()
+            self._wait_folder_info(
+                server,
+                paths=["slow"],
+                current="",
+                predicate=lambda data: data.get("slow", {}).get("complete") and data.get("", {}).get("complete"),
+            )
+
+        events = self.read_trace_events()
+        blocked_polls = [
+            event for event in events
+            if event["event"] == "folder_info_poll" and not (event.get("status_counts") or {}).get("complete")
+        ]
+        self.assertTrue(blocked_polls)
+        self.assertFalse(
+            any(event.get("stuck_parent_reenqueued") for event in blocked_polls),
+            "partial current must not re-request while polled children are incomplete",
+        )
+
     def test_server_cleanup_stops_app_background_workers(self) -> None:
         before_folder_workers = {
             thread.ident for thread in threading.enumerate()
