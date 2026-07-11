@@ -37,7 +37,7 @@ PROBE_CACHE_SUBDIR = "probe_cache"
 SUBTITLE_CACHE_VERSION = "webvtt-v2-ass-cleanup"
 SUBTITLE_WINDOW_CACHE_VERSION = "webvtt-window-v2-ass-cleanup"
 SUBTITLE_WINDOW_MANIFEST_VERSION = "webvtt-window-manifest-v2-ass-cleanup"
-PROBE_CACHE_VERSION = "ffprobe-v3"
+PROBE_CACHE_VERSION = "ffprobe-v4"
 HEADER_CACHE_VERSION = "header-v1"
 DEFAULT_PROBE_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60.0
 DEFAULT_PROBE_CACHE_MAX_BYTES = 50 * 1024 * 1024
@@ -3079,6 +3079,65 @@ def probe_payload_is_incomplete(payload: dict[str, object]) -> bool:
     return True
 
 
+def header_probe_duration_unreliable(
+    raw_payload: dict[str, object],
+    *,
+    file_size: int | None,
+    header_bytes: int,
+) -> bool:
+    """Return True when a header-cache ffprobe duration looks stub-sized.
+
+    AVI and similar formats often report a positive duration from a truncated
+    prefix that is really size/bitrate of the stub, not the full remote file.
+    """
+    if file_size is None or file_size <= 0 or header_bytes <= 0:
+        return False
+    if file_size <= header_bytes:
+        # Header cache already covers the whole object.
+        return False
+    format_data = raw_payload.get("format")
+    if not isinstance(format_data, dict):
+        return False
+    duration = _duration_seconds(format_data)
+    if duration is None or duration <= 0:
+        return False
+    streams = raw_payload.get("streams")
+    if not isinstance(streams, list) or not streams:
+        # Incomplete (no streams) is handled separately.
+        return False
+
+    stub_size_limit = max(float(header_bytes) * 1.25, 1.0)
+    file_size_threshold = float(file_size) * 0.9
+
+    reported_size: float | None = None
+    raw_size = format_data.get("size")
+    if raw_size not in (None, ""):
+        try:
+            reported_size = float(raw_size)
+        except (TypeError, ValueError):
+            reported_size = None
+    if (
+        reported_size is not None
+        and reported_size > 0
+        and reported_size <= stub_size_limit
+        and reported_size < file_size_threshold
+    ):
+        return True
+
+    bit_rate: float | None = None
+    raw_bit_rate = format_data.get("bit_rate")
+    if raw_bit_rate not in (None, ""):
+        try:
+            bit_rate = float(raw_bit_rate)
+        except (TypeError, ValueError):
+            bit_rate = None
+    if bit_rate is not None and bit_rate > 0:
+        implied_size = duration * bit_rate / 8.0
+        if implied_size <= stub_size_limit and implied_size < file_size_threshold:
+            return True
+    return False
+
+
 def _read_probe_cache(app: Any, cache_key: str) -> dict[str, object] | None:
     payload = _probe_cache_store(app).read_json(cache_key, suffix=".json")
     if not isinstance(payload, dict):
@@ -3258,6 +3317,8 @@ def probe_remote_media(
         file_size=file_size,
     )
     file_input_url = build_remote_file_probe_url(base_url, rel_path)
+    header_bytes = _header_cache_bytes(app)
+    used_header_input = header_input_url != file_input_url
     try:
         raw_payload = _run_ffprobe_json(
             ffprobe_exe,
@@ -3271,7 +3332,7 @@ def probe_remote_media(
             raw_payload=raw_payload,
         )
     except BrowserError:
-        if header_input_url == file_input_url:
+        if not used_header_input:
             raise
         raw_payload = _run_ffprobe_json(
             ffprobe_exe,
@@ -3284,7 +3345,16 @@ def probe_remote_media(
             input_url=file_input_url,
             raw_payload=raw_payload,
         )
-    if probe_payload_is_incomplete(response_payload) and header_input_url != file_input_url:
+        used_header_input = False
+    needs_full_file_probe = used_header_input and (
+        probe_payload_is_incomplete(response_payload)
+        or header_probe_duration_unreliable(
+            raw_payload,
+            file_size=file_size,
+            header_bytes=header_bytes,
+        )
+    )
+    if needs_full_file_probe:
         raw_payload = _run_ffprobe_json(
             ffprobe_exe,
             file_input_url,
