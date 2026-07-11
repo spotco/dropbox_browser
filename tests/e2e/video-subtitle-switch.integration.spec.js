@@ -350,7 +350,7 @@ async function readFullscreenPlaybackState(page) {
       "video-loop-toggle",
       "video-previous",
       "video-next",
-      "video-pip-toggle",
+      "video-full-window-toggle",
       "video-fullscreen-toggle",
     ];
     const controlRects = Object.fromEntries(controlOrder.map((id) => [id, rectFor(id)]));
@@ -388,12 +388,12 @@ async function readFullscreenPlaybackState(page) {
         || controlRects["video-back-15"].bottom <= controlRects["video-forward-15"].top + 1,
       forward15BeforeMute: controlRects["video-forward-15"].right <= controlRects["video-mute-toggle"].left + 1
         || controlRects["video-forward-15"].bottom <= controlRects["video-mute-toggle"].top + 1,
-      nextBeforePip: controlRects["video-next"].right <= controlRects["video-pip-toggle"].left + 1
-        || controlRects["video-next"].bottom <= controlRects["video-pip-toggle"].top + 1,
-      forward15BeforePip: controlRects["video-forward-15"].right <= controlRects["video-pip-toggle"].left + 1
-        || controlRects["video-forward-15"].bottom <= controlRects["video-pip-toggle"].top + 1,
-      pipBeforeFullscreen: controlRects["video-pip-toggle"].right <= controlRects["video-fullscreen-toggle"].left + 1
-        || controlRects["video-pip-toggle"].bottom <= controlRects["video-fullscreen-toggle"].top + 1,
+      nextBeforeFullWindow: controlRects["video-next"].right <= controlRects["video-full-window-toggle"].left + 1
+        || controlRects["video-next"].bottom <= controlRects["video-full-window-toggle"].top + 1,
+      forward15BeforeFullWindow: controlRects["video-forward-15"].right <= controlRects["video-full-window-toggle"].left + 1
+        || controlRects["video-forward-15"].bottom <= controlRects["video-full-window-toggle"].top + 1,
+      fullWindowBeforeFullscreen: controlRects["video-full-window-toggle"].right <= controlRects["video-fullscreen-toggle"].left + 1
+        || controlRects["video-full-window-toggle"].bottom <= controlRects["video-fullscreen-toggle"].top + 1,
     };
   });
 }
@@ -1607,9 +1607,9 @@ test("video controls stay visible and usable in fullscreen", async ({ page }) =>
       previousBeforeNext: true,
       back15BeforeForward15: true,
       forward15BeforeMute: true,
-      nextBeforePip: true,
-      forward15BeforePip: true,
-      pipBeforeFullscreen: true,
+      nextBeforeFullWindow: true,
+      forward15BeforeFullWindow: true,
+      fullWindowBeforeFullscreen: true,
     });
 
   await expectVideoControlState(page, {
@@ -3173,9 +3173,9 @@ test("video fullscreen keeps the scrubber overlay visible and functional", async
   expect(fullscreenState.previousBeforeNext).toBe(true);
   expect(fullscreenState.back15BeforeForward15).toBe(true);
   expect(fullscreenState.forward15BeforeMute).toBe(true);
-  expect(fullscreenState.nextBeforePip).toBe(true);
-  expect(fullscreenState.forward15BeforePip).toBe(true);
-  expect(fullscreenState.pipBeforeFullscreen).toBe(true);
+  expect(fullscreenState.nextBeforeFullWindow).toBe(true);
+  expect(fullscreenState.forward15BeforeFullWindow).toBe(true);
+  expect(fullscreenState.fullWindowBeforeFullscreen).toBe(true);
   for (const id of fullscreenState.controlOrder) {
     expect(fullscreenState.controlRects[id].width).toBeGreaterThan(0);
     expect(fullscreenState.controlRects[id].height).toBeGreaterThan(0);

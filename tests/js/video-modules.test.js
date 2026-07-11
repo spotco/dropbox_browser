@@ -66,7 +66,7 @@ function createVideoCtx() {
       muteToggleButton: makeEl(),
       volumeSliderEl: makeEl(),
       fullscreenButton: makeEl(),
-      pipButton: makeEl(),
+      fullWindowButton: makeEl(),
       progressSliderEl: makeEl(),
       elapsedTimeEl: makeEl(),
       totalTimeEl: makeEl(),
