@@ -99,9 +99,11 @@ function resetPlaybackProgress() {
     ctx.setControlButtonState(ctx.els.fullscreenButton, 'Fullscreen', VIDEO_ICONS.fullscreen);
     ctx.els.fullscreenButton.disabled = true;
   }
-  if (ctx.els.pipButton) {
-    ctx.setControlButtonState(ctx.els.pipButton, 'Picture in picture', VIDEO_ICONS.pipEnter);
-    ctx.els.pipButton.disabled = true;
+  if (ctx.els.fullWindowButton) {
+    ctx.setControlButtonState(ctx.els.fullWindowButton, 'Full window', VIDEO_ICONS.fullWindowEnter);
+    ctx.els.fullWindowButton.setAttribute('aria-pressed', 'false');
+    ctx.els.fullWindowButton.classList.remove('is-active');
+    ctx.els.fullWindowButton.disabled = true;
   }
   syncLoopQueueButton();
   syncQueueNavigationButtons(false);
@@ -184,16 +186,15 @@ function syncTransportControls() {
       isFullscreen ? VIDEO_ICONS.fullscreenExit : VIDEO_ICONS.fullscreen
     );
   }
-  if (ctx.els.pipButton) {
-    var pipSupported = Boolean(
-      document.pictureInPictureEnabled && typeof ctx.els.videoEl.requestPictureInPicture === 'function'
-    );
-    var isPipActive = document.pictureInPictureElement === ctx.els.videoEl;
-    ctx.els.pipButton.disabled = !canControl || !pipSupported;
+  if (ctx.els.fullWindowButton) {
+    var isFullWindow = Boolean(ctx.state.fullWindowActive);
+    ctx.els.fullWindowButton.disabled = !canControl;
+    ctx.els.fullWindowButton.setAttribute('aria-pressed', isFullWindow ? 'true' : 'false');
+    ctx.els.fullWindowButton.classList.toggle('is-active', isFullWindow);
     ctx.setControlButtonState(
-      ctx.els.pipButton,
-      isPipActive ? 'Exit picture in picture' : 'Picture in picture',
-      isPipActive ? VIDEO_ICONS.pipExit : VIDEO_ICONS.pipEnter
+      ctx.els.fullWindowButton,
+      isFullWindow ? 'Exit full window' : 'Full window',
+      isFullWindow ? VIDEO_ICONS.fullWindowExit : VIDEO_ICONS.fullWindowEnter
     );
   }
   syncLoopQueueButton();
@@ -319,11 +320,20 @@ function eventTargetIsTextEntry(target) {
   return Boolean(target.isContentEditable);
 }
 
+function isNativeFullscreenActive() {
+  var fullscreenHost = ctx.fullscreenHostElement();
+  return Boolean(fullscreenHost && document.fullscreenElement === fullscreenHost);
+}
+
+function isFullWindowActive() {
+  return Boolean(ctx.state.fullWindowActive);
+}
+
 function videoKeyboardShortcutAllowed(event) {
   if (!event) return false;
-  var fullscreenHost = ctx.fullscreenHostElement();
-  var stageFullscreen = fullscreenHost && document.fullscreenElement === fullscreenHost;
-  if (!stageFullscreen && !ctx.state.paneActive) return false;
+  // Allow shortcuts while the video pane is active, or while either expanded
+  // layout owns the viewport (native fullscreen or CSS full window).
+  if (!isNativeFullscreenActive() && !isFullWindowActive() && !ctx.state.paneActive) return false;
   if (eventTargetIsTextEntry(event.target)) return false;
   return true;
 }
@@ -448,17 +458,168 @@ function setVideoVolumeFromSlider() {
   syncTransportControls();
 }
 
+function logPanelApi() {
+  if (typeof window === 'undefined') return null;
+  return window.DropboxBrowserLogPanel || null;
+}
+
+function readLogPanelHeightPx() {
+  var api = logPanelApi();
+  if (api && typeof api.getHeight === 'function') {
+    var fromApi = Number(api.getHeight());
+    if (Number.isFinite(fromApi) && fromApi > 0) return fromApi;
+  }
+  if (typeof document === 'undefined' || !document.documentElement) return null;
+  var raw = String(
+    window.getComputedStyle(document.documentElement).getPropertyValue('--log-panel-height') || ''
+  ).trim();
+  var parsed = parseInt(raw, 10);
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  return null;
+}
+
+function applyFullWindowLayoutClasses(active) {
+  var isActive = Boolean(active);
+  ctx.state.fullWindowActive = isActive;
+  if (typeof document !== 'undefined' && document.body) {
+    document.body.classList.toggle('video-full-window-mode', isActive);
+  }
+  if (ctx.pane) {
+    ctx.pane.classList.toggle('video-full-window', isActive);
+  }
+  if (ctx.els.playbackStageEl) {
+    ctx.els.playbackStageEl.classList.toggle('video-full-window', isActive);
+  }
+}
+
+function enterFullWindowLayout() {
+  if (ctx.state.fullWindowActive) {
+    var activeApi = logPanelApi();
+    if (activeApi && typeof activeApi.applyFullWindowHeight === 'function') {
+      activeApi.applyFullWindowHeight();
+    }
+    return;
+  }
+  var savedHeight = readLogPanelHeightPx();
+  ctx.state.savedLogPanelHeight = savedHeight;
+  applyFullWindowLayoutClasses(true);
+  var api = logPanelApi();
+  if (api && typeof api.setVideoFullWindowActive === 'function') {
+    api.setVideoFullWindowActive(true, {savedHeight: savedHeight});
+  }
+}
+
+function exitFullWindowLayout() {
+  var restoreHeight = ctx.state.savedLogPanelHeight;
+  var wasActive = Boolean(ctx.state.fullWindowActive);
+  applyFullWindowLayoutClasses(false);
+  ctx.state.savedLogPanelHeight = null;
+  var api = logPanelApi();
+  if (api && typeof api.setVideoFullWindowActive === 'function') {
+    api.setVideoFullWindowActive(false, {
+      restoreHeight: Number.isFinite(Number(restoreHeight)) ? Number(restoreHeight) : null,
+    });
+    return;
+  }
+  // Fallback when log panel API is unavailable: restore CSS variable only.
+  if (wasActive && Number.isFinite(Number(restoreHeight)) && Number(restoreHeight) > 0) {
+    document.documentElement.style.setProperty('--log-panel-height', Number(restoreHeight) + 'px');
+  }
+}
+
+async function exitNativeFullscreenIfNeeded() {
+  var fullscreenHost = ctx.fullscreenHostElement();
+  if (
+    !fullscreenHost
+    || document.fullscreenElement !== fullscreenHost
+    || typeof document.exitFullscreen !== 'function'
+  ) {
+    return;
+  }
+  try {
+    await document.exitFullscreen();
+  }
+  catch (_error) {
+    // Browser may reject exitFullscreen outside a user gesture; ignore.
+  }
+}
+
+async function enterFullWindow() {
+  await exitNativeFullscreenIfNeeded();
+  enterFullWindowLayout();
+  ctx.state.preferredExpandedMode = 'full-window';
+}
+
+async function exitFullWindow() {
+  if (!isFullWindowActive()) return;
+  exitFullWindowLayout();
+}
+
+async function enterNativeFullscreen() {
+  var fullscreenHost = ctx.fullscreenHostElement();
+  if (!ctx.els.videoEl || !fullscreenHost || typeof fullscreenHost.requestFullscreen !== 'function') {
+    return;
+  }
+  // Mutual exclusion: leave CSS full-window layout before native fullscreen.
+  if (isFullWindowActive()) {
+    exitFullWindowLayout();
+  }
+  if (document.fullscreenElement === fullscreenHost) {
+    ctx.state.preferredExpandedMode = 'fullscreen';
+    return;
+  }
+  await fullscreenHost.requestFullscreen();
+  ctx.state.preferredExpandedMode = 'fullscreen';
+}
+
+async function exitToEmbeddedPlaybackLayout() {
+  if (isFullWindowActive()) {
+    exitFullWindowLayout();
+  }
+  await exitNativeFullscreenIfNeeded();
+}
+
+async function enterPreferredExpandedMode() {
+  var preferred = ctx.state.preferredExpandedMode === 'full-window' ? 'full-window' : 'fullscreen';
+  if (preferred === 'full-window') {
+    await enterFullWindow();
+    return;
+  }
+  await enterNativeFullscreen();
+}
+
+async function handlePlaybackSurfaceDoubleClick() {
+  if (isFullWindowActive() || isNativeFullscreenActive()) {
+    await exitToEmbeddedPlaybackLayout();
+    return;
+  }
+  await enterPreferredExpandedMode();
+}
+
+function handleFullscreenChange() {
+  // Esc / browser UI exit from native fullscreen lands in embedded layout.
+  // Do not auto-enter full window here; full window is only entered explicitly
+  // (toolbar or double-click preferred mode). Mutual exclusion already clears
+  // full window before requestFullscreen, so both modes should not co-exist.
+  if (!isNativeFullscreenActive() && !isFullWindowActive()) {
+    // Ensure log-panel height lock is not left dangling if state drifted.
+    var api = logPanelApi();
+    if (api && typeof api.isVideoFullWindowActive === 'function' && api.isVideoFullWindowActive()) {
+      exitFullWindowLayout();
+    }
+  }
+  syncTransportControls();
+}
+
 async function toggleVideoFullscreen() {
   var fullscreenHost = ctx.fullscreenHostElement();
   if (!ctx.els.videoEl || !fullscreenHost || !videoControlsAvailable()) return;
   try {
-    if (document.fullscreenElement === fullscreenHost && typeof document.exitFullscreen === 'function') {
-      await document.exitFullscreen();
+    if (isNativeFullscreenActive()) {
+      await exitNativeFullscreenIfNeeded();
       return;
     }
-    if (typeof fullscreenHost.requestFullscreen === 'function') {
-      await fullscreenHost.requestFullscreen();
-    }
+    await enterNativeFullscreen();
   }
   catch (_error) {
     ctx.setStatus('Fullscreen is unavailable in this browser context.');
@@ -468,21 +629,18 @@ async function toggleVideoFullscreen() {
   }
 }
 
-async function togglePictureInPicture() {
-  if (!ctx.els.videoEl || !videoControlsAvailable()) return;
-  if (!document.pictureInPictureEnabled || typeof ctx.els.videoEl.requestPictureInPicture !== 'function') {
-    syncTransportControls();
-    return;
-  }
+async function toggleFullWindowMode() {
+  if (!videoControlsAvailable()) return;
   try {
-    if (document.pictureInPictureElement === ctx.els.videoEl) {
-      await document.exitPictureInPicture();
+    if (isFullWindowActive()) {
+      await exitFullWindow();
       return;
     }
-    await ctx.els.videoEl.requestPictureInPicture();
+    await enterFullWindow();
   }
   catch (_error) {
-    ctx.setStatus('Picture-in-picture is unavailable for this video.');
+    ctx.setStatus('Full window mode is unavailable in this browser context.');
+    exitFullWindowLayout();
   }
   finally {
     syncTransportControls();
@@ -516,7 +674,17 @@ async function togglePictureInPicture() {
   ctx.toggleVideoMute = toggleVideoMute;
   ctx.setVideoVolumeFromSlider = setVideoVolumeFromSlider;
   ctx.toggleVideoFullscreen = toggleVideoFullscreen;
-  ctx.togglePictureInPicture = togglePictureInPicture;
+  ctx.applyFullWindowLayoutClasses = applyFullWindowLayoutClasses;
+  ctx.enterFullWindowLayout = enterFullWindowLayout;
+  ctx.exitFullWindowLayout = exitFullWindowLayout;
+  ctx.isFullWindowActive = isFullWindowActive;
+  ctx.isNativeFullscreenActive = isNativeFullscreenActive;
+  ctx.enterFullWindow = enterFullWindow;
+  ctx.exitFullWindow = exitFullWindow;
+  ctx.enterNativeFullscreen = enterNativeFullscreen;
+  ctx.enterPreferredExpandedMode = enterPreferredExpandedMode;
+  ctx.exitToEmbeddedPlaybackLayout = exitToEmbeddedPlaybackLayout;
+  ctx.toggleFullWindowMode = toggleFullWindowMode;
 
   if (ctx.els.playbackSurfaceEl) {
     ctx.els.playbackSurfaceEl.addEventListener('mousemove', function (event) {
@@ -533,7 +701,7 @@ async function togglePictureInPicture() {
     ctx.els.playbackSurfaceEl.addEventListener('dblclick', function (event) {
       if (!videoControlsAvailable()) return;
       if (event.target && event.target.closest && event.target.closest('#video-controls-overlay')) return;
-      void toggleVideoFullscreen();
+      void handlePlaybackSurfaceDoubleClick();
       revealControlsOverlay();
     });
   }
@@ -580,10 +748,10 @@ async function togglePictureInPicture() {
       revealControlsOverlay();
     });
   }
-  if (ctx.els.pipButton) {
-    ctx.els.pipButton.addEventListener('click', function (event) {
+  if (ctx.els.fullWindowButton) {
+    ctx.els.fullWindowButton.addEventListener('click', function (event) {
       event.stopPropagation();
-      void togglePictureInPicture();
+      void toggleFullWindowMode();
       revealControlsOverlay();
     });
   }
@@ -680,11 +848,9 @@ async function togglePictureInPicture() {
     });
     ctx.els.videoEl.addEventListener('volumechange', syncTransportControls);
     if (typeof document !== 'undefined') {
-      document.addEventListener('fullscreenchange', syncTransportControls);
+      document.addEventListener('fullscreenchange', handleFullscreenChange);
       document.addEventListener('keydown', handleVideoKeyboardShortcut);
     }
-    ctx.els.videoEl.addEventListener('enterpictureinpicture', syncTransportControls);
-    ctx.els.videoEl.addEventListener('leavepictureinpicture', syncTransportControls);
     ctx.els.videoEl.addEventListener('emptied', resetPlaybackProgress);
     ctx.els.videoEl.addEventListener('playing', function () {
       ctx.state.transportWantsPlay = true;

@@ -6,6 +6,8 @@
   var defaultHeight = 240;
   var minHeight = 42;
   var currentHeight = defaultHeight;
+  var videoFullWindowActive = false;
+  var heightBeforeFullWindow = null;
 
   function scrollLogToBottom() {
     entries.scrollTop = entries.scrollHeight;
@@ -29,6 +31,60 @@
     return clamped;
   }
 
+  function getHeight() {
+    return currentHeight;
+  }
+
+  function applyFullWindowHeight() {
+    // Bypass clampHeight (which reserves 80px for page chrome). Do not persist.
+    var fill = Math.max(minHeight, window.innerHeight || minHeight);
+    document.documentElement.style.setProperty('--log-panel-height', fill + 'px');
+    return fill;
+  }
+
+  function setResizerInteractionEnabled(enabled) {
+    var pointerEvents = enabled ? '' : 'none';
+    if (resizer) {
+      resizer.style.pointerEvents = pointerEvents;
+      resizer.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+      if (enabled) resizer.removeAttribute('data-full-window-locked');
+      else resizer.setAttribute('data-full-window-locked', '1');
+    }
+    if (grip) {
+      grip.style.pointerEvents = pointerEvents;
+      if (enabled) grip.removeAttribute('data-full-window-locked');
+      else grip.setAttribute('data-full-window-locked', '1');
+    }
+  }
+
+  function setVideoFullWindowActive(active, options) {
+    var opts = options || {};
+    var nextActive = Boolean(active);
+    if (nextActive) {
+      if (!videoFullWindowActive) {
+        if (Number.isFinite(Number(opts.savedHeight))) {
+          heightBeforeFullWindow = Number(opts.savedHeight);
+        } else {
+          heightBeforeFullWindow = currentHeight;
+        }
+      }
+      videoFullWindowActive = true;
+      setResizerInteractionEnabled(false);
+      applyFullWindowHeight();
+      return heightBeforeFullWindow;
+    }
+    videoFullWindowActive = false;
+    setResizerInteractionEnabled(true);
+    var restore = Number.isFinite(Number(opts.restoreHeight))
+      ? Number(opts.restoreHeight)
+      : heightBeforeFullWindow;
+    heightBeforeFullWindow = null;
+    if (Number.isFinite(restore) && restore > 0) {
+      return applyHeight(restore);
+    }
+    return applyHeight(currentHeight);
+  }
+
   function musicMinHeight() {
     var pane = document.getElementById('music-player-pane');
     if (!pane) return minHeight;
@@ -38,6 +94,7 @@
   }
 
   function ensureMusicPaneHeight() {
+    if (videoFullWindowActive) return;
     var target = clampHeight(musicMinHeight());
     if (currentHeight < target) applyHeight(target);
   }
@@ -45,12 +102,17 @@
   applyHeight(Settings.get('log-height', defaultHeight));
 
   function startResize(ev) {
+    if (videoFullWindowActive) {
+      ev.preventDefault();
+      return;
+    }
     ev.preventDefault();
     var startY = ev.clientY;
     var startHeight = currentHeight;
     resizer.classList.add('dragging');
 
     function move(moveEv) {
+      if (videoFullWindowActive) return;
       applyHeight(startHeight + startY - moveEv.clientY);
       scrollLogToBottom();
     }
@@ -67,14 +129,28 @@
     window.addEventListener('pointercancel', end);
   }
 
-  resizer.addEventListener('pointerdown', startResize);
-  grip.addEventListener('pointerdown', startResize);
-  window.addEventListener('resize', function () { applyHeight(currentHeight); });
+  if (resizer) resizer.addEventListener('pointerdown', startResize);
+  if (grip) grip.addEventListener('pointerdown', startResize);
+  window.addEventListener('resize', function () {
+    if (videoFullWindowActive) {
+      applyFullWindowHeight();
+      return;
+    }
+    applyHeight(currentHeight);
+  });
   window.addEventListener('bottom-pane-mode-changed', function (ev) {
     if (!ev.detail) return;
     if (ev.detail.mode === 'music-player') ensureMusicPaneHeight();
     if (ev.detail.mode === 'server-log') scrollLogToBottom();
   });
+
+  window.DropboxBrowserLogPanel = {
+    getHeight: getHeight,
+    applyHeight: applyHeight,
+    applyFullWindowHeight: applyFullWindowHeight,
+    setVideoFullWindowActive: setVideoFullWindowActive,
+    isVideoFullWindowActive: function () { return videoFullWindowActive; },
+  };
 
   var nextIndex = 0;
   var nextUpdateSeq = 0;

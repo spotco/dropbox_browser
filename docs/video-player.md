@@ -309,6 +309,65 @@ required:
 
 The client supports compatibility playback only (no native remote streaming path).
 
+### Playback Layout Modes
+
+Playback layout is separate from HLS/session playback mode. Three layouts:
+
+| Layout | How it is entered | Viewport scope |
+|--------|-------------------|----------------|
+| **Embedded** (default) | Initial state; exit from full window or native fullscreen | Bottom `#log-panel` only |
+| **Full window** | Full-window toggle or double-click when preferred | Browser viewport (CSS) |
+| **Native fullscreen** | Fullscreen toggle or double-click when preferred | Monitor (Fullscreen API) |
+
+#### Session state (`ctx.state` in `video.js`)
+
+| Field | Type | Default | Persistence |
+|-------|------|---------|-------------|
+| `fullWindowActive` | boolean | `false` | session memory only |
+| `preferredExpandedMode` | `'fullscreen'` \| `'full-window'` | `'fullscreen'` | session memory only |
+| `savedLogPanelHeight` | number \| `null` | `null` | session memory only (px at full-window entry) |
+
+`preferredExpandedMode` is updated when the user explicitly enters either expanded
+mode via its toolbar button or via double-click from embedded. It is never written
+to `Settings` or `localStorage`.
+
+#### Body / shell class strategy
+
+| Selector | Owner | Purpose |
+|----------|-------|---------|
+| `body.video-full-window-mode` | `app.css` | Hide page `header` and `main`; force `#log-panel` to fill the viewport (`--log-panel-height: 100vh` or equivalent) |
+| `#video-player-pane.video-full-window` (or shell ancestor) | `video.css` | Single-column playback-only shell: hide library, queue, playback subpane header, track panel, and debug panel; stretch stage |
+| `.video-playback-stage.video-full-window` (or ancestor `.video-full-window`) | `video.css` | Subtitle overlay / `::cue` at full configured size, matching `.video-playback-stage:fullscreen` (not the embedded 65% scale) |
+
+Native fullscreen continues to use the Fullscreen API on `#video-playback-stage`
+and existing `:fullscreen` rules. Do not rely on `:fullscreen` alone for full
+window; full window is not a Fullscreen API mode.
+
+#### Regions hidden in full window
+
+When `fullWindowActive` is true:
+
+- Page: `header`, `main` (browse)
+- Video shell: `#video-library-pane`, `#video-queue-pane`, playback
+  `.video-subpane-header`, `#video-track-panel`, `#video-debug-panel`
+- Visible: playback surface/stage, transport controls overlay, media + subtitles
+
+Library, queue, track, and debug are only reachable after exiting full window.
+
+#### Mutual exclusion
+
+Full window and native fullscreen must never be active together:
+
+- Entering **native fullscreen** exits full window first, then sets
+  `preferredExpandedMode = 'fullscreen'`.
+- Entering **full window** exits native fullscreen first (if any), then sets
+  `preferredExpandedMode = 'full-window'`.
+- Double-click on `#video-playback-surface`:
+  - embedded → enter `preferredExpandedMode` (default native fullscreen)
+  - full window or native fullscreen → return to embedded only
+- Exit full window also on: full-window toggle, bottom-pane mode change away from
+  `video-player`, or video pane deactivate (`pane.js`).
+
 Typical startup for the active queue item:
 
 1. `playback.js` loads `/video/endpoints/status` and probe metadata.

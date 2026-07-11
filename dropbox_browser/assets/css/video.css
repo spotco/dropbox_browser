@@ -281,6 +281,51 @@
   background: #000;
 }
 
+/* Full-window mode (CSS viewport takeover; not Fullscreen API).
+   Classes applied by controls.js: body.video-full-window-mode,
+   #video-player-pane.video-full-window, .video-playback-stage.video-full-window */
+#video-player-pane.video-full-window .video-player-shell {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+#video-player-pane.video-full-window #video-library-pane,
+#video-player-pane.video-full-window #video-queue-pane,
+#video-player-pane.video-full-window .video-playback-pane > .video-subpane-header,
+#video-player-pane.video-full-window #video-track-panel,
+#video-player-pane.video-full-window #video-debug-panel {
+  display: none !important;
+}
+
+#video-player-pane.video-full-window .video-playback-pane {
+  border-left: none;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#video-player-pane.video-full-window .video-playback-surface {
+  border-bottom: 0;
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+}
+
+#video-player-pane.video-full-window .video-playback-stage,
+.video-playback-stage.video-full-window {
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 0;
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+}
+
 .video-empty-state,
 .video-playback-placeholder {
   border: 1px dashed #3c4f69;
@@ -431,11 +476,12 @@
   margin-top: 4px;
 }
 
-.video-playback-stage:not(:fullscreen) .video-player-media::cue {
+/* Embedded-only subtitle scale (65%). Exclude native fullscreen and full-window. */
+.video-playback-stage:not(:fullscreen):not(.video-full-window) .video-player-media::cue {
   font-size: calc(var(--video-subtitle-font-size, 28px) * 0.65);
 }
 
-.video-playback-stage:not(:fullscreen) .video-subtitle-overlay {
+.video-playback-stage:not(:fullscreen):not(.video-full-window) .video-subtitle-overlay {
   font-size: calc(var(--video-subtitle-font-size, 28px) * 0.65);
   line-height: calc(var(--video-subtitle-font-size, 28px) * 0.65 * 1.4);
 }
@@ -445,6 +491,16 @@
 }
 
 .video-playback-stage:fullscreen .video-subtitle-overlay {
+  font-size: var(--video-subtitle-font-size, 28px);
+  line-height: calc(var(--video-subtitle-font-size, 28px) * 1.4);
+}
+
+/* Full-window subtitle scale matches native fullscreen (full configured size). */
+.video-playback-stage.video-full-window .video-player-media::cue {
+  font-size: var(--video-subtitle-font-size, 28px);
+}
+
+.video-playback-stage.video-full-window .video-subtitle-overlay {
   font-size: var(--video-subtitle-font-size, 28px);
   line-height: calc(var(--video-subtitle-font-size, 28px) * 1.4);
 }

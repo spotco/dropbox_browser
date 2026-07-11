@@ -71,7 +71,7 @@ import {initPane} from './video/pane.js';
       muteToggleButton: document.getElementById('video-mute-toggle'),
       volumeSliderEl: document.getElementById('video-volume-slider'),
       fullscreenButton: document.getElementById('video-fullscreen-toggle'),
-      pipButton: document.getElementById('video-pip-toggle'),
+      fullWindowButton: document.getElementById('video-full-window-toggle'),
       loopButton: document.getElementById('video-loop-toggle'),
       previousButton: document.getElementById('video-previous'),
       nextButton: document.getElementById('video-next'),
@@ -230,6 +230,14 @@ import {initPane} from './video/pane.js';
       lastControlsRevealPointerKey: '',
       controlsScrubReveal: false,
       subtitleFailureState: 'idle',
+      // Full-window layout mode (CSS viewport takeover; not native fullscreen).
+      // See docs/video-player.md "Playback Layout Modes".
+      fullWindowActive: false,
+      // Session-only preferred expanded mode for double-click from embedded:
+      // 'fullscreen' (native Fullscreen API, default) | 'full-window'.
+      preferredExpandedMode: 'fullscreen',
+      // Pre-entry --log-panel-height (px number) restored on full-window exit.
+      savedLogPanelHeight: null,
     },
     setStatus: function (text) {
       if (ctx.els.statusEl) ctx.els.statusEl.textContent = text;
