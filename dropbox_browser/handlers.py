@@ -1055,6 +1055,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 request_page_time = time.time()
         results: dict = {}
         requested_count = 0
+        stuck_parent_reenqueued = False
         status_counts: dict[str, int] = {}
         for rel_path in rel_paths:
             if not cache:
@@ -1089,6 +1090,22 @@ class RequestHandler(BaseHTTPRequestHandler):
                 cache.request(full_remote, request_page_time)
                 requested_count += 1
                 results[rel_path] = {"status": "calculating", "complete": False}
+        # Safety net: when polled child folders are already complete but the
+        # current folder is still partial, re-request current. Legitimate
+        # in-progress parents dedupe; stuck partial parents (stale disk or
+        # missed child attach) can repair/flush or recompute.
+        if cache and current_rel is not None:
+            current_result = results.get(current_rel) or {}
+            child_paths = [path for path in rel_paths if path != current_rel]
+            if (
+                child_paths
+                and current_result.get("status") == "partial"
+                and not current_result.get("complete")
+                and all((results.get(path) or {}).get("complete") for path in child_paths)
+            ):
+                cache.request(remote_target(self.app.remote, current_rel), request_page_time)
+                requested_count += 1
+                stuck_parent_reenqueued = True
         workertrace.append(
             "folder_info_poll",
             path_count=len(rel_paths),
@@ -1096,6 +1113,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             status_counts=status_counts,
             current_rel=current_rel,
             request_page_time=request_page_time,
+            stuck_parent_reenqueued=stuck_parent_reenqueued,
             elapsed_ms=round((time.perf_counter() - started) * 1000, 3),
         )
         body = _json.dumps({"results": results}).encode("utf-8")

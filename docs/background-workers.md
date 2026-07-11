@@ -28,6 +28,20 @@ Folder cache jobs:
 - continue metadata work even after a direct diff is discovered, because size,
   date, and count still need to finish before `complete: true`.
 
+Cache file writes are deferred until after the manager lock is released so
+workers and HTTP threads are not blocked on disk I/O. Each dirty mark advances
+a per-path write epoch; flush skips or repairs stale snapshots so a late
+**partial** parent write cannot clobber a newer **complete** record produced
+when a child finishes on another worker.
+
+`/folder-info` returns cached `partial`/`complete` snapshots without re-queueing
+in the normal case. As a conservative safety net, when the poll includes a
+`current` folder that is still `partial` and every other requested path is
+already `complete`, the handler re-requests `current`. Legitimate parents still
+waiting on unpolled children dedupe; stuck partial parents can repair pending
+children or flush a complete in-memory record back to disk
+(`stuck_parent_reenqueued` on `folder_info_poll`, `request_flushed_complete`).
+
 Folder cache data can expose diff status before recursive metadata is complete.
 This lets the UI show `Has Diffs` while size/date cells continue loading.
 Cache records also persist filtered direct child `lsjson` items. Normal page
@@ -86,8 +100,11 @@ Useful event names:
 - `page_load`, `page_load_reused` - page epoch changes.
 - `navigation_listing_source` - foreground page listing source and row count.
 - `navigation_render_complete` - foreground page render phase timings.
-- `folder_info_poll` - `/folder-info` batch size, queued request count, and
-  status counts.
+- `folder_info_poll` - `/folder-info` batch size, queued request count,
+  status counts, and `stuck_parent_reenqueued` when the partial-current
+  safety net fires.
+- `request_flushed_complete` - a re-request found complete in-memory state and
+  rewrote the on-disk record without a full recompute.
 - `music_library_poll` - `/music/endpoints/library` response timing, cache
   status, returned folder/song counts, and client poll scheduling fields.
 - `request_enqueued`, `request_reenqueued`, `request_refreshed`,
