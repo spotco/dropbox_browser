@@ -59,6 +59,7 @@ from dropbox_browser.video import (
     parse_subtitle_window_duration_seconds,
     probe_cache_path,
     probe_payload_is_incomplete,
+    header_probe_duration_unreliable,
     rebase_webvtt_text,
     slice_webvtt_text_to_window,
     store_subtitle_window_cache_entry,
@@ -981,6 +982,149 @@ class VideoEndpointTests(AppTestCase):
         self.assertIn("path=movie.mp4", run_calls[1][-1])
         self.assertEqual(len(payload["audio_streams"]), 1)
 
+    def test_header_probe_duration_unreliable_detects_stub_sized_duration(self) -> None:
+        # Synthetic AVI-style header probe: streams + duration present, but format
+        # size/bit_rate only explain the header stub, not the real file size.
+        header_bytes = 8 * 1024 * 1024
+        file_size = 181_809_152
+        stub_duration = 68.401667
+        stub_bit_rate = int(round(header_bytes * 8 / stub_duration))
+        raw_payload = {
+            "streams": [
+                {"index": 0, "codec_type": "video", "codec_name": "mpeg4"},
+                {"index": 1, "codec_type": "audio", "codec_name": "mp3"},
+            ],
+            "format": {
+                "duration": str(stub_duration),
+                "size": str(header_bytes),
+                "bit_rate": str(stub_bit_rate),
+                "format_name": "avi",
+            },
+        }
+        self.assertTrue(
+            header_probe_duration_unreliable(
+                raw_payload,
+                file_size=file_size,
+                header_bytes=header_bytes,
+            )
+        )
+        # Full-file-sized format metadata should be trusted.
+        full_duration = 1501.25
+        full_payload = {
+            "streams": raw_payload["streams"],
+            "format": {
+                "duration": str(full_duration),
+                "size": str(file_size),
+                "bit_rate": str(int(round(file_size * 8 / full_duration))),
+                "format_name": "avi",
+            },
+        }
+        self.assertFalse(
+            header_probe_duration_unreliable(
+                full_payload,
+                file_size=file_size,
+                header_bytes=header_bytes,
+            )
+        )
+
+    def test_probe_endpoint_falls_back_when_header_duration_matches_stub_not_file_size(self) -> None:
+        """AVI-style prefix probe can return a plausible but wrong duration.
+
+        Reproduces header-cache probing where ffprobe sees only the stub size
+        (~8 MiB) and reports ~68s, while the real remote file is much larger.
+        """
+        header_bytes = 8 * 1024
+        full_size = 1_000_000
+        avi_bytes = b"A" * full_size
+        rclone = SimulatedRclone(
+            {
+                "dropbox:": [SimulatedLsjsonResponse(items=[{
+                    "Name": "episode.avi",
+                    "Path": "episode.avi",
+                    "IsDir": False,
+                    "Size": full_size,
+                    "ModTime": "2024-01-01T12:00:00Z",
+                }])],
+                "dropbox:episode.avi": [SimulatedLsjsonResponse(items=[{
+                    "Name": "episode.avi",
+                    "Path": "episode.avi",
+                    "IsDir": False,
+                    "Size": full_size,
+                }])],
+            },
+            cat_data={"dropbox:episode.avi": avi_bytes},
+        )
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffmpeg/bin/ffprobe.exe"),
+            ),
+        )
+        app.video_probe_cache_ttl_seconds = 3600
+        app.video_header_cache_bytes = header_bytes
+        stub_duration = 68.401667
+        full_duration = 1501.25
+        stub_bit_rate = int(round(header_bytes * 8 / stub_duration))
+        full_bit_rate = int(round(full_size * 8 / full_duration))
+        streams = [
+            {
+                "index": 0,
+                "codec_type": "video",
+                "codec_name": "mpeg4",
+                "width": 640,
+                "height": 480,
+                "pix_fmt": "yuv420p",
+            },
+            {
+                "index": 1,
+                "codec_type": "audio",
+                "codec_name": "mp3",
+                "channels": 2,
+                "sample_rate": "48000",
+            },
+        ]
+        header_ffprobe = {
+            "streams": streams,
+            "format": {
+                "duration": str(stub_duration),
+                "size": str(header_bytes),
+                "bit_rate": str(stub_bit_rate),
+                "format_name": "avi",
+            },
+        }
+        full_ffprobe = {
+            "streams": streams,
+            "format": {
+                "duration": str(full_duration),
+                "size": str(full_size),
+                "bit_rate": str(full_bit_rate),
+                "format_name": "avi",
+            },
+        }
+        run_calls: list[list[str]] = []
+
+        def fake_run(cmd, stdout=None, stderr=None, check=False, timeout=None):
+            run_calls.append(list(cmd))
+            input_url = cmd[-1]
+            payload = header_ffprobe if str(input_url).endswith(".bin") else full_ffprobe
+            return CompletedProcess(cmd, 0, json.dumps(payload).encode("utf-8"), b"")
+
+        with (
+            TestServer(app) as server,
+            patch("dropbox_browser.video.subprocess.run", side_effect=fake_run),
+        ):
+            payload = server.get_json("/video/endpoints/probe?path=episode.avi&source=remote")
+
+        self.assertEqual(len(run_calls), 2, run_calls)
+        self.assertTrue(str(run_calls[0][-1]).endswith(".bin"), run_calls[0][-1])
+        self.assertIn("path=episode.avi", str(run_calls[1][-1]))
+        self.assertAlmostEqual(float(payload["duration_seconds"]), full_duration, places=3)
+        self.assertNotAlmostEqual(float(payload["duration_seconds"]), stub_duration, places=1)
+        self.assertTrue(str(payload["probe_url"]).startswith("http://"))
+        self.assertIn("path=episode.avi", str(payload["probe_url"]))
+
     def test_probe_endpoint_uses_header_cache_for_ffprobe_input(self) -> None:
         rclone = self._remote_media_rclone()
         app = self._build_app(
@@ -1689,15 +1833,17 @@ class VideoEndpointTests(AppTestCase):
             with urlopen(request, timeout=5) as response:
                 body = response.read()
                 status = response.status
+            # Completion is logged in the handler finally after the body is sent.
+            # Wait while patches are still active so the event lands in `events`.
+            wait_until(
+                lambda: any(row.get("event") == "tagged_input_http_complete" for row in events),
+                description="tagged range request completion event",
+            )
+            request_event = next(row for row in events if row.get("event") == "tagged_input_http_request")
+            complete_event = next(row for row in events if row.get("event") == "tagged_input_http_complete")
 
         self.assertEqual(status, HTTPStatus.PARTIAL_CONTENT)
         self.assertEqual(body, b"3456")
-        wait_until(
-            lambda: any(row.get("event") == "tagged_input_http_complete" for row in events),
-            description="tagged range request completion event",
-        )
-        request_event = next(row for row in events if row.get("event") == "tagged_input_http_request")
-        complete_event = next(row for row in events if row.get("event") == "tagged_input_http_complete")
         self.assertEqual(request_event["session_id"], payload["session_id"])
         self.assertEqual(request_event["requested_rel_path"], "movie.mp4")
         self.assertEqual(request_event["range_header"], "bytes=3-6")
@@ -1757,14 +1903,14 @@ class VideoEndpointTests(AppTestCase):
             ) as response:
                 body = response.read()
                 status = response.status
+            wait_until(
+                lambda: any(row.get("event") == "tagged_input_http_complete" for row in events),
+                description="tagged full request completion event",
+            )
+            complete_event = next(row for row in events if row.get("event") == "tagged_input_http_complete")
 
         self.assertEqual(status, HTTPStatus.OK)
         self.assertEqual(body, b"0123456789")
-        wait_until(
-            lambda: any(row.get("event") == "tagged_input_http_complete" for row in events),
-            description="tagged full request completion event",
-        )
-        complete_event = next(row for row in events if row.get("event") == "tagged_input_http_complete")
         self.assertEqual(complete_event["range_header"], "")
         self.assertEqual(complete_event["selected_start"], 0)
         self.assertEqual(complete_event["selected_count"], 10)
@@ -1792,14 +1938,14 @@ class VideoEndpointTests(AppTestCase):
                     body = response.read()
                 except IncompleteRead as exc:
                     body = exc.partial
+            wait_until(
+                lambda: any(row.get("event") == "tagged_input_http_complete" for row in events),
+                description="missing tagged session completion event",
+            )
+            complete_event = next(row for row in events if row.get("event") == "tagged_input_http_complete")
 
         self.assertEqual(status, HTTPStatus.OK)
         self.assertEqual(body, b"")
-        wait_until(
-            lambda: any(row.get("event") == "tagged_input_http_complete" for row in events),
-            description="missing tagged session completion event",
-        )
-        complete_event = next(row for row in events if row.get("event") == "tagged_input_http_complete")
         self.assertEqual(complete_event["validation_result"], "session_missing")
         self.assertEqual(complete_event["selected_start"], 0)
         self.assertEqual(complete_event["selected_count"], 10)
@@ -1880,14 +2026,14 @@ class VideoEndpointTests(AppTestCase):
                     body = response.read()
                 except IncompleteRead as exc:
                     body = exc.partial
+            wait_until(
+                lambda: any(row.get("event") == "tagged_input_http_complete" for row in events),
+                description="path mismatch tagged completion event",
+            )
+            complete_event = next(row for row in events if row.get("event") == "tagged_input_http_complete")
 
         self.assertEqual(status, HTTPStatus.OK)
         self.assertEqual(body, b"")
-        wait_until(
-            lambda: any(row.get("event") == "tagged_input_http_complete" for row in events),
-            description="path mismatch tagged completion event",
-        )
-        complete_event = next(row for row in events if row.get("event") == "tagged_input_http_complete")
         self.assertEqual(complete_event["requested_rel_path"], "other.mp4")
         self.assertEqual(complete_event["rel_path"], "other.mp4")
         self.assertEqual(complete_event["validation_result"], "path_mismatch")

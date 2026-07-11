@@ -205,23 +205,34 @@ python misc/benchmark_video_startup.py `
 
 ## Step 9 - Capture Updated Measurements
 
-- [ ] Use the exact Step 1 machine, remote paths, server settings, probe-cache
+- [x] Use the exact Step 1 machine, remote paths, server settings, probe-cache
       treatment, iteration count, and benchmark command.
-- [ ] Save raw runs under
+      Run on `SPOTCOASUS2025`, `dropbox:`, `LogVideoDebug=true`, same pacing
+      knobs, 3 iterations, `--sample-seconds 0`, server on port `8018`
+      (baseline used `8016`). Commit: `5b06d44`.
+- [x] Save raw runs under
       `Temp/video_benchmarks/file-http-after-2026-07-10-<sample>.jsonl` without
       overwriting the baseline artifacts.
-- [ ] Compute medians and per-sample deltas for `session_create_ms`,
+- [x] Compute medians and per-sample deltas for `session_create_ms`,
       `server_session_create_ms`, `asset_fetch_ms`, and `total_startup_ms`.
-- [ ] Compare tagged range traces before and after: resolution time, rclone
+      See `Temp/video_benchmarks/file-http-after-2026-07-10-notes.md`.
+- [x] Compare tagged range traces before and after: resolution time, rclone
       process count, time to first byte, duplicate early ranges, total bytes,
       and stream duration.
-- [ ] Verify the Matroska/PGS sample, a nonzero seek/restart, and a copy-mode
+      Matched tagged `remote_resolution_ms` went **~400–500 → 0**; still 3
+      remote opens per session; TTFB still ~1 s median.
+- [x] Verify the Matroska/PGS sample, a nonzero seek/restart, and a copy-mode
       session still succeed with no HLS stalls or regression in untagged
       `/file`/`/download` behavior.
-- [ ] Record the measured result, variance, enabled gates, and any remaining
+      Fairy Tail playlist 200; seek@120 playlist 200; Conan `video_copy`/`audio_copy`;
+      untagged HEAD 200 + range 206 + download HEAD 200.
+- [x] Record the measured result, variance, enabled gates, and any remaining
       bottleneck next to the machine-local benchmark artifacts. Report the
       direct-pipe 3.2-4.2 s result only as the retained-HTTP upper bound, not as
       an achieved gain.
+      Median session_create improved ~1.2–1.5 s (24–30%) across samples; still
+      well above the direct-pipe ceiling. Notes:
+      `Temp/video_benchmarks/file-http-after-2026-07-10-notes.md`.
 
 ## Ownership Map
 
