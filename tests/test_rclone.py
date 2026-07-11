@@ -123,6 +123,65 @@ class TimeoutAndSignalKillProcess:
 
 
 class RcloneLoggingTests(unittest.TestCase):
+    def test_cat_command_matrix_files_from_mode_preserves_exact_relative_path(self) -> None:
+        path_cases = [
+            "Camera Uploads/2020-08-07 13.34.35.png",
+            "music/宇多田ヒカル/Automatic.mp3",
+            "anime/[Group] Show [1080p]/ep[01].mkv",
+            "anime/JoJo's Bizarre Adventure/episode 01's cut.mkv",
+            "music/＊NSYNC／Greatest Hits／01 - It's Gonna Be Me.mp3",
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            patcher = patch.object(rclone_module, "TEMP_DIR", Path(tmpdir))
+            with patcher:
+                client = RcloneClient("rclone.exe", None)
+                for rel_path in path_cases:
+                    cmd, temp_list_path = client._cat_command_for_target(
+                        f"dropbox:{rel_path}",
+                        remote_form="files-from",
+                    )
+                    self.assertIsNotNone(temp_list_path)
+                    assert temp_list_path is not None
+                    self.assertEqual(
+                        cmd,
+                        [
+                            "rclone.exe",
+                            "cat",
+                            "--files-from",
+                            str(temp_list_path),
+                            "--no-traverse",
+                            "--",
+                            "dropbox:",
+                        ],
+                    )
+                    self.assertEqual(temp_list_path.read_text(encoding="utf-8"), rel_path)
+                    temp_list_path.unlink()
+
+    def test_cat_command_matrix_direct_mode_preserves_exact_remote_target(self) -> None:
+        path_cases = [
+            "Camera Uploads/2020-08-07 13.34.35.png",
+            "music/宇多田ヒカル/Automatic.mp3",
+            "anime/[Group] Show [1080p]/ep[01].mkv",
+            "anime/JoJo's Bizarre Adventure/episode 01's cut.mkv",
+            "music/＊NSYNC／Greatest Hits／01 - It's Gonna Be Me.mp3",
+        ]
+        client = RcloneClient("rclone.exe", None)
+        for rel_path in path_cases:
+            cmd, temp_list_path = client._cat_command_for_target(
+                f"dropbox:{rel_path}",
+                remote_form="direct",
+            )
+            self.assertIsNone(temp_list_path)
+            self.assertEqual(
+                cmd,
+                [
+                    "rclone.exe",
+                    "cat",
+                    "--",
+                    f"dropbox:{rel_path}",
+                ],
+            )
+
     def test_dropbox_throttle_classifier_matches_write_limit_error(self) -> None:
         self.assertTrue(
             is_retryable_dropbox_throttle_message(
@@ -465,6 +524,29 @@ class RcloneLoggingTests(unittest.TestCase):
             self.assertEqual(cmd[1:7], ["cat", "--files-from", cmd[3], "--no-traverse", "--offset", "10"])
             self.assertEqual(cmd[7:11], ["--count", "5", "--", "dropbox:"])
             self.assertEqual(Path(cmd[3]).read_text(encoding="utf-8"), "test/video.mp4")
+
+    def test_cat_command_direct_mode_can_open_byte_range(self) -> None:
+        client = RcloneClient("rclone.exe", None)
+        cmd, temp_list_path = client._cat_command_for_target(
+            "dropbox:test/video.mp4",
+            offset=10,
+            count=5,
+            remote_form="direct",
+        )
+        self.assertIsNone(temp_list_path)
+        self.assertEqual(
+            cmd,
+            [
+                "rclone.exe",
+                "cat",
+                "--offset",
+                "10",
+                "--count",
+                "5",
+                "--",
+                "dropbox:test/video.mp4",
+            ],
+        )
 
     def test_cat_stream_uses_files_from_and_no_traverse_for_single_remote_file(self) -> None:
         process = FakeCatProcess()

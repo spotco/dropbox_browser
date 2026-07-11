@@ -56,6 +56,26 @@ from .views import dropbox_home_url, folder_page_title, icon_for_entry, error_ht
 
 ASSET_DIR = Path(__file__).resolve().parent / "assets"
 ASSET_ROUTE_PREFIX = "/assets/"
+TAGGED_INPUT_COPY_BUFFER_SIZE = 2 * 1024 * 1024
+
+
+class _FirstByteTimingReader:
+    def __init__(self, handle, *, started_at: float) -> None:
+        self._handle = handle
+        self._started_at = float(started_at)
+        self.first_byte_elapsed_ms: float | None = None
+        self.bytes_read = 0
+
+    def read(self, size: int = -1):
+        chunk = self._handle.read(size)
+        if chunk:
+            self.bytes_read += len(chunk)
+            if self.first_byte_elapsed_ms is None:
+                self.first_byte_elapsed_ms = round((time.monotonic() - self._started_at) * 1000, 3)
+        return chunk
+
+    def close(self) -> None:
+        self._handle.close()
 
 
 class RequestHandler(BaseHTTPRequestHandler):
@@ -340,6 +360,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         rel_path = clean_rel_path(params.get("path", [""])[0])
         source = params.get("source", ["remote"])[0]
         video_session_id = params.get("video_session_id", [""])[0].strip() or None
+        tagged_request = source != "local" and video_session_id is not None
         name = Path(rel_path).name
         content_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
         disposition = "inline" if inline else "attachment"
@@ -366,43 +387,113 @@ class RequestHandler(BaseHTTPRequestHandler):
                     raise
             return
 
-        remote_rel_path, file_size = self._resolve_remote_file(rel_path)
+        range_header = self.headers.get("Range")
+        request_started = time.monotonic()
+        remote_resolution_started = request_started
+        remote_rel_path = rel_path
+        remote_resolution_ms: float | None = None
+        validation_result = "untagged"
+        tagged_input_metadata = None
         tagged_video_session_manager = video_session_manager(self.app)
-        _video_session = tagged_video_session_manager.tagged_input_session(video_session_id, remote_rel_path)
+        if tagged_request:
+            log_video_debug(
+                self.app,
+                "tagged_input_http_request",
+                session_id=video_session_id,
+                requested_rel_path=rel_path,
+                range_header=("" if range_header is None else range_header),
+                head_only=head_only,
+            )
+            tagged_input_metadata, validation_result = tagged_video_session_manager.tagged_input_file_metadata(
+                video_session_id,
+                rel_path,
+            )
+        if tagged_input_metadata is not None:
+            remote_rel_path = tagged_input_metadata.rel_path
+            file_size = tagged_input_metadata.file_size
+            remote_resolution_ms = 0.0
+        else:
+            remote_rel_path, file_size = self._resolve_remote_file(rel_path)
+            if tagged_request:
+                remote_resolution_ms = round((time.monotonic() - remote_resolution_started) * 1000, 3)
         try:
-            plan = plan_stream(self.headers.get("Range"), file_size)
+            plan = plan_stream(range_header, file_size)
         except RangeNotSatisfiable:
+            if tagged_request:
+                log_video_debug(
+                    self.app,
+                    "tagged_input_http_complete",
+                    session_id=video_session_id,
+                    requested_rel_path=rel_path,
+                    rel_path=remote_rel_path,
+                    range_header=("" if range_header is None else range_header),
+                    validation_result=validation_result,
+                    remote_resolution_ms=remote_resolution_ms,
+                    selected_start=None,
+                    selected_count=None,
+                    file_size=file_size,
+                    rclone_command_form="not_opened",
+                    open_cat_to_first_byte_ms=None,
+                    bytes_copied=0,
+                    stream_duration_ms=0.0,
+                    outcome="range_not_satisfiable",
+                )
             self._send_unsatisfiable_range(file_size)
             return
         self._send_file_headers(plan=plan, content_type=content_type, disposition=disposition, name=name)
         if head_only:
+            if tagged_request:
+                log_video_debug(
+                    self.app,
+                    "tagged_input_http_complete",
+                    session_id=video_session_id,
+                    requested_rel_path=rel_path,
+                    rel_path=remote_rel_path,
+                    range_header=("" if range_header is None else range_header),
+                    validation_result=validation_result,
+                    remote_resolution_ms=remote_resolution_ms,
+                    selected_start=plan.start,
+                    selected_count=plan.length,
+                    file_size=file_size,
+                    rclone_command_form=("cat_offset_count" if plan.is_partial else "cat_full"),
+                    open_cat_to_first_byte_ms=None,
+                    bytes_copied=0,
+                    stream_duration_ms=0.0,
+                    outcome="head_only",
+                )
             return
 
+        open_cat_started = time.monotonic()
         proc = self.app.rclone.open_cat(
             remote_target(self.app.remote, remote_rel_path),
             offset=plan.start if plan.is_partial else None,
             count=plan.length if plan.is_partial else None,
         )
+        open_cat_duration_ms = round((time.monotonic() - open_cat_started) * 1000, 3)
         assert proc.stdout is not None
+        timed_stdout = _FirstByteTimingReader(proc.stdout, started_at=open_cat_started)
         stream_error: Exception | None = None
         wait_error: Exception | None = None
         stream_stats: StreamCopyStats | None = None
+        outcome = "completed"
         try:
             if video_session_id is None:
-                copy_exact(proc.stdout, self.wfile, plan.length)
+                copy_exact(timed_stdout, self.wfile, plan.length)
             else:
                 stream_stats = copy_exact_with_throttle(
-                    proc.stdout,
+                    timed_stdout,
                     self.wfile,
                     plan.length,
                     decision_fn=lambda: tagged_video_session_manager.tagged_input_throttle_decision(
                         video_session_id,
                         remote_rel_path,
                     ),
+                    buffer_size=TAGGED_INPUT_COPY_BUFFER_SIZE,
                 )
         except Exception as exc:
             stream_error = exc
             if isinstance(exc, StreamCopyCancelled):
+                outcome = "stream_cancelled"
                 log_video_debug(
                     self.app,
                     "tagged_input_stream_cancelled",
@@ -419,21 +510,49 @@ class RequestHandler(BaseHTTPRequestHandler):
                         pass
                 return
             if is_client_disconnect(exc):
+                outcome = "client_disconnect"
                 if getattr(proc, "poll", lambda: None)() is None:
                     try:
                         proc.kill()
                     except OSError:
                         pass
                 return
+            outcome = "stream_error"
             raise
         finally:
-            proc.stdout.close()
+            timed_stdout.close()
             try:
                 proc.wait(timeout=30)
             except Exception as exc:
                 wait_error = exc
+                outcome = "wait_error"
             finally:
                 self.app.rclone.finish_cat(proc, stream_error or wait_error)
+            if tagged_request:
+                bytes_copied = (
+                    stream_stats.bytes_copied
+                    if stream_stats is not None
+                    else timed_stdout.bytes_read
+                )
+                log_video_debug(
+                    self.app,
+                    "tagged_input_http_complete",
+                    session_id=video_session_id,
+                    requested_rel_path=rel_path,
+                    rel_path=remote_rel_path,
+                    range_header=("" if range_header is None else range_header),
+                    validation_result=validation_result,
+                    remote_resolution_ms=remote_resolution_ms,
+                    selected_start=plan.start,
+                    selected_count=plan.length,
+                    file_size=file_size,
+                    rclone_command_form=("cat_offset_count" if plan.is_partial else "cat_full"),
+                    open_cat_duration_ms=open_cat_duration_ms,
+                    open_cat_to_first_byte_ms=timed_stdout.first_byte_elapsed_ms,
+                    bytes_copied=bytes_copied,
+                    stream_duration_ms=round((time.monotonic() - request_started) * 1000, 3),
+                    outcome=outcome,
+                )
             if wait_error is not None:
                 raise wait_error
         if video_session_id is not None and stream_stats is not None:
