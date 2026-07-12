@@ -20,10 +20,14 @@ async function importPlaybackModuleFromWorkspace() {
     "  };",
     "}",
   ].join("\n");
+  const shufflePath = path.resolve(__dirname, "..", "..", "dropbox_browser/assets/js/music-shuffle-helpers.js");
+  const shuffleSource = await fs.readFile(shufflePath, "utf8");
   const sharedUrl = `data:text/javascript;base64,${Buffer.from(sharedSource, "utf8").toString("base64")}`;
   const metadataUrl = `data:text/javascript;base64,${Buffer.from(metadataSource, "utf8").toString("base64")}`;
+  const shuffleUrl = `data:text/javascript;base64,${Buffer.from(shuffleSource, "utf8").toString("base64")}`;
   source = source.replace("'./music-shared.js'", `'${sharedUrl}'`);
   source = source.replace("'./music-metadata.js'", `'${metadataUrl}'`);
+  source = source.replace("'./music-shuffle-helpers.js'", `'${shuffleUrl}'`);
   return import(`data:text/javascript;base64,${Buffer.from(source, "utf8").toString("base64")}`);
 }
 

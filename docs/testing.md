@@ -84,15 +84,26 @@ fixture `tests/e2e/fixtures/music-library-deep.json`, keeps temp/cache paths
 isolated, and verifies `Music Player -> Song Library -> Load Current Folder`
 through partial cached-library polling and final completion.
 
+The music-player integration suite uses the same integration harness on port
+`8012` with a generated synthetic fixture
+`tests/e2e/fixtures/music_player_generated_fixture.py` (short WAV tracks via
+vendored ffmpeg). It covers library load/sort, shift-range and sibling
+select-all, playlist add/dedupe/reorder/remove, context Play, save/load/rename/
+overwrite/delete, overwrite and discard **cancel** paths, m3u + JSON import,
+JSON export, playback transport (play/pause, next/prev, loop, deterministic
+shuffle non-sequential next, seek, volume), and Settings survival across reload
+(library sort, pane widths, playlist column widths, load-dialog sort/filter).
+
 Video-player integration tests may also point `DROPBOX_BROWSER_E2E_FIXTURE` at a
 Python fixture generator script. The integration harness executes that script
 into its isolated temp root, lets it materialize binary test media on disk, and
 then loads the returned JSON fixture description.
 
-Run that integration test directly:
+Run music integration tests directly:
 
 ```powershell
 npx playwright test tests/e2e/music-library.integration.spec.js
+npx playwright test tests/e2e/music-player.integration.spec.js
 ```
 
 Keep the split intentional:

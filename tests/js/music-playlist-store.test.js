@@ -358,3 +358,72 @@ test("PlaylistStore deletePersistedPlaylistByName removes the matching saved pla
     ["Bravo"],
   );
 });
+
+test("PlaylistStore honors a configurable storage key for load and persist", async () => {
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
+  const writes = [];
+  const storage = {
+    get(key, fallback) {
+      if (key === "video-playlists") {
+        return {
+          exported_at: 10,
+          playlists: [{
+            last_modified: 10,
+            name: "Video Queue",
+            songs: ["Videos/alpha.mkv"],
+          }],
+          version: 1,
+        };
+      }
+      return fallback;
+    },
+    set(key, value) {
+      writes.push({ key, value });
+    },
+  };
+
+  const store = new playlistModule.PlaylistStore({
+    storage,
+    storageKey: "video-playlists",
+    clock: () => 5000000,
+  });
+
+  assert.equal(store.storageKey, "video-playlists");
+  assert.deepEqual(
+    store.listPersistedPlaylists("name", "asc").map((playlist) => playlist.name),
+    ["Video Queue"],
+  );
+
+  store.activePlaylist.addSongs([song("Videos/bravo.mkv")]);
+  store.saveActivePlaylist({ name: "Clips" });
+  store.persist();
+
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].key, "video-playlists");
+  assert.notEqual(writes[0].key, playlistModule.PLAYLIST_STORAGE_KEY);
+  assert.equal(writes[0].value.playlists.length, 2);
+});
+
+test("PlaylistModel removeSongsByRemotePaths removes selected paths and keeps order", async () => {
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
+  const playlist = new playlistModule.PlaylistModel({
+    name: "Trim",
+    songs: [
+      song("music/alpha.mp3"),
+      song("music/bravo.mp3"),
+      song("music/charlie.mp3"),
+    ],
+  });
+
+  const removed = playlist.removeSongsByRemotePaths({
+    "music/bravo.mp3": true,
+  });
+
+  assert.equal(removed, 1);
+  assert.deepEqual(
+    playlist.songs.map((entry) => entry.remote_path),
+    ["music/alpha.mp3", "music/charlie.mp3"],
+  );
+  assert.equal(playlist.hasAbsolutePath(song("music/bravo.mp3")), false);
+  assert.equal(playlist.hasAbsolutePath(song("music/alpha.mp3")), true);
+});

@@ -229,7 +229,7 @@ library is wired.
 
 ### Phase 0 — Inventory And Guardrails
 
-- [ ] Write a short behavior inventory checklist (plan appendix or test comments)
+- [x] Write a short behavior inventory checklist (plan appendix or test comments)
       covering music:
   - Library: load current folder, poll partial→complete, expand/collapse, sort
     name/date, multi-select, select-all, context add, dblclick add+play
@@ -238,20 +238,22 @@ library is wired.
     export, toast
   - Playback: play/pause, next/prev, loop, shuffle, volume, seek, metadata/
     cover art (music-only assertions)
-- [ ] Confirm Settings keys that must remain readable after extract
+- [x] Confirm Settings keys that must remain readable after extract
       (`music-playlists`, `music-library-sort`, `music-playlist-load-sort`,
       `music-playlist-load-filter`, `music-playlist-column-widths`,
       `music-pane-widths`, `music-shuffle-enabled`, `music-loop-playlist` if present).
-- [ ] Confirm video Settings keys to introduce (`video-playlists`, sort/filter/
+- [x] Confirm video Settings keys to introduce (`video-playlists`, sort/filter/
       column/pane keys) without reading music keys.
-- [ ] Note web UI path contracts in `tests/test_web_ui.py` that will need
+- [x] Note web UI path contracts in `tests/test_web_ui.py` that will need
       incremental updates when files move.
+
+Completed inventory lives in **Appendix A** at the end of this file.
 
 ### Phase 1 — Music E2E Baseline (before any extract)
 
 Goal: lock current music behavior with synthetic fixtures, few/fast specs.
 
-- [ ] Add a synthetic music fixture (video-style pattern):
+- [x] Add a synthetic music fixture (video-style pattern):
   - Prefer generated tiny audio files under the integration temp root (ffmpeg
     or minimal valid audio bytes) so `/file` + `<audio>` playback works without
     live Dropbox.
@@ -259,7 +261,7 @@ Goal: lock current music behavior with synthetic fixtures, few/fast specs.
   - Reuse integration server / gates pattern only where partial-cache is under
     test; for pure UI flows prefer a complete-cache or fully listed fixture for
     speed.
-- [ ] Add **one primary** Playwright file such as
+- [x] Add **one primary** Playwright file such as
       `tests/e2e/music-player.integration.spec.js` (serial, dedicated port,
       shared `beforeAll` server) that covers as much as practical in few tests:
   1. Library load + tree visibility + sort (and keep/port partial-poll coverage
@@ -272,24 +274,49 @@ Goal: lock current music behavior with synthetic fixtures, few/fast specs.
      supported.
   5. Playback: play/pause, next/prev, loop, shuffle order changes next track,
      seek/volume smoke if cheap.
-- [ ] Prefer **fast defaults**: short media (1–2 s), small tree, short timeouts,
+- [x] Prefer **fast defaults**: short media (1–2 s), small tree, short timeouts,
       minimal sleeps (`expect.poll` only).
-- [ ] Keep existing `music-library.integration.spec.js` green until the new suite
+- [x] Keep existing `music-library.integration.spec.js` green until the new suite
       fully replaces its assertions; then either delete or slim it to avoid
       duplicate long runs.
-- [ ] Document how to run the new suite in `docs/testing.md`.
-- [ ] Gate: `npx playwright test` for the new music suite passes on clean tree.
+- [x] Document how to run the new suite in `docs/testing.md`.
+- [x] Gate: `npx playwright test` for the new music suite passes on clean tree.
+
+Landed:
+
+- Fixture: `tests/e2e/fixtures/music_player_generated_fixture.py`
+- Suite: `tests/e2e/music-player.integration.spec.js` (port `8012`, 6 serial tests)
+- Partial-cache coverage remains in `music-library.integration.spec.js` (port `8011`)
+
+Post–Phase-2 review gaps closed in the same suite (still Phase 1 e2e surface):
+
+1. Shuffle e2e with seeded `Math.random` so next is not sequential TrackB
+2. Library Shift-range + Ctrl/Cmd+A sibling select-all; playlist Ctrl/Cmd+A
+3. JSON import e2e (in addition to m3u import + JSON export)
+4. Overwrite and discard **cancel** keep prior playlist / stored playlist
+5. Playlist context menu Play (not only dblclick)
+6. Settings survive reload: `music-library-sort`, `music-pane-widths`,
+   `music-playlist-column-widths`, load sort/filter keys + UI restore
 
 ### Phase 2 — Expand Focused Unit Tests (still on current paths)
 
-- [ ] Fill gaps in `tests/js/` for pure logic already exported (or extract pure
+- [x] Fill gaps in `tests/js/` for pure logic already exported (or extract pure
       helpers first if needed without moving folders yet):
   - playlist store: save/load/import/export/delete/overwrite, storage key option
   - reorder / selection helpers
   - library sort helpers
   - shuffle sequence next/prev pure helpers if extracted from playback
-- [ ] Keep import helpers working for current `music-*.js` paths.
-- [ ] Gate: `npm run test:js` + relevant Python music endpoint group green.
+- [x] Keep import helpers working for current `music-*.js` paths.
+- [x] Gate: `npm run test:js` + relevant Python music endpoint group green.
+
+Landed:
+
+- Extracted pure shuffle/nav helpers to `assets/js/music-shuffle-helpers.js`;
+  `music-playback.js` delegates next/prev/rebuild to them.
+- New `tests/js/music-shuffle-helpers.test.js` (linear + shuffle + loop cases).
+- Expanded store tests: configurable `storageKey`, `removeSongsByRemotePaths`.
+- Expanded playlist reorder no-op + library date helper / date-asc sort tests.
+- Updated `tests/test_web_ui.py` asset contracts for the shuffle helpers module.
 
 ### Phase 3 — Extract Shared Client (`media-library/`) Using Music Host Only
 
@@ -465,10 +492,216 @@ Each cadence must keep the music e2e suite green.
 
 ## Progress
 
-- [ ] Phase 0 — Inventory And Guardrails
-- [ ] Phase 1 — Music E2E Baseline
-- [ ] Phase 2 — Expand Focused Unit Tests
+- [x] Phase 0 — Inventory And Guardrails
+- [x] Phase 1 — Music E2E Baseline
+- [x] Phase 2 — Expand Focused Unit Tests
 - [ ] Phase 3 — Extract Shared Client (`media-library/`)
 - [ ] Phase 4 — Shared Server Library Listing
 - [ ] Phase 5 — Wire Video Host
 - [ ] Phase 6 — Docs, Cleanup, Full Verification
+
+---
+
+## Appendix A — Phase 0 Inventory (2026-07-12)
+
+### A.1 Music behavior inventory (e2e target matrix)
+
+Use this as the Phase 1 Playwright coverage checklist. Prefer one serial suite
+with synthetic short audio; keep partial-cache poll coverage either merged or
+in the existing `music-library.integration.spec.js`.
+
+#### Library (`music-library.js` + `/music/endpoints/library`)
+
+| Behavior | How it works today | Suggested e2e assertion |
+|----------|--------------------|-------------------------|
+| Load Current Folder | `#music-library-load` fetches root from `body` current folder; disables button while polling; shows elapsed seconds on button | Click load; tree leaves empty state; status bar updates |
+| Poll partial→complete | Poll while `status.complete` is false; `poll_seq` / `poll_delay_ms` query params; `data-music-library-poll-delay-ms` override | Existing integration gates; or keep dedicated deep fixture file |
+| Tree expand/collapse | Folder rows `aria-expanded`; toggle `>`/`v`; `expandedIds` state | Expand nested folder; child songs visible |
+| Folder badges | `files cached` vs `not cached` from `metadata_cached` | Partial fixture shows not-cached; complete shows cached |
+| Sort name/date | Buttons `[data-library-sort-key]`; default name asc, date default desc; Settings `music-library-sort` | Toggle sort; order changes; survives reload if cheap |
+| Multi-select | Click / Ctrl / Shift range on visible nodes | Select range; selected class on rows |
+| Select-all | Ctrl/Cmd+A on tree; context menu Select → All | All visible nodes selected |
+| Context Add to Playlist | `#music-library-context-menu` `data-action=add-selected` | Adds selected songs only; status “Added N cached song(s)” |
+| Dblclick song | `addSongToPlaylistAndPlay` | Song appears in playlist and becomes current/playing |
+| Dedup on add | Store rejects duplicate absolute path keys | Second add of same path does not grow playlist |
+| Status bar | `#music-player-status` only when music pane active | Visible during music mode |
+
+#### Active playlist (`music-playlist.js` + `music-playlist-store.js`)
+
+| Behavior | How it works today | Suggested e2e assertion |
+|----------|--------------------|-------------------------|
+| Empty state | “Playlist is empty.” | Initial empty |
+| Row columns | Filename, Absolute Path, Reorder handle | Columns present |
+| Multi-select | Click / Ctrl / Shift; Ctrl/Cmd+A | Selection classes |
+| Drag reorder | Handle drag; multi-block reorder; drop indicator CSS var | Reorder two rows; order persists in DOM |
+| Context Play | `playbackApi.playPlaylistRemotePath` | Current row + audio starts |
+| Context Remove | Removes selected | Row gone; no dup path reappear |
+| Context Copy | filename / absolute path / Dropbox URL | Clipboard text (if Playwright clipboard available) or skip if flaky |
+| Dirty state | Signature of name+ordered paths vs last save | Rename/add marks dirty; save clears |
+| Save | Upsert by name; overwrite confirm when name conflict | Toast “Saved … as of …”; reload load dialog shows it |
+| Overwrite confirm | Modal when saving onto existing different content name | Cancel keeps old; confirm replaces |
+| Load dialog | Filter, sort name/last_modified, OK/Cancel/New | Load replaces active; New creates “New Playlist” |
+| Discard unsaved | Confirm when loading another with dirty active | Cancel keeps dirty playlist |
+| Rename | Dialog; may overwrite-confirm | Name chip updates |
+| Delete saved | Load dialog context menu Delete | Playlist disappears from list |
+| Import JSON | File input `.json`; merge persisted store | Imported names appear in load list |
+| Import m3u8 | Paths as songs; playlist name from filename | Named playlist appears |
+| Export | Downloads `dropbox-browser-playlists.json` blob | Trigger export; no error status (download hard to assert) |
+| Error toast | Save/load/import failures | Optional negative path |
+
+Item fields: `remote_path`, `stream_path`, `rel_path`, `display_name`,
+`filename`, `extension`. Absolute path key = lowercased stream/rel path.
+
+#### Playback (`music-playback.js` + metadata/coverart) — music host only
+
+| Behavior | How it works today | Suggested e2e assertion |
+|----------|--------------------|-------------------------|
+| Stream | `GET /file?path=<stream_path>&source=remote` into `<audio>` | Playing state after dblclick/play |
+| Play/pause | Separate play/pause buttons + visual state | Toggle |
+| Next/prev | Respects shuffle sequence + loop | Order differs under shuffle |
+| Loop | Settings `music-loop-playlist`; wraps playlist | Last→first when loop on |
+| Shuffle | Settings `music-shuffle-enabled`; rebuild bag on membership change | Next is not always sequential when on |
+| Volume | Settings `music-volume`; slider 0–1 | Persist optional |
+| Seek | Progress slider scrub | Current time moves |
+| Metadata | Title/artist loading → loaded/unavailable | Labels change after play (if fixture has tags or accept fallbacks) |
+| Cover art | ID3/MP4 extract; placeholder otherwise | Placeholder or img visible |
+| Load retry | Up to 3 retries with delay on audio error | Optional; skip unless flaky load tested |
+| Paint throttle | Layout skips paints when pane hidden/document hidden | Unit/layout only; not e2e critical |
+
+### A.2 Music Settings keys (must remain readable)
+
+Defaults live on host `ctx.state` / module constants. **Do not rename keys** without
+a read-fallback (prefer keep exact strings).
+
+| Key | Owner module | Shape / notes |
+|-----|--------------|---------------|
+| `music-playlists` | `PlaylistStore` default `PLAYLIST_STORAGE_KEY` | Export envelope `{version, exported_at, playlists:[{name,last_modified,songs:[path,...]}]}` |
+| `music-library-sort` | library | `{key: 'name'\|'date', direction: 'asc'\|'desc'}` |
+| `music-playlist-load-sort` | playlist | `{key: 'name'\|'last_modified', direction}` |
+| `music-playlist-load-filter` | playlist | string |
+| `music-playlist-column-widths` | layout | `{filename, path, reorder}` px |
+| `music-pane-widths` | layout | 3-length percent array |
+| `music-shuffle-enabled` | playback | boolean |
+| `music-loop-playlist` | playback | boolean |
+| `music-volume` | playback | number 0–1 |
+
+Shared with app (not music-owned, leave alone): `bottom-pane-mode`, `log-height`.
+
+### A.3 Video Settings keys to introduce (separate store)
+
+New keys must **not** read music keys. Video already has unrelated keys
+(`video-loop-queue`, `video-subtitle-style`, track preference keys, volume may
+exist under video controls).
+
+Recommended media-library host config for video:
+
+| Key | Purpose | Parallel music key |
+|-----|---------|-------------------|
+| `video-playlists` | PlaylistStore storage | `music-playlists` |
+| `video-library-sort` | Library sort | `music-library-sort` |
+| `video-playlist-load-sort` | Load dialog sort | `music-playlist-load-sort` |
+| `video-playlist-load-filter` | Load dialog filter | `music-playlist-load-filter` |
+| `video-playlist-column-widths` | Playlist columns | `music-playlist-column-widths` |
+| `video-media-library-pane-widths` | library\|playlist\|playback percents if shared layout used | `music-pane-widths` |
+| `video-shuffle-enabled` | Music-parity shuffle (new UI) | `music-shuffle-enabled` |
+
+Loop: today video uses `video-loop-queue`. Phase 5 should either keep that key
+as the loop setting (host maps it into shared/host loop state) or introduce
+`video-loop-playlist` with **read-fallback** from `video-loop-queue` for
+back-compat. Prefer keep `video-loop-queue` as the storage key to avoid
+breaking existing users.
+
+Do **not** migrate in-memory queue → playlists (nothing persisted today).
+
+### A.4 Existing test coverage map
+
+| Layer | Files | Covers |
+|-------|-------|--------|
+| E2E | `tests/e2e/music-library.integration.spec.js` | Deep partial library poll only |
+| JS unit | `music-playlist-store.test.js` | Serialize, dedupe, store helpers |
+| JS unit | `music-playlist.test.js` | Drag block reorder pure helpers |
+| JS unit | `music-library-helpers.test.js` | Sort/compare helpers |
+| JS unit | `music-playback.test.js` | Limited pure/playback helpers |
+| JS unit | `music-coverart.test.js` | Cover art parsers |
+| Python | `tests/test_music_endpoints.py` | Library endpoint |
+| Web | `tests/test_web_ui.py` | Markup + string contracts on asset paths |
+
+Gaps for Phase 1: playlist CRUD, import/export, multi-select, reorder e2e,
+playback transport, shuffle/loop e2e.
+
+### A.5 `tests/test_web_ui.py` asset path contracts (Phase 3 touch list)
+
+Fetched paths that **must be updated when files move**:
+
+**Music (today → after extract)**
+
+| Current path | Likely new path |
+|--------------|-----------------|
+| `/assets/js/music.js` | stays thin entry |
+| `/assets/js/music-layout.js` | split → `/assets/js/media-library/layout.js` + maybe `/assets/js/music/layout.js` |
+| `/assets/js/music-library.js` | `/assets/js/media-library/library.js` |
+| `/assets/js/music-library-helpers.js` | `/assets/js/media-library/library-helpers.js` |
+| `/assets/js/music-playlist.js` | `/assets/js/media-library/playlist.js` |
+| `/assets/js/music-playlist-store.js` | `/assets/js/media-library/playlist-store.js` (may only be imported, not always string-asserted) |
+| `/assets/js/music-shared.js` | `/assets/js/media-library/shared.js` and/or music-only leftovers |
+| `/assets/js/music-playback.js` | `/assets/js/music/playback.js` |
+| `/assets/js/music-metadata.js` | `/assets/js/music/metadata.js` |
+| `/assets/js/music-coverart.js` | `/assets/js/music/coverart.js` |
+| `/assets/css/music.css` | stays + new `/assets/css/media-library.css` link in `page.html` |
+
+**Video paths that change in Phase 5 (not Phase 3)**
+
+| Current path | Phase 5 fate |
+|--------------|--------------|
+| `/assets/js/video/library.js` | remove or host stub |
+| `/assets/js/video/queue.js` | remove or host stub |
+| `/assets/js/video/queue-core.js` | shrink / drop management ops |
+
+**HTML shell contracts** (music player template strings, video queue buttons)
+are asserted heavily under class names `.music-*` and `#music-*` / `#video-*`.
+When extracting CSS, either:
+
+- keep dual class lists during transition, or
+- update web assertions when shared classes land.
+
+**Import path strings** inside modules are also asserted, e.g. music helpers
+import `./filename-compare-key.js`. Nested `media-library/` will need
+`../filename-compare-key.js` and matching assertion updates.
+
+### A.6 DOM ID prefixes (host-owned; shared binds via `ctx.els`)
+
+Music keeps `#music-*` (see `music_player.html`). Video Phase 5 should mirror
+structure with `#video-*` IDs and shared CSS classes (`.media-library-*` /
+temporary dual `.music-*` during extract).
+
+Critical music IDs for e2e:
+
+- `#music-player-pane`, `#music-library-load`, `#music-library-tree`
+- `#music-playlist-list`, `#music-active-playlist-name`
+- `#music-playlist-save|load|rename|import|export`
+- dialogs: rename / overwrite / load
+- `#music-audio`, transport buttons, shuffle/loop, progress/volume
+- context menus: library, playlist, load
+
+### A.7 Cross-module API surface (must survive extract)
+
+Shared modules expose via `ctx.*Api` (names may stabilize):
+
+- `libraryApi`: `paintLibrary`, `fetchLibrary`, `hideLibraryContextMenu`, …
+- `playlistApi`: `renderPlaylist`, `paintPlaylist`, `addSongsToPlaylist`,
+  `addSongToPlaylistAndPlay`, `resetShuffleBag`, `playlistIndexByRemotePath`,
+  `focusPlaylistRemotePath`, toast helpers, …
+- Host provides `playbackApi` for play/current index (music only today).
+- `layoutApi`: `playbackUiMayPaint`, schedule paint, pane resize, …
+
+Shared code must **not** import `music/playback` or `video/*` playback modules.
+
+### A.8 Phase 0 decisions locked for Phase 1
+
+- No production code moves in Phase 1.
+- Music e2e first; do not touch video product code yet.
+- Keep existing `music-library.integration.spec.js` until new suite supersedes
+  its assertions.
+- Synthetic short audio + nested folders for full player suite; deep gated
+  fixture remains valid for partial-cache only.
+

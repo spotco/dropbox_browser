@@ -73,3 +73,46 @@ test("firstSelectedVisibleNodeId keeps the first selected row in tree order", as
     "song:two",
   );
 });
+
+test("libraryNodeDateSortValue prefers recursive folder mtime over direct mtime", async () => {
+  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/music-library-helpers.js");
+
+  assert.equal(
+    helpers.libraryNodeDateSortValue({
+      type: "folder",
+      mtime: 10,
+      recursive_mtime: 50,
+    }),
+    50,
+  );
+  assert.equal(
+    helpers.libraryNodeDateSortValue({
+      type: "folder",
+      mtime: 10,
+    }),
+    10,
+  );
+  assert.equal(
+    helpers.libraryNodeDateSortValue({
+      type: "file",
+      mtime: 22,
+      recursive_mtime: 99,
+    }),
+    22,
+  );
+  assert.equal(helpers.libraryNodeDateSortValue(null), 0);
+});
+
+test("sortLibraryItems date ascending reverses the default date comparison", async () => {
+  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/music-library-helpers.js");
+  const items = [
+    { id: "song:new", type: "file", display_name: "New.mp3", mtime: 30 },
+    { id: "song:old", type: "file", display_name: "Old.mp3", mtime: 10 },
+    { id: "song:mid", type: "file", display_name: "Mid.mp3", mtime: 20 },
+  ];
+
+  assert.deepEqual(
+    helpers.sortLibraryItems(items, "date", "asc").map((item) => item.id),
+    ["song:old", "song:mid", "song:new"],
+  );
+});
