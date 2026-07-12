@@ -1,7 +1,8 @@
 """Shared media library listing helpers (recursive folder-cache + flat folder).
 
-Music uses the recursive folder-cache tree. Video keeps a flat current-folder
-listing until Phase 5 wires the shared client, but both call into this module.
+Music and video both use the recursive folder-cache tree via
+``build_recursive_library_payload``. Flat ``build_flat_folder_library_payload``
+remains for tests or any non-UI consumers that only need one folder listing.
 """
 from __future__ import annotations
 

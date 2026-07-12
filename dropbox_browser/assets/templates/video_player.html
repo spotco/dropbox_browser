@@ -1,39 +1,152 @@
 <div id="video-player-pane" class="bottom-pane-view hidden" data-pane-mode="video-player" hidden>
-  <div class="video-player-shell" aria-label="Video player">
-    <section id="video-library-pane" class="video-subpane video-library-pane" aria-labelledby="video-library-title">
-      <div class="video-subpane-header">
-        <div class="video-subpane-heading">
-          <h2 id="video-library-title">Current Folder Videos</h2>
-          <div id="video-library-path" class="video-subpane-meta" title="Current folder">/</div>
-        </div>
-        <div class="video-toolbar" role="group" aria-label="Video library actions">
-          <button type="button" id="video-library-up">Up</button>
-          <button type="button" id="video-library-add-selected">Add Selected</button>
-        </div>
-      </div>
-      <div id="video-library-list" class="video-library-list" role="list" tabindex="0">
-        <div class="video-empty-state">Open the Video Player to browse folders and remote video files.</div>
-      </div>
-    </section>
-    <section id="video-queue-pane" class="video-subpane video-queue-pane" aria-labelledby="video-queue-title">
-      <div class="video-subpane-header">
-        <div class="video-subpane-heading">
-          <h2 id="video-queue-title">Queue</h2>
-          <div class="video-subpane-meta">In-memory only</div>
-        </div>
-        <div class="video-toolbar" role="group" aria-label="Queue actions">
-          <button type="button" id="video-queue-play">Play</button>
-          <button type="button" id="video-queue-remove">Remove</button>
-          <button type="button" id="video-queue-up">Up</button>
-          <button type="button" id="video-queue-down">Down</button>
-          <button type="button" id="video-queue-clear">Clear</button>
+  <div class="video-player-shell music-player-shell" aria-label="Video player">
+    <section id="video-library-pane" class="music-subpane music-library-pane video-library-pane" aria-labelledby="video-library-title">
+      <div class="music-subpane-header music-library-header">
+        <h2 id="video-library-title">Video Library</h2>
+        <div class="music-library-toolbar">
+          <button type="button" id="video-library-load">Load Current Folder</button>
+          <div class="music-library-sort-controls" role="group" aria-label="Video library sort">
+            <button type="button" data-library-sort-key="name" aria-pressed="true">Name ↑</button>
+            <button type="button" data-library-sort-key="date" aria-pressed="false">Date ↓</button>
+          </div>
         </div>
       </div>
-      <div id="video-queue-list" class="video-queue-list" role="list" tabindex="0">
-        <div class="video-empty-state">Queue is empty.</div>
+      <div id="video-library-tree" class="music-library-tree" role="tree" tabindex="0">
+        <div class="music-empty-state">Load the current folder to show cached videos.</div>
       </div>
     </section>
-    <section id="video-playback-pane" class="video-subpane video-playback-pane" aria-labelledby="video-playback-title">
+    <div id="video-resizer-library-playlist" class="music-pane-resizer" role="separator" aria-orientation="vertical" title="Drag to resize video panels"></div>
+
+    <section id="video-playlist-pane" class="music-subpane music-playlist-pane video-queue-pane" aria-labelledby="video-playlist-title">
+      <div class="music-subpane-header music-playlist-toolbar music-playlist-toolbar-primary">
+        <div class="music-playlist-toolbar-group music-playlist-toolbar-title">
+          <h2 id="video-playlist-title">Active Playlist:</h2>
+          <span id="video-active-playlist-name" class="music-active-playlist-name" data-default-name="New Playlist">New Playlist</span>
+        </div>
+        <div class="music-playlist-toolbar-group music-playlist-toolbar-actions" role="group" aria-label="Playlist import and export">
+          <button type="button" id="video-playlist-import">Import</button>
+          <button type="button" id="video-playlist-export">Export</button>
+        </div>
+      </div>
+      <div id="video-playlist-controls" class="music-playlist-toolbar music-playlist-toolbar-secondary">
+        <div class="music-playlist-toolbar-group" role="group" aria-label="Playlist load and rename">
+          <button type="button" id="video-playlist-load">Load Playlist</button>
+          <button type="button" id="video-playlist-rename">Rename Playlist</button>
+        </div>
+        <div class="music-playlist-toolbar-group music-playlist-toolbar-save" role="group" aria-label="Playlist save">
+          <button type="button" id="video-playlist-save">Save</button>
+        </div>
+      </div>
+      <input
+        type="file"
+        id="video-playlist-import-input"
+        class="music-hidden-file-input"
+        accept=".m3u8,.json,application/json"
+        multiple
+        hidden
+      >
+      <div id="video-playlist-table" class="music-playlist-table" role="table" aria-label="Active playlist">
+        <div class="music-playlist-row music-playlist-heading" role="row">
+          <div class="music-playlist-column-heading" role="columnheader">
+            <span>Filename</span>
+            <button type="button" class="music-playlist-column-resizer" data-music-playlist-column-resizer="filename" aria-label="Resize filename column"></button>
+          </div>
+          <div class="music-playlist-column-heading" role="columnheader">
+            <span>Absolute Path</span>
+            <button type="button" class="music-playlist-column-resizer" data-music-playlist-column-resizer="path" aria-label="Resize absolute path column"></button>
+          </div>
+          <div class="music-playlist-column-heading music-playlist-reorder-heading" role="columnheader"><span>Reorder</span></div>
+        </div>
+        <div id="video-playlist-list" class="music-playlist-list" role="rowgroup" tabindex="0">
+          <div class="music-empty-state">Playlist is empty.</div>
+        </div>
+      </div>
+      <div id="video-playlist-save-toast" class="music-playlist-save-toast hidden" role="status" aria-live="polite" hidden>
+        <div id="video-playlist-save-toast-text" class="music-playlist-save-toast-text"></div>
+        <button type="button" id="video-playlist-save-toast-close" class="music-playlist-save-toast-close" aria-label="Close save notification">Close</button>
+      </div>
+      <div id="video-playlist-rename-dialog" class="music-playlist-modal music-playlist-modal-rename hidden" role="dialog" aria-modal="true" aria-labelledby="video-playlist-rename-title" hidden>
+        <div class="music-playlist-modal-card">
+          <div class="music-playlist-modal-header">
+            <h3 id="video-playlist-rename-title">Rename Playlist</h3>
+          </div>
+          <div class="music-playlist-modal-body">
+            <label class="music-playlist-field-label" for="video-playlist-rename-input">Playlist Name</label>
+            <input type="text" id="video-playlist-rename-input" class="music-playlist-text-input" value="New Playlist" maxlength="255" autocomplete="off">
+          </div>
+          <div class="music-playlist-modal-actions">
+            <button type="button" id="video-playlist-rename-cancel">Cancel</button>
+            <button type="button" id="video-playlist-rename-confirm">OK</button>
+          </div>
+        </div>
+      </div>
+      <div id="video-playlist-overwrite-dialog" class="music-playlist-modal music-playlist-modal-overwrite hidden" role="dialog" aria-modal="true" aria-labelledby="video-playlist-overwrite-title" hidden>
+        <div class="music-playlist-modal-card">
+          <div class="music-playlist-modal-header">
+            <h3 id="video-playlist-overwrite-title">Overwrite Playlist?</h3>
+          </div>
+          <div class="music-playlist-modal-body">
+            <p id="video-playlist-overwrite-message" class="music-playlist-modal-message">A saved playlist with this name already exists. Overwrite it?</p>
+          </div>
+          <div class="music-playlist-modal-actions">
+            <button type="button" id="video-playlist-overwrite-cancel">Cancel</button>
+            <button type="button" id="video-playlist-overwrite-confirm">Overwrite</button>
+          </div>
+        </div>
+      </div>
+      <div id="video-playlist-load-dialog" class="music-playlist-modal hidden" role="dialog" aria-modal="true" aria-labelledby="video-playlist-load-title" hidden>
+        <div class="music-playlist-modal-card music-playlist-load-card">
+          <div class="music-playlist-modal-header">
+            <h3 id="video-playlist-load-title">Load Playlist</h3>
+          </div>
+          <div class="music-playlist-modal-body">
+            <div class="music-playlist-load-filter">
+              <label class="music-playlist-field-label" for="video-playlist-load-filter-input">Search Playlists</label>
+              <input
+                type="search"
+                id="video-playlist-load-filter-input"
+                class="music-playlist-text-input music-playlist-search-input"
+                placeholder="Search playlists"
+                autocomplete="off"
+                spellcheck="false"
+              >
+            </div>
+            <div class="music-playlist-load-table" role="table" aria-label="Saved playlists">
+              <div class="music-playlist-row music-playlist-heading music-playlist-load-heading" role="row">
+                <button type="button" id="video-playlist-sort-name" class="music-playlist-sort-button" data-playlist-sort-key="name" aria-pressed="true">
+                  Name
+                </button>
+                <button type="button" id="video-playlist-sort-last-modified" class="music-playlist-sort-button" data-playlist-sort-key="last_modified" aria-pressed="false">
+                  Last Modified
+                </button>
+              </div>
+              <div id="video-playlist-load-list" class="music-playlist-load-list" role="rowgroup" tabindex="0">
+                <div class="music-empty-state">No saved playlists yet.</div>
+              </div>
+            </div>
+          </div>
+          <div class="music-playlist-modal-actions">
+            <button type="button" id="video-playlist-load-new">New Playlist</button>
+            <button type="button" id="video-playlist-load-cancel">Cancel</button>
+            <button type="button" id="video-playlist-load-confirm">OK</button>
+          </div>
+        </div>
+      </div>
+      <div id="video-playlist-load-context-menu" class="music-context-menu hidden" hidden>
+        <div class="music-context-menu-group">
+          <button type="button" class="music-context-menu-parent" aria-haspopup="true">
+            <span>Playlist</span>
+            <span class="music-context-menu-arrow" aria-hidden="true">></span>
+          </button>
+          <div class="music-context-submenu">
+            <button type="button" data-action="delete">Delete</button>
+          </div>
+        </div>
+      </div>
+    </section>
+    <div id="video-resizer-playlist-playback" class="music-pane-resizer" role="separator" aria-orientation="vertical" title="Drag to resize video panels"></div>
+
+    <section id="video-playback-pane" class="video-subpane video-playback-pane music-subpane music-playback-pane" aria-labelledby="video-playback-title">
       <div class="video-subpane-header">
         <div class="video-subpane-heading">
           <h2 id="video-playback-title">Playback</h2>
@@ -91,6 +204,9 @@
                 <input type="range" id="video-volume-slider" class="video-volume-slider" min="0" max="1" value="1" step="0.01" aria-label="Volume" disabled>
               </div>
               <div class="video-controls-spacer" aria-hidden="true"></div>
+              <button type="button" id="video-shuffle-toggle" class="video-control-button" aria-label="Shuffle playlist" title="Shuffle playlist" aria-pressed="false">
+                <img class="video-control-icon" data-icon-role="shuffle" src="/assets/icons/material-icon-theme/music-shuffle.svg" alt="" aria-hidden="true">
+              </button>
               <button type="button" id="video-loop-toggle" class="video-control-button" aria-label="Loop queue" title="Loop queue" aria-pressed="false">
                 <img class="video-control-icon" data-icon-role="loop" src="/assets/icons/material-icon-theme/music-loop.svg" alt="" aria-hidden="true">
               </button>
@@ -207,5 +323,56 @@
         </div>
       </details>
     </section>
+
+    <div id="video-library-context-menu" class="music-context-menu hidden" hidden>
+      <button type="button" data-action="add-selected">
+        <img class="music-button-icon" src="/assets/icons/material-icon-theme/music-add.svg" alt="" aria-hidden="true">
+        <span>Add to Playlist</span>
+      </button>
+      <div class="music-context-menu-group">
+        <button type="button" class="music-context-menu-parent" aria-haspopup="true">
+          <span>Select</span>
+          <span class="music-context-menu-arrow" aria-hidden="true">></span>
+        </button>
+        <div class="music-context-submenu">
+          <button type="button" data-action="select-all">All</button>
+        </div>
+      </div>
+    </div>
+    <div id="video-playlist-context-menu" class="music-context-menu hidden" hidden>
+      <button type="button" data-action="play">
+        <img class="music-button-icon" src="/assets/icons/material-icon-theme/music-play.svg" alt="" aria-hidden="true">
+        <span>Play</span>
+      </button>
+      <div class="music-context-menu-group">
+        <button type="button" class="music-context-menu-parent" aria-haspopup="true">
+          <span>Select</span>
+          <span class="music-context-menu-arrow" aria-hidden="true">></span>
+        </button>
+        <div class="music-context-submenu">
+          <button type="button" data-action="select-all">All</button>
+        </div>
+      </div>
+      <div class="music-context-menu-group">
+        <button type="button" class="music-context-menu-parent" aria-haspopup="true">
+          <span>Playlist</span>
+          <span class="music-context-menu-arrow" aria-hidden="true">></span>
+        </button>
+        <div class="music-context-submenu">
+          <button type="button" data-action="remove">Remove</button>
+        </div>
+      </div>
+      <div class="music-context-menu-group">
+        <button type="button" class="music-context-menu-parent" aria-haspopup="true">
+          <span>Copy</span>
+          <span class="music-context-menu-arrow" aria-hidden="true">></span>
+        </button>
+        <div class="music-context-submenu">
+          <button type="button" data-action="copy-filename">Filename</button>
+          <button type="button" data-action="copy-absolute-path">Absolute Path</button>
+          <button type="button" data-action="copy-dropbox-url">Dropbox URL</button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>

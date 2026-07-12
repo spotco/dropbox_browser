@@ -112,6 +112,19 @@ function mediaRangesSummary(ranges) {
 }
 
 function setPlaybackSummary(title, meta) {
+  var headerTitle = title && String(title).trim() ? String(title).trim() : 'Playback';
+  // Placeholder uses "No video selected"; pane header stays "Playback" until a real item is active.
+  if (
+    !headerTitle
+    || headerTitle === 'No video selected'
+    || headerTitle === 'Selected video'
+  ) {
+    headerTitle = 'Playback';
+  }
+  if (ctx.els.playbackTitleEl) {
+    ctx.els.playbackTitleEl.textContent = headerTitle;
+    ctx.els.playbackTitleEl.title = headerTitle === 'Playback' ? 'Playback' : headerTitle;
+  }
   if (ctx.els.titleEl) ctx.els.titleEl.textContent = title;
   if (ctx.els.metaEl) ctx.els.metaEl.textContent = meta;
 }

@@ -221,6 +221,7 @@ function restoreVideoLoopQueue() {
     ? ctx.readVideoSetting(key, false)
     : false;
   ctx.state.loopQueue = Boolean(stored);
+  ctx.state.loopPlaylist = Boolean(stored);
   syncLoopQueueButton();
 }
 
@@ -233,6 +234,7 @@ function persistVideoLoopQueue() {
 
 function toggleVideoLoopQueue() {
   ctx.state.loopQueue = !ctx.state.loopQueue;
+  ctx.state.loopPlaylist = !!ctx.state.loopQueue;
   persistVideoLoopQueue();
   syncLoopQueueButton();
   syncTransportControls();
@@ -277,6 +279,7 @@ function playQueueIndexFromControls(index) {
   if (index < 0 || index >= ctx.state.queue.length) return;
   ctx.state.activeQueueIndex = index;
   ctx.state.selectedQueueIndex = index;
+  ctx.state.currentPlaylistIndex = index;
   ctx.state.pendingAutoplay = true;
   ctx.state.transportWantsPlay = true;
   ctx.renderQueue();
@@ -284,6 +287,11 @@ function playQueueIndexFromControls(index) {
 }
 
 function playPreviousVideo() {
+  if (typeof ctx.playPreviousFromPlaylist === 'function' && (ctx.state.playlist || []).length) {
+    ctx.playPreviousFromPlaylist();
+    revealControlsOverlay();
+    return;
+  }
   playQueueIndexFromControls(previousQueueIndex(
     ctx.state.queue.length,
     ctx.state.activeQueueIndex,
@@ -292,6 +300,11 @@ function playPreviousVideo() {
 }
 
 function playNextVideo() {
+  if (typeof ctx.playNextFromPlaylist === 'function' && (ctx.state.playlist || []).length) {
+    ctx.playNextFromPlaylist();
+    revealControlsOverlay();
+    return;
+  }
   playQueueIndexFromControls(nextQueueIndex(
     ctx.state.queue.length,
     ctx.state.activeQueueIndex,
@@ -478,6 +491,31 @@ function readLogPanelHeightPx() {
   return null;
 }
 
+function clearShellInlineGridTemplate() {
+  if (ctx.els.playerShell && ctx.els.playerShell.style) {
+    ctx.els.playerShell.style.removeProperty('grid-template-columns');
+  }
+}
+
+function restoreShellPaneLayoutAfterFullWindow() {
+  if (
+    ctx.layoutApi
+    && typeof ctx.layoutApi.applyMusicPanePercents === 'function'
+    && typeof ctx.layoutApi.readSavedMusicPanePercents === 'function'
+  ) {
+    ctx.layoutApi.applyMusicPanePercents(ctx.layoutApi.readSavedMusicPanePercents(), false);
+    return;
+  }
+  if (
+    ctx.layoutApi
+    && typeof ctx.layoutApi.applyMusicPanePercents === 'function'
+    && ctx.state
+    && Array.isArray(ctx.state.currentMusicPanePercents)
+  ) {
+    ctx.layoutApi.applyMusicPanePercents(ctx.state.currentMusicPanePercents, false);
+  }
+}
+
 function applyFullWindowLayoutClasses(active) {
   var isActive = Boolean(active);
   ctx.state.fullWindowActive = isActive;
@@ -490,6 +528,9 @@ function applyFullWindowLayoutClasses(active) {
   if (ctx.els.playbackStageEl) {
     ctx.els.playbackStageEl.classList.toggle('video-full-window', isActive);
   }
+  // Drop layout.js inline multi-column grid while full-window is active so
+  // playback can occupy the only remaining track.
+  if (isActive) clearShellInlineGridTemplate();
 }
 
 function enterFullWindowLayout() {
@@ -498,6 +539,7 @@ function enterFullWindowLayout() {
     if (activeApi && typeof activeApi.applyFullWindowHeight === 'function') {
       activeApi.applyFullWindowHeight();
     }
+    clearShellInlineGridTemplate();
     return;
   }
   var savedHeight = readLogPanelHeightPx();
@@ -514,6 +556,7 @@ function exitFullWindowLayout() {
   var wasActive = Boolean(ctx.state.fullWindowActive);
   applyFullWindowLayoutClasses(false);
   ctx.state.savedLogPanelHeight = null;
+  if (wasActive) restoreShellPaneLayoutAfterFullWindow();
   var api = logPanelApi();
   if (api && typeof api.setVideoFullWindowActive === 'function') {
     api.setVideoFullWindowActive(false, {

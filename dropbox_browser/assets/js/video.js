@@ -1,9 +1,12 @@
 import {advanceQueueAfterPlaybackEnd} from './video-core.js';
+import {initLayout} from './media-library/layout.js';
+import {initPlaylist} from './media-library/playlist.js';
+import {initLibrary as initMediaLibrary} from './media-library/library.js';
+import {PlaylistStore} from './media-library/playlist-store.js';
 import {initShared} from './video/shared.js';
 import {initCache} from './video/cache.js';
 import {initDiagnostics} from './video/diagnostics.js';
-import {initLibrary} from './video/library.js';
-import {initQueue} from './video/queue.js';
+import {initMediaLibraryBridge} from './video/media-library-bridge.js';
 import {initProbe} from './video/probe.js';
 import {initTracks} from './video/tracks.js';
 import {initCompatibility} from './video/compatibility.js';
@@ -14,6 +17,12 @@ import {initPane} from './video/pane.js';
 
 (function () {
   var pane = document.getElementById('video-player-pane');
+  var body = document.body;
+  var pollDelayAttr = body ? (body.dataset.musicLibraryPollDelayMs || body.dataset.videoLibraryPollDelayMs || '') : '';
+  var parsedPollDelayMs = Number.parseInt(pollDelayAttr || '', 10);
+  var defaultPollDelayMs = Number.isFinite(parsedPollDelayMs) && parsedPollDelayMs > 0
+    ? parsedPollDelayMs
+    : 4000;
   if (!pane) return;
 
   function createVideoClientId() {
@@ -48,9 +57,19 @@ import {initPane} from './video/pane.js';
 
   var ctx = {
     pane: pane,
+    mediaLibraryConfig: {
+      libraryEndpoint: '/video/endpoints/library',
+      itemNounSingular: 'video',
+      itemNounPlural: 'videos',
+      emptyLibraryText: 'Load the current folder to show cached videos.',
+      emptyLibraryNoItemsText: 'No supported cached videos found in this folder yet.',
+      loadingLibraryText: 'Loading cached video library...',
+      libraryTitle: 'Video Library',
+      playlistTitlePrefix: 'Active Playlist:'
+    },
     els: {
-      pathEl: document.getElementById('video-library-path'),
       statusEl: document.getElementById('video-player-status'),
+      playbackTitleEl: document.getElementById('video-playback-title'),
       titleEl: document.getElementById('video-current-title'),
       metaEl: document.getElementById('video-current-meta'),
       placeholderEl: document.getElementById('video-playback-placeholder'),
@@ -72,6 +91,7 @@ import {initPane} from './video/pane.js';
       volumeSliderEl: document.getElementById('video-volume-slider'),
       fullscreenButton: document.getElementById('video-fullscreen-toggle'),
       fullWindowButton: document.getElementById('video-full-window-toggle'),
+      shuffleButton: document.getElementById('video-shuffle-toggle'),
       loopButton: document.getElementById('video-loop-toggle'),
       previousButton: document.getElementById('video-previous'),
       nextButton: document.getElementById('video-next'),
@@ -100,19 +120,109 @@ import {initPane} from './video/pane.js';
       debugCurrentCueEl: document.getElementById('video-debug-current-cue'),
       debugNextTitleEl: document.getElementById('video-debug-next-title'),
       debugNextCueEl: document.getElementById('video-debug-next-cue'),
-      libraryListEl: document.getElementById('video-library-list'),
-      queueListEl: document.getElementById('video-queue-list'),
-      libraryUpButton: document.getElementById('video-library-up'),
-      libraryAddSelectedButton: document.getElementById('video-library-add-selected'),
-      queuePlayButton: document.getElementById('video-queue-play'),
-      queueRemoveButton: document.getElementById('video-queue-remove'),
-      queueUpButton: document.getElementById('video-queue-up'),
-      queueDownButton: document.getElementById('video-queue-down'),
-      queueClearButton: document.getElementById('video-queue-clear'),
+      // Shared media-library DOM
+      playerShell: pane.querySelector('.video-player-shell'),
+      loadButton: document.getElementById('video-library-load'),
+      librarySortButtons: pane.querySelectorAll('[data-library-sort-key]'),
+      treeEl: document.getElementById('video-library-tree'),
+      libraryPane: document.getElementById('video-library-pane'),
+      libraryPlaylistResizer: document.getElementById('video-resizer-library-playlist'),
+      playlistListEl: document.getElementById('video-playlist-list'),
+      playlistTableEl: document.getElementById('video-playlist-table'),
+      playlistPane: document.getElementById('video-playlist-pane'),
+      playlistPlaybackResizer: document.getElementById('video-resizer-playlist-playback'),
+      activePlaylistNameEl: document.getElementById('video-active-playlist-name'),
+      playlistImportButton: document.getElementById('video-playlist-import'),
+      playlistExportButton: document.getElementById('video-playlist-export'),
+      playlistRenameButton: document.getElementById('video-playlist-rename'),
+      playlistLoadButton: document.getElementById('video-playlist-load'),
+      playlistSaveButton: document.getElementById('video-playlist-save'),
+      playlistImportInput: document.getElementById('video-playlist-import-input'),
+      playlistSaveToast: document.getElementById('video-playlist-save-toast'),
+      playlistSaveToastText: document.getElementById('video-playlist-save-toast-text'),
+      playlistSaveToastCloseButton: document.getElementById('video-playlist-save-toast-close'),
+      playlistRenameDialog: document.getElementById('video-playlist-rename-dialog'),
+      playlistRenameTitleEl: document.getElementById('video-playlist-rename-title'),
+      playlistRenameInput: document.getElementById('video-playlist-rename-input'),
+      playlistRenameCancelButton: document.getElementById('video-playlist-rename-cancel'),
+      playlistRenameConfirmButton: document.getElementById('video-playlist-rename-confirm'),
+      playlistOverwriteDialog: document.getElementById('video-playlist-overwrite-dialog'),
+      playlistOverwriteMessageEl: document.getElementById('video-playlist-overwrite-message'),
+      playlistOverwriteCancelButton: document.getElementById('video-playlist-overwrite-cancel'),
+      playlistOverwriteConfirmButton: document.getElementById('video-playlist-overwrite-confirm'),
+      playlistLoadDialog: document.getElementById('video-playlist-load-dialog'),
+      playlistLoadFilterInput: document.getElementById('video-playlist-load-filter-input'),
+      playlistLoadListEl: document.getElementById('video-playlist-load-list'),
+      playlistLoadNewButton: document.getElementById('video-playlist-load-new'),
+      playlistLoadCancelButton: document.getElementById('video-playlist-load-cancel'),
+      playlistLoadConfirmButton: document.getElementById('video-playlist-load-confirm'),
+      playlistLoadSortButtons: pane.querySelectorAll('[data-playlist-sort-key]'),
+      playlistLoadMenu: document.getElementById('video-playlist-load-context-menu'),
+      libraryMenu: document.getElementById('video-library-context-menu'),
+      playlistMenu: document.getElementById('video-playlist-context-menu'),
+      playbackPane: document.getElementById('video-playback-pane'),
     },
     state: {
       paneActive: false,
-      currentFolder: '',
+      currentFolder: document.body.dataset.currentFolderPath || '',
+      loadButtonDefaultText: '',
+      defaultPollDelayMs: defaultPollDelayMs,
+      pollTimer: null,
+      loadTimer: null,
+      libraryPollingActive: false,
+      lastLibraryPollResponseAt: 0,
+      libraryPollSequence: 0,
+      libraryRequested: false,
+      loading: false,
+      libraryRoot: '',
+      librarySnapshot: null,
+      expandedIds: Object.create(null),
+      selectedIds: Object.create(null),
+      visibleNodeIds: [],
+      selectionAnchor: null,
+      librarySortKey: 'name',
+      librarySortDirection: 'asc',
+      librarySortSettingKey: 'video-library-sort',
+      contextNodeId: null,
+      playlistStore: null,
+      activePlaylist: null,
+      persistedPlaylists: [],
+      playlist: [],
+      playlistRemotePaths: Object.create(null),
+      selectedPlaylistRemotePaths: Object.create(null),
+      playlistSelectionAnchor: null,
+      playlistContextRemotePath: null,
+      activePlaylistSavedName: null,
+      activePlaylistSavedSignature: '',
+      activePlaylistDirty: false,
+      playlistRenameMode: 'rename',
+      playlistLoadSortKey: 'last_modified',
+      playlistLoadSortDirection: 'desc',
+      playlistLoadSortSettingKey: 'video-playlist-load-sort',
+      playlistLoadFilterText: '',
+      playlistLoadFilterSettingKey: 'video-playlist-load-filter',
+      selectedPersistedPlaylistName: null,
+      playlistLoadContextName: null,
+      pendingPlaylistConfirmAction: null,
+      playlistSaveToastTimer: null,
+      currentPlaylistIndex: -1,
+      musicPaneWidthSettingKey: 'video-media-library-pane-widths',
+      playlistColumnWidthSettingKey: 'video-playlist-column-widths',
+      defaultPlaylistColumnWidths: {filename: 220, path: 340, reorder: 56},
+      musicPaneResizerWidth: 8,
+      defaultMusicPanePercents: [28, 28, 44],
+      minMusicPaneWidthsPx: [160, 180, 280],
+      currentMusicPanePercents: [28, 28, 44],
+      shuffleEnabled: false,
+      loopPlaylist: false,
+      shuffleBag: [],
+      shuffleSequence: [],
+      shuffleCursor: -1,
+      libraryRenderDirty: false,
+      pendingLibraryStatusText: null,
+      playlistRenderDirty: false,
+      playlistSelectionDirty: false,
+      pendingPlaylistFocusRemotePath: null,
       libraryItems: [],
       selectedLibraryPaths: Object.create(null),
       queue: [],
@@ -242,25 +352,81 @@ import {initPane} from './video/pane.js';
     setStatus: function (text) {
       if (ctx.els.statusEl) ctx.els.statusEl.textContent = text;
     },
+    setLibraryStatus: function (text) {
+      ctx.state.pendingLibraryStatusText = text;
+      if (!ctx.layoutApi || !ctx.layoutApi.playbackUiMayPaint()) return;
+      ctx.setStatus(ctx.state.pendingLibraryStatusText);
+      ctx.state.pendingLibraryStatusText = null;
+    },
+    syncPlaylistState: function () {
+      ctx.state.activePlaylist = ctx.state.playlistStore.activePlaylist;
+      ctx.state.persistedPlaylists = ctx.state.playlistStore.persistedPlaylists;
+      ctx.state.playlist = ctx.state.activePlaylist.songs;
+      ctx.state.playlistRemotePaths = ctx.state.activePlaylist.absolutePathSet;
+      if (typeof ctx.syncQueueFromPlaylist === 'function') ctx.syncQueueFromPlaylist();
+    },
     readVideoSetting: readVideoSetting,
     writeVideoSetting: writeVideoSetting,
+    playlistApi: null,
+    libraryApi: null,
+    layoutApi: null,
   };
+
+  ctx.state.playlistStore = new PlaylistStore({
+    storage: typeof Settings !== 'undefined' ? Settings : null,
+    storageKey: 'video-playlists',
+  });
+  ctx.syncPlaylistState();
+  if (ctx.els.loadButton) {
+    ctx.state.loadButtonDefaultText = ctx.els.loadButton.textContent || 'Load Current Folder';
+  }
+  ctx.state.libraryRoot = ctx.state.currentFolder;
 
   initShared(ctx);
   initCache(ctx);
   initDiagnostics(ctx);
-  initLibrary(ctx);
-  initQueue(ctx);
+  initMediaLibraryBridge(ctx);
+  initLayout(ctx);
+  initPlaylist(ctx);
   initProbe(ctx);
   initTracks(ctx);
   initCompatibility(ctx);
   initSubtitles(ctx);
   initControls(ctx);
   initPlayback(ctx);
+  ctx.extendMediaLibraryPlaybackApi();
+  initMediaLibrary(ctx);
   initPane(ctx);
+
+  // Compatibility shims for modules still calling renderQueue / loadLibrary.
+  ctx.renderQueue = function () {
+    if (ctx.playlistApi && typeof ctx.playlistApi.renderPlaylist === 'function') {
+      ctx.playlistApi.renderPlaylist();
+    }
+  };
+  ctx.loadLibrary = function (path) {
+    if (path != null && path !== '') ctx.state.libraryRoot = path;
+    else ctx.state.libraryRoot = ctx.state.currentFolder || ctx.currentFolderPath() || '';
+    ctx.state.libraryRequested = true;
+    ctx.state.librarySnapshot = null;
+    ctx.state.libraryPollSequence = 0;
+    if (ctx.libraryApi && typeof ctx.libraryApi.startLibraryPollingUi === 'function') {
+      ctx.libraryApi.startLibraryPollingUi();
+    }
+    if (ctx.libraryApi && typeof ctx.libraryApi.fetchLibrary === 'function') {
+      ctx.libraryApi.fetchLibrary(false, 0);
+    }
+  };
+  ctx.renderLibrary = function () {
+    if (ctx.libraryApi && typeof ctx.libraryApi.renderLibrary === 'function') {
+      ctx.libraryApi.renderLibrary();
+    }
+  };
 
   pane.setAttribute('data-video-player-ready', 'subtitles');
   ctx.restoreVideoLoopQueue();
+  ctx.restoreVideoShuffle();
+  ctx.state.loopPlaylist = !!ctx.state.loopQueue;
   ctx.state.audioTrackPreferenceByLayout = ctx.loadStoredTrackPreferences('dropbox-browser-video-audio-track-preferences');
   ctx.state.subtitleTrackPreferenceByLayout = ctx.loadStoredTrackPreferences('dropbox-browser-video-subtitle-track-preferences');
   ctx.updateCurrentFolder(ctx.currentFolderPath());
@@ -275,6 +441,18 @@ import {initPane} from './video/pane.js';
   void ctx.playbackApi.syncForActiveItem();
   ctx.renderLibrary();
   ctx.renderQueue();
+
+  document.addEventListener('click', function () {
+    if (ctx.libraryApi && ctx.libraryApi.hideLibraryContextMenu) ctx.libraryApi.hideLibraryContextMenu();
+    if (ctx.playlistApi && ctx.playlistApi.hidePlaylistContextMenu) ctx.playlistApi.hidePlaylistContextMenu();
+    if (ctx.playlistApi && ctx.playlistApi.hidePlaylistLoadContextMenu) ctx.playlistApi.hidePlaylistLoadContextMenu();
+  });
+
+  if (ctx.els.shuffleButton) {
+    ctx.els.shuffleButton.addEventListener('click', function () {
+      ctx.toggleVideoShuffle();
+    });
+  }
 
   window.addEventListener('bottom-pane-mode-changed', function (ev) {
     if (!ev.detail) return;
@@ -295,7 +473,11 @@ import {initPane} from './video/pane.js';
   });
 
   pane.addEventListener('video-playback-ended', function () {
-    if (ctx.state.activeQueueIndex < 0) return;
+    if (ctx.state.activeQueueIndex < 0 && ctx.state.currentPlaylistIndex < 0) return;
+    if (typeof ctx.playNextFromPlaylist === 'function' && (ctx.state.playlist || []).length) {
+      ctx.playNextFromPlaylist();
+      return;
+    }
     ctx.state.activeQueueIndex = advanceQueueAfterPlaybackEnd(
       ctx.state.queue.length,
       ctx.state.activeQueueIndex,
@@ -303,6 +485,7 @@ import {initPane} from './video/pane.js';
     );
     if (ctx.state.activeQueueIndex >= 0) {
       ctx.state.selectedQueueIndex = ctx.state.activeQueueIndex;
+      ctx.state.currentPlaylistIndex = ctx.state.activeQueueIndex;
       ctx.state.pendingAutoplay = true;
       ctx.state.transportWantsPlay = true;
     }

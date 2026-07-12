@@ -166,38 +166,52 @@ class VideoEndpointTests(AppTestCase):
         ]
 
     def test_library_endpoint_returns_child_folders_and_supported_video_files(self) -> None:
+        from tests.test_music_endpoints import DirectFilesFolderCache
+
         rclone = self._build_video_library_rclone()
         app = self._build_app(rclone, local_root=None)
+        # Recursive library reads folder-cache direct_* rows (Phase 5 shared UI).
+        app.folder_cache = DirectFilesFolderCache({
+            "dropbox:Videos": {
+                "complete": True,
+                "newest_mtime": 1704067200.0,
+                "direct_files": [
+                    {"name": "a.avi", "path": "a.avi", "remote_path": "dropbox:Videos/a.avi", "size": 10, "mtime": 1.0},
+                    {"name": "B.mkv", "path": "B.mkv", "remote_path": "dropbox:Videos/B.mkv", "size": 10, "mtime": 2.0},
+                    {"name": "clip.mp4", "path": "clip.mp4", "remote_path": "dropbox:Videos/clip.mp4", "size": 10, "mtime": 3.0},
+                    {"name": "episode.WEBM", "path": "episode.WEBM", "remote_path": "dropbox:Videos/episode.WEBM", "size": 10, "mtime": 4.0},
+                    {"name": "notes.txt", "path": "notes.txt", "remote_path": "dropbox:Videos/notes.txt", "size": 2, "mtime": 5.0},
+                ],
+                "direct_folders": [
+                    {"name": "Anime", "path": "Anime", "remote_path": "dropbox:Videos/Anime", "mtime": 6.0},
+                    {"name": "Movies", "path": "Movies", "remote_path": "dropbox:Videos/Movies", "mtime": 7.0},
+                ],
+            },
+            "dropbox:Videos/Anime": {"complete": True, "direct_files": [], "direct_folders": []},
+            "dropbox:Videos/Movies": {"complete": True, "direct_files": [], "direct_folders": []},
+        })
 
         with TestServer(app) as server:
             payload = server.get_json("/video/endpoints/library?path=Videos")
 
-        self.assertEqual(payload["status"], "ok")
-        self.assertEqual(payload["root"], {
-            "display_name": "Videos",
-            "path": "Videos",
-            "stream_path": "Videos",
-            "remote_path": "dropbox:Videos",
-        })
+        self.assertTrue(payload["status"]["complete"])
+        self.assertEqual(payload["root"]["stream_path"], "Videos")
+        self.assertEqual(payload["root"]["remote_path"], "dropbox:Videos")
         self.assertEqual(payload["supported_extensions"], [".mkv", ".mp4", ".m4v", ".webm", ".mov", ".avi", ".ts", ".m2ts", ".wmv"])
         self.assertEqual(
-            [(item["display_name"], item["type"]) for item in payload["items"]],
-            [
-                ("Anime", "folder"),
-                ("Movies", "folder"),
-                ("a.avi", "file"),
-                ("B.mkv", "file"),
-                ("clip.mp4", "file"),
-                ("episode.WEBM", "file"),
-            ],
+            sorted(folder["display_name"] for folder in payload["folders"]),
+            ["Anime", "Movies"],
         )
+        self.assertEqual(
+            sorted(item["display_name"] for item in payload["items"]),
+            ["B.mkv", "a.avi", "clip.mp4", "episode.WEBM"],
+        )
+        self.assertEqual(payload["items"], payload["songs"])
         mkv_row = next(item for item in payload["items"] if item["display_name"] == "B.mkv")
         mp4_row = next(item for item in payload["items"] if item["display_name"] == "clip.mp4")
         self.assertEqual(mkv_row["preview_url"], "/file?path=Videos%2FB.mkv&source=remote")
         self.assertTrue(mkv_row["compatibility_expected"])
         self.assertFalse(mp4_row["compatibility_expected"])
-        self.assertEqual(len(rclone.calls), 1)
-        self.assertEqual(rclone.calls[0]["target"], "dropbox:Videos")
 
     def test_status_endpoint_reports_missing_ffmpeg_support_without_crashing(self) -> None:
         rclone = self._remote_media_rclone()
@@ -434,6 +448,8 @@ class VideoEndpointTests(AppTestCase):
         self.assertNotIn("LocalFolder", names)
 
     def test_library_endpoint_marks_native_compatible_extensions(self) -> None:
+        from tests.test_music_endpoints import DirectFilesFolderCache
+
         local_root = self.create_local_root({})
         rclone = SimulatedRclone({
             "dropbox:Videos": [SimulatedLsjsonResponse(items=[
@@ -454,6 +470,16 @@ class VideoEndpointTests(AppTestCase):
             ])],
         })
         app = self._build_app(rclone, local_root=local_root)
+        app.folder_cache = DirectFilesFolderCache({
+            "dropbox:Videos": {
+                "complete": True,
+                "direct_files": [
+                    {"name": "movie.mov", "path": "movie.mov", "remote_path": "dropbox:Videos/movie.mov", "size": 11, "mtime": 1.0},
+                    {"name": "broadcast.ts", "path": "broadcast.ts", "remote_path": "dropbox:Videos/broadcast.ts", "size": 12, "mtime": 2.0},
+                ],
+                "direct_folders": [],
+            },
+        })
 
         with TestServer(app) as server:
             payload = server.get_json("/video/endpoints/library?path=Videos")
