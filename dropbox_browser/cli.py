@@ -21,7 +21,7 @@ from .foldercache import FolderCacheManager
 from .handlers import RequestHandler
 from . import logoutput, workertrace
 from .listingcache import ListingCacheManager
-from .rclone import RcloneClient
+from .rclone import RcloneClient, write_retry_policy_from_config
 from .services import DropboxBrowser
 from .syncjobs import SyncJobManager
 
@@ -72,6 +72,7 @@ def main() -> int:
     )
 
     rclone = RcloneClient(args.rclone, args.rclone_config, log_commands=bool(app_config["LogRcloneCommands"]))
+    rclone.write_retry_policy = write_retry_policy_from_config(app_config)
     listing_cache = ListingCacheManager(ttl_seconds=float(app_config["ListingCacheTTLSeconds"]))
     folder_cache = FolderCacheManager(
         rclone,

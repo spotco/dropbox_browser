@@ -15,6 +15,7 @@ from dropbox_browser.rclone import (
     RcloneCancelled,
     RcloneRetryPolicy,
     is_retryable_dropbox_throttle_message,
+    write_retry_policy_from_config,
 )
 
 
@@ -189,6 +190,53 @@ class RcloneLoggingTests(unittest.TestCase):
             )
         )
         self.assertFalse(is_retryable_dropbox_throttle_message("directory not found"))
+
+    def test_write_retry_policy_from_config_defaults_match_builtin(self) -> None:
+        policy = write_retry_policy_from_config({})
+        defaults = RcloneRetryPolicy()
+        self.assertEqual(policy.max_attempts, defaults.max_attempts)
+        self.assertEqual(policy.min_timeout, defaults.min_timeout)
+        self.assertEqual(policy.timeout_per_gib, defaults.timeout_per_gib)
+        self.assertEqual(policy.max_initial_timeout, defaults.max_initial_timeout)
+        self.assertEqual(policy.timeout_multiplier, defaults.timeout_multiplier)
+        self.assertEqual(policy.max_timeout, defaults.max_timeout)
+
+    def test_write_retry_policy_from_config_applies_overrides(self) -> None:
+        policy = write_retry_policy_from_config(
+            {
+                "RcloneWriteMaxAttempts": 10,
+                "RcloneWriteMinTimeoutSeconds": 60,
+                "RcloneWriteTimeoutPerGibSeconds": 900,
+                "RcloneWriteMaxInitialTimeoutSeconds": 3600,
+                "RcloneWriteTimeoutMultiplier": 2.0,
+                "RcloneWriteMaxTimeoutSeconds": 7200,
+            }
+        )
+        self.assertEqual(policy.max_attempts, 10)
+        self.assertEqual(policy.min_timeout, 60.0)
+        self.assertEqual(policy.timeout_per_gib, 900.0)
+        self.assertEqual(policy.max_initial_timeout, 3600.0)
+        self.assertEqual(policy.timeout_multiplier, 2.0)
+        self.assertEqual(policy.max_timeout, 7200.0)
+        # ~400 MiB anime episode should get a multi-minute first attempt.
+        four_hundred_mib = 400 * 1024 * 1024
+        self.assertGreaterEqual(policy.timeout_for_attempt(1, four_hundred_mib), 300.0)
+        # ~2 GiB should stay under the initial cap and far above old 37s budget.
+        two_gib = 2 * 1024 * 1024 * 1024
+        self.assertGreaterEqual(policy.timeout_for_attempt(1, two_gib), 1800.0)
+        self.assertLessEqual(policy.timeout_for_attempt(1, two_gib), 3600.0)
+
+    def test_write_retry_policy_from_config_orders_timeout_caps(self) -> None:
+        policy = write_retry_policy_from_config(
+            {
+                "RcloneWriteMinTimeoutSeconds": 100,
+                "RcloneWriteMaxInitialTimeoutSeconds": 50,
+                "RcloneWriteMaxTimeoutSeconds": 25,
+            }
+        )
+        self.assertEqual(policy.min_timeout, 100.0)
+        self.assertEqual(policy.max_initial_timeout, 100.0)
+        self.assertEqual(policy.max_timeout, 100.0)
 
     def test_copyto_local_upload_uses_rcat_with_stdin(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

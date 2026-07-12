@@ -58,6 +58,14 @@ _APP_CONFIG_DEFAULTS: dict = {
     },
     "FolderCacheWorkers": 4,
     "SyncJobWorkers": 4,
+    # Write rclone (rcat/copyto/mkdir) process timeout policy. Matches
+    # dropbox_browser.rclone.DEFAULT_WRITE_RETRY_POLICY defaults.
+    "RcloneWriteMaxAttempts": 25,
+    "RcloneWriteMinTimeoutSeconds": 10.0,
+    "RcloneWriteTimeoutPerGibSeconds": 20.0,
+    "RcloneWriteMaxInitialTimeoutSeconds": 300.0,
+    "RcloneWriteTimeoutMultiplier": 2.0,
+    "RcloneWriteMaxTimeoutSeconds": 600.0,
     "FolderCacheTTLSeconds": 14 * 24 * 60 * 60,
     "ListingCacheTTLSeconds": 1800,
     "ThumbnailEnabled": True,
