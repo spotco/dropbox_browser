@@ -1,4 +1,4 @@
-import {compareFilenameKeys, filenameCompareKey} from './filename-compare-key.js';
+import {compareFilenameKeys, filenameCompareKey} from '../filename-compare-key.js';
 
 export function libraryNameSortKey(name) {
   return filenameCompareKey(name);

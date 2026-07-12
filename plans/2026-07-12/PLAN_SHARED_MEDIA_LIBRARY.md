@@ -322,7 +322,7 @@ Landed:
 
 No video wiring yet. Music remains the only consumer.
 
-- [ ] Create `assets/js/media-library/` modules by moving logic from:
+- [x] Create `assets/js/media-library/` modules by moving logic from:
   - `music-library.js` → `media-library/library.js`
   - `music-library-helpers.js` → `media-library/library-helpers.js`
   - `music-playlist.js` → `media-library/playlist.js`
@@ -331,37 +331,64 @@ No video wiring yet. Music remains the only consumer.
   - library/playlist layout pieces from `music-layout.js` →
     `media-library/layout.js` (pane resizers between library|playlist and
     playlist columns; host may still own playback-column resizer)
-- [ ] Parameterize hard-coded music strings, storage keys, and endpoint URL via
+- [x] Parameterize hard-coded music strings, storage keys, and endpoint URL via
       host config (defaults preserve current music behavior).
-- [ ] Keep DOM binding through `ctx.els` so `#music-*` IDs still work without a
+- [x] Keep DOM binding through `ctx.els` so `#music-*` IDs still work without a
       shared HTML fragment.
-- [ ] Introduce shared CSS classes + `assets/css/media-library.css` extracted
+- [x] Introduce shared CSS classes + `assets/css/media-library.css` extracted
       from `music.css` rules that style library/playlist/modals/context menus.
       Leave music playback-only rules in `music.css`.
-- [ ] Update `page.html` to include `media-library.css` (before host CSS if
+- [x] Update `page.html` to include `media-library.css` (before host CSS if
       needed).
-- [ ] Move music-only modules under `assets/js/music/`:
+- [x] Move music-only modules under `assets/js/music/`:
   - `playback.js`, `metadata.js`, `coverart.js`, remaining music layout/shell
-- [ ] Keep thin `assets/js/music.js` entry that builds config + `ctx` and inits
+- [x] Keep thin `assets/js/music.js` entry that builds config + `ctx` and inits
       shared media-library then music playback.
-- [ ] Update JS unit tests and `tests/test_web_ui.py` asset path contracts
+- [x] Update JS unit tests and `tests/test_web_ui.py` asset path contracts
       **in the same change** as each move.
-- [ ] Gate after each sub-move: music e2e + js unit + web group still pass.
+- [x] Gate after each sub-move: music e2e + js unit + web group still pass.
+
+Landed layout:
+
+```text
+assets/js/media-library/{shared,library-helpers,library,playlist-store,playlist,layout}.js
+assets/js/music/{playback,metadata,coverart,shuffle-helpers}.js
+assets/js/music.js   # host entry + mediaLibraryConfig
+assets/css/media-library.css  # library/playlist chrome (keeps .music-* class names)
+assets/css/music.css          # playback-only
+```
+
+`ctx.mediaLibraryConfig` currently configures library endpoint, item nouns, and
+empty/loading library status strings. Settings keys remain music-* defaults on
+host state. Class names still `.music-*` for e2e stability; dual/shared rename
+can wait for Phase 5 video markup.
 
 ### Phase 4 — Shared Server Library Listing
 
-- [ ] Add `dropbox_browser/media_library.py` (or equivalent) with the recursive
+- [x] Add `dropbox_browser/media_library.py` (or equivalent) with the recursive
       folder-cache builder parameterized by supported extensions.
-- [ ] Point `music.py` library endpoint at the shared builder (audio extensions).
-- [ ] Point `video.py` library endpoint at the shared builder (video extensions)
+- [x] Point `music.py` library endpoint at the shared builder (audio extensions).
+- [x] Point `video.py` library endpoint at the shared builder (video extensions)
       — even before video UI is fully switched, keep response compatible for the
       upcoming client (or ship server + client video switch in the same PR/step
       to avoid a half-migrated video UI).
-- [ ] Prefer **one client JSON shape** for both hosts (see Server Contract).
-- [ ] Update `tests/test_music_endpoints.py` and add/adjust video library
+- [x] Prefer **one client JSON shape** for both hosts (see Server Contract).
+- [x] Update `tests/test_music_endpoints.py` and add/adjust video library
       endpoint tests for recursive payload + extension filtering.
-- [ ] Gate: `python -m tests.run music-endpoints -v` and video endpoint library
+- [x] Gate: `python -m tests.run music-endpoints -v` and video endpoint library
       tests green.
+
+Landed:
+
+- `media_library.py`:
+  - `build_recursive_library_payload` — folder-cache tree (music + future shared UI)
+  - `build_flat_folder_library_payload` — current-folder `items` (legacy video UI)
+  - shared extension check + video file enricher (preview_url / compatibility)
+- `music.py` is a thin wrapper; emits both `songs` and `items` (same array) plus
+  `supported_extensions` for shared-client readiness.
+- `video_library_payload` uses the flat shared builder so `/video/endpoints/library`
+  stays byte-compatible with current video client/e2e until Phase 5.
+- Tests: dual-key assert on music library; new `tests/test_media_library.py`.
 
 ### Phase 5 — Wire Video Host To Shared Media Library
 
@@ -495,8 +522,8 @@ Each cadence must keep the music e2e suite green.
 - [x] Phase 0 — Inventory And Guardrails
 - [x] Phase 1 — Music E2E Baseline
 - [x] Phase 2 — Expand Focused Unit Tests
-- [ ] Phase 3 — Extract Shared Client (`media-library/`)
-- [ ] Phase 4 — Shared Server Library Listing
+- [x] Phase 3 — Extract Shared Client (`media-library/`)
+- [x] Phase 4 — Shared Server Library Listing
 - [ ] Phase 5 — Wire Video Host
 - [ ] Phase 6 — Docs, Cleanup, Full Verification
 

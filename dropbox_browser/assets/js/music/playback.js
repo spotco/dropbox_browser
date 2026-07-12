@@ -1,11 +1,11 @@
-import {formatPlaybackTime} from './music-shared.js';
-import {createMetadataController} from './music-metadata.js';
+import {formatPlaybackTime} from '../media-library/shared.js';
+import {createMetadataController} from './metadata.js';
 import {
   ensureShuffleState,
   rebuildShuffleSequence as rebuildShuffleSequenceState,
   resolveNextPlaylistIndex,
   resolvePreviousPlaylistIndex
-} from './music-shuffle-helpers.js';
+} from './shuffle-helpers.js';
 
 export function initPlayback(ctx) {
   var els = ctx.els;

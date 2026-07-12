@@ -6,17 +6,17 @@ const assert = require("node:assert/strict");
 async function importModuleFromWorkspace(relativePath) {
   const absolutePath = path.resolve(__dirname, "..", "..", relativePath);
   let source = await fs.readFile(absolutePath, "utf8");
-  if (relativePath.endsWith("music-library-helpers.js")) {
-    const keyPath = path.resolve(path.dirname(absolutePath), "filename-compare-key.js");
+  if (relativePath.endsWith("library-helpers.js")) {
+    const keyPath = path.resolve(path.dirname(absolutePath), "..", "filename-compare-key.js");
     const keySource = await fs.readFile(keyPath, "utf8");
     const keyUrl = `data:text/javascript;base64,${Buffer.from(keySource, "utf8").toString("base64")}`;
-    source = source.replace("'./filename-compare-key.js'", `'${keyUrl}'`);
+    source = source.replace("'../filename-compare-key.js'", `'${keyUrl}'`);
   }
   return import(`data:text/javascript;base64,${Buffer.from(source, "utf8").toString("base64")}`);
 }
 
 test("sortLibraryItems sorts by date descending with name fallback", async () => {
-  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/music-library-helpers.js");
+  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/library-helpers.js");
   const items = [
     { id: "song:b", type: "file", display_name: "Bravo.mp3", mtime: 20 },
     { id: "folder:a", type: "folder", display_name: "Album", mtime: 10, recursive_mtime: 50 },
@@ -32,7 +32,7 @@ test("sortLibraryItems sorts by date descending with name fallback", async () =>
 });
 
 test("sortLibraryItems treats casefold-equivalent names as duplicates for ordering", async () => {
-  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/music-library-helpers.js");
+  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/library-helpers.js");
   const items = [
     { id: "song:strasse", type: "file", display_name: "STRASSE.mp3", mtime: 10 },
     { id: "song:eszett", type: "file", display_name: "Stra\u00DFe.mp3", mtime: 20 },
@@ -48,7 +48,7 @@ test("sortLibraryItems treats casefold-equivalent names as duplicates for orderi
 });
 
 test("sortLibraryItems sorts by name descending when requested", async () => {
-  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/music-library-helpers.js");
+  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/library-helpers.js");
   const items = [
     { id: "song:a", type: "file", display_name: "Alpha.mp3", mtime: 10 },
     { id: "song:c", type: "file", display_name: "charlie.mp3", mtime: 20 },
@@ -64,7 +64,7 @@ test("sortLibraryItems sorts by name descending when requested", async () => {
 });
 
 test("firstSelectedVisibleNodeId keeps the first selected row in tree order", async () => {
-  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/music-library-helpers.js");
+  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/library-helpers.js");
   const visibleNodeIds = ["folder:root", "song:two", "song:one", "song:three"];
   const selectedIds = { "song:one": true, "song:two": true, "song:three": true };
 
@@ -75,7 +75,7 @@ test("firstSelectedVisibleNodeId keeps the first selected row in tree order", as
 });
 
 test("libraryNodeDateSortValue prefers recursive folder mtime over direct mtime", async () => {
-  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/music-library-helpers.js");
+  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/library-helpers.js");
 
   assert.equal(
     helpers.libraryNodeDateSortValue({
@@ -104,7 +104,7 @@ test("libraryNodeDateSortValue prefers recursive folder mtime over direct mtime"
 });
 
 test("sortLibraryItems date ascending reverses the default date comparison", async () => {
-  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/music-library-helpers.js");
+  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/library-helpers.js");
   const items = [
     { id: "song:new", type: "file", display_name: "New.mp3", mtime: 30 },
     { id: "song:old", type: "file", display_name: "Old.mp3", mtime: 10 },

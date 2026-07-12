@@ -6,6 +6,9 @@
     "test:js": "node --test tests/js/**/*.test.js",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
+    "test:e2e:music": "playwright test --project=music",
+    "test:e2e:video": "playwright test --project=video",
+    "test:e2e:client-render": "playwright test --project=client-render",
     "test:all": "npm run test:js && npm run test:e2e"
   },
   "devDependencies": {

@@ -1,5 +1,5 @@
-import {setTextOrFallback} from './music-shared.js';
-import {resolveCoverArtFromMetadata, supportedArtMime} from './music-coverart.js';
+import {setTextOrFallback} from '../media-library/shared.js';
+import {resolveCoverArtFromMetadata, supportedArtMime} from './coverart.js';
 
 export function createMetadataController(ctx) {
   var els = ctx.els;

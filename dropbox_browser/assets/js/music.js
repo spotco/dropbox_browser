@@ -1,8 +1,8 @@
-import {initLayout} from './music-layout.js';
-import {initPlaylist} from './music-playlist.js';
-import {initPlayback} from './music-playback.js';
-import {initLibrary} from './music-library.js';
-import {PlaylistStore} from './music-playlist-store.js';
+import {initLayout} from './media-library/layout.js';
+import {initPlaylist} from './media-library/playlist.js';
+import {initLibrary} from './media-library/library.js';
+import {PlaylistStore} from './media-library/playlist-store.js';
+import {initPlayback} from './music/playback.js';
 
 (function () {
   var pane = document.getElementById('music-player-pane');
@@ -16,6 +16,16 @@ import {PlaylistStore} from './music-playlist-store.js';
 
   var ctx = {
     pane: pane,
+    mediaLibraryConfig: {
+      libraryEndpoint: '/music/endpoints/library',
+      itemNounSingular: 'song',
+      itemNounPlural: 'songs',
+      emptyLibraryText: 'Load the current folder to show cached songs.',
+      emptyLibraryNoItemsText: 'No supported cached songs found in this folder yet.',
+      loadingLibraryText: 'Loading cached song library...',
+      libraryTitle: 'Song Library',
+      playlistTitlePrefix: 'Active Playlist:'
+    },
     els: {
       playerShell: pane.querySelector('.music-player-shell'),
       loadButton: document.getElementById('music-library-load'),

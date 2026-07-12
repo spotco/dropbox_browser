@@ -218,6 +218,9 @@ class MusicEndpointTests(AppTestCase):
                 ("Wave.WAV", "Album/Wave.WAV", "Music/Album/Wave.WAV", ".wav", "Wave.WAV", "file"),
             ],
         )
+        # Shared-client dual field: items aliases songs for media-library consumers.
+        self.assertEqual(payload["items"], payload["songs"])
+        self.assertEqual(payload["supported_extensions"], [".mp3", ".m4a", ".aac", ".wav"])
         self.assertEqual(rclone.calls, [])
 
     def test_music_library_stops_at_missing_child_folder_cache_record(self) -> None:

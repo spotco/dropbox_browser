@@ -6,15 +6,15 @@ const assert = require("node:assert/strict");
 async function importModuleFromWorkspace(relativePath) {
   const absolutePath = path.resolve(__dirname, "..", "..", relativePath);
   let source = await fs.readFile(absolutePath, "utf8");
-  if (relativePath.endsWith("music-playlist.js")) {
-    const sharedPath = path.resolve(path.dirname(absolutePath), "music-shared.js");
+  if (relativePath.endsWith("playlist.js")) {
+    const sharedPath = path.resolve(path.dirname(absolutePath), "shared.js");
     const sharedSource = await fs.readFile(sharedPath, "utf8");
     const sharedUrl = `data:text/javascript;base64,${Buffer.from(sharedSource, "utf8").toString("base64")}`;
-    const storePath = path.resolve(path.dirname(absolutePath), "music-playlist-store.js");
+    const storePath = path.resolve(path.dirname(absolutePath), "playlist-store.js");
     const storeSource = await fs.readFile(storePath, "utf8");
     const storeUrl = `data:text/javascript;base64,${Buffer.from(storeSource, "utf8").toString("base64")}`;
-    source = source.replace("'./music-shared.js'", `'${sharedUrl}'`);
-    source = source.replace("'./music-playlist-store.js'", `'${storeUrl}'`);
+    source = source.replace("'./shared.js'", `'${sharedUrl}'`);
+    source = source.replace("'./playlist-store.js'", `'${storeUrl}'`);
   }
   return import(`data:text/javascript;base64,${Buffer.from(source, "utf8").toString("base64")}`);
 }
@@ -28,7 +28,7 @@ function song(remotePath) {
 }
 
 test("draggedPlaylistBlockRemotePaths keeps multi-selection order from the playlist", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist.js");
   const playlist = [
     song("music/alpha.mp3"),
     song("music/bravo.mp3"),
@@ -48,7 +48,7 @@ test("draggedPlaylistBlockRemotePaths keeps multi-selection order from the playl
 });
 
 test("reorderPlaylistBlock moves the selected songs as one sequential block and keeps the current song", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist.js");
   const playlist = [
     song("music/alpha.mp3"),
     song("music/bravo.mp3"),
@@ -89,7 +89,7 @@ test("reorderPlaylistBlock moves the selected songs as one sequential block and 
 });
 
 test("playlistAutoScrollDeltaForBounds only requests scrolling near list edges", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist.js");
 
   assert.equal(playlistModule.playlistAutoScrollDeltaForBounds(160, 100, 300), 0);
   assert.ok(playlistModule.playlistAutoScrollDeltaForBounds(96, 100, 300) < 0);
@@ -97,7 +97,7 @@ test("playlistAutoScrollDeltaForBounds only requests scrolling near list edges",
 });
 
 test("nextPlaylistLoadSort toggles the current column and defaults new date sorts to descending", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist.js");
 
   assert.deepEqual(
     playlistModule.nextPlaylistLoadSort("name", "asc", "name"),
@@ -114,7 +114,7 @@ test("nextPlaylistLoadSort toggles the current column and defaults new date sort
 });
 
 test("playlistStateSignature changes when the playlist name or order changes", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist.js");
   const alphaBravo = [song("music/alpha.mp3"), song("music/bravo.mp3")];
   const bravoAlpha = [song("music/bravo.mp3"), song("music/alpha.mp3")];
 
@@ -133,7 +133,7 @@ test("playlistStateSignature changes when the playlist name or order changes", a
 });
 
 test("preferredPlaylistLoadSelection favors the active name, then the saved name, then the first playlist", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist.js");
 
   assert.equal(
     playlistModule.preferredPlaylistLoadSelection("Road Trip", "Focus", ["Focus", "Road Trip", "Sleep"]),
@@ -154,7 +154,7 @@ test("preferredPlaylistLoadSelection favors the active name, then the saved name
 });
 
 test("normalizePlaylistLoadSort defaults the load dialog to newest first and accepts saved overrides", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist.js");
 
   assert.deepEqual(
     playlistModule.normalizePlaylistLoadSort(null),
@@ -171,7 +171,7 @@ test("normalizePlaylistLoadSort defaults the load dialog to newest first and acc
 });
 
 test("playlistMatchesLoadFilter matches playlist names case-insensitively and empty filters match all", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist.js");
 
   assert.equal(playlistModule.normalizePlaylistLoadFilter("  Road  "), "Road");
   assert.equal(playlistModule.playlistMatchesLoadFilter({ name: "Road Trip" }, ""), true);
@@ -181,7 +181,7 @@ test("playlistMatchesLoadFilter matches playlist names case-insensitively and em
 });
 
 test("reorderPlaylistBlock is a no-op when the drop target keeps the block in place", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist.js");
   const playlist = [
     song("music/alpha.mp3"),
     song("music/bravo.mp3"),
