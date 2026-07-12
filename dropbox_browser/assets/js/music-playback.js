@@ -1,5 +1,11 @@
 import {formatPlaybackTime} from './music-shared.js';
 import {createMetadataController} from './music-metadata.js';
+import {
+  ensureShuffleState,
+  rebuildShuffleSequence as rebuildShuffleSequenceState,
+  resolveNextPlaylistIndex,
+  resolvePreviousPlaylistIndex
+} from './music-shuffle-helpers.js';
 
 export function initPlayback(ctx) {
   var els = ctx.els;
@@ -218,61 +224,34 @@ export function initPlayback(ctx) {
     state.shuffleCursor = -1;
   }
 
-  function shuffleSequenceIsValid() {
-    var expectedLength = state.playlist.length;
-    var seen = Object.create(null);
-    if (!Array.isArray(state.shuffleSequence) || state.shuffleSequence.length !== expectedLength) return false;
-    for (var i = 0; i < state.shuffleSequence.length; i += 1) {
-      var value = state.shuffleSequence[i];
-      if (!Number.isInteger(value) || value < 0 || value >= expectedLength || seen[value]) return false;
-      seen[value] = true;
-    }
-    return true;
+  function shuffleNavigationInput() {
+    return {
+      playlistLength: state.playlist.length,
+      currentPlaylistIndex: state.currentPlaylistIndex,
+      shuffleEnabled: state.shuffleEnabled,
+      loopPlaylist: state.loopPlaylist,
+      shuffleSequence: state.shuffleSequence,
+      shuffleCursor: state.shuffleCursor
+    };
   }
 
-  function shuffledIndices(length) {
-    var indices = [];
-    var swapIndex;
-    var tmp;
-    for (var i = 0; i < length; i += 1) indices.push(i);
-    for (var j = indices.length - 1; j > 0; j -= 1) {
-      swapIndex = Math.floor(Math.random() * (j + 1));
-      tmp = indices[j];
-      indices[j] = indices[swapIndex];
-      indices[swapIndex] = tmp;
-    }
-    return indices;
+  function applyShuffleNavigationResult(result) {
+    state.shuffleSequence = result.shuffleSequence;
+    state.shuffleCursor = result.shuffleCursor;
+    return result.index;
   }
 
   function rebuildShuffleSequence(currentIndex) {
     var index = Number.isInteger(currentIndex) ? currentIndex : state.currentPlaylistIndex;
-    var sequence = shuffledIndices(state.playlist.length);
-    var currentPosition;
-    if (index >= 0 && index < state.playlist.length) {
-      currentPosition = sequence.indexOf(index);
-      if (currentPosition > 0) {
-        sequence.splice(currentPosition, 1);
-        sequence.unshift(index);
-      }
-      state.shuffleCursor = sequence.length ? 0 : -1;
-    } else {
-      state.shuffleCursor = -1;
-    }
-    state.shuffleSequence = sequence;
+    var rebuilt = rebuildShuffleSequenceState(state.playlist.length, index);
+    state.shuffleSequence = rebuilt.shuffleSequence;
+    state.shuffleCursor = rebuilt.shuffleCursor;
   }
 
   function ensureShuffleSequence() {
-    if (!shuffleSequenceIsValid()) {
-      rebuildShuffleSequence();
-      return;
-    }
-    if (!Number.isInteger(state.shuffleCursor)) {
-      state.shuffleCursor = -1;
-      return;
-    }
-    if (state.shuffleCursor >= state.shuffleSequence.length) {
-      state.shuffleCursor = state.shuffleSequence.length - 1;
-    }
+    var ensured = ensureShuffleState(shuffleNavigationInput());
+    state.shuffleSequence = ensured.shuffleSequence;
+    state.shuffleCursor = ensured.shuffleCursor;
   }
 
   function syncShuffleCursorForIndex(index) {
@@ -416,50 +395,11 @@ export function initPlayback(ctx) {
   }
 
   function nextPlaylistIndex() {
-    if (state.playlist.length === 0) return -1;
-    if (state.shuffleEnabled) {
-      ensureShuffleSequence();
-      if (state.shuffleCursor < 0) {
-        state.shuffleCursor = 0;
-        return state.shuffleSequence[0] ?? -1;
-      }
-      if (state.shuffleCursor + 1 < state.shuffleSequence.length) {
-        state.shuffleCursor += 1;
-        return state.shuffleSequence[state.shuffleCursor];
-      }
-      if (state.loopPlaylist && state.shuffleSequence.length > 0) {
-        state.shuffleCursor = 0;
-        return state.shuffleSequence[0];
-      }
-      return -1;
-    }
-    if (state.currentPlaylistIndex < 0) return 0;
-    if (state.currentPlaylistIndex + 1 < state.playlist.length) return state.currentPlaylistIndex + 1;
-    if (state.loopPlaylist) return 0;
-    return -1;
+    return applyShuffleNavigationResult(resolveNextPlaylistIndex(shuffleNavigationInput()));
   }
 
   function previousPlaylistIndex() {
-    if (state.playlist.length === 0) return -1;
-    if (state.shuffleEnabled) {
-      ensureShuffleSequence();
-      if (state.shuffleCursor < 0) {
-        if (state.shuffleSequence.length === 0) return -1;
-        state.shuffleCursor = 0;
-        return state.shuffleSequence[0];
-      }
-      if (state.shuffleCursor > 0) {
-        state.shuffleCursor -= 1;
-        return state.shuffleSequence[state.shuffleCursor];
-      }
-      if (state.loopPlaylist && state.shuffleSequence.length > 0) {
-        state.shuffleCursor = state.shuffleSequence.length - 1;
-        return state.shuffleSequence[state.shuffleCursor];
-      }
-      return state.shuffleSequence[0] ?? -1;
-    }
-    if (state.currentPlaylistIndex <= 0) return state.loopPlaylist ? state.playlist.length - 1 : 0;
-    return state.currentPlaylistIndex - 1;
+    return applyShuffleNavigationResult(resolvePreviousPlaylistIndex(shuffleNavigationInput()));
   }
 
   function playNextSong() {

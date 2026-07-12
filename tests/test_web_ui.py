@@ -181,6 +181,7 @@ class WebUiTests(AppTestCase):
             music_library_helpers_js = server.get_text("/assets/js/music-library-helpers.js")
             music_playlist_js = server.get_text("/assets/js/music-playlist.js")
             music_playback_js = server.get_text("/assets/js/music-playback.js")
+            music_shuffle_helpers_js = server.get_text("/assets/js/music-shuffle-helpers.js")
             music_metadata_js = server.get_text("/assets/js/music-metadata.js")
             music_shared_js = server.get_text("/assets/js/music-shared.js")
             js = "\n".join([
@@ -196,6 +197,7 @@ class WebUiTests(AppTestCase):
                 music_library_js,
                 music_playlist_js,
                 music_playback_js,
+                music_shuffle_helpers_js,
                 music_metadata_js,
                 music_shared_js,
                 server.get_text("/assets/js/refresh.js"),
@@ -797,8 +799,13 @@ class WebUiTests(AppTestCase):
         self.assertIn("function resetShuffleBag()", music_playlist_js)
         self.assertIn("function shuffleBagIndex()", music_playlist_js)
         self.assertIn("function ensureShuffleSequence()", music_playback_js)
-        self.assertIn("state.shuffleCursor + 1 < state.shuffleSequence.length", music_playback_js)
-        self.assertIn("if (state.loopPlaylist) return 0;", music_playback_js)
+        self.assertIn("from './music-shuffle-helpers.js'", music_playback_js)
+        self.assertIn("resolveNextPlaylistIndex(shuffleNavigationInput())", music_playback_js)
+        self.assertIn("resolvePreviousPlaylistIndex(shuffleNavigationInput())", music_playback_js)
+        self.assertIn("export function resolveNextPlaylistIndex(input, randomFn)", music_shuffle_helpers_js)
+        self.assertIn("export function resolvePreviousPlaylistIndex(input, randomFn)", music_shuffle_helpers_js)
+        self.assertIn("shuffleState.shuffleCursor + 1 < shuffleState.shuffleSequence.length", music_shuffle_helpers_js)
+        self.assertIn("index: loopPlaylist ? 0 : -1", music_shuffle_helpers_js)
         self.assertIn("function toggleShuffle()", music_playback_js)
         self.assertIn("function toggleLoopPlaylist()", music_playback_js)
         self.assertIn("Settings.get('music-shuffle-enabled', state.defaultShuffleEnabled)", music_playback_js)

@@ -179,3 +179,31 @@ test("playlistMatchesLoadFilter matches playlist names case-insensitively and em
   assert.equal(playlistModule.playlistMatchesLoadFilter({ name: "Road Trip" }, "TRIP"), true);
   assert.equal(playlistModule.playlistMatchesLoadFilter({ name: "Road Trip" }, "focus"), false);
 });
+
+test("reorderPlaylistBlock is a no-op when the drop target keeps the block in place", async () => {
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist.js");
+  const playlist = [
+    song("music/alpha.mp3"),
+    song("music/bravo.mp3"),
+    song("music/charlie.mp3"),
+  ];
+  const selectedRemotePaths = {
+    "music/bravo.mp3": true,
+  };
+
+  const result = playlistModule.reorderPlaylistBlock(
+    playlist,
+    selectedRemotePaths,
+    "music/bravo.mp3",
+    "music/bravo.mp3",
+    false,
+    1,
+  );
+
+  assert.equal(result.moved, false);
+  assert.deepEqual(
+    result.playlist.map((entry) => entry.remote_path),
+    ["music/alpha.mp3", "music/bravo.mp3", "music/charlie.mp3"],
+  );
+  assert.equal(result.currentPlaylistIndex, 1);
+});
