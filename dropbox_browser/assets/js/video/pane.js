@@ -22,10 +22,14 @@ function syncPaneMode(mode) {
     return;
   }
   ctx.updateCurrentFolder(ctx.currentFolderPath());
-  ctx.setStatus('Current folder video library is ready to load.');
+  // Do not auto-fetch the recursive library; match music and only load when
+  // the user presses "Load Current Folder". Keep an already-loaded tree for
+  // the current folder until the user navigates or reloads explicitly.
+  if (!ctx.state.libraryRequested) {
+    ctx.setStatus('Current folder video library is ready to load.');
+  }
   void ctx.syncPlaybackForActiveItem();
   void ctx.loadPlaybackStatus();
-  void ctx.loadLibrary(ctx.state.currentFolder);
 }
 
   ctx.syncPaneMode = syncPaneMode;

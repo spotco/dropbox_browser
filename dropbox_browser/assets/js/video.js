@@ -462,8 +462,12 @@ import {initPane} from './video/pane.js';
   window.addEventListener('browse-folder-changed', function (ev) {
     var detail = ev && ev.detail ? ev.detail : {};
     var nextPath = typeof detail.path === 'string' ? detail.path : ctx.currentFolderPath();
+    if (nextPath === ctx.state.currentFolder) return;
     ctx.updateCurrentFolder(nextPath);
-    if (ctx.state.paneActive) void ctx.loadLibrary(nextPath);
+    // Same as music: folder change clears the tree until the user loads again.
+    if (ctx.libraryApi && typeof ctx.libraryApi.resetLibraryForCurrentFolder === 'function') {
+      ctx.libraryApi.resetLibraryForCurrentFolder();
+    }
   });
 
   window.addEventListener('beforeunload', function () {
