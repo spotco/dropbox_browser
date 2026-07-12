@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 async function importPlaybackModuleFromWorkspace() {
-  const absolutePath = path.resolve(__dirname, "..", "..", "dropbox_browser/assets/js/music-playback.js");
+  const absolutePath = path.resolve(__dirname, "..", "..", "dropbox_browser/assets/js/music/playback.js");
   let source = await fs.readFile(absolutePath, "utf8");
   const sharedSource = "export function formatPlaybackTime(value) { return String(value); }";
   const metadataSource = [
@@ -20,14 +20,14 @@ async function importPlaybackModuleFromWorkspace() {
     "  };",
     "}",
   ].join("\n");
-  const shufflePath = path.resolve(__dirname, "..", "..", "dropbox_browser/assets/js/music-shuffle-helpers.js");
+  const shufflePath = path.resolve(__dirname, "..", "..", "dropbox_browser/assets/js/music/shuffle-helpers.js");
   const shuffleSource = await fs.readFile(shufflePath, "utf8");
   const sharedUrl = `data:text/javascript;base64,${Buffer.from(sharedSource, "utf8").toString("base64")}`;
   const metadataUrl = `data:text/javascript;base64,${Buffer.from(metadataSource, "utf8").toString("base64")}`;
   const shuffleUrl = `data:text/javascript;base64,${Buffer.from(shuffleSource, "utf8").toString("base64")}`;
-  source = source.replace("'./music-shared.js'", `'${sharedUrl}'`);
-  source = source.replace("'./music-metadata.js'", `'${metadataUrl}'`);
-  source = source.replace("'./music-shuffle-helpers.js'", `'${shuffleUrl}'`);
+  source = source.replace("'../media-library/shared.js'", `'${sharedUrl}'`);
+  source = source.replace("'./metadata.js'", `'${metadataUrl}'`);
+  source = source.replace("'./shuffle-helpers.js'", `'${shuffleUrl}'`);
   return import(`data:text/javascript;base64,${Buffer.from(source, "utf8").toString("base64")}`);
 }
 

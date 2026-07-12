@@ -99,7 +99,23 @@ Python fixture generator script. The integration harness executes that script
 into its isolated temp root, lets it materialize binary test media on disk, and
 then loads the returned JSON fixture description.
 
-Run music integration tests directly:
+Playwright projects group e2e specs by feature area (see `playwright.config.js`):
+
+| Project | Match | npm script |
+|---------|-------|------------|
+| `music` | `music-*.spec.js` | `npm run test:e2e:music` |
+| `video` | `video-*.spec.js` | `npm run test:e2e:video` |
+| `client-render` | `client-render.*.spec.js` | `npm run test:e2e:client-render` |
+
+Run only music-player e2es (library deep-poll + full player suite):
+
+```powershell
+npm run test:e2e:music
+# equivalent:
+npx playwright test --project=music
+```
+
+Individual files still work:
 
 ```powershell
 npx playwright test tests/e2e/music-library.integration.spec.js

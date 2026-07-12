@@ -1,4 +1,4 @@
-import {fitColumnWidthsToTotal, normalizeStoredColumnWidths, resizeColumnPair} from './browse/columns.js';
+import {fitColumnWidthsToTotal, normalizeStoredColumnWidths, resizeColumnPair} from '../browse/columns.js';
 
 export function initLayout(ctx) {
   var els = ctx.els;

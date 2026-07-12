@@ -1819,11 +1819,15 @@ def build_ffmpeg_hls_command(
 
 
 def _display_name_for_root(rel_path: str) -> str:
-    return Path(rel_path).name if rel_path else "Dropbox"
+    from .media_library import display_name_for_root
+
+    return display_name_for_root(rel_path)
 
 
 def _is_supported_video(name: str) -> bool:
-    return Path(name).suffix.casefold() in SUPPORTED_VIDEO_EXTENSIONS
+    from .media_library import is_supported_media
+
+    return is_supported_media(name, SUPPORTED_VIDEO_EXTENSIONS)
 
 
 def _compatibility_expected(extension: str) -> bool:
@@ -1840,41 +1844,6 @@ def _sort_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
         key=lambda row: filename_compare_key(str(row.get("display_name") or "")),
     )
     return folders + files
-
-
-def _library_folder_row(rel_path: str, name: str) -> dict[str, object]:
-    child_path = rel_path + "/" + name if rel_path else name
-    return {
-        "display_name": name,
-        "filename": name,
-        "type": "folder",
-        "path": child_path,
-        "stream_path": child_path,
-        "remote_path": child_path,
-    }
-
-
-def _library_file_row(rel_path: str, row: dict[str, object]) -> dict[str, object] | None:
-    name = row.get("name")
-    if not isinstance(name, str) or not _is_supported_video(name):
-        return None
-    child_path = rel_path + "/" + name if rel_path else name
-    extension = Path(name).suffix.casefold()
-    size = row.get("remote_size")
-    mtime = row.get("remote_mtime")
-    return {
-        "display_name": name,
-        "filename": name,
-        "type": "file",
-        "path": child_path,
-        "stream_path": child_path,
-        "remote_path": child_path,
-        "extension": extension,
-        "size": size,
-        "mtime": mtime,
-        "preview_url": "/file?" + urlencode({"path": child_path, "source": "remote"}),
-        "compatibility_expected": _compatibility_expected(extension),
-    }
 
 
 @dataclass
@@ -2897,32 +2866,23 @@ def video_session_manager(app: Any) -> VideoSessionManager:
 
 
 def video_library_payload(app: Any, *, rel_path: str) -> dict[str, object]:
-    entries = app.list_entries(rel_path)
-    rows: list[dict[str, object]] = []
-    for entry in entries:
-        if not entry.get("remote"):
-            continue
-        name = entry.get("name")
-        if not isinstance(name, str):
-            continue
-        if entry.get("is_dir"):
-            rows.append(_library_folder_row(rel_path, name))
-            continue
-        video_row = _library_file_row(rel_path, entry)
-        if video_row is not None:
-            rows.append(video_row)
-    sorted_rows = _sort_rows(rows)
-    return {
-        "status": "ok",
-        "root": {
-            "display_name": _display_name_for_root(rel_path),
-            "path": rel_path,
-            "stream_path": rel_path,
-            "remote_path": remote_target(app.remote, rel_path),
-        },
-        "items": sorted_rows,
-        "supported_extensions": list(SUPPORTED_VIDEO_EXTENSIONS),
-    }
+    """Current-folder flat library for the legacy video UI.
+
+    Flat ``items`` stay the client contract until Phase 5 wires the shared
+    recursive media-library UI. Listing construction lives in
+    ``media_library.build_flat_folder_library_payload``.
+    """
+    from .media_library import build_flat_folder_library_payload, video_file_enricher
+
+    return build_flat_folder_library_payload(
+        app,
+        rel_path=rel_path,
+        supported_extensions=SUPPORTED_VIDEO_EXTENSIONS,
+        enrich_file=video_file_enricher(
+            compatibility_expected_extensions=COMPATIBILITY_EXPECTED_EXTENSIONS,
+        ),
+        sort_rows=_sort_rows,  # type: ignore[arg-type]
+    )
 
 
 def build_probe_cache_key(

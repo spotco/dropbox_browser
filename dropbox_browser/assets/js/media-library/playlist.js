@@ -1,9 +1,9 @@
-import {clearObject, formatShortDateTime} from './music-shared.js';
+import {clearObject, formatShortDateTime} from './shared.js';
 import {
   DEFAULT_PLAYLIST_NAME,
   parseM3uPlaylistText,
   playlistNameFromFilename
-} from './music-playlist-store.js';
+} from './playlist-store.js';
 
 function copySelectedRemotePathMap(selectedRemotePaths) {
   var copied = Object.create(null);

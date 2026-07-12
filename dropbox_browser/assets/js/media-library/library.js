@@ -1,15 +1,27 @@
-import {clearObject, formatShortDateTime, itemCount, plural} from './music-shared.js';
+import {clearObject, formatShortDateTime, itemCount, plural} from './shared.js';
 import {
   compareLibraryNames,
   firstSelectedVisibleNodeId,
   libraryNameSortKey,
   libraryNodeDateSortValue,
   sortLibraryItems
-} from './music-library-helpers.js';
+} from './library-helpers.js';
+
+function libraryConfig(ctx) {
+  return (ctx && ctx.mediaLibraryConfig) || {};
+}
 
 export function initLibrary(ctx) {
   var els = ctx.els;
   var state = ctx.state;
+  var cfg = libraryConfig(ctx);
+  var libraryEndpoint = cfg.libraryEndpoint || '/music/endpoints/library';
+  var itemNounSingular = cfg.itemNounSingular || 'song';
+  var itemNounPlural = cfg.itemNounPlural || 'songs';
+  var emptyLibraryText = cfg.emptyLibraryText || 'Load the current folder to show cached songs.';
+  var emptyLibraryNoItemsText = cfg.emptyLibraryNoItemsText
+    || ('No supported cached ' + itemNounPlural + ' found in this folder yet.');
+  var loadingLibraryText = cfg.loadingLibraryText || 'Loading cached song library...';
 
   function updateLoadButtonTimer() {
     var elapsedSeconds = 0;
@@ -44,7 +56,7 @@ export function initLibrary(ctx) {
 
   function libraryUrl(isRefresh, scheduledDelayMs) {
     state.libraryPollSequence += 1;
-    return '/music/endpoints/library?path=' + encodeURIComponent(state.libraryRoot) +
+    return libraryEndpoint + '?path=' + encodeURIComponent(state.libraryRoot) +
       '&poll_seq=' + encodeURIComponent(String(state.libraryPollSequence)) +
       '&poll_delay_ms=' + encodeURIComponent(String(scheduledDelayMs || 0)) +
       '&poll_refresh=' + (isRefresh ? '1' : '0');
@@ -450,7 +462,7 @@ export function initLibrary(ctx) {
     if (!snapshot) {
       var empty = document.createElement('div');
       empty.className = 'music-empty-state';
-      empty.textContent = 'Load the current folder to show cached songs.';
+      empty.textContent = emptyLibraryText;
       els.treeEl.appendChild(empty);
       return;
     }
@@ -483,7 +495,7 @@ export function initLibrary(ctx) {
     if (state.visibleNodeIds.length === 1 && (!snapshot.songs || snapshot.songs.length === 0)) {
       var noSongs = document.createElement('div');
       noSongs.className = 'music-empty-state';
-      noSongs.textContent = 'No supported cached songs found in this folder yet.';
+      noSongs.textContent = emptyLibraryNoItemsText;
       els.treeEl.appendChild(noSongs);
     }
 
@@ -529,11 +541,11 @@ export function initLibrary(ctx) {
     var missingFolders = status.missing_folder_count || status.missing_listing_count || 0;
     var seq = state.libraryPollSequence ? 'Poll #' + state.libraryPollSequence + ': ' : '';
     if (status.complete) {
-      return 'Loaded ' + plural(songCount, 'song', 'songs') + ' and ' + plural(folderCount, 'folder', 'folders') + '.';
+      return 'Loaded ' + plural(songCount, itemNounSingular, itemNounPlural) + ' and ' + plural(folderCount, 'folder', 'folders') + '.';
     }
     return seq +
-      '+' + plural(addedSongs, 'song', 'songs') + ', +' + plural(addedFolders, 'folder', 'folders') +
-      ' loaded this response. Totals: ' + plural(songCount, 'song', 'songs') + ', ' +
+      '+' + plural(addedSongs, itemNounSingular, itemNounPlural) + ', +' + plural(addedFolders, 'folder', 'folders') +
+      ' loaded this response. Totals: ' + plural(songCount, itemNounSingular, itemNounPlural) + ', ' +
       plural(folderCount, 'folder', 'folders') + '. Remaining: ' +
       plural(pendingFolders, 'pending folder', 'pending folders') + ', ' +
       plural(missingFolders, 'missing cache record', 'missing cache records') + '. ' +
@@ -545,7 +557,7 @@ export function initLibrary(ctx) {
     if (state.loading) return;
     state.loading = true;
     els.loadButton.disabled = true;
-    if (!isRefresh) ctx.setLibraryStatus('Loading cached song library...');
+    if (!isRefresh) ctx.setLibraryStatus(loadingLibraryText);
     fetch(libraryUrl(isRefresh, scheduledDelayMs))
       .then(function (response) {
         if (!response.ok) throw new Error('Library request failed with HTTP ' + response.status);

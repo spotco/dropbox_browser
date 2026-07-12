@@ -20,7 +20,7 @@ function song(remotePath, displayName) {
 }
 
 test("PlaylistModel serializes ordered Dropbox paths and round-trips through JSON helpers", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist-store.js");
   const playlist = new playlistModule.PlaylistModel({
     last_modified: 111,
     name: "Road Trip",
@@ -47,7 +47,7 @@ test("PlaylistModel serializes ordered Dropbox paths and round-trips through JSO
 });
 
 test("PlaylistModel keeps duplicate absolute paths disallowed", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist-store.js");
   const playlist = new playlistModule.PlaylistModel({
     name: "No Duplicates",
     songs: [song("/Music/alpha.mp3")],
@@ -66,7 +66,7 @@ test("PlaylistModel keeps duplicate absolute paths disallowed", async () => {
 });
 
 test("PlaylistModel treats dropbox-prefixed and bare paths as the same absolute path", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist-store.js");
   const playlist = new playlistModule.PlaylistModel({
     name: "No Duplicates",
     songs: [{ remote_path: "music/alpha.mp3", stream_path: "music/alpha.mp3" }],
@@ -92,7 +92,7 @@ test("PlaylistModel treats dropbox-prefixed and bare paths as the same absolute 
 });
 
 test("playlistAbsolutePathKey matches the stream path shown in the playlist UI", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist-store.js");
 
   assert.equal(
     playlistModule.playlistAbsolutePathKey({
@@ -108,7 +108,7 @@ test("playlistAbsolutePathKey matches the stream path shown in the playlist UI",
 });
 
 test("PlaylistModel normalizes saved Dropbox remote paths into playable stream paths", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist-store.js");
   const playlist = new playlistModule.PlaylistModel({
     name: "Saved",
     songs: [{ remote_path: "dropbox:Music/Album/Track.mp3" }],
@@ -128,7 +128,7 @@ test("PlaylistModel normalizes saved Dropbox remote paths into playable stream p
 });
 
 test("PlaylistStore overwrites persisted playlists by name and updates last_modified on save", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist-store.js");
   const writes = [];
   const storage = {
     get(_key, fallback) {
@@ -160,7 +160,7 @@ test("PlaylistStore overwrites persisted playlists by name and updates last_modi
 });
 
 test("PlaylistStore exports, imports, and sorts persisted playlists", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist-store.js");
   const store = new playlistModule.PlaylistStore({
     clock: () => 4000000,
   });
@@ -198,7 +198,7 @@ test("PlaylistStore exports, imports, and sorts persisted playlists", async () =
 });
 
 test("playlistNameFromFilename strips playlist file extensions and falls back cleanly", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist-store.js");
 
   assert.equal(playlistModule.playlistNameFromFilename("Road Trip.m3u8"), "Road Trip");
   assert.equal(playlistModule.playlistNameFromFilename("saved-playlists.json"), "saved-playlists");
@@ -206,7 +206,7 @@ test("playlistNameFromFilename strips playlist file extensions and falls back cl
 });
 
 test("parseM3uPlaylistText ignores blank lines and comment lines", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist-store.js");
 
   assert.deepEqual(
     playlistModule.parseM3uPlaylistText([
@@ -222,7 +222,7 @@ test("parseM3uPlaylistText ignores blank lines and comment lines", async () => {
 });
 
 test('PlaylistModel preserves imported phone-playlist paths like "/music/...mp3" as playable stream paths', async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist-store.js");
   const imported = new playlistModule.PlaylistModel({
     name: "2024distantworlds",
     songs: [
@@ -253,7 +253,7 @@ test('PlaylistModel preserves imported phone-playlist paths like "/music/...mp3"
 });
 
 test("PlaylistModel.fromJSON restores Dropbox-prefixed songs with playable stream paths", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist-store.js");
   const restored = playlistModule.PlaylistModel.fromJSON({
     last_modified: 5,
     name: "Road Trip",
@@ -273,7 +273,7 @@ test("PlaylistModel.fromJSON restores Dropbox-prefixed songs with playable strea
 });
 
 test("PlaylistStore mergePersistedPlaylists validates and overwrites by imported name", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist-store.js");
   const store = new playlistModule.PlaylistStore();
 
   store.upsertPersistedPlaylist(new playlistModule.PlaylistModel({
@@ -317,7 +317,7 @@ test("PlaylistStore mergePersistedPlaylists validates and overwrites by imported
 });
 
 test("PlaylistStore can replace an old persisted playlist name while saving the renamed active playlist", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist-store.js");
   const store = new playlistModule.PlaylistStore({
     clock: () => 9876000,
   });
@@ -336,7 +336,7 @@ test("PlaylistStore can replace an old persisted playlist name while saving the 
 });
 
 test("PlaylistStore deletePersistedPlaylistByName removes the matching saved playlist only", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist-store.js");
   const store = new playlistModule.PlaylistStore();
 
   store.upsertPersistedPlaylist(new playlistModule.PlaylistModel({
@@ -360,7 +360,7 @@ test("PlaylistStore deletePersistedPlaylistByName removes the matching saved pla
 });
 
 test("PlaylistStore honors a configurable storage key for load and persist", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist-store.js");
   const writes = [];
   const storage = {
     get(key, fallback) {
@@ -405,7 +405,7 @@ test("PlaylistStore honors a configurable storage key for load and persist", asy
 });
 
 test("PlaylistModel removeSongsByRemotePaths removes selected paths and keeps order", async () => {
-  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music-playlist-store.js");
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist-store.js");
   const playlist = new playlistModule.PlaylistModel({
     name: "Trim",
     songs: [

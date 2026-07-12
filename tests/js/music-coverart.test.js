@@ -19,7 +19,7 @@ function synchsafeBytes(value) {
 }
 
 test("extractId3ArtFromTagBytes returns APIC artwork bytes and mime", async () => {
-  const art = await importModuleFromWorkspace("dropbox_browser/assets/js/music-coverart.js");
+  const art = await importModuleFromWorkspace("dropbox_browser/assets/js/music/coverart.js");
   const imageBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
   const apicPayload = Buffer.concat([
     Buffer.from([0x00]),
@@ -47,7 +47,7 @@ test("extractId3ArtFromTagBytes returns APIC artwork bytes and mime", async () =
 });
 
 test("parseId3TagByteLength includes header bytes", async () => {
-  const art = await importModuleFromWorkspace("dropbox_browser/assets/js/music-coverart.js");
+  const art = await importModuleFromWorkspace("dropbox_browser/assets/js/music/coverart.js");
   const tag = Buffer.concat([
     Buffer.from("ID3\x04\x00\x00", "latin1"),
     synchsafeBytes(32),

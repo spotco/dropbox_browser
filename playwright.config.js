@@ -12,4 +12,21 @@ module.exports = defineConfig({
     baseURL: `http://127.0.0.1:${port}`,
     trace: "on-first-retry",
   },
+  // Named groups so suites can be run in isolation:
+  //   npx playwright test --project=music
+  //   npm run test:e2e:music
+  projects: [
+    {
+      name: "music",
+      testMatch: /music-.*\.spec\.js$/,
+    },
+    {
+      name: "video",
+      testMatch: /video-.*\.spec\.js$/,
+    },
+    {
+      name: "client-render",
+      testMatch: /client-render\..*\.spec\.js$/,
+    },
+  ],
 });

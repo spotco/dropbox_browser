@@ -10,7 +10,7 @@ async function importModuleFromWorkspace(relativePath) {
 }
 
 test("isValidShuffleSequence accepts a permutation and rejects duplicates or wrong length", async () => {
-  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/music-shuffle-helpers.js");
+  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/music/shuffle-helpers.js");
 
   assert.equal(helpers.isValidShuffleSequence([0, 1, 2], 3), true);
   assert.equal(helpers.isValidShuffleSequence([2, 0, 1], 3), true);
@@ -22,7 +22,7 @@ test("isValidShuffleSequence accepts a permutation and rejects duplicates or wro
 });
 
 test("buildShuffledIndices is deterministic when random is fixed", async () => {
-  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/music-shuffle-helpers.js");
+  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/music/shuffle-helpers.js");
 
   assert.deepEqual(helpers.buildShuffledIndices(4, () => 0), [1, 2, 3, 0]);
   assert.deepEqual(helpers.buildShuffledIndices(1, () => 0), [0]);
@@ -30,7 +30,7 @@ test("buildShuffledIndices is deterministic when random is fixed", async () => {
 });
 
 test("rebuildShuffleSequence pins the current index at the front of the sequence", async () => {
-  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/music-shuffle-helpers.js");
+  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/music/shuffle-helpers.js");
   const rebuilt = helpers.rebuildShuffleSequence(4, 2, () => 0);
 
   assert.equal(rebuilt.shuffleSequence[0], 2);
@@ -39,7 +39,7 @@ test("rebuildShuffleSequence pins the current index at the front of the sequence
 });
 
 test("resolveNextPlaylistIndex walks linear order and loops when enabled", async () => {
-  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/music-shuffle-helpers.js");
+  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/music/shuffle-helpers.js");
 
   assert.equal(
     helpers.resolveNextPlaylistIndex({
@@ -77,7 +77,7 @@ test("resolveNextPlaylistIndex walks linear order and loops when enabled", async
 });
 
 test("resolvePreviousPlaylistIndex walks linear order and loops when enabled", async () => {
-  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/music-shuffle-helpers.js");
+  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/music/shuffle-helpers.js");
 
   assert.equal(
     helpers.resolvePreviousPlaylistIndex({
@@ -115,7 +115,7 @@ test("resolvePreviousPlaylistIndex walks linear order and loops when enabled", a
 });
 
 test("resolveNextPlaylistIndex follows shuffle sequence and loops shuffle order", async () => {
-  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/music-shuffle-helpers.js");
+  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/music/shuffle-helpers.js");
   const sequence = [2, 0, 3, 1];
 
   const first = helpers.resolveNextPlaylistIndex({
@@ -152,7 +152,7 @@ test("resolveNextPlaylistIndex follows shuffle sequence and loops shuffle order"
 });
 
 test("resolvePreviousPlaylistIndex follows shuffle sequence and loops to the last shuffle entry", async () => {
-  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/music-shuffle-helpers.js");
+  const helpers = await importModuleFromWorkspace("dropbox_browser/assets/js/music/shuffle-helpers.js");
   const sequence = [2, 0, 3, 1];
 
   const previous = helpers.resolvePreviousPlaylistIndex({
