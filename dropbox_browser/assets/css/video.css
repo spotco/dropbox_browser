@@ -25,10 +25,16 @@
 .video-player-shell {
   display: grid;
   gap: 0;
-  grid-template-columns: minmax(220px, 1.05fr) minmax(220px, 0.9fr) minmax(280px, 1.2fr);
+  /* library | resizer | playlist | resizer | playback — layout.js may override via inline grid */
+  grid-template-columns: minmax(160px, 1fr) 8px minmax(180px, 1fr) 8px minmax(280px, 1.4fr);
   height: 100%;
   min-height: 0;
   overflow: hidden;
+}
+
+.video-player-shell.music-player-shell {
+  /* Shared media-library pane chrome (music.css / media-library.css) */
+  min-height: var(--music-min-pane-height, 320px);
 }
 
 .video-subpane {
@@ -72,6 +78,16 @@
   font-size: 14px;
   line-height: 1.2;
   margin: 0;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#video-playback-title {
+  /* Filename of the active video (falls back to "Playback" when idle). */
+  font-weight: 700;
 }
 
 .video-subpane-meta {
@@ -285,12 +301,18 @@
    Classes applied by controls.js: body.video-full-window-mode,
    #video-player-pane.video-full-window, .video-playback-stage.video-full-window */
 #video-player-pane.video-full-window .video-player-shell {
-  grid-template-columns: minmax(0, 1fr);
+  /* !important: media-library layout.js may leave inline multi-column
+     grid-template-columns after pane drag; without this, hidden library/
+     playlist tracks still reserve columns and pin playback to column 1. */
+  grid-template-columns: minmax(0, 1fr) !important;
   grid-template-rows: minmax(0, 1fr);
 }
 
 #video-player-pane.video-full-window #video-library-pane,
+#video-player-pane.video-full-window #video-playlist-pane,
 #video-player-pane.video-full-window #video-queue-pane,
+#video-player-pane.video-full-window #video-resizer-library-playlist,
+#video-player-pane.video-full-window #video-resizer-playlist-playback,
 #video-player-pane.video-full-window .video-playback-pane > .video-subpane-header,
 #video-player-pane.video-full-window #video-track-panel,
 #video-player-pane.video-full-window #video-debug-panel {

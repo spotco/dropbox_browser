@@ -439,7 +439,8 @@ export function initLibrary(ctx) {
     Object.keys(state.selectedIds).forEach(function (nodeId) {
       var node = nodes[nodeId];
       if (!node) return;
-      if (nodeId.indexOf('song:') === 0) {
+      // Media rows use song:* (music) or item:* (generic); folders use folder:*.
+      if (node.type === 'file' || nodeId.indexOf('song:') === 0 || nodeId.indexOf('item:') === 0) {
         songsByRemotePath[node.remote_path] = node;
       } else {
         songsUnderFolder(nodeId).forEach(function (song) {

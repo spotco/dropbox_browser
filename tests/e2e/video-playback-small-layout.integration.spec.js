@@ -10,6 +10,7 @@ process.env.DROPBOX_BROWSER_E2E_FIXTURE = path.join(
 );
 
 const { startIntegrationServer, stopIntegrationServer } = require("./support/integration_server");
+const { playLibraryFile: playLibraryFileBase } = require("./support/video_library");
 
 const baseURL = `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT}`;
 
@@ -66,21 +67,7 @@ async function openVideoPane(page) {
 }
 
 async function playLibraryFile(page, filename) {
-  const row = page
-    .locator("#video-library-list .video-library-row")
-    .filter({ has: page.locator(".video-row-title", { hasText: filename }) })
-    .first();
-  await expect(row).toBeVisible();
-  await row.dblclick();
-  await expect
-    .poll(async () => {
-      const activeTitle = await page
-        .locator("#video-queue-list .video-queue-row.is-active .video-row-title")
-        .first()
-        .textContent();
-      return String(activeTitle || "").trim();
-    }, { timeout: 15000 })
-    .toBe(filename);
+  await playLibraryFileBase(page, filename);
   await waitForDecodedVideo(page);
 }
 
@@ -377,4 +364,99 @@ test("playback pane keeps a usable embedded stage and scrolls vertically at smal
     expect(controlsMetrics.rects[id].width).toBeGreaterThan(0);
     expect(controlsMetrics.rects[id].height).toBeGreaterThan(0);
   }
+});
+
+test("full-window mode hides library/playlist and stretches stage across the viewport", async ({ page }) => {
+  // Regression: media-library layout.js sets inline grid-template-columns on the
+  // shell after pane drag; full-window CSS must still force a single-column
+  // playback layout (inline styles otherwise keep a multi-column track list and
+  // pin the stage to the first column — video stuck on the left).
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await openVideoPane(page);
+  await playLibraryFile(page, "multiline.mkv");
+
+  // Simulate a prior pane resize (layout.js applyMusicPanePercents).
+  await page.evaluate(() => {
+    const shell = document.querySelector("#video-player-pane .video-player-shell");
+    if (!shell) throw new Error("video player shell missing");
+    shell.style.gridTemplateColumns = "280px 8px 280px 8px 400px";
+  });
+
+  await revealControls(page);
+
+  const fullWindowButton = page.locator("#video-full-window-toggle");
+  await expect(fullWindowButton).toBeEnabled({ timeout: 15000 });
+  await fullWindowButton.click();
+
+  await expect(page.locator("body")).toHaveClass(/video-full-window-mode/);
+  await expect(page.locator("#video-player-pane")).toHaveClass(/video-full-window/);
+  await expect(page.locator("#video-library-pane")).toBeHidden();
+  await expect(page.locator("#video-playlist-pane")).toBeHidden();
+
+  await expect
+    .poll(async () => {
+      return page.evaluate(() => {
+        const body = document.body;
+        const pane = document.getElementById("video-player-pane");
+        const shell = pane ? pane.querySelector(".video-player-shell") : null;
+        const stage = document.getElementById("video-playback-stage");
+        const library = document.getElementById("video-library-pane");
+        const playlist = document.getElementById("video-playlist-pane");
+        if (!body || !pane || !shell || !stage) return null;
+        const shellStyle = window.getComputedStyle(shell);
+        const stageRect = stage.getBoundingClientRect();
+        const paneRect = pane.getBoundingClientRect();
+        const viewportWidth = window.innerWidth;
+        return {
+          bodyFullWindow: body.classList.contains("video-full-window-mode"),
+          paneFullWindow: pane.classList.contains("video-full-window"),
+          libraryDisplay: library ? window.getComputedStyle(library).display : "none",
+          playlistDisplay: playlist ? window.getComputedStyle(playlist).display : "none",
+          shellGridColumns: shellStyle.gridTemplateColumns,
+          stageWidth: stageRect.width,
+          stageHeight: stageRect.height,
+          paneWidth: paneRect.width,
+          viewportWidth,
+          // Stage should occupy essentially the full pane/viewport width.
+          stageWidthRatioOfViewport: stageRect.width / Math.max(viewportWidth, 1),
+          stageWidthRatioOfPane: stageRect.width / Math.max(paneRect.width, 1),
+        };
+      });
+    }, { timeout: 10000 })
+    .toMatchObject({
+      bodyFullWindow: true,
+      paneFullWindow: true,
+      libraryDisplay: "none",
+      playlistDisplay: "none",
+    });
+
+  const metrics = await page.evaluate(() => {
+    const stage = document.getElementById("video-playback-stage");
+    const pane = document.getElementById("video-player-pane");
+    const shell = pane ? pane.querySelector(".video-player-shell") : null;
+    const stageRect = stage.getBoundingClientRect();
+    const paneRect = pane.getBoundingClientRect();
+    return {
+      stageWidth: stageRect.width,
+      stageHeight: stageRect.height,
+      paneWidth: paneRect.width,
+      viewportWidth: window.innerWidth,
+      stageWidthRatioOfViewport: stageRect.width / Math.max(window.innerWidth, 1),
+      stageWidthRatioOfPane: stageRect.width / Math.max(paneRect.width, 1),
+      shellGridColumns: shell ? window.getComputedStyle(shell).gridTemplateColumns : "",
+      shellInlineGrid: shell ? shell.style.gridTemplateColumns : "",
+    };
+  });
+
+  // Without the fix, inline 5-column grid leaves stage ~playback column width
+  // (~30–45% of viewport). Full-window must use nearly the full width.
+  expect(metrics.stageWidthRatioOfViewport).toBeGreaterThan(0.85);
+  expect(metrics.stageWidthRatioOfPane).toBeGreaterThan(0.95);
+  expect(metrics.stageHeight).toBeGreaterThan(200);
+  // Single track, not multi-column pixel list like "280px 8px 280px 8px 400px".
+  expect(metrics.shellGridColumns.split(/\s+/).filter(Boolean).length).toBeLessThanOrEqual(2);
+
+  await fullWindowButton.click();
+  await expect(page.locator("body")).not.toHaveClass(/video-full-window-mode/);
+  await expect(page.locator("#video-library-pane")).toBeVisible();
 });

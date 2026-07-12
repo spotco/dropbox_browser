@@ -392,34 +392,34 @@ Landed:
 
 ### Phase 5 — Wire Video Host To Shared Media Library
 
-- [ ] Replace video library/queue markup in `video_player.html` with music-like
+- [x] Replace video library/queue markup in `video_player.html` with music-like
       library + active playlist structure (video IDs, video labels, shared CSS
       classes). Include playlist toolbars, modals, context menus, import input.
-- [ ] Remove or gut `video/library.js` and `video/queue.js` management UI.
-- [ ] Init shared media-library from `video.js` with:
+- [x] Remove or gut `video/library.js` and `video/queue.js` management UI.
+- [x] Init shared media-library from `video.js` with:
   - labels: Video Library / Active Playlist / video nouns
   - `playlistStorageKey: 'video-playlists'`
   - library endpoint `/video/endpoints/library`
   - host hooks that call existing video playback sync (`syncPlaybackForActiveItem`,
     session create, etc.)
-- [ ] Map active playlist index to video’s former `activeQueueIndex` /
+- [x] Map active playlist index to video’s former `activeQueueIndex` /
       `selectedQueueIndex` concepts (or replace those state fields and update
       all call sites in controls/playback/compatibility/cache/diagnostics).
-- [ ] Implement **music shuffle behavior** in video host playback navigation:
+- [x] Implement **music shuffle behavior** in video host playback navigation:
   - shuffle toggle UI (music-equivalent control in video transport)
   - shuffle bag reset when playlist membership changes
   - next/prev/end-of-track respect shuffle + loop like music
-- [ ] Preserve loop toggle; wire it to shared playlist loop semantics (music),
+- [x] Preserve loop toggle; wire it to shared playlist loop semantics (music),
       not only linear `queue-core` advance.
-- [ ] Deduping: adding from library never inserts duplicate absolute paths.
-- [ ] Full-window: keep **video-only opt-in** hide of library + playlist panes
+- [x] Deduping: adding from library never inserts duplicate absolute paths.
+- [x] Full-window: keep **video-only opt-in** hide of library + playlist panes
       (existing full-window CSS/state). Do not put full-window logic into shared
       media-library core beyond optional `ctx` flag/class host applies.
-- [ ] Delete obsolete pure queue mutation paths that duplicate playlist store
+- [x] Delete obsolete pure queue mutation paths that duplicate playlist store
       once unused; keep pure helpers only if video playback still needs them.
-- [ ] Update `tests/test_web_ui.py` video markup contracts (queue → playlist
+- [x] Update `tests/test_web_ui.py` video markup contracts (queue → playlist
       chrome).
-- [ ] Gate: all existing video e2e specs pass (update selectors where they
+- [x] Gate: all existing video e2e specs pass (update selectors where they
       click library/queue rows). Prefer minimal fixture changes; recursive
       library may require “Load Current Folder” click before selecting a file.
 
@@ -524,7 +524,7 @@ Each cadence must keep the music e2e suite green.
 - [x] Phase 2 — Expand Focused Unit Tests
 - [x] Phase 3 — Extract Shared Client (`media-library/`)
 - [x] Phase 4 — Shared Server Library Listing
-- [ ] Phase 5 — Wire Video Host
+- [x] Phase 5 — Wire Video Host
 - [ ] Phase 6 — Docs, Cleanup, Full Verification
 
 ---

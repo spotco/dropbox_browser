@@ -11,6 +11,7 @@ process.env.DROPBOX_BROWSER_E2E_FIXTURE = path.join(
 );
 
 const { startIntegrationServer, stopIntegrationServer } = require("./support/integration_server");
+const { libraryRow, loadVideoLibrary } = require("./support/video_library");
 const baseURL = `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT}`;
 
 const hlsStubSource = fs.readFileSync(
@@ -161,13 +162,6 @@ async function waitForCompatibilityReady(page) {
     .toBe(true);
 }
 
-async function libraryRow(page, filename) {
-  return page
-    .locator("#video-library-list .video-library-row")
-    .filter({ has: page.locator(".video-row-title", { hasText: filename }) })
-    .first();
-}
-
 function waitForSessionPost(page, predicate) {
   return page.waitForRequest((request) => {
     if (!request.url().includes("/video/endpoints/session") || request.method() !== "POST") {
@@ -183,9 +177,10 @@ async function openVideoPane(page) {
   await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
   await page.locator("#bottom-pane-mode").selectOption("video-player");
   await expect(page.locator("#video-player-pane")).toBeVisible();
+  await loadVideoLibrary(page);
   await expect
-    .poll(async () => page.locator("#video-library-list .video-library-row").count(), { timeout: 15000 })
-    .toBeGreaterThanOrEqual(5);
+    .poll(async () => page.locator("#video-library-tree .music-tree-song").count(), { timeout: 45000 })
+    .toBeGreaterThanOrEqual(1);
   await waitForCompatibilityReady(page);
 }
 

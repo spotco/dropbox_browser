@@ -15,6 +15,7 @@ const {
   expectStackedSubtitleLayout,
   readSubtitleLayoutMetrics,
 } = require("./support/subtitle_layout");
+const { playLibraryFile: playLibraryFileBase } = require("./support/video_library");
 
 const baseURL = `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT}`;
 
@@ -164,21 +165,7 @@ async function openVideoPane(page) {
 }
 
 async function playLibraryFile(page, filename) {
-  const row = page
-    .locator("#video-library-list .video-library-row")
-    .filter({ has: page.locator(".video-row-title", { hasText: filename }) })
-    .first();
-  await expect(row).toBeVisible();
-  await row.dblclick();
-  await expect
-    .poll(async () => {
-      const activeTitle = await page
-        .locator("#video-queue-list .video-queue-row.is-active .video-row-title")
-        .first()
-        .textContent();
-      return String(activeTitle || "").trim();
-    }, { timeout: 15000 })
-    .toBe(filename);
+  await playLibraryFileBase(page, filename);
   await expect
     .poll(async () => {
       return page.evaluate(() => {

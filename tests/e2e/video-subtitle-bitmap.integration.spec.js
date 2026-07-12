@@ -11,6 +11,7 @@ process.env.DROPBOX_BROWSER_E2E_FIXTURE = path.join(
 );
 
 const { startIntegrationServer, stopIntegrationServer } = require("./support/integration_server");
+const { libraryRow } = require("./support/video_library");
 const baseURL = `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT}`;
 
 const hlsStubSource = fs.readFileSync(
@@ -202,10 +203,7 @@ test("bitmap subtitle tracks restart compatibility playback instead of mounting 
   await expect(page.locator("#video-player-pane")).toBeVisible();
   await waitForCompatibilityReady(page);
 
-  const row = page
-    .locator("#video-library-list .video-library-row")
-    .filter({ has: page.locator(".video-row-title", { hasText: "bitmap.mkv" }) })
-    .first();
+  const row = await libraryRow(page, "bitmap.mkv");
   await expect(row).toBeVisible();
 
   const initialSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fbitmap.mkv"));
@@ -353,10 +351,7 @@ test("changing from WebVTT to burned-in subtitles during seek restart replays th
   await expect(page.locator("#video-player-pane")).toBeVisible();
   await waitForCompatibilityReady(page);
 
-  const row = page
-    .locator("#video-library-list .video-library-row")
-    .filter({ has: page.locator(".video-row-title", { hasText: "bitmap.mkv" }) })
-    .first();
+  const row = await libraryRow(page, "bitmap.mkv");
   await expect(row).toBeVisible();
 
   const initialSession = waitForSessionPost(page, (body) => (

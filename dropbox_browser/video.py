@@ -2866,22 +2866,24 @@ def video_session_manager(app: Any) -> VideoSessionManager:
 
 
 def video_library_payload(app: Any, *, rel_path: str) -> dict[str, object]:
-    """Current-folder flat library for the legacy video UI.
+    """Recursive folder-cache library for the shared media-library client.
 
-    Flat ``items`` stay the client contract until Phase 5 wires the shared
-    recursive media-library UI. Listing construction lives in
-    ``media_library.build_flat_folder_library_payload``.
+    Emits music-compatible ``folders`` / ``songs`` / ``items`` (items aliases
+    songs) so video.js can host the shared library UI.
     """
-    from .media_library import build_flat_folder_library_payload, video_file_enricher
+    from .media_library import build_recursive_library_payload, video_file_enricher
 
-    return build_flat_folder_library_payload(
+    return build_recursive_library_payload(
         app,
         rel_path=rel_path,
         supported_extensions=SUPPORTED_VIDEO_EXTENSIONS,
+        # Shared client treats media rows as song:* ids (music-compatible).
+        id_prefix="song",
+        include_songs_key=True,
+        include_items_key=True,
         enrich_file=video_file_enricher(
             compatibility_expected_extensions=COMPATIBILITY_EXPECTED_EXTENSIONS,
         ),
-        sort_rows=_sort_rows,  # type: ignore[arg-type]
     )
 
 

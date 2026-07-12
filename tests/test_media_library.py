@@ -74,7 +74,7 @@ class MediaLibraryHelperTests(AppTestCase):
             "/file?path=Videos%2Fclip.mkv&source=remote",
         )
 
-    def test_flat_folder_builder_matches_video_endpoint_shape(self) -> None:
+    def test_flat_folder_builder_filters_unsupported_files(self) -> None:
         rclone = SimulatedRclone({
             "dropbox:Videos": [SimulatedLsjsonResponse(items=[
                 {"Name": "Movies", "Path": "Movies", "IsDir": True, "Size": 0, "ModTime": "2024-01-01T00:00:00Z"},
@@ -95,8 +95,3 @@ class MediaLibraryHelperTests(AppTestCase):
         names = [item["display_name"] for item in payload["items"]]
         self.assertEqual(names, ["Movies", "clip.mp4"])
         self.assertNotIn("readme.txt", names)
-
-        with TestServer(app) as server:
-            endpoint = server.get_json("/video/endpoints/library?path=Videos")
-        self.assertEqual(endpoint["items"], payload["items"])
-        self.assertEqual(endpoint["root"], payload["root"])

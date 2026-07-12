@@ -1,3 +1,6 @@
+/* Host panes that embed shared media-library chrome. Music styles the whole
+   pane; video only scopes library/playlist chrome so playback controls keep
+   video.css rules. */
 #music-player-pane {
   --music-min-pane-height: 320px;
   background: #111827;
@@ -11,7 +14,16 @@
   box-sizing: border-box;
 }
 
-#music-player-pane button {
+/* Base control chrome used by library/playlist toolbars + context menus.
+   Music: all pane buttons (resizer/drag-handle/sort overrides win later by
+   higher class specificity on #music-player-pane).
+   Video: shared subpanes/modals/menus only — exclude structural buttons so
+   #video-player-pane .music-subpane button (1,1,1) cannot overpower resizer
+   rules (1,1,0) and inflate column draggers. */
+#music-player-pane button,
+#video-player-pane .music-subpane button:not(.music-playlist-column-resizer):not(.music-playlist-drag-handle):not(.music-playlist-sort-button),
+#video-player-pane .music-context-menu button,
+#video-player-pane .music-playlist-modal button:not(.music-playlist-sort-button) {
   background: #263547;
   border: 1px solid #4c6a86;
   border-radius: 4px;
@@ -19,6 +31,7 @@
   cursor: pointer;
   font: inherit;
   font-size: 12px;
+  font-weight: 400;
   line-height: 1.2;
   min-height: 28px;
   padding: 5px 9px;
@@ -26,12 +39,21 @@
 }
 
 #music-player-pane button:hover:not(:disabled),
-#music-player-pane button:focus-visible {
+#music-player-pane button:focus-visible,
+#video-player-pane .music-subpane button:not(.music-playlist-column-resizer):not(.music-playlist-drag-handle):not(.music-playlist-sort-button):hover:not(:disabled),
+#video-player-pane .music-subpane button:not(.music-playlist-column-resizer):not(.music-playlist-drag-handle):not(.music-playlist-sort-button):focus-visible,
+#video-player-pane .music-context-menu button:hover:not(:disabled),
+#video-player-pane .music-context-menu button:focus-visible,
+#video-player-pane .music-playlist-modal button:not(.music-playlist-sort-button):hover:not(:disabled),
+#video-player-pane .music-playlist-modal button:not(.music-playlist-sort-button):focus-visible {
   background: #31506b;
   border-color: #72a3c8;
 }
 
-#music-player-pane button:disabled {
+#music-player-pane button:disabled,
+#video-player-pane .music-subpane button:not(.music-playlist-column-resizer):not(.music-playlist-drag-handle):not(.music-playlist-sort-button):disabled,
+#video-player-pane .music-context-menu button:disabled,
+#video-player-pane .music-playlist-modal button:not(.music-playlist-sort-button):disabled {
   color: #728295;
   cursor: default;
   opacity: 0.75;
@@ -156,7 +178,8 @@
   opacity: 0.9;
 }
 
-#music-player-pane h2 {
+#music-player-pane h2,
+#video-player-pane .music-subpane h2 {
   color: #f2f6fa;
   font-size: 13px;
   font-weight: 700;
@@ -554,7 +577,8 @@
   padding-top: 4px;
 }
 
-#music-player-pane .music-playlist-sort-button {
+#music-player-pane .music-playlist-sort-button,
+#video-player-pane .music-playlist-sort-button {
   align-items: center;
   background: transparent;
   border: 0;
@@ -572,12 +596,15 @@
 }
 
 #music-player-pane .music-playlist-sort-button:hover,
-#music-player-pane .music-playlist-sort-button:focus-visible {
+#music-player-pane .music-playlist-sort-button:focus-visible,
+#video-player-pane .music-playlist-sort-button:hover,
+#video-player-pane .music-playlist-sort-button:focus-visible {
   background: rgba(120, 174, 224, 0.12);
   border: 0;
 }
 
-#music-player-pane .music-playlist-sort-button[aria-pressed="true"] {
+#music-player-pane .music-playlist-sort-button[aria-pressed="true"],
+#video-player-pane .music-playlist-sort-button[aria-pressed="true"] {
   color: #f6fbff;
 }
 
@@ -703,28 +730,36 @@
   overflow: visible;
 }
 
-#music-player-pane .music-playlist-column-resizer {
+/* button. class keeps specificity above any host button base that includes
+   the type selector (e.g. #video-player-pane .music-subpane button). */
+#music-player-pane button.music-playlist-column-resizer,
+#video-player-pane button.music-playlist-column-resizer {
   appearance: none;
   background: transparent;
   border: 0;
   border-radius: 0;
   bottom: 0;
   box-shadow: none;
+  color: transparent;
   cursor: col-resize;
   font-size: 0;
   line-height: 0;
   margin: 0;
   min-height: 0;
+  min-width: 0;
+  opacity: 1;
   padding: 0;
   position: absolute;
   right: 0;
   top: 0;
   touch-action: none;
   width: 14px;
+  white-space: normal;
   z-index: 2;
 }
 
-#music-player-pane .music-playlist-column-resizer::before {
+#music-player-pane button.music-playlist-column-resizer::before,
+#video-player-pane button.music-playlist-column-resizer::before {
   background: #8fb4d4;
   box-shadow: 0 0 0 1px rgba(10, 18, 30, 0.35);
   border-radius: 999px;
@@ -737,18 +772,24 @@
   width: 2px;
 }
 
-#music-player-pane .music-playlist-column-resizer:hover,
-#music-player-pane .music-playlist-column-resizer:focus-visible,
-#music-player-pane .music-playlist-column-resizer.dragging {
+#music-player-pane button.music-playlist-column-resizer:hover,
+#music-player-pane button.music-playlist-column-resizer:focus-visible,
+#music-player-pane button.music-playlist-column-resizer.dragging,
+#video-player-pane button.music-playlist-column-resizer:hover,
+#video-player-pane button.music-playlist-column-resizer:focus-visible,
+#video-player-pane button.music-playlist-column-resizer.dragging {
   background: transparent;
   border: 0;
   box-shadow: none;
   outline: 0;
 }
 
-#music-player-pane .music-playlist-column-resizer:hover::before,
-#music-player-pane .music-playlist-column-resizer:focus-visible::before,
-#music-player-pane .music-playlist-column-resizer.dragging::before {
+#music-player-pane button.music-playlist-column-resizer:hover::before,
+#music-player-pane button.music-playlist-column-resizer:focus-visible::before,
+#music-player-pane button.music-playlist-column-resizer.dragging::before,
+#video-player-pane button.music-playlist-column-resizer:hover::before,
+#video-player-pane button.music-playlist-column-resizer:focus-visible::before,
+#video-player-pane button.music-playlist-column-resizer.dragging::before {
   background: #78aee0;
   opacity: 1;
 }
@@ -824,6 +865,9 @@ body.music-playlist-column-resizing {
   color: #1f2937;
   display: flex;
   flex-direction: column;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 12px;
+  line-height: 1.2;
   min-width: 180px;
   padding: 4px;
   position: fixed;
@@ -834,26 +878,21 @@ body.music-playlist-column-resizing {
   display: none;
 }
 
+/* Layout for menu rows. Colors/size come from host button base rules above
+   (#music-player-pane button / #video-player-pane .music-context-menu button)
+   so music and video render identically. */
 .music-context-menu button {
-  background: transparent;
-  border: 0;
-  color: #1f2937;
   display: flex;
   align-items: center;
   justify-content: flex-start;
   gap: 8px;
   min-width: 100%;
-  padding: 6px 10px;
   text-align: left;
-}
-
-.music-context-menu button:hover,
-.music-context-menu button:focus-visible {
-  background: #dce8f4;
 }
 
 .music-context-menu .music-button-icon {
   filter: brightness(0) invert(1);
+  flex: 0 0 auto;
 }
 
 .music-context-menu-group {

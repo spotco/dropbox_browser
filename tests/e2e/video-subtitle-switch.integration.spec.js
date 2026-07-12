@@ -11,6 +11,14 @@ process.env.DROPBOX_BROWSER_E2E_FIXTURE = path.join(
 );
 
 const { startIntegrationServer, stopIntegrationServer } = require("./support/integration_server");
+const {
+  libraryRow,
+  playLibraryFile: playLibraryFileBase,
+  queueLibraryFile,
+  expectActivePlaylistTitle,
+  expectPlaylistCount,
+  loadVideoLibrary,
+} = require("./support/video_library");
 const baseURL = `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT}`;
 
 const hlsStubSource = fs.readFileSync(
@@ -180,7 +188,7 @@ const TRACK_REMOVAL_INSTRUMENTATION = () => {
   function recordTrackRemoved(video) {
     if (!video || video.id !== "video-player-media") return;
     const haystack = collectNativeSubtitleHaystack(video);
-    const activeTitle = document.querySelector("#video-queue-list .video-queue-row.is-active .video-row-title");
+    const activeTitle = document.querySelector("#video-playlist-list .music-playlist-entry.current [role='cell']");
     window.__subtitleTeardownEvents.push({
       type: "track-removed",
       videoHidden: Boolean(video.hidden),
@@ -211,13 +219,6 @@ async function waitForCompatibilityReady(page) {
       return payload.compatibility_available === true;
     }, { timeout: 30000 })
     .toBe(true);
-}
-
-async function libraryRow(page, filename) {
-  return page
-    .locator("#video-library-list .video-library-row")
-    .filter({ has: page.locator(".video-row-title", { hasText: filename }) })
-    .first();
 }
 
 async function waitForVisibleVideo(page) {
@@ -822,7 +823,7 @@ const SUBTITLE_STALE_MONITOR = () => {
     if (!window.__subtitleSwitchArmed) return;
     const needles = Array.isArray(window.__subtitleStaleNeedles) ? window.__subtitleStaleNeedles : [];
     if (!needles.length) return;
-    const activeTitle = document.querySelector("#video-queue-list .video-queue-row.is-active .video-row-title");
+    const activeTitle = document.querySelector("#video-playlist-list .music-playlist-entry.current [role='cell']");
     const activeFilename = activeTitle ? String(activeTitle.textContent || "").trim() : "";
     if (!activeFilename || activeFilename === "alpha.mkv") return;
     const haystack = collectNativeSubtitleHaystack();
@@ -936,13 +937,6 @@ async function clickVideoControl(page, id) {
   }, id);
 }
 
-async function queueLibraryFile(page, filename) {
-  const row = await libraryRow(page, filename);
-  await expect(row).toBeVisible();
-  await row.click();
-  await page.locator("#video-library-add-selected").click();
-}
-
 async function setMediaPlaybackTime(page, seconds) {
   await page.evaluate((targetSeconds) => {
     const video = document.getElementById("video-player-media");
@@ -1032,8 +1026,7 @@ async function expectNoMountedSubtitleTrack(page) {
 }
 
 async function expectActiveQueueTitle(page, filename) {
-  const activeRow = page.locator("#video-queue-list .video-queue-row.is-active").first();
-  await expect(activeRow.locator(".video-row-title")).toHaveText(filename);
+  await expectActivePlaylistTitle(page, filename);
 }
 
 async function expectTrackSelectors(page, {
@@ -1201,16 +1194,15 @@ async function openVideoPane(page) {
   await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
   await page.locator("#bottom-pane-mode").selectOption("video-player");
   await expect(page.locator("#video-player-pane")).toBeVisible();
+  await loadVideoLibrary(page);
   await expect
-    .poll(async () => page.locator("#video-library-list .video-library-row").count(), { timeout: 15000 })
+    .poll(async () => page.locator("#video-library-tree .music-tree-song").count(), { timeout: 45000 })
     .toBeGreaterThanOrEqual(5);
   await waitForCompatibilityReady(page);
 }
 
 async function playLibraryFile(page, filename) {
-  const row = await libraryRow(page, filename);
-  await expect(row).toBeVisible();
-  await row.dblclick();
+  await playLibraryFileBase(page, filename);
   await waitForLoadingOverlayWithoutPlaceholder(page);
   await expectActiveQueueTitle(page, filename);
   await waitForVisibleVideo(page);
@@ -1423,7 +1415,7 @@ test("video controls navigate the queue, persist loop, and wrap natural end when
   await playLibraryFile(page, "alpha.mkv");
   await alphaSession;
   await queueLibraryFile(page, "bravo.mkv");
-  await expect(page.locator("#video-queue-list .video-queue-row")).toHaveCount(2);
+  await expectPlaylistCount(page, 2);
 
   const icons = await readVideoControlState(page);
   expect([
@@ -1494,7 +1486,7 @@ test("video controls navigate the queue, persist loop, and wrap natural end when
   await page.locator("#video-player-media").evaluate((video) => {
     video.dispatchEvent(new Event("ended"));
   });
-  await expect(page.locator("#video-queue-list .video-queue-row.is-active")).toHaveCount(0);
+  await expect(page.locator("#video-playlist-list .music-playlist-entry.current")).toHaveCount(0);
 });
 
 test("video controls seek backward and forward by 15 seconds in embedded playback", async ({ page }) => {
@@ -2025,10 +2017,8 @@ test("automatic playlist next clears old subtitles and mounts the next video tra
   await waitForDisplayedSubtitleText(page, "ALPHA-SUBTITLE-FRA");
   await waitForNativeSubtitleCueText(page, "ALPHA-SUBTITLE-FRA");
 
-  const bravoRow = await libraryRow(page, "bravo.mkv");
-  await bravoRow.click();
-  await page.locator("#video-library-add-selected").click();
-  await expect(page.locator("#video-queue-list .video-queue-row")).toHaveCount(2);
+  await queueLibraryFile(page, "bravo.mkv");
+  await expectPlaylistCount(page, 2);
 
   await page.evaluate(() => {
     window.__subtitleTeardownEvents = [];
