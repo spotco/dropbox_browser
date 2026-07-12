@@ -82,6 +82,75 @@ class RcloneRetryPolicy:
 
 
 DEFAULT_WRITE_RETRY_POLICY = RcloneRetryPolicy()
+
+
+def write_retry_policy_from_config(config: dict[str, Any] | None = None) -> RcloneRetryPolicy:
+    """Build a write retry policy from app config keys, falling back to defaults.
+
+    Config keys (all optional):
+    - RcloneWriteMaxAttempts
+    - RcloneWriteMinTimeoutSeconds
+    - RcloneWriteTimeoutPerGibSeconds
+    - RcloneWriteMaxInitialTimeoutSeconds
+    - RcloneWriteTimeoutMultiplier
+    - RcloneWriteMaxTimeoutSeconds
+    """
+    defaults = DEFAULT_WRITE_RETRY_POLICY
+    cfg = config or {}
+
+    def _positive_int(key: str, default: int, *, minimum: int = 1, maximum: int = 100) -> int:
+        raw = cfg.get(key, default)
+        try:
+            value = int(raw)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            value = default
+        if value < minimum:
+            return minimum
+        if value > maximum:
+            return maximum
+        return value
+
+    def _non_negative_float(key: str, default: float, *, maximum: float = 24 * 60 * 60.0) -> float:
+        raw = cfg.get(key, default)
+        try:
+            value = float(raw)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            value = default
+        if value < 0:
+            return 0.0
+        if value > maximum:
+            return maximum
+        return value
+
+    max_attempts = _positive_int("RcloneWriteMaxAttempts", defaults.max_attempts)
+    min_timeout = _non_negative_float("RcloneWriteMinTimeoutSeconds", defaults.min_timeout)
+    timeout_per_gib = _non_negative_float("RcloneWriteTimeoutPerGibSeconds", defaults.timeout_per_gib)
+    max_initial_timeout = _non_negative_float(
+        "RcloneWriteMaxInitialTimeoutSeconds",
+        defaults.max_initial_timeout,
+    )
+    timeout_multiplier = _non_negative_float(
+        "RcloneWriteTimeoutMultiplier",
+        defaults.timeout_multiplier,
+        maximum=16.0,
+    )
+    if timeout_multiplier < 1.0:
+        timeout_multiplier = 1.0
+    max_timeout = _non_negative_float("RcloneWriteMaxTimeoutSeconds", defaults.max_timeout)
+    # Keep caps ordered so later attempts are never shorter than the initial budget.
+    max_initial_timeout = max(min_timeout, max_initial_timeout)
+    max_timeout = max(max_initial_timeout, max_timeout)
+    return RcloneRetryPolicy(
+        max_attempts=max_attempts,
+        min_timeout=min_timeout,
+        timeout_per_gib=timeout_per_gib,
+        max_initial_timeout=max_initial_timeout,
+        timeout_multiplier=timeout_multiplier,
+        max_timeout=max_timeout,
+        retry_sleep=defaults.retry_sleep,
+    )
+
+
 _RETRYABLE_DROPBOX_THROTTLE_MARKERS = (
     "too_many_write_operations",
     "too many write operations",

@@ -91,6 +91,16 @@ class ConfigDefaultsTests(unittest.TestCase):
         self.assertFalse(config["ClientLogSubsystems"]["file-search"])
         self.assertFalse(config["ClientLogSubsystems"]["music-metadata"])
 
+    def test_rclone_write_retry_defaults_match_policy_defaults(self) -> None:
+        config = dict(config_module._APP_CONFIG_DEFAULTS)
+
+        self.assertEqual(config["RcloneWriteMaxAttempts"], 25)
+        self.assertEqual(config["RcloneWriteMinTimeoutSeconds"], 10.0)
+        self.assertEqual(config["RcloneWriteTimeoutPerGibSeconds"], 20.0)
+        self.assertEqual(config["RcloneWriteMaxInitialTimeoutSeconds"], 300.0)
+        self.assertEqual(config["RcloneWriteTimeoutMultiplier"], 2.0)
+        self.assertEqual(config["RcloneWriteMaxTimeoutSeconds"], 600.0)
+
 
 class ThumbnailConfigTests(unittest.TestCase):
     def test_find_vendored_magick_returns_none_when_missing(self) -> None:
