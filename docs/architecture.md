@@ -79,8 +79,16 @@ Rules:
   `dropbox_browser/views.py`.
 - Config evolution and path locations:
   `dropbox_browser/config.py`.
+- Shared recursive media library listing (music + video endpoints):
+  `dropbox_browser/media_library.py`.
+- Music player endpoints and audio filter wrappers:
+  `dropbox_browser/music.py`.
+- Shared library/playlist client (tree, playlist store, layout):
+  `dropbox_browser/assets/js/media-library/` + `assets/css/media-library.css`.
+- Music-only playback client:
+  `dropbox_browser/assets/js/music/` (entry: `assets/js/music.js`).
 - Video player endpoints, HLS sessions, and browser modules:
-  `docs/video-player.md`.
+  `docs/video-player.md` (`dropbox_browser/video.py`, `assets/js/video/`).
 
 ## Current Known Issues
 

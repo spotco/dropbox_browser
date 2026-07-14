@@ -194,8 +194,6 @@ const MODULES = [
   ["dropbox_browser/assets/js/video/cache.js", "initCache"],
   ["dropbox_browser/assets/js/video/diagnostics.js", "initDiagnostics"],
   ["dropbox_browser/assets/js/video/media-library-bridge.js", "initMediaLibraryBridge"],
-  ["dropbox_browser/assets/js/video/library.js", "initLibrary"],
-  ["dropbox_browser/assets/js/video/queue.js", "initQueue"],
   ["dropbox_browser/assets/js/video/probe.js", "initProbe"],
   ["dropbox_browser/assets/js/video/tracks.js", "initTracks"],
   ["dropbox_browser/assets/js/video/compatibility.js", "initCompatibility"],

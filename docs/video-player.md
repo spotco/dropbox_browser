@@ -1,22 +1,29 @@
 # Video Player Architecture
 
-The video player is a bottom-pane feature for browsing remote videos in the
-current folder, queueing selections, and playing them through a local HLS
-compatibility session. Playback always uses ffmpeg-generated HLS; the browser
-does not stream remote files directly with native `<video src>`.
+The video player is a bottom-pane feature for loading a recursive video library
+from the folder cache, managing a saved **active playlist** (music-parity), and
+playing items through a local HLS compatibility session. Playback always uses
+ffmpeg-generated HLS; the browser does not stream remote files directly with
+native `<video src>`.
 
-Server logic lives in `dropbox_browser/video.py` and `dropbox_browser/handlers.py`.
-Client logic is split across ES modules under `dropbox_browser/assets/js/video/`,
-loaded from a thin entry at `dropbox_browser/assets/js/video.js`.
+**Shared library/playlist** (tree UI, save/load/import/export, pane layout) lives
+under `dropbox_browser/assets/js/media-library/` and `assets/css/media-library.css`,
+also used by the music player. **Video-only playback** (HLS, tracks, subtitles,
+controls, diagnostics) stays under `dropbox_browser/assets/js/video/`.
+
+Server logic: `dropbox_browser/video.py`, `dropbox_browser/media_library.py`
+(recursive library listing), and `dropbox_browser/handlers.py`. Client entry:
+`dropbox_browser/assets/js/video.js`.
 
 ## Request Flow
 
 ```text
 Browser bottom pane (video.js entry)
-  -> initX(ctx) modules in dropbox_browser/assets/js/video/
+  -> media-library/* (library tree, active playlist, layout)
+  -> video/* (playback, HLS, tracks, subtitles, controls)
   -> fetch /video/endpoints/*
   -> handlers.serve_video_endpoint() / serve_video_endpoint_post()
-  -> video.py helpers and VideoSessionManager
+  -> media_library.py (library) / video.py (probe, subtitles, HLS sessions)
   -> ffmpeg HLS output under Temp/video_sessions/
   -> browser plays session playlist via hls.js
 ```
@@ -28,9 +35,10 @@ Only one script tag is included:
 <script type="module" src="/assets/js/video.js"></script>
 ```
 
-Nested client modules import each other as `/assets/js/video/*.js`. The asset
-handler already serves recursive paths under `/assets/js/` with JavaScript content
-type.
+Nested client modules import each other as `/assets/js/video/*.js` and
+`/assets/js/media-library/*.js`. The asset handler serves recursive paths under
+`/assets/js/` with JavaScript content type. Shared library/playlist chrome also
+loads `media-library.css` from the page shell.
 
 ## Server Architecture
 
@@ -39,7 +47,8 @@ type.
 | Concern | Module |
 |---------|--------|
 | Endpoint routing, JSON/VTT/HLS asset responses | `handlers.py` (`serve_video_endpoint`, `serve_video_endpoint_post`) |
-| Probe, subtitle extraction, library listing, HLS session lifecycle | `video.py` |
+| Recursive library listing (folder-cache walk, video extensions) | `media_library.py` via `video_library_payload` in `video.py` |
+| Probe, subtitle extraction, HLS session lifecycle | `video.py` |
 | Disk caches for probe, subtitles, header bytes | `videocache.py` (`DiskCacheStore`) |
 | Remote file byte streaming used as ffmpeg input | `/file` route + `streaming.py` |
 | ffmpeg/ffprobe discovery | `config.py` (`video_tools_config`) |
@@ -111,7 +120,7 @@ All routes are under `/video/endpoints/`.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `library?path=` | List video files in a remote folder |
+| GET | `library?path=` | Recursive video library from folder-cache (shared builder; poll until complete) |
 | GET | `status` | Report ffmpeg/ffprobe availability plus session summaries and aggregate limits |
 | GET | `probe?path=` | Return ffprobe metadata (streams, duration, codecs) |
 | GET | `subtitles?path=&track=` | Extract one subtitle stream to WebVTT |
@@ -229,21 +238,42 @@ compatibility session restart with burned-in subtitles instead.
 
 ## Client Architecture
 
+### Library and active playlist
+
+Video uses the same recursive library + active playlist model as music:
+
+| Concern | Implementation |
+|---------|----------------|
+| Library tree UI, Load Current Folder, poll, sort, multi-select, context add | `media-library/library.js` |
+| Active playlist UI, save/load/rename/import/export, drag reorder, dedupe paths | `media-library/playlist.js` + `playlist-store.js` |
+| Library↔playlist resizers and playlist columns | `media-library/layout.js` |
+| Shared styles | `assets/css/media-library.css` (music-class names still used on video markup for parity) |
+| Video Settings keys | `video-playlists`, `video-library-sort`, `video-playlist-load-*`, `video-playlist-column-widths`, `video-media-library-pane-widths`, `video-shuffle-enabled`; loop stays `video-loop-queue` |
+| Bridge to HLS playback | `video/media-library-bridge.js` mirrors playlist → `state.queue` / `activeQueueIndex` and owns shuffle next/prev |
+
+Host markup IDs are `#video-*` (`video_player.html`). User flow: open Video Player
+→ **Load Current Folder** → expand tree → add/dblclick items into the active
+playlist → play via transport or playlist context menu.
+
+Full-window mode is **video-only chrome**: CSS hides library + playlist panes;
+shared media-library modules do not own full-window logic.
+
 ### Entry and Context
 
 `video.js` builds a shared `ctx` object:
 
-- `ctx.els` — DOM references for library, queue, playback surface, controls, debug panel
-- `ctx.state` — mutable playback/library/queue/subtitle/session state
-- `ctx.setStatus(text)` — updates the status bar
+- `ctx.mediaLibraryConfig` — labels, library endpoint, empty/loading copy
+- `ctx.els` — DOM for library tree, playlist, playback surface, controls, debug
+- `ctx.state` — playback, playlist/queue mirror, subtitle/session, shuffle/loop
+- `ctx.setStatus(text)` — status bar
 
-It calls `initX(ctx)` modules in dependency order, then wires only **global**
-cross-app events:
+It inits media-library + video modules in dependency order, then wires only
+**global** cross-app events:
 
 - `bottom-pane-mode-changed` — activate or deactivate the video pane
-- `browse-folder-changed` — reload library when the browse folder changes
+- `browse-folder-changed` — reset library tree until the user loads again
 - `beforeunload` — stop active session and clear recovery timers
-- `video-playback-ended` (on the pane) — advance queue after natural playback end
+- `video-playback-ended` (on the pane) — advance playlist (shuffle/loop aware)
 
 Per-control DOM listeners live inside the modules that own the behavior, not in
 the entry file.
@@ -252,43 +282,52 @@ the entry file.
 
 ```text
 dropbox_browser/assets/js/
-  video.js                 # entry (~190 lines)
-  video-core.js            # barrel re-export of pure *-core modules
+  video.js                      # thin host entry + mediaLibraryConfig
+  video-core.js                 # barrel re-export of pure *-core modules
+  media-library/
+    shared.js                   # format/clear helpers
+    library-helpers.js          # pure sort/selection helpers
+    library.js                  # recursive library UI + poll
+    playlist-store.js           # PlaylistModel + PlaylistStore (video-playlists key)
+    playlist.js                 # active playlist UI
+    layout.js                   # library|playlist resizers, column widths
   video/
-    constants.js           # icons, timing, recovery, probe storage constants
-    shared.js              # formatting, paths, loading overlay, queue helpers
-    diagnostics.js         # client-log timing and diagnostic reporters
-    library.js             # folder library fetch/render, playback status
-    queue.js               # queue render/mutations, library/queue button listeners
-    probe.js               # probe sessionStorage cache, metadata fetch
-    tracks.js              # audio/subtitle selectors, preferences, change handlers
-    compatibility.js       # Hls import, session create/stop, seek/restart, recovery
-    subtitles.js           # VTT mount/cache/overlay/debug
-    controls.js            # transport UI, progress scrubber, overlay listeners
-    playback.js            # syncPlaybackForActiveItem orchestration
-    pane.js                # syncPaneMode, pane lifecycle
-    queue-core.js          # pure queue math
-    compatibility-core.js  # seek decisions, duration, processed/seekable ranges
-    webvtt-core.js         # WebVTT HTML rendering helpers
-    vtt-parse-core.js      # WebVTT cue parsing and timing rebase
+    constants.js                # icons, timing, recovery, probe storage constants
+    shared.js                   # formatting, paths, loading overlay helpers
+    diagnostics.js              # client-log timing and diagnostic reporters
+    media-library-bridge.js     # playlist ↔ queue mirror, shuffle next/prev
+    probe.js                    # probe sessionStorage cache, metadata fetch
+    tracks.js                   # audio/subtitle selectors, preferences
+    compatibility.js            # Hls import, session create/stop, seek/restart
+    subtitles.js                # VTT mount/cache/overlay/debug
+    controls.js                 # transport UI, progress, full-window, loop/shuffle
+    playback.js                 # syncPlaybackForActiveItem orchestration
+    pane.js                     # syncPaneMode, pane lifecycle
+    queue-core.js               # pure next/prev/end advance (linear fallback math)
+    compatibility-core.js       # seek decisions, duration, processed/seekable ranges
+    webvtt-core.js              # WebVTT HTML rendering helpers
+    vtt-parse-core.js           # WebVTT cue parsing and timing rebase
 ```
 
-`video-core.js` re-exports the four `*-core.js` modules so unit tests and browser
-code can import pure helpers from one path.
+`video-core.js` re-exports the pure `*-core.js` modules so unit tests and browser
+code can import helpers from one path.
 
 ### Init Order
 
 ```text
 initShared
+  -> initCache
   -> initDiagnostics
-  -> initLibrary
-  -> initQueue
+  -> initMediaLibraryBridge
+  -> initLayout / initPlaylist          # shared media-library
   -> initProbe
   -> initTracks
   -> initCompatibility   # registers ctx.compatibilityApi
   -> initSubtitles        # uses compatibilityApi
   -> initControls
   -> initPlayback         # registers ctx.playbackApi
+  -> extendMediaLibraryPlaybackApi
+  -> initMediaLibrary     # shared library tree (after playback hooks exist)
   -> initPane             # registers ctx.paneApi
 ```
 
@@ -299,9 +338,11 @@ required:
 
 | API | Owner | Used for |
 |-----|-------|----------|
+| `ctx.libraryApi` / `ctx.playlistApi` | `media-library/*` | Tree paint, fetch, playlist CRUD, shuffle bag reset |
 | `ctx.compatibilityApi.restartAt(seconds, reason)` | `compatibility.js` | Scrub, audio/subtitle track changes, recovery |
 | `ctx.compatibilityApi.stopSession()` | `compatibility.js` | Pane deactivate, beforeunload, item changes |
-| `ctx.playbackApi.syncForActiveItem()` | `playback.js` | Queue changes, pane activation |
+| `ctx.playbackApi.syncForActiveItem()` | `playback.js` | Playlist/queue changes, pane activation |
+| `ctx.playNextFromPlaylist` / `playPreviousFromPlaylist` | `media-library-bridge.js` | Transport next/prev with shuffle+loop |
 | `ctx.subtitlesApi.applyForSeek(...)` | `subtitles.js` | Post-seek subtitle remount |
 | `ctx.paneApi.syncPaneMode(mode)` | `pane.js` | Bottom pane mode changes |
 
@@ -336,7 +377,7 @@ to `Settings` or `localStorage`.
 | Selector | Owner | Purpose |
 |----------|-------|---------|
 | `body.video-full-window-mode` | `app.css` | Hide page `header` and `main`; force `#log-panel` to fill the viewport (`--log-panel-height: 100vh` or equivalent) |
-| `#video-player-pane.video-full-window` (or shell ancestor) | `video.css` | Single-column playback-only shell: hide library, queue, playback subpane header, track panel, and debug panel; stretch stage |
+| `#video-player-pane.video-full-window` (or shell ancestor) | `video.css` | Single-column playback-only shell: hide library, playlist, playback subpane header, track panel, and debug panel; stretch stage |
 | `.video-playback-stage.video-full-window` (or ancestor `.video-full-window`) | `video.css` | Subtitle overlay / `::cue` at full configured size, matching `.video-playback-stage:fullscreen` (not the embedded 65% scale) |
 
 Native fullscreen continues to use the Fullscreen API on `#video-playback-stage`
@@ -348,11 +389,11 @@ window; full window is not a Fullscreen API mode.
 When `fullWindowActive` is true:
 
 - Page: `header`, `main` (browse)
-- Video shell: `#video-library-pane`, `#video-queue-pane`, playback
+- Video shell: `#video-library-pane`, `#video-playlist-pane`, playback
   `.video-subpane-header`, `#video-track-panel`, `#video-debug-panel`
 - Visible: playback surface/stage, transport controls overlay, media + subtitles
 
-Library, queue, track, and debug are only reachable after exiting full window.
+Library, playlist, track, and debug are only reachable after exiting full window.
 
 #### Mutual exclusion
 
@@ -368,14 +409,16 @@ Full window and native fullscreen must never be active together:
 - Exit full window also on: full-window toggle, bottom-pane mode change away from
   `video-player`, or video pane deactivate (`pane.js`).
 
-Typical startup for the active queue item:
+Typical startup for the active playlist item:
 
-1. `playback.js` loads `/video/endpoints/status` and probe metadata.
-2. `tracks.js` renders audio/subtitle selectors from probe payload.
-3. `compatibility.js` posts `/video/endpoints/session` with selected tracks and start time.
-4. hls.js attaches to the returned playlist URL on the `<video>` element.
-5. `subtitles.js` preloads and mounts sidecar WebVTT when a WebVTT-compatible subtitle is selected.
-6. `controls.js` syncs transport UI, progress bar, and overlay visibility.
+1. Shared library loads via **Load Current Folder** → `GET /video/endpoints/library`.
+2. User adds items to the active playlist; bridge mirrors into `state.queue`.
+3. `playback.js` loads `/video/endpoints/status` and probe metadata for the active path.
+4. `tracks.js` renders audio/subtitle selectors from probe payload.
+5. `compatibility.js` posts `/video/endpoints/session` with selected tracks and start time.
+6. hls.js attaches to the returned playlist URL on the `<video>` element.
+7. `subtitles.js` preloads and mounts sidecar WebVTT when a WebVTT-compatible subtitle is selected.
+8. `controls.js` syncs transport UI, progress bar, and overlay visibility.
 
 Seeking uses `compatibility-core.js` to decide between in-session `video.currentTime`
 adjustment and a full session restart. Restarts preserve transport intent and may
@@ -506,16 +549,20 @@ Server HLS/session events go to `Temp/video_debug.jsonl` when enabled.
 | Layer | Command |
 |-------|---------|
 | Pure JS helpers | `npm run test:js` — `video-core.test.js`, `video-vtt-parse.test.js` |
+| Shared playlist/library JS | `npm run test:js` — music-media-library unit tests under `tests/js/` |
 | Module import graph | `npm run test:js` — `video-modules.test.js` smoke imports |
-| Server endpoints | `python -m tests.run video -v` |
+| Server endpoints | `python -m tests.run video -v` / `music-endpoints -v` |
 | UI asset contracts | `python -m tests.run web -v` |
-| Browser integration | `npx playwright test --grep video` |
+| Browser integration | `npm run test:e2e:video` |
 
 When changing playback, subtitle, or HLS behavior, run the video e2e suite before
 checkin. When changing pure seek/queue/WebVTT math, run the JS unit tests first.
+Shared media-library behavior is locked primarily by the music e2e suite
+(`npm run test:e2e:music`); video e2es keep shallow library/playlist + playback
+coverage without a shared cross-player suite.
 
 ## Related Docs
 
-- Regression groups: `docs/testing.md` (`video`, `web` groups)
+- Regression groups: `docs/testing.md` (`video`, `music`, `web` groups)
 - General request/asset routing: `docs/architecture.md`
-- Refactor plan (completed): `plans/PLAN_VIDEO_JS_REFACTOR.md`
+- Shared media library plan: `plans/2026-07-12/PLAN_SHARED_MEDIA_LIBRARY.md`
