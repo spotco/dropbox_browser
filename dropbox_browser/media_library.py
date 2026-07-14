@@ -1,8 +1,6 @@
-"""Shared media library listing helpers (recursive folder-cache + flat folder).
+"""Shared media library listing helpers (recursive folder-cache walk).
 
-Music and video both use the recursive folder-cache tree via
-``build_recursive_library_payload``. Flat ``build_flat_folder_library_payload``
-remains for tests or any non-UI consumers that only need one folder listing.
+Music and video library endpoints both use ``build_recursive_library_payload``.
 """
 from __future__ import annotations
 
@@ -319,70 +317,6 @@ def build_recursive_library_payload(
     if include_items_key:
         payload["items"] = media_items
     return payload
-
-
-def build_flat_folder_library_payload(
-    app: Any,
-    *,
-    rel_path: str,
-    supported_extensions: Sequence[str],
-    enrich_file: FileEnricher | None = None,
-    sort_rows: Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None = None,
-) -> dict[str, Any]:
-    """Flat current-folder library (legacy video player UI until Phase 5)."""
-    root_rel_path = clean_rel_path(rel_path)
-    entries = app.list_entries(root_rel_path)
-    rows: list[dict[str, Any]] = []
-    for entry in entries:
-        if not entry.get("remote"):
-            continue
-        name = entry.get("name")
-        if not isinstance(name, str):
-            continue
-        if entry.get("is_dir"):
-            child_path = root_rel_path + "/" + name if root_rel_path else name
-            rows.append({
-                "display_name": name,
-                "filename": name,
-                "type": "folder",
-                "path": child_path,
-                "stream_path": child_path,
-                "remote_path": child_path,
-            })
-            continue
-        if not is_supported_media(name, supported_extensions):
-            continue
-        child_path = root_rel_path + "/" + name if root_rel_path else name
-        extension = Path(name).suffix.casefold()
-        row: dict[str, Any] = {
-            "display_name": name,
-            "filename": name,
-            "type": "file",
-            "path": child_path,
-            "stream_path": child_path,
-            "remote_path": child_path,
-            "extension": extension,
-            "size": entry.get("remote_size"),
-            "mtime": entry.get("remote_mtime"),
-        }
-        if enrich_file is not None:
-            enriched = enrich_file(row)
-            if enriched is None:
-                continue
-            row = enriched
-        rows.append(row)
-    sorted_rows = sort_rows(rows) if sort_rows is not None else rows
-    return {
-        "status": "ok",
-        "root": {
-            "display_name": display_name_for_root(root_rel_path),
-            "path": root_rel_path,
-            "stream_path": root_rel_path,
-            "remote_path": remote_target(app.remote, root_rel_path),
-        },
-        "items": sorted_rows,
-        "supported_extensions": list(supported_extensions),
-    }
 
 
 def video_file_enricher(

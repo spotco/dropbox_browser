@@ -381,13 +381,12 @@ can wait for Phase 5 video markup.
 Landed:
 
 - `media_library.py`:
-  - `build_recursive_library_payload` — folder-cache tree (music + future shared UI)
-  - `build_flat_folder_library_payload` — current-folder `items` (legacy video UI)
+  - `build_recursive_library_payload` — folder-cache tree (music + video)
   - shared extension check + video file enricher (preview_url / compatibility)
+  - (flat builder removed in Phase 6 after video UI switched)
 - `music.py` is a thin wrapper; emits both `songs` and `items` (same array) plus
   `supported_extensions` for shared-client readiness.
-- `video_library_payload` uses the flat shared builder so `/video/endpoints/library`
-  stays byte-compatible with current video client/e2e until Phase 5.
+- `video_library_payload` uses the recursive shared builder (Phase 5+).
 - Tests: dual-key assert on music library; new `tests/test_media_library.py`.
 
 ### Phase 5 — Wire Video Host To Shared Media Library
@@ -425,15 +424,15 @@ Landed:
 
 ### Phase 6 — Docs, Cleanup, Full Verification
 
-- [ ] Update `docs/video-player.md` library/queue sections to active playlist +
+- [x] Update `docs/video-player.md` library/queue sections to active playlist +
       recursive library + shared modules.
-- [ ] Update `docs/testing.md` for new music e2e suite and fixture pattern.
-- [ ] Update `docs/architecture.md` / `AGENTS.md` ownership notes if they list
+- [x] Update `docs/testing.md` for new music e2e suite and fixture pattern.
+- [x] Update `docs/architecture.md` / `AGENTS.md` ownership notes if they list
       music/video asset paths.
-- [ ] Remove dead code: old flat video library helpers, unused music root files,
+- [x] Remove dead code: old flat video library helpers, unused music root files,
       unused CSS, unused queue management buttons.
-- [ ] Ensure no remaining imports of deleted paths.
-- [ ] Full verification:
+- [x] Ensure no remaining imports of deleted paths.
+- [x] Full verification:
   - music e2e suite
   - all video e2e suites
   - `npm run test:js`
@@ -441,6 +440,13 @@ Landed:
   - `python -m tests.run video-endpoints -v` (or full video-related groups)
   - `python -m tests.run web -v`
   - full suite before checkin if handing off broadly
+
+Landed cleanup:
+
+- Deleted no-op stubs `video/library.js` / `video/queue.js`.
+- Slimmed `queue-core.js` to linear next/prev/end helpers only.
+- Removed legacy `build_flat_folder_library_payload` and dead flat-row CSS.
+- Docs: video-player, testing, architecture, AGENTS ownership map.
 
 ---
 
@@ -525,7 +531,7 @@ Each cadence must keep the music e2e suite green.
 - [x] Phase 3 — Extract Shared Client (`media-library/`)
 - [x] Phase 4 — Shared Server Library Listing
 - [x] Phase 5 — Wire Video Host
-- [ ] Phase 6 — Docs, Cleanup, Full Verification
+- [x] Phase 6 — Docs, Cleanup, Full Verification
 
 ---
 

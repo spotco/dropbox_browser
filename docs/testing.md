@@ -77,27 +77,41 @@ Playwright worker starts and stops that server explicitly so short E2E runs do
 not hang during teardown. Remote Dropbox data comes from the fixture configured
 by `DROPBOX_BROWSER_E2E_FIXTURE`.
 
-The music-library integration test uses a separate harness on non-default port
-`8011` through `tests/e2e/support/integration_server.js` and
-`tests/e2e/support/run_integration_server.py`. It loads the committed deep-music
-fixture `tests/e2e/fixtures/music-library-deep.json`, keeps temp/cache paths
-isolated, and verifies `Music Player -> Song Library -> Load Current Folder`
-through partial cached-library polling and final completion.
+### Music e2e fixtures and suites
 
-The music-player integration suite uses the same integration harness on port
-`8012` with a generated synthetic fixture
-`tests/e2e/fixtures/music_player_generated_fixture.py` (short WAV tracks via
-vendored ffmpeg). It covers library load/sort, shift-range and sibling
-select-all, playlist add/dedupe/reorder/remove, context Play, save/load/rename/
-overwrite/delete, overwrite and discard **cancel** paths, m3u + JSON import,
-JSON export, playback transport (play/pause, next/prev, loop, deterministic
-shuffle non-sequential next, seek, volume), and Settings survival across reload
-(library sort, pane widths, playlist column widths, load-dialog sort/filter).
+Music library/playlist behavior is locked by Playwright against a real local
+server (not live Dropbox). Two serial suites:
 
-Video-player integration tests may also point `DROPBOX_BROWSER_E2E_FIXTURE` at a
+| Suite | Port | Fixture | Focus |
+|-------|------|---------|--------|
+| `tests/e2e/music-library.integration.spec.js` | `8011` | committed `tests/e2e/fixtures/music-library-deep.json` | Partial folder-cache poll → complete library |
+| `tests/e2e/music-player.integration.spec.js` | `8012` | generated `tests/e2e/fixtures/music_player_generated_fixture.py` | Full library + playlist + playback |
+
+Harness: `tests/e2e/support/integration_server.js` +
+`tests/e2e/support/run_integration_server.py` (isolated temp/cache paths).
+
+The generated music-player fixture builds short WAV tracks with vendored ffmpeg
+under the integration temp root so `/file` + `<audio>` work offline. It covers
+library load/sort, shift-range and sibling select-all, playlist
+add/dedupe/reorder/remove, context Play, save/load/rename/overwrite/delete,
+overwrite and discard **cancel** paths, m3u + JSON import, JSON export, playback
+transport (play/pause, next/prev, loop, deterministic shuffle non-sequential
+next, seek, volume), and Settings survival across reload (library sort, pane
+widths, playlist column widths, load-dialog sort/filter).
+
+Shared client code for that surface lives under
+`dropbox_browser/assets/js/media-library/` (also used by the video player).
+There is **no** shared music/video e2e suite; video keeps its own specs and
+updates selectors for the music-like library/playlist DOM.
+
+### Video e2e fixtures
+
+Video-player integration tests may point `DROPBOX_BROWSER_E2E_FIXTURE` at a
 Python fixture generator script. The integration harness executes that script
 into its isolated temp root, lets it materialize binary test media on disk, and
-then loads the returned JSON fixture description.
+then loads the returned JSON fixture description. After the shared media-library
+wire-up, video e2es typically click **Load Current Folder** before selecting
+tree rows (recursive library, not a flat live listing).
 
 Playwright projects group e2e specs by feature area (see `playwright.config.js`):
 

@@ -43,7 +43,15 @@ Load only the doc that matches the work:
 - `dropbox_browser/namekeys.py` - filename comparison compatibility wrapper.
 - `dropbox_browser/ignored.py` - ignored metadata/system names.
 - `dropbox_browser/clientlog.py` - client-side browser log ingestion and filtering.
+- `dropbox_browser/media_library.py` - shared recursive folder-cache library listing
+  (music + video library endpoints).
+- `dropbox_browser/music.py` - music library endpoint (audio filter + thin wrapper).
+- `dropbox_browser/video.py` - video endpoints, HLS sessions, video library wrapper.
 - `dropbox_browser/views.py` - server-rendered HTML/CSS/JS asset responses.
+- `dropbox_browser/assets/js/media-library/` - shared library tree + active playlist UI.
+- `dropbox_browser/assets/js/music/` - music-only playback/metadata/cover art.
+- `dropbox_browser/assets/js/video/` - video-only playback/HLS/tracks/subtitles.
+- `dropbox_browser/assets/js/music.js` / `video.js` - thin host entries.
 - `tests/` - stdlib `unittest` tests with fake rclone and isolated temp/cache paths.
 - `Cache/`, `Temp/`, `.dropbox-browser-temp/` - generated local state, ignored by git.
 - `plans/TODO_NOTES` - human-owned active plan list and scratch notes; do not
@@ -166,7 +174,11 @@ the smallest fix, rerun that test, then run the relevant group. See
   - browser-originated client logs: `dropbox_browser/clientlog.py`;
   - request routing and response status: `dropbox_browser/handlers.py`;
   - HTML, icons, and browser assets: `dropbox_browser/views.py`;
-  - config evolution and path locations: `dropbox_browser/config.py`.
+  - config evolution and path locations: `dropbox_browser/config.py`;
+  - shared recursive media library listing: `dropbox_browser/media_library.py`;
+  - shared library/playlist browser UI: `dropbox_browser/assets/js/media-library/`;
+  - music-only client playback: `dropbox_browser/assets/js/music/`;
+  - video player endpoints and client modules: `docs/video-player.md`.
 
 ## Git Notes
 
