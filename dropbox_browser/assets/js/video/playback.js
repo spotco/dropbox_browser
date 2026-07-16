@@ -48,11 +48,19 @@ async function syncPlaybackForActiveItem() {
     return;
   }
 
+  var activePath = String(active.path || '');
+  var previousSessionId = String(ctx.state.compatibilitySessionId || '');
+  var previousSessionPath = String(ctx.state.compatibilitySessionPath || '');
+  resetPlaybackSurface();
+  ctx.resetSubtitlesForActiveItemChange(active);
+  if (previousSessionId && previousSessionPath !== activePath) {
+    await ctx.stopCompatibilitySession(previousSessionId);
+    if (syncToken !== ctx.state.playbackSyncToken) return;
+  }
+
   if (!ctx.state.playbackStatusLoaded) {
     if (!ctx.state.loadingPlaybackStatus) void ctx.loadPlaybackStatus();
     ctx.state.playbackMode = 'loading';
-    resetPlaybackSurface();
-    ctx.resetSubtitlesForActiveItemChange(active);
     ctx.renderAudioTrackSelector(active, null);
     ctx.showPlaybackPlaceholder(ctx.activeItemTitle(active), 'Loading video playback capabilities.');
     ctx.showLoadingOverlay(ctx.loadingOverlayCopy(active, 'Loading video playback capabilities.', 0.08));
@@ -60,8 +68,6 @@ async function syncPlaybackForActiveItem() {
     return;
   }
 
-  resetPlaybackSurface();
-  ctx.resetSubtitlesForActiveItemChange(active);
   ctx.showPlaybackPlaceholder(ctx.activeItemTitle(active), '');
 
   if (!ctx.state.compatibilityAvailable) {

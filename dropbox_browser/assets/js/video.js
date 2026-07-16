@@ -470,11 +470,14 @@ import {initPane} from './video/pane.js';
     }
   });
 
-  window.addEventListener('beforeunload', function () {
+  function stopVideoSessionOnUnload() {
     ctx.clearCompatibilityRecoveryTimer();
     var unloadSessionId = String(ctx.state.compatibilitySessionId || '');
-    void ctx.compatibilityApi.stopSession(unloadSessionId);
-  });
+    void ctx.compatibilityApi.stopSession(unloadSessionId, {unloadSafe: true});
+  }
+
+  window.addEventListener('pagehide', stopVideoSessionOnUnload);
+  window.addEventListener('beforeunload', stopVideoSessionOnUnload);
 
   pane.addEventListener('video-playback-ended', function () {
     if (ctx.state.activeQueueIndex < 0 && ctx.state.currentPlaylistIndex < 0) return;
