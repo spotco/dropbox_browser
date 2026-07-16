@@ -909,10 +909,11 @@ function hlsErrorTargetsCurrentSession(data) {
 async function postStopCompatibilitySession(sessionId, options) {
   var clientId = ctx.state.videoClientId || '';
   var normalizedSessionId = String(sessionId || '');
-  if (!normalizedSessionId) return;
-  var body = 'id=' + encodeURIComponent(normalizedSessionId)
-    + '&client_id=' + encodeURIComponent(clientId);
   var unloadSafe = Boolean(options && options.unloadSafe);
+  var clientOwned = Boolean(options && options.clientOwned);
+  if ((!normalizedSessionId && !unloadSafe && !clientOwned) || (!normalizedSessionId && !clientId)) return;
+  var body = (normalizedSessionId && !clientOwned ? 'id=' + encodeURIComponent(normalizedSessionId) + '&' : '')
+    + 'client_id=' + encodeURIComponent(clientId);
   try {
     await fetch('/video/endpoints/session/stop', {
       method: 'POST',
@@ -940,7 +941,9 @@ async function stopCompatibilitySession(sessionIdOverride, options) {
     ? ''
     : String(sessionIdOverride || '');
   var sessionId = explicitSessionId || String(ctx.state.compatibilitySessionId || '');
-  if (!sessionId) return;
+  var unloadSafe = Boolean(options && options.unloadSafe);
+  var clientOwned = Boolean(options && options.clientOwned);
+  if (!sessionId && !unloadSafe && !clientOwned) return;
   var clearLocalFirst = Boolean(options && options.clearLocalFirst);
   if (clearLocalFirst && String(ctx.state.compatibilitySessionId || '') === sessionId) {
     clearLocalCompatibilitySessionState();

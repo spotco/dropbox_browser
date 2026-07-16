@@ -1903,6 +1903,7 @@ class VideoSessionManager:
         self._session_lifecycle: dict[str, dict[str, object]] = {}
         self._pending_session_creations = 0
         self._deferred_session_stops: list[VideoHlsSession] = []
+        self._client_stop_generations: dict[str, int] = {}
 
     def shutdown(self) -> None:
         with self._lock:
@@ -1935,8 +1936,10 @@ class VideoSessionManager:
         if max_session_count <= 0:
             max_session_count = 1
         evicted_session_id: str | None = None
+        normalized_client_id = str(client_id or "")
         with self._lock:
             self._cleanup_expired_locked()
+            client_stop_generation = self._client_stop_generations.get(normalized_client_id, 0)
             active_count = len(self._sessions)
             pending_count = self._pending_session_creations
             if (active_count + pending_count) >= max_session_count:
@@ -2080,11 +2083,19 @@ class VideoSessionManager:
             )
             with self._lock:
                 self._cleanup_expired_locked()
-                self._sessions[session_id] = session
-                self._active_session_id = session_id
                 self._pending_session_creations = max(0, self._pending_session_creations - 1)
                 reservation_active = False
+                client_stop_cancelled = (
+                    bool(normalized_client_id)
+                    and self._client_stop_generations.get(normalized_client_id, 0) != client_stop_generation
+                )
+                if not client_stop_cancelled:
+                    self._sessions[session_id] = session
+                    self._active_session_id = session_id
             self._drain_deferred_session_stops()
+            if client_stop_cancelled:
+                self._stop_session_resources(session)
+                raise BrowserError(HTTPStatus.CONFLICT, "Video session was stopped before it became ready.")
             ready_timeout_seconds = (
                 HLS_READY_TIMEOUT_BURN_IN_SECONDS
                 if subtitle_stream_index is not None
@@ -2119,14 +2130,26 @@ class VideoSessionManager:
                     self._pending_session_creations = max(0, self._pending_session_creations - 1)
             self._drain_deferred_session_stops()
 
-    def stop_session(self, session_id: str | None = None) -> dict[str, object]:
+    def stop_session(self, session_id: str | None = None, *, client_id: str = "") -> dict[str, object]:
         with self._lock:
             self._cleanup_expired_locked()
-            session = self._get_session_locked(session_id) if session_id else self._active_session_locked()
-            if session is None:
+            if session_id:
+                session = self._get_session_locked(session_id)
+                sessions = [session] if session is not None else []
+            elif client_id:
+                self._client_stop_generations[client_id] = self._client_stop_generations.get(client_id, 0) + 1
+                sessions = [
+                    session
+                    for session in self._sessions.values()
+                    if session.client_id == client_id
+                ]
+            else:
+                sessions = []
+            if not sessions:
                 result = {"status": "ok", "stopped": False}
             else:
-                self._remove_session_locked(session.session_id, reason="stopped")
+                for session in sessions:
+                    self._remove_session_locked(session.session_id, reason="stopped")
                 result = {"status": "ok", "stopped": True}
         self._drain_deferred_session_stops()
         return result

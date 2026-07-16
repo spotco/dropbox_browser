@@ -957,7 +957,11 @@ test("unload-safe session stop enables keepalive", async () => {
   const ctx = createCtx(item);
   const requests = [];
   global.fetch = async function (url, options) {
-    requests.push({url: String(url || ""), keepalive: Boolean(options && options.keepalive)});
+    requests.push({
+      url: String(url || ""),
+      body: String(options && options.body || ""),
+      keepalive: Boolean(options && options.keepalive),
+    });
     return { ok: true, async json() { return {status: "ok"}; } };
   };
   global.window = { setTimeout, clearTimeout };
@@ -967,7 +971,79 @@ test("unload-safe session stop enables keepalive", async () => {
 
   assert.deepEqual(requests, [{
     url: "/video/endpoints/session/stop",
+    body: "id=session-beforeunload&client_id=client-123",
     keepalive: true,
+  }]);
+});
+
+test("unload-safe session stop can identify a session still being created by client id", async () => {
+  const {initCompatibility} = await importModuleFromWorkspace("dropbox_browser/assets/js/video/compatibility.js");
+  const item = {path: "Videos/copy.mkv"};
+  const ctx = createCtx(item);
+  ctx.state.compatibilitySessionId = "";
+  const requests = [];
+  global.fetch = async function (url, options) {
+    requests.push({
+      url: String(url || ""),
+      body: String(options && options.body || ""),
+      keepalive: Boolean(options && options.keepalive),
+    });
+    return { ok: true, async json() { return {status: "ok"}; } };
+  };
+  global.window = { setTimeout, clearTimeout };
+  initCompatibility(ctx);
+
+  await ctx.stopCompatibilitySession("", {unloadSafe: true});
+
+  assert.deepEqual(requests, [{
+    url: "/video/endpoints/session/stop",
+    body: "client_id=client-123",
+    keepalive: true,
+  }]);
+});
+
+test("unload-safe session stop without an id or client id is a no-op", async () => {
+  const {initCompatibility} = await importModuleFromWorkspace("dropbox_browser/assets/js/video/compatibility.js");
+  const item = {path: "Videos/copy.mkv"};
+  const ctx = createCtx(item);
+  ctx.state.compatibilitySessionId = "";
+  ctx.state.videoClientId = "";
+  const requests = [];
+  global.fetch = async function (url) {
+    requests.push(String(url || ""));
+    return { ok: true, async json() { return {status: "ok"}; } };
+  };
+  global.window = { setTimeout, clearTimeout };
+  initCompatibility(ctx);
+
+  await ctx.stopCompatibilitySession("", {unloadSafe: true});
+
+  assert.equal(requests.length, 0);
+});
+
+test("client-owned session stop can clean up navigation races without keepalive", async () => {
+  const {initCompatibility} = await importModuleFromWorkspace("dropbox_browser/assets/js/video/compatibility.js");
+  const item = {path: "Videos/copy.mkv"};
+  const ctx = createCtx(item);
+  ctx.state.compatibilitySessionId = "session-1";
+  const requests = [];
+  global.fetch = async function (url, options) {
+    requests.push({
+      url: String(url || ""),
+      body: String(options && options.body || ""),
+      keepalive: Boolean(options && options.keepalive),
+    });
+    return { ok: true, async json() { return {status: "ok"}; } };
+  };
+  global.window = { setTimeout, clearTimeout };
+  initCompatibility(ctx);
+
+  await ctx.stopCompatibilitySession("", {clientOwned: true});
+
+  assert.deepEqual(requests, [{
+    url: "/video/endpoints/session/stop",
+    body: "client_id=client-123",
+    keepalive: false,
   }]);
 });
 

@@ -53,8 +53,8 @@ async function syncPlaybackForActiveItem() {
   var previousSessionPath = String(ctx.state.compatibilitySessionPath || '');
   resetPlaybackSurface();
   ctx.resetSubtitlesForActiveItemChange(active);
-  if (previousSessionId && previousSessionPath !== activePath) {
-    await ctx.stopCompatibilitySession(previousSessionId);
+  if (previousSessionPath !== activePath) {
+    await ctx.stopCompatibilitySession(previousSessionId, {clientOwned: true});
     if (syncToken !== ctx.state.playbackSyncToken) return;
   }
 

@@ -2423,7 +2423,7 @@ class VideoEndpointTests(AppTestCase):
         self.assertIn("#EXTM3U", second_playlist)
         self.assertEqual(second_segment, b"segment0")
 
-    def test_session_stop_endpoint_cleans_up_only_requested_session(self) -> None:
+    def test_session_stop_endpoint_cleans_up_requested_and_client_owned_sessions(self) -> None:
         rclone = SimulatedRclone({
             "dropbox:": [SimulatedLsjsonResponse(items=[
                 {
@@ -2494,14 +2494,24 @@ class VideoEndpointTests(AppTestCase):
             with urlopen(server.base_url + second["asset_root"] + "segment_00000.m4s", timeout=5) as response:
                 second_segment = response.read()
             status_payload = server.get_json("/video/endpoints/status")
+            client_stop_payload = server.post_json("/video/endpoints/session/stop", {
+                "client_id": "client-new-browser",
+            })
+            status_after_client_stop = server.get_json("/video/endpoints/status")
+            with self.assertRaises(HTTPError) as second_ctx:
+                urlopen(server.base_url + second["asset_root"] + "segment_00000.m4s", timeout=5)
         self.assertEqual(stop_payload, {"status": "ok", "stopped": True})
+        self.assertEqual(client_stop_payload, {"status": "ok", "stopped": True})
         self.assertEqual(first_ctx.exception.code, 404)
+        self.assertEqual(second_ctx.exception.code, 404)
         self.assertIn("#EXTM3U", second_playlist)
         self.assertEqual(second_segment, b"segment0")
         self.assertEqual(len(status_payload["active_sessions"]), 1)
         self.assertEqual(status_payload["active_sessions"][0]["session_id"], second["session_id"])
         self.assertEqual(status_payload["active_sessions"][0]["client_id"], "client-new-browser")
+        self.assertEqual(status_after_client_stop["active_sessions"], [])
         first_ctx.exception.close()
+        second_ctx.exception.close()
 
     def test_stop_session_releases_registry_lock_before_waiting_for_ffmpeg_exit(self) -> None:
         rclone = self._remote_media_rclone()

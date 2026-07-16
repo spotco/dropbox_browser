@@ -1351,7 +1351,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                 status = HTTPStatus.OK
             elif endpoint == "session/stop":
                 session_id = params.get("id", [""])[0].strip() or None
-                payload = video_session_manager(self.app).stop_session(session_id)
+                client_id = params.get("client_id", [""])[0].strip()[:128]
+                payload = video_session_manager(self.app).stop_session(
+                    session_id,
+                    client_id=client_id,
+                )
                 status = HTTPStatus.OK
             elif endpoint == "session/progress":
                 session_id = params.get("id", [""])[0].strip()
