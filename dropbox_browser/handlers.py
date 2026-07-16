@@ -47,6 +47,7 @@ from .video import (
     parse_video_playback_seconds,
     parse_video_playback_state,
     parse_video_start_seconds,
+    parse_video_transition_token,
     probe_remote_media,
     log_video_debug,
     video_session_manager,
@@ -1333,6 +1334,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 start_time_seconds = parse_video_start_seconds(params.get("start_time_seconds", [""])[0])
                 force_video_transcode = params.get("force_video_transcode", [""])[0].strip() == "1"
                 force_audio_transcode = params.get("force_audio_transcode", [""])[0].strip() == "1"
+                transition_token = parse_video_transition_token(params.get("transition_token", [""])[0])
                 port = int(self.server.server_address[1])  # type: ignore[attr-defined]
                 base_url = f"http://127.0.0.1:{port}"
                 payload = video_session_manager(self.app).create_session(
@@ -1347,14 +1349,17 @@ class RequestHandler(BaseHTTPRequestHandler):
                     start_time_seconds=start_time_seconds,
                     force_video_transcode=force_video_transcode,
                     force_audio_transcode=force_audio_transcode,
+                    transition_token=transition_token,
                 )
                 status = HTTPStatus.OK
             elif endpoint == "session/stop":
                 session_id = params.get("id", [""])[0].strip() or None
                 client_id = params.get("client_id", [""])[0].strip()[:128]
+                transition_token = parse_video_transition_token(params.get("transition_token", [""])[0])
                 payload = video_session_manager(self.app).stop_session(
                     session_id,
                     client_id=client_id,
+                    transition_token=transition_token,
                 )
                 status = HTTPStatus.OK
             elif endpoint == "session/progress":

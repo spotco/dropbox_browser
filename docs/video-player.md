@@ -134,6 +134,11 @@ Session creation (`POST /video/endpoints/session`) accepts form fields:
 
 - `path` — remote video path (required)
 - `source` — must be `remote`
+- `client_id` — optional browser-client owner id used for cleanup of sessions
+  whose create response has not reached the browser yet
+- `transition_token` — optional nonnegative client transition generation. The
+  client sends the same token on the matching stop and create requests so a
+  delayed stop from an older navigation cannot remove a newer session.
 - `audio_stream_index` — optional ffmpeg audio stream index
 - `subtitle_stream_index` — optional burned-in subtitle stream index
 - `start_time_seconds` — seek target for the new session
@@ -141,6 +146,14 @@ Session creation (`POST /video/endpoints/session`) accepts form fields:
   stream copy for that session request
 - `force_audio_transcode` — optional retry knob (`1`) that disables AAC
   stream copy for that session request
+
+Session stops (`POST /video/endpoints/session/stop`) accept `id` for an exact
+session cleanup, `client_id` for owner cleanup when the session id is not yet
+known, and the optional matching `transition_token`. Navigation stops should
+include both the old session `id` and the transition token; unload cleanup may
+use only `client_id` and the token to cancel a create that is still pending.
+An exact stop without a transition token remains scoped to that session and
+does not advance the client-wide pending-create cancellation generation.
 
 Playback progress updates (`POST /video/endpoints/session/progress`) accept:
 

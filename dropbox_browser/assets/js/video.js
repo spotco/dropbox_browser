@@ -473,7 +473,10 @@ import {initPane} from './video/pane.js';
   function stopVideoSessionOnUnload() {
     ctx.clearCompatibilityRecoveryTimer();
     var unloadSessionId = String(ctx.state.compatibilitySessionId || '');
-    void ctx.compatibilityApi.stopSession(unloadSessionId, {unloadSafe: true});
+    void ctx.compatibilityApi.stopSession(unloadSessionId, {
+      unloadSafe: true,
+      transitionToken: ctx.state.playbackSyncToken,
+    });
   }
 
   window.addEventListener('pagehide', stopVideoSessionOnUnload);

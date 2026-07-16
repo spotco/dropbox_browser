@@ -1677,6 +1677,68 @@ test("rapid next and previous navigation keeps the final subtitle item isolated"
   await waitForNativeSubtitleCueText(page, "ALPHA-SUBTITLE-FRA");
 });
 
+test("delayed prior client stop cannot stop a newer session", async ({ page }) => {
+  test.setTimeout(90000);
+  const clientId = "e2e-transition-order-client";
+  const createSession = (transitionToken) => page.evaluate(async ({clientId: id, transitionToken: token}) => {
+    const body = new URLSearchParams({
+      path: "Videos/alpha.mkv",
+      source: "remote",
+      client_id: id,
+      transition_token: String(token),
+    });
+    const response = await fetch("/video/endpoints/session", {
+      method: "POST",
+      headers: {"Content-Type": "application/x-www-form-urlencoded; charset=utf-8"},
+      body,
+    });
+    return {ok: response.ok, payload: await response.json()};
+  }, {clientId, transitionToken});
+
+  await page.goto("/");
+  const firstSession = await createSession(1);
+  expect(firstSession.ok).toBe(true);
+
+  let releaseFirstStop;
+  let firstStopSeen;
+  const firstStopReleased = new Promise((resolve) => {
+    releaseFirstStop = resolve;
+  });
+  const firstStopSeenPromise = new Promise((resolve) => {
+    firstStopSeen = resolve;
+  });
+  await page.route("**/video/endpoints/session/stop", async (route) => {
+    firstStopSeen();
+    await firstStopReleased;
+    await route.continue();
+  });
+
+  const priorStop = page.evaluate(async (id) => {
+    const body = new URLSearchParams({client_id: id, transition_token: "1"});
+    const response = await fetch("/video/endpoints/session/stop", {
+      method: "POST",
+      headers: {"Content-Type": "application/x-www-form-urlencoded; charset=utf-8"},
+      body,
+    });
+    return {ok: response.ok, payload: await response.json()};
+  }, clientId);
+  await firstStopSeenPromise;
+
+  const finalSession = await createSession(2);
+  expect(finalSession.ok).toBe(true);
+  expect(finalSession.payload.session_id).not.toBe(firstSession.payload.session_id);
+
+  releaseFirstStop();
+  const priorStopResult = await priorStop;
+  expect(priorStopResult.ok).toBe(true);
+  await expect
+    .poll(async () => {
+      const sessions = await readActiveVideoSessions(page);
+      return sessions.some((session) => session && session.session_id === finalSession.payload.session_id);
+    }, {timeout: 15000})
+    .toBe(true);
+});
+
 test("switching during delayed subtitle extraction ignores the old item response", async ({ page }) => {
   test.setTimeout(90000);
 

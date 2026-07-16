@@ -1,6 +1,16 @@
-plans\2026-07-12\PLAN_SHARED_MEDIA_LIBRARY.md
+plans\2026-07-16\PLAN_TEST_FLAKES.md
+
+bottom panel allow drag to top (video player full screen does this)
+bottom panel top bar allow min/max
+load playlist -> always "songs"
+export playlist -> always dropbox_browser_playlists.json, make it different for every user
+video player full browser - esc to return
+
+recently played: include playlist in entry, resume state at playlist entry when selecting
 
 plans/2026-07-05/PLAN_VIDEO_SUBTITLE_STYLING.md
+
+---
 
 plans/2026-06-04/SPEC_RECURSIVE_FILE_SEARCH.md
 	performance improvements
