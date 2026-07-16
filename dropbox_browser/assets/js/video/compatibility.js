@@ -914,6 +914,10 @@ async function postStopCompatibilitySession(sessionId, options) {
   if ((!normalizedSessionId && !unloadSafe && !clientOwned) || (!normalizedSessionId && !clientId)) return;
   var body = (normalizedSessionId && !clientOwned ? 'id=' + encodeURIComponent(normalizedSessionId) + '&' : '')
     + 'client_id=' + encodeURIComponent(clientId);
+  var transitionToken = options && options.transitionToken;
+  if (transitionToken != null && Number.isFinite(Number(transitionToken))) {
+    body += '&transition_token=' + encodeURIComponent(String(Math.max(0, Math.trunc(Number(transitionToken)))));
+  }
   try {
     await fetch('/video/endpoints/session/stop', {
       method: 'POST',
@@ -1192,6 +1196,9 @@ async function createCompatibilitySession(item, audioStreamIndex, startSeconds, 
   if (options && options.forceAudioTranscode) {
     body += '&force_audio_transcode=1';
   }
+  if (options && options.transitionToken != null && Number.isFinite(Number(options.transitionToken))) {
+    body += '&transition_token=' + encodeURIComponent(String(Math.max(0, Math.trunc(Number(options.transitionToken)))));
+  }
   var response = await fetch('/video/endpoints/session', {
     method: 'POST',
     headers: {'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8'},
@@ -1414,7 +1421,10 @@ async function restartCompatibilityAt(targetSeconds, reason, options) {
     ctx.setStatus('Could not inspect video tracks.');
     return;
   }
-  await stopCompatibilitySession('', {clearLocalFirst: true});
+  await stopCompatibilitySession('', {
+    clearLocalFirst: true,
+    transitionToken: syncToken,
+  });
   if (syncToken !== ctx.state.playbackSyncToken) return;
   var audioStreamIndex = ctx.selectedAudioStreamIndex(active, probePayload);
   var burnedInSubtitleStreamIndex = ctx.selectedBurnedInSubtitleStreamIndex(active, probePayload);
@@ -1430,10 +1440,11 @@ async function restartCompatibilityAt(targetSeconds, reason, options) {
       {
         forceVideoTranscode,
         forceAudioTranscode,
+        transitionToken: syncToken,
       }
     );
     if (syncToken !== ctx.state.playbackSyncToken) {
-      await postStopCompatibilitySession(session.session_id || '');
+      await postStopCompatibilitySession(session.session_id || '', {transitionToken: syncToken});
       return;
     }
     ctx.state.compatibilitySessionId = session.session_id || '';

@@ -54,7 +54,7 @@ async function syncPlaybackForActiveItem() {
   resetPlaybackSurface();
   ctx.resetSubtitlesForActiveItemChange(active);
   if (previousSessionPath !== activePath) {
-    await ctx.stopCompatibilitySession(previousSessionId, {clientOwned: true});
+    await ctx.stopCompatibilitySession(previousSessionId, {transitionToken: syncToken});
     if (syncToken !== ctx.state.playbackSyncToken) return;
   }
 
@@ -113,9 +113,15 @@ async function syncPlaybackForActiveItem() {
   try {
     ctx.showLoadingOverlay(ctx.loadingOverlayCopy(active, 'Creating the local HLS compatibility session.', 0.48));
     ctx.reportPlaybackTiming('session_create_requested');
-    var session = await ctx.createCompatibilitySession(active, audioStreamIndex, 0, burnedInSubtitleStreamIndex);
+    var session = await ctx.createCompatibilitySession(
+      active,
+      audioStreamIndex,
+      0,
+      burnedInSubtitleStreamIndex,
+      {transitionToken: syncToken},
+    );
     if (syncToken !== ctx.state.playbackSyncToken) {
-      await ctx.postStopCompatibilitySession(session.session_id || '');
+      await ctx.postStopCompatibilitySession(session.session_id || '', {transitionToken: syncToken});
       return;
     }
     ctx.state.compatibilitySessionId = session.session_id || '';

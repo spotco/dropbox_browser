@@ -2513,6 +2513,157 @@ class VideoEndpointTests(AppTestCase):
         first_ctx.exception.close()
         second_ctx.exception.close()
 
+    def test_client_stop_cancels_create_before_session_registration(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffprobe/bin/ffprobe.exe"),
+            ),
+        )
+        probe_started = threading.Event()
+        release_probe = threading.Event()
+        create_result: dict[str, object] = {}
+
+        def delayed_probe(*args, **kwargs):
+            probe_started.set()
+            release_probe.wait(2.0)
+            return None
+
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            playlist_path = Path(command[-1])
+            write_hls_session_fixture(playlist_path)
+            return FakeFfmpegProcess(command)
+
+        manager = video_session_manager(app)
+
+        def run_create() -> None:
+            try:
+                create_result["payload"] = manager.create_session(
+                    rel_path="movie.mp4",
+                    base_url="http://127.0.0.1:8000",
+                    file_size=10,
+                    client_id="client-pending",
+                    transition_token=4,
+                )
+            except BrowserError as exc:
+                create_result["error"] = exc
+
+        with patch("dropbox_browser.video.probe_remote_media", side_effect=delayed_probe), \
+                patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen):
+            create_thread = threading.Thread(target=run_create)
+            create_thread.start()
+            self.assertTrue(probe_started.wait(1.0))
+            stop_result = manager.stop_session(client_id="client-pending", transition_token=4)
+            release_probe.set()
+            create_thread.join(timeout=3.0)
+
+        self.assertFalse(create_thread.is_alive())
+        self.assertEqual(stop_result, {"status": "ok", "stopped": False})
+        self.assertIsInstance(create_result.get("error"), BrowserError)
+        error = create_result["error"]
+        assert isinstance(error, BrowserError)
+        self.assertEqual(error.status, HTTPStatus.CONFLICT)
+        self.assertEqual(manager.session_status_payload()["active_sessions"], [])
+
+    def test_stale_exact_stop_does_not_cancel_newer_pending_create(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffprobe/bin/ffprobe.exe"),
+            ),
+        )
+        first_response_started = threading.Event()
+        release_first_response = threading.Event()
+        second_probe_started = threading.Event()
+        release_second_probe = threading.Event()
+        create_results: dict[str, object] = {}
+        probe_call_count = 0
+        probe_call_lock = threading.Lock()
+        first_payload = True
+
+        def delayed_probe(*args, **kwargs):
+            nonlocal probe_call_count
+            with probe_call_lock:
+                probe_call_count += 1
+                call_number = probe_call_count
+            if call_number == 2:
+                second_probe_started.set()
+                release_second_probe.wait(2.0)
+            return None
+
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            playlist_path = Path(command[-1])
+            write_hls_session_fixture(playlist_path)
+            return FakeFfmpegProcess(command)
+
+        manager = video_session_manager(app)
+        original_session_payload = manager._session_payload
+
+        def delayed_first_response(session, **kwargs):
+            nonlocal first_payload
+            if first_payload:
+                first_payload = False
+                first_response_started.set()
+                release_first_response.wait(2.0)
+            return original_session_payload(session, **kwargs)
+
+        def run_create(label: str, transition_token: int) -> None:
+            try:
+                create_results[label] = manager.create_session(
+                    rel_path=f"{label}.mp4",
+                    base_url="http://127.0.0.1:8000",
+                    file_size=10,
+                    client_id="client-stale-response",
+                    transition_token=transition_token,
+                )
+            except BrowserError as exc:
+                create_results[f"{label}_error"] = exc
+
+        with patch("dropbox_browser.video.probe_remote_media", side_effect=delayed_probe), \
+                patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen), \
+                patch.object(manager, "_session_payload", side_effect=delayed_first_response):
+            first_thread = threading.Thread(target=run_create, args=("old", 1))
+            second_thread = threading.Thread(target=run_create, args=("new", 2))
+            first_thread.start()
+            try:
+                self.assertTrue(first_response_started.wait(1.0))
+                active_sessions = manager.session_status_payload()["active_sessions"]
+                self.assertEqual(len(active_sessions), 1)
+                old_session_id = active_sessions[0]["session_id"]
+
+                second_thread.start()
+                self.assertTrue(second_probe_started.wait(1.0))
+                release_first_response.set()
+                first_thread.join(timeout=3.0)
+                stop_result = manager.stop_session(
+                    old_session_id,
+                    client_id="client-stale-response",
+                )
+                release_second_probe.set()
+                second_thread.join(timeout=3.0)
+            finally:
+                release_first_response.set()
+                release_second_probe.set()
+                first_thread.join(timeout=3.0)
+                second_thread.join(timeout=3.0)
+
+        self.assertFalse(first_thread.is_alive())
+        self.assertFalse(second_thread.is_alive())
+        self.assertEqual(stop_result, {"status": "ok", "stopped": True})
+        self.assertIn("old", create_results)
+        self.assertIn("new", create_results)
+        self.assertNotIn("new_error", create_results)
+        self.assertEqual(
+            manager.session_status_payload()["active_sessions"][0]["path"],
+            "new.mp4",
+        )
+
     def test_stop_session_releases_registry_lock_before_waiting_for_ffmpeg_exit(self) -> None:
         rclone = self._remote_media_rclone()
         app = self._build_app(

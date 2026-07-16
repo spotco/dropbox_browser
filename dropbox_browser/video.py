@@ -706,6 +706,19 @@ def parse_playback_sync_token(raw: object) -> int | None:
     return value
 
 
+def parse_video_transition_token(raw: object) -> int | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        value = int(text)
+    except (TypeError, ValueError) as exc:
+        raise BrowserError(HTTPStatus.BAD_REQUEST, "Video transition token must be an integer.") from exc
+    if value < 0:
+        raise BrowserError(HTTPStatus.BAD_REQUEST, "Video transition token must not be negative.")
+    return value
+
+
 def parse_video_playback_seconds(raw: object) -> float:
     text = str(raw or "").strip()
     if not text:
@@ -1904,6 +1917,8 @@ class VideoSessionManager:
         self._pending_session_creations = 0
         self._deferred_session_stops: list[VideoHlsSession] = []
         self._client_stop_generations: dict[str, int] = {}
+        self._client_transition_tokens: dict[str, int] = {}
+        self._client_stop_tokens: dict[str, int] = {}
 
     def shutdown(self) -> None:
         with self._lock:
@@ -1927,6 +1942,7 @@ class VideoSessionManager:
         start_time_seconds: float = 0.0,
         force_video_transcode: bool = False,
         force_audio_transcode: bool = False,
+        transition_token: int | None = None,
     ) -> dict[str, object]:
         video_config = getattr(self.app, "video_tools_config", None)
         ffmpeg_exe = getattr(video_config, "ffmpeg_exe", None)
@@ -1940,6 +1956,10 @@ class VideoSessionManager:
         with self._lock:
             self._cleanup_expired_locked()
             client_stop_generation = self._client_stop_generations.get(normalized_client_id, 0)
+            if normalized_client_id and transition_token is not None:
+                current_transition_token = self._client_transition_tokens.get(normalized_client_id, -1)
+                if transition_token > current_transition_token:
+                    self._client_transition_tokens[normalized_client_id] = transition_token
             active_count = len(self._sessions)
             pending_count = self._pending_session_creations
             if (active_count + pending_count) >= max_session_count:
@@ -2089,6 +2109,11 @@ class VideoSessionManager:
                     bool(normalized_client_id)
                     and self._client_stop_generations.get(normalized_client_id, 0) != client_stop_generation
                 )
+                if normalized_client_id and transition_token is not None:
+                    current_transition_token = self._client_transition_tokens.get(normalized_client_id, -1)
+                    last_stop_token = self._client_stop_tokens.get(normalized_client_id, -1)
+                    client_stop_cancelled = client_stop_cancelled or transition_token < current_transition_token
+                    client_stop_cancelled = client_stop_cancelled or transition_token < last_stop_token
                 if not client_stop_cancelled:
                     self._sessions[session_id] = session
                     self._active_session_id = session_id
@@ -2130,18 +2155,51 @@ class VideoSessionManager:
                     self._pending_session_creations = max(0, self._pending_session_creations - 1)
             self._drain_deferred_session_stops()
 
-    def stop_session(self, session_id: str | None = None, *, client_id: str = "") -> dict[str, object]:
+    def stop_session(
+        self,
+        session_id: str | None = None,
+        *,
+        client_id: str = "",
+        transition_token: int | None = None,
+    ) -> dict[str, object]:
         with self._lock:
             self._cleanup_expired_locked()
+            normalized_client_id = str(client_id or "")
+            current_transition_token = self._client_transition_tokens.get(normalized_client_id, -1)
+            stale_transition = (
+                bool(normalized_client_id)
+                and transition_token is not None
+                and transition_token < current_transition_token
+            )
+            if normalized_client_id and not stale_transition:
+                if transition_token is not None:
+                    self._client_transition_tokens[normalized_client_id] = max(
+                        current_transition_token,
+                        transition_token,
+                    )
+                    self._client_stop_tokens[normalized_client_id] = max(
+                        self._client_stop_tokens.get(normalized_client_id, -1),
+                        transition_token,
+                    )
+                # An exact-session cleanup must not invalidate an unrelated
+                # create that is already in flight. A stale response from an
+                # older transition can arrive after the newer create starts;
+                # its session id is safe to remove, but its missing token must
+                # not become a client-wide cancellation generation. Stops
+                # carrying the current transition token still cancel pending
+                # work for that transition (for example pagehide cleanup).
+                if not session_id or transition_token is not None:
+                    self._client_stop_generations[normalized_client_id] = (
+                        self._client_stop_generations.get(normalized_client_id, 0) + 1
+                    )
             if session_id:
                 session = self._get_session_locked(session_id)
                 sessions = [session] if session is not None else []
-            elif client_id:
-                self._client_stop_generations[client_id] = self._client_stop_generations.get(client_id, 0) + 1
+            elif normalized_client_id and not stale_transition:
                 sessions = [
                     session
                     for session in self._sessions.values()
-                    if session.client_id == client_id
+                    if session.client_id == normalized_client_id
                 ]
             else:
                 sessions = []

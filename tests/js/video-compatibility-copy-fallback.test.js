@@ -628,7 +628,9 @@ test("stale restart cleanup stops only the session created by that restart", asy
   assert.equal(sessionRequests.length, 1);
   assert.equal(stopRequests.length, 2);
   assert.match(stopRequests[0], /id=session-1/);
+  assert.match(stopRequests[0], /transition_token=8/);
   assert.match(stopRequests[1], /id=session-2/);
+  assert.match(stopRequests[1], /transition_token=8/);
   assert.doesNotMatch(stopRequests[1], /id=session-3/);
   assert.equal(ctx.state.compatibilitySessionId, "session-3");
 });
@@ -1118,9 +1120,9 @@ test("playback stale session create stops only the returned stale session id", a
   const item = {path: "Videos/copy.mkv"};
   const ctx = createCtx(item);
   ctx.state.playbackStatusLoaded = true;
-  const stoppedSessionIds = [];
-  ctx.postStopCompatibilitySession = async function (sessionId) {
-    stoppedSessionIds.push(String(sessionId || ""));
+  const stoppedSessions = [];
+  ctx.postStopCompatibilitySession = async function (sessionId, options) {
+    stoppedSessions.push([String(sessionId || ""), options && options.transitionToken]);
   };
   ctx.createCompatibilitySession = async function () {
     ctx.state.playbackSyncToken = 9;
@@ -1144,7 +1146,7 @@ test("playback stale session create stops only the returned stale session id", a
 
   await ctx.playbackApi.syncForActiveItem();
 
-  assert.deepEqual(stoppedSessionIds, ["session-stale-created"]);
+  assert.deepEqual(stoppedSessions, [["session-stale-created", 8]]);
   assert.equal(ctx.state.compatibilitySessionId, "session-newer");
 });
 
@@ -1161,11 +1163,11 @@ test("playback navigation stops the previous path before creating the next sessi
   ctx.state.playbackStatusLoaded = true;
   ctx.state.compatibilitySessionId = "session-alpha";
   ctx.state.compatibilitySessionPath = alpha.path;
-  ctx.stopCompatibilitySession = async function (sessionId) {
-    events.push(["stop", String(sessionId || "")]);
+  ctx.stopCompatibilitySession = async function (sessionId, options) {
+    events.push(["stop", String(sessionId || ""), options && options.transitionToken]);
   };
-  ctx.createCompatibilitySession = async function (item) {
-    events.push(["create", item.path]);
+  ctx.createCompatibilitySession = async function (item, audioStreamIndex, startSeconds, subtitleStreamIndex, options) {
+    events.push(["create", item.path, options && options.transitionToken]);
     return {
       status: "ok",
       session_id: "session-bravo",
@@ -1179,7 +1181,7 @@ test("playback navigation stops the previous path before creating the next sessi
 
   await ctx.playbackApi.syncForActiveItem();
 
-  assert.deepEqual(events, [["stop", "session-alpha"], ["create", "Videos/bravo.mkv"]]);
+  assert.deepEqual(events, [["stop", "session-alpha", 8], ["create", "Videos/bravo.mkv", 8]]);
   assert.equal(ctx.state.compatibilitySessionId, "session-bravo");
 });
 
