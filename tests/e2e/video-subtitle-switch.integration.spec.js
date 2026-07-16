@@ -440,6 +440,42 @@ async function clearActiveVideoSessionAndCache(page) {
   expect(clearResponse.ok()).toBe(true);
 }
 
+async function readActiveVideoSessions(page) {
+  const response = await page.request.get("/video/endpoints/status");
+  expect(response.ok()).toBe(true);
+  const payload = await response.json();
+  return payload && Array.isArray(payload.active_sessions) ? payload.active_sessions : [];
+}
+
+async function waitForActiveVideoSession(page, expectedPath) {
+  let matchingSession = null;
+  await expect
+    .poll(async () => {
+      const sessions = await readActiveVideoSessions(page);
+      matchingSession = sessions.find((session) => session && session.path === expectedPath) || null;
+      return matchingSession ? matchingSession.session_id : "";
+    }, { timeout: 15000 })
+    .not.toBe("");
+  return matchingSession;
+}
+
+async function expectOnlyActiveVideoSession(page, expectedPath, absentSessionId) {
+  await expect
+    .poll(async () => {
+      const sessions = await readActiveVideoSessions(page);
+      return sessions.map((session) => session && session.path).filter(Boolean);
+    }, { timeout: 15000 })
+    .toEqual([expectedPath]);
+  if (absentSessionId) {
+    await expect
+      .poll(async () => {
+        const sessions = await readActiveVideoSessions(page);
+        return sessions.map((session) => session && session.session_id).filter(Boolean);
+      }, { timeout: 15000 })
+      .not.toContain(absentSessionId);
+  }
+}
+
 async function ensureTrackPanelOpen(page) {
   const panel = page.locator("#video-track-panel");
   await expect(panel).toBeVisible();
@@ -1414,6 +1450,7 @@ test("video controls navigate the queue, persist loop, and wrap natural end when
   const alphaSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
   await playLibraryFile(page, "alpha.mkv");
   await alphaSession;
+  const alphaActiveSession = await waitForActiveVideoSession(page, "Videos/alpha.mkv");
   await queueLibraryFile(page, "bravo.mkv");
   await expectPlaylistCount(page, 2);
 
@@ -1449,16 +1486,19 @@ test("video controls navigate the queue, persist loop, and wrap natural end when
   await clickVideoControl(page, "video-next");
   await bravoSessionFromNext;
   await expectActiveQueueTitle(page, "bravo.mkv");
+  await expectOnlyActiveVideoSession(page, "Videos/bravo.mkv", alphaActiveSession.session_id);
 
   const alphaSessionFromPrevious = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
   await clickVideoControl(page, "video-previous");
   await alphaSessionFromPrevious;
   await expectActiveQueueTitle(page, "alpha.mkv");
+  await expectOnlyActiveVideoSession(page, "Videos/alpha.mkv");
 
   const bravoSessionFromPreviousWrap = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fbravo.mkv"));
   await clickVideoControl(page, "video-previous");
   await bravoSessionFromPreviousWrap;
   await expectActiveQueueTitle(page, "bravo.mkv");
+  await expectOnlyActiveVideoSession(page, "Videos/bravo.mkv");
 
   const alphaSessionFromLoopEnd = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
   await page.locator("#video-player-media").evaluate((video) => {
@@ -1466,6 +1506,7 @@ test("video controls navigate the queue, persist loop, and wrap natural end when
   });
   await alphaSessionFromLoopEnd;
   await expectActiveQueueTitle(page, "alpha.mkv");
+  await expectOnlyActiveVideoSession(page, "Videos/alpha.mkv");
 
   await clickVideoControl(page, "video-loop-toggle");
   await expectVideoControlState(page, {
@@ -1478,6 +1519,7 @@ test("video controls navigate the queue, persist loop, and wrap natural end when
   await clickVideoControl(page, "video-next");
   await bravoSessionFromNextAgain;
   await expectActiveQueueTitle(page, "bravo.mkv");
+  await expectOnlyActiveVideoSession(page, "Videos/bravo.mkv");
   await expectVideoControlState(page, {
     previous: { disabled: false },
     next: { disabled: true },
@@ -1487,6 +1529,27 @@ test("video controls navigate the queue, persist loop, and wrap natural end when
     video.dispatchEvent(new Event("ended"));
   });
   await expect(page.locator("#video-playlist-list .music-playlist-entry.current")).toHaveCount(0);
+});
+
+test("video session cleanup stops the active session on reload", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await installHlsStub(page);
+  await openVideoPane(page);
+
+  const alphaSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
+  await playLibraryFile(page, "alpha.mkv");
+  await alphaSession;
+  const alphaActiveSession = await waitForActiveVideoSession(page, "Videos/alpha.mkv");
+
+  await page.reload();
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await expect
+    .poll(async () => {
+      const sessions = await readActiveVideoSessions(page);
+      return sessions.some((session) => session && session.session_id === alphaActiveSession.session_id);
+    }, { timeout: 15000 })
+    .toBe(false);
 });
 
 test("video controls seek backward and forward by 15 seconds in embedded playback", async ({ page }) => {
@@ -2038,6 +2101,7 @@ test("automatic playlist next clears old subtitles and mounts the next video tra
   await expectActiveQueueTitle(page, "bravo.mkv");
   await waitForVisibleVideo(page);
   await waitForPlaybackSurfaceWithoutOverlay(page);
+  await expectOnlyActiveVideoSession(page, "Videos/bravo.mkv");
   await expectTrackSelectors(page, { subtitleValue: "4" });
   await waitForSubtitleStreamIndex(page, 4);
   await waitForMountedSubtitleTrackReady(page, 4);

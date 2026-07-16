@@ -951,6 +951,26 @@ test("stopCompatibilitySession posts session id and client id", async () => {
   assert.match(requests[0].body, /client_id=client-123/);
 });
 
+test("unload-safe session stop enables keepalive", async () => {
+  const {initCompatibility} = await importModuleFromWorkspace("dropbox_browser/assets/js/video/compatibility.js");
+  const item = {path: "Videos/copy.mkv"};
+  const ctx = createCtx(item);
+  const requests = [];
+  global.fetch = async function (url, options) {
+    requests.push({url: String(url || ""), keepalive: Boolean(options && options.keepalive)});
+    return { ok: true, async json() { return {status: "ok"}; } };
+  };
+  global.window = { setTimeout, clearTimeout };
+  initCompatibility(ctx);
+
+  await ctx.stopCompatibilitySession("session-beforeunload", {unloadSafe: true});
+
+  assert.deepEqual(requests, [{
+    url: "/video/endpoints/session/stop",
+    keepalive: true,
+  }]);
+});
+
 test("stopCompatibilitySession can clear local session state before the stop request settles", async () => {
   const {initCompatibility} = await importModuleFromWorkspace("dropbox_browser/assets/js/video/compatibility.js");
   const item = {path: "Videos/copy.mkv"};
@@ -1050,6 +1070,41 @@ test("playback stale session create stops only the returned stale session id", a
 
   assert.deepEqual(stoppedSessionIds, ["session-stale-created"]);
   assert.equal(ctx.state.compatibilitySessionId, "session-newer");
+});
+
+test("playback navigation stops the previous path before creating the next session", async () => {
+  const {initPlayback} = await importModuleFromWorkspace("dropbox_browser/assets/js/video/playback.js");
+  const alpha = {path: "Videos/alpha.mkv"};
+  const bravo = {path: "Videos/bravo.mkv"};
+  const ctx = createCtx(bravo);
+  let active = bravo;
+  const events = [];
+  ctx.activeQueueItem = function () {
+    return active;
+  };
+  ctx.state.playbackStatusLoaded = true;
+  ctx.state.compatibilitySessionId = "session-alpha";
+  ctx.state.compatibilitySessionPath = alpha.path;
+  ctx.stopCompatibilitySession = async function (sessionId) {
+    events.push(["stop", String(sessionId || "")]);
+  };
+  ctx.createCompatibilitySession = async function (item) {
+    events.push(["create", item.path]);
+    return {
+      status: "ok",
+      session_id: "session-bravo",
+      playlist_url: "/video/endpoints/session/file?id=session-bravo&name=stream.m3u8",
+      start_time_seconds: 0,
+      encoded_media_end_seconds: 0,
+      subtitle_stream_index: null,
+    };
+  };
+  initPlayback(ctx);
+
+  await ctx.playbackApi.syncForActiveItem();
+
+  assert.deepEqual(events, [["stop", "session-alpha"], ["create", "Videos/bravo.mkv"]]);
+  assert.equal(ctx.state.compatibilitySessionId, "session-bravo");
 });
 
 test("pane deactivation stops the local session id snapshot", async () => {

@@ -906,20 +906,32 @@ function hlsErrorTargetsCurrentSession(data) {
   return match[1] === sessionId;
 }
 
-async function postStopCompatibilitySession(sessionId) {
+async function postStopCompatibilitySession(sessionId, options) {
   var clientId = ctx.state.videoClientId || '';
   var normalizedSessionId = String(sessionId || '');
   if (!normalizedSessionId) return;
+  var body = 'id=' + encodeURIComponent(normalizedSessionId)
+    + '&client_id=' + encodeURIComponent(clientId);
+  var unloadSafe = Boolean(options && options.unloadSafe);
   try {
     await fetch('/video/endpoints/session/stop', {
       method: 'POST',
       headers: {'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8'},
-      body: 'id=' + encodeURIComponent(normalizedSessionId)
-        + '&client_id=' + encodeURIComponent(clientId),
+      body: body,
+      ...(unloadSafe ? {keepalive: true} : {}),
     });
   }
   catch (_error) {
-    return;
+    if (!unloadSafe || typeof navigator === 'undefined' || typeof navigator.sendBeacon !== 'function') return;
+    try {
+      var beaconBody = typeof Blob === 'function'
+        ? new Blob([body], {type: 'application/x-www-form-urlencoded; charset=UTF-8'})
+        : body;
+      navigator.sendBeacon('/video/endpoints/session/stop', beaconBody);
+    }
+    catch (_beaconError) {
+      return;
+    }
   }
 }
 
@@ -933,7 +945,7 @@ async function stopCompatibilitySession(sessionIdOverride, options) {
   if (clearLocalFirst && String(ctx.state.compatibilitySessionId || '') === sessionId) {
     clearLocalCompatibilitySessionState();
   }
-  await postStopCompatibilitySession(sessionId);
+  await postStopCompatibilitySession(sessionId, options);
   if (String(ctx.state.compatibilitySessionId || '') === sessionId) {
     clearLocalCompatibilitySessionState();
   }
