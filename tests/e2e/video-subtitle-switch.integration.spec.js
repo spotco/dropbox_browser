@@ -1552,6 +1552,80 @@ test("video session cleanup stops the active session on reload", async ({ page }
     .toBe(false);
 });
 
+test("rapid next and previous navigation keeps the final subtitle item isolated", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await installHlsStub(page);
+  await openVideoPane(page);
+
+  const alphaSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
+  await playLibraryFile(page, "alpha.mkv");
+  await alphaSession;
+  await selectTrackOption(page, "#video-subtitle-track", "4");
+  await waitForSubtitleStreamIndex(page, 4);
+  await waitForMountedSubtitleTrackReady(page, 4);
+  await setPlaybackTimeForSubtitleChecks(page, 1);
+  await waitForNativeSubtitleCueText(page, "ALPHA-SUBTITLE-FRA");
+
+  await queueLibraryFile(page, "bravo.mkv");
+  await expectVideoControlState(page, {
+    next: {disabled: false},
+  });
+  const bravoSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fbravo.mkv"));
+  const finalAlphaSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
+  await page.locator("#video-next").click();
+  await expectVideoControlState(page, {previous: {disabled: false}});
+  await page.locator("#video-previous").click();
+  await bravoSession;
+  await finalAlphaSession;
+
+  await expectActiveQueueTitle(page, "alpha.mkv");
+  await expectOnlyActiveVideoSession(page, "Videos/alpha.mkv");
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+  await expectNativeSubtitleSurfaceClearOf(page, ["BRAVO-SUBTITLE-FRA", "BRAVO-SUBTITLE-ENG"]);
+  await setPlaybackTimeForSubtitleChecks(page, 1);
+  await waitForNativeSubtitleCueText(page, "ALPHA-SUBTITLE-FRA");
+});
+
+test("switching during delayed subtitle extraction ignores the old item response", async ({ page }) => {
+  test.setTimeout(90000);
+
+  await page.route("**/video/endpoints/subtitles/all**", async (route) => {
+    const path = new URL(route.request().url()).searchParams.get("path") || "";
+    if (path !== "Videos/alpha.mkv") {
+      await route.continue();
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await route.continue();
+  });
+  await installHlsStub(page);
+  await openVideoPane(page);
+
+  const alphaSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
+  const alphaSubtitleRequest = page.waitForRequest((request) => {
+    if (request.method() !== "GET" || !request.url().includes("/video/endpoints/subtitles/all")) return false;
+    return (new URL(request.url()).searchParams.get("path") || "") === "Videos/alpha.mkv";
+  }, {timeout: 15000});
+  await playLibraryFile(page, "alpha.mkv");
+  await alphaSession;
+  await alphaSubtitleRequest;
+
+  const bravoSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fbravo.mkv"));
+  await playLibraryFile(page, "bravo.mkv");
+  await bravoSession;
+  await expectActiveQueueTitle(page, "bravo.mkv");
+  await waitForVisibleVideo(page);
+  await waitForPlaybackSurfaceWithoutOverlay(page);
+  await selectTrackOption(page, "#video-subtitle-track", "4");
+  await waitForSubtitleStreamIndex(page, 4);
+  await waitForMountedSubtitleTrackReady(page, 4);
+  await setPlaybackTimeForSubtitleChecks(page, 1);
+  await waitForNativeSubtitleCueText(page, "BRAVO-SUBTITLE-FRA");
+  await expectNativeSubtitleSurfaceClearOf(page, ["ALPHA-SUBTITLE-FRA", "ALPHA-SUBTITLE-ENG"]);
+});
+
 test("video controls seek backward and forward by 15 seconds in embedded playback", async ({ page }) => {
   test.setTimeout(90000);
 
