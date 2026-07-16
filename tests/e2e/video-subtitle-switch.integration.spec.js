@@ -418,23 +418,38 @@ async function clearStoredTrackPreferences(page) {
 }
 
 async function clearActiveVideoSessionAndCache(page) {
-  const statusResponse = await page.request.get("/video/endpoints/status");
-  expect(statusResponse.ok()).toBe(true);
-  const statusPayload = await statusResponse.json();
-  const sessionIds = [];
-  if (statusPayload && Array.isArray(statusPayload.active_sessions)) {
-    statusPayload.active_sessions.forEach((session) => {
-      if (session && session.session_id) sessionIds.push(String(session.session_id));
-    });
-  }
-  if (!sessionIds.length && statusPayload && statusPayload.active_session && statusPayload.active_session.session_id) {
-    sessionIds.push(String(statusPayload.active_session.session_id));
-  }
-  for (const sessionId of sessionIds) {
-    const stopResponse = await page.request.post("/video/endpoints/session/stop", {
-      data: { id: sessionId },
-    });
-    expect(stopResponse.ok()).toBe(true);
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const statusResponse = await page.request.get("/video/endpoints/status");
+    expect(statusResponse.ok()).toBe(true);
+    const statusPayload = await statusResponse.json();
+    const sessionIds = [];
+    const clientIds = new Set();
+    if (statusPayload && Array.isArray(statusPayload.active_sessions)) {
+      statusPayload.active_sessions.forEach((session) => {
+        if (session && session.session_id) sessionIds.push(String(session.session_id));
+        if (session && session.client_id) clientIds.add(String(session.client_id));
+      });
+    }
+    if (!sessionIds.length && statusPayload && statusPayload.active_session && statusPayload.active_session.session_id) {
+      sessionIds.push(String(statusPayload.active_session.session_id));
+      if (statusPayload.active_session.client_id) {
+        clientIds.add(String(statusPayload.active_session.client_id));
+      }
+    }
+    if (!sessionIds.length && !clientIds.size) break;
+    for (const sessionId of sessionIds) {
+      const stopResponse = await page.request.post("/video/endpoints/session/stop", {
+        data: { id: sessionId },
+      });
+      expect(stopResponse.ok()).toBe(true);
+    }
+    for (const clientId of clientIds) {
+      const stopResponse = await page.request.post("/video/endpoints/session/stop", {
+        data: {client_id: clientId},
+      });
+      expect(stopResponse.ok()).toBe(true);
+    }
+    await page.waitForTimeout(50);
   }
   const clearResponse = await page.request.post("/video/endpoints/cache/clear");
   expect(clearResponse.ok()).toBe(true);
@@ -474,6 +489,18 @@ async function expectOnlyActiveVideoSession(page, expectedPath, absentSessionId)
       }, { timeout: 15000 })
       .not.toContain(absentSessionId);
   }
+}
+
+async function expectOnlyActiveVideoClientSession(page, expectedPath, clientId) {
+  await expect
+    .poll(async () => {
+      const sessions = await readActiveVideoSessions(page);
+      return sessions
+        .filter((session) => session && session.client_id === clientId)
+        .map((session) => session.path)
+        .filter(Boolean);
+    }, { timeout: 15000 })
+    .toEqual([expectedPath]);
 }
 
 async function ensureTrackPanelOpen(page) {
@@ -1552,6 +1579,67 @@ test("video session cleanup stops the active session on reload", async ({ page }
     .toBe(false);
 });
 
+test("closing during session creation stops the server session before the response arrives", async ({ page }) => {
+  test.setTimeout(90000);
+  const playingPage = await page.context().newPage();
+  let releaseResponse;
+  let responseReached;
+  let responseReleased = false;
+  const responseReleasedPromise = new Promise((resolve) => {
+    releaseResponse = () => {
+      if (responseReleased) return;
+      responseReleased = true;
+      resolve();
+    };
+  });
+  const responseReachedPromise = new Promise((resolve) => {
+    responseReached = resolve;
+  });
+  try {
+    await playingPage.route("**/video/endpoints/session", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.continue();
+        return;
+      }
+      const response = await route.fetch();
+      const body = await response.body();
+      responseReached();
+      await responseReleasedPromise;
+      try {
+        await route.fulfill({
+          status: response.status(),
+          headers: response.headers(),
+          body,
+        });
+      }
+      catch (_error) {
+        // Closing the page may cancel the held browser response.
+      }
+    });
+    await installHlsStub(playingPage);
+    await openVideoPane(playingPage);
+
+    const alphaRow = await libraryRow(playingPage, "alpha.mkv");
+    await alphaRow.dblclick();
+    await expectActiveQueueTitle(playingPage, "alpha.mkv");
+    await responseReachedPromise;
+    const serverSession = await waitForActiveVideoSession(page, "Videos/alpha.mkv");
+
+    await playingPage.close();
+    releaseResponse();
+    await expect
+      .poll(async () => {
+        const sessions = await readActiveVideoSessions(page);
+        return sessions.some((session) => session && session.session_id === serverSession.session_id);
+      }, { timeout: 15000 })
+      .toBe(false);
+  }
+  finally {
+    releaseResponse();
+    if (!playingPage.isClosed()) await playingPage.close();
+  }
+});
+
 test("rapid next and previous navigation keeps the final subtitle item isolated", async ({ page }) => {
   test.setTimeout(90000);
 
@@ -1577,10 +1665,11 @@ test("rapid next and previous navigation keeps the final subtitle item isolated"
   await expectVideoControlState(page, {previous: {disabled: false}});
   await page.locator("#video-previous").click();
   await bravoSession;
-  await finalAlphaSession;
+  const finalAlphaRequest = await finalAlphaSession;
+  const finalAlphaClientId = new URLSearchParams(finalAlphaRequest.postData() || "").get("client_id") || "";
 
   await expectActiveQueueTitle(page, "alpha.mkv");
-  await expectOnlyActiveVideoSession(page, "Videos/alpha.mkv");
+  await expectOnlyActiveVideoClientSession(page, "Videos/alpha.mkv", finalAlphaClientId);
   await waitForVisibleVideo(page);
   await waitForPlaybackSurfaceWithoutOverlay(page);
   await expectNativeSubtitleSurfaceClearOf(page, ["BRAVO-SUBTITLE-FRA", "BRAVO-SUBTITLE-ENG"]);
