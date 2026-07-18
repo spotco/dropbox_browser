@@ -44,7 +44,7 @@ leave the video player's CSS full-window mode.
 - [x] Extend the existing video full-window browser coverage to press `Escape`
   in CSS full-window mode and assert the generic shell state and video-specific
   classes both clear, while native fullscreen behavior remains unchanged.
-- [ ] Add focused JavaScript tests for a media-kind presentation helper,
+- [x] Add focused JavaScript tests for a media-kind presentation helper,
   including music/video singular and plural count labels, `Load Playlist:`
   labels, and the two export filenames.
 - [ ] Extend music and video playlist browser tests to assert the displayed
