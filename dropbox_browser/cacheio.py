@@ -12,9 +12,9 @@ _REPLACE_RETRY_DELAY_SECONDS = 0.02
 
 def write_json_atomic(path: Path, data: Any) -> None:
     """Write JSON by replacing the cache file only after a full temp write."""
-    path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path: Path | None = None
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             "w",
             encoding="utf-8",
@@ -33,6 +33,12 @@ def write_json_atomic(path: Path, data: Any) -> None:
                     raise
                 time.sleep(delay)
                 delay *= 2
+    except FileNotFoundError:
+        # Cache state is disposable.  A test or server teardown can remove the
+        # isolated cache directory after the temp file is created but before
+        # the atomic replace; do not turn that shutdown race into a worker
+        # failure.
+        return
     finally:
         if tmp_path is not None:
             try:

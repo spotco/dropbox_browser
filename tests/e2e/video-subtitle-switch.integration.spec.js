@@ -221,15 +221,41 @@ async function waitForCompatibilityReady(page) {
     .toBe(true);
 }
 
-async function waitForVisibleVideo(page) {
-  await expect
-    .poll(async () => {
-      return page.evaluate(() => {
-        const video = document.getElementById("video-player-media");
-        return Boolean(video && !video.hidden);
-      });
-    }, { timeout: 30000 })
-    .toBe(true);
+async function waitForVisibleVideo(page, timeout = 30000) {
+  try {
+    await expect
+      .poll(async () => {
+        return page.evaluate(() => {
+          const video = document.getElementById("video-player-media");
+          return Boolean(video && !video.hidden);
+        });
+      }, { timeout })
+      .toBe(true);
+  } catch (error) {
+    const clientState = await page.evaluate(() => {
+      const video = document.getElementById("video-player-media");
+      const loading = document.getElementById("video-loading-overlay");
+      const placeholder = document.getElementById("video-playback-placeholder");
+      const status = document.getElementById("video-player-status");
+      return {
+        videoHidden: video ? Boolean(video.hidden) : null,
+        videoReadyState: video ? video.readyState : null,
+        videoNetworkState: video ? video.networkState : null,
+        loadingHidden: loading ? Boolean(loading.hidden) : null,
+        loadingText: loading ? String(loading.textContent || "").trim() : "",
+        placeholderHidden: placeholder ? Boolean(placeholder.hidden) : null,
+        statusText: status ? String(status.textContent || "").trim() : "",
+      };
+    });
+    let serverState = null;
+    try {
+      const response = await page.request.get("/video/endpoints/status");
+      if (response.ok()) serverState = await response.json();
+    } catch (_statusError) {
+      serverState = { statusError: true };
+    }
+    throw new Error(`${error.message}\nPlayback startup state: ${JSON.stringify({clientState, serverState})}`);
+  }
 }
 
 async function waitForLoadingOverlayWithoutPlaceholder(page) {
@@ -474,13 +500,26 @@ async function waitForActiveVideoSession(page, expectedPath) {
   return matchingSession;
 }
 
-async function expectOnlyActiveVideoSession(page, expectedPath, absentSessionId) {
+async function expectOnlyActiveVideoSession(page, expectedPath, absentSessionId, expectedSessionId) {
   await expect
     .poll(async () => {
       const sessions = await readActiveVideoSessions(page);
+      if (expectedSessionId) {
+        const expectedSession = sessions.find((session) => session && session.session_id === expectedSessionId);
+        const unexpectedLivePaths = sessions
+          .filter((session) => session && session.state === "active" && session.session_id !== expectedSessionId)
+          .map((session) => session.path)
+          .filter(Boolean);
+        return {
+          expectedSession: expectedSession && expectedSession.path === expectedPath,
+          unexpectedLivePaths,
+        };
+      }
       return sessions.map((session) => session && session.path).filter(Boolean);
     }, { timeout: 15000 })
-    .toEqual([expectedPath]);
+    .toEqual(expectedSessionId
+      ? { expectedSession: true, unexpectedLivePaths: [] }
+      : [expectedPath]);
   if (absentSessionId) {
     await expect
       .poll(async () => {
@@ -1264,11 +1303,11 @@ async function openVideoPane(page) {
   await waitForCompatibilityReady(page);
 }
 
-async function playLibraryFile(page, filename) {
+async function playLibraryFile(page, filename, { visibleVideoTimeout = 30000 } = {}) {
   await playLibraryFileBase(page, filename);
   await waitForLoadingOverlayWithoutPlaceholder(page);
   await expectActiveQueueTitle(page, filename);
-  await waitForVisibleVideo(page);
+  await waitForVisibleVideo(page, visibleVideoTimeout);
   await waitForPlaybackSurfaceWithoutOverlay(page);
 }
 
@@ -1643,6 +1682,10 @@ test("closing during session creation stops the server session before the respon
 test("rapid next and previous navigation keeps the final subtitle item isolated", async ({ page }) => {
   test.setTimeout(90000);
 
+  await page.route("**/video/endpoints/session/stop", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await route.continue();
+  });
   await installHlsStub(page);
   await openVideoPane(page);
 
@@ -1662,11 +1705,18 @@ test("rapid next and previous navigation keeps the final subtitle item isolated"
   const bravoSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fbravo.mkv"));
   const finalAlphaSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
   await page.locator("#video-next").click();
+  const bravoRequest = await bravoSession;
+  const bravoParams = new URLSearchParams(bravoRequest.postData() || "");
+  const bravoTransitionToken = Number(bravoParams.get("transition_token"));
+  expect(Number.isSafeInteger(bravoTransitionToken)).toBe(true);
   await expectVideoControlState(page, {previous: {disabled: false}});
   await page.locator("#video-previous").click();
-  await bravoSession;
   const finalAlphaRequest = await finalAlphaSession;
   const finalAlphaClientId = new URLSearchParams(finalAlphaRequest.postData() || "").get("client_id") || "";
+  const finalAlphaTransitionToken = Number(
+    new URLSearchParams(finalAlphaRequest.postData() || "").get("transition_token"),
+  );
+  expect(finalAlphaTransitionToken).toBeGreaterThan(bravoTransitionToken);
 
   await expectActiveQueueTitle(page, "alpha.mkv");
   await expectOnlyActiveVideoClientSession(page, "Videos/alpha.mkv", finalAlphaClientId);
@@ -2006,10 +2056,19 @@ test("video playback loads tracks, switches tracks, and hides video before subti
   const bravoSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fbravo.mkv"));
   await armSubtitleStaleMonitor(page, staleAlphaSubtitleTexts);
   await bravoRow.dblclick();
-  await waitForLoadingOverlayWithoutPlaceholder(page);
   await waitForDisplayedSubtitleToClear(page);
   await expectNativeSubtitleSurfaceClearOf(page, staleAlphaSubtitleTexts);
   await bravoSession;
+
+  await expect
+    .poll(async () => {
+      const events = await page.evaluate(() => window.__subtitleTeardownEvents || []);
+      return events.length;
+    }, { timeout: 10000 })
+    .toBeGreaterThan(0);
+  const teardownEvents = await page.evaluate(() => window.__subtitleTeardownEvents || []);
+  expect(teardownEvents.every((event) => event.videoHidden)).toBe(true);
+
   await expectActiveQueueTitle(page, "bravo.mkv");
   await expectNoStaleNativeSubtitleOnVideoResume(page, staleAlphaSubtitleTexts);
 
@@ -2018,15 +2077,6 @@ test("video playback loads tracks, switches tracks, and hides video before subti
   await setPlaybackTimeForSubtitleChecks(page, 0.5);
   await expectNativeSubtitleSurfaceClearOf(page, staleAlphaSubtitleTexts);
   await expectNoSubtitleStaleMonitorViolations(page);
-
-  await expect
-    .poll(async () => {
-      const events = await page.evaluate(() => window.__subtitleTeardownEvents || []);
-      return events.length;
-    }, { timeout: 10000 })
-    .toBeGreaterThan(0);
-
-  const teardownEvents = await page.evaluate(() => window.__subtitleTeardownEvents || []);
   for (const event of teardownEvents) {
     const staleAtTeardown = staleAlphaSubtitleTexts.filter((text) => String(event.nativeHaystack || "").includes(text));
     expect(staleAtTeardown, JSON.stringify(event)).toEqual([]);
@@ -2199,7 +2249,10 @@ test("WebVTT subtitle debug timing stays aligned after in-session scrub remount"
   await openVideoPane(page);
 
   const initialSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Foffset.mkv"));
-  await playLibraryFile(page, "offset.mkv");
+  // This real-media startup can follow a serial run of FFmpeg-backed tests;
+  // keep the normal playback wait unchanged while allowing its surface reveal
+  // to finish after the session response has already hidden the placeholder.
+  await playLibraryFile(page, "offset.mkv", { visibleVideoTimeout: 60000 });
   await initialSession;
 
   await expectTrackSelectors(page, {
@@ -2322,11 +2375,14 @@ test("automatic playlist next clears old subtitles and mounts the next video tra
   await waitForLoadingOverlayWithoutPlaceholder(page);
   await waitForDisplayedSubtitleToClear(page);
   await expectNativeSubtitleSurfaceClearOf(page, staleAlphaSubtitleTexts);
-  await bravoSession;
+  const bravoSessionRequest = await bravoSession;
+  const bravoSessionResponse = await bravoSessionRequest.response();
+  if (!bravoSessionResponse) throw new Error("Bravo session response was unavailable.");
+  const bravoSessionPayload = await bravoSessionResponse.json();
   await expectActiveQueueTitle(page, "bravo.mkv");
   await waitForVisibleVideo(page);
   await waitForPlaybackSurfaceWithoutOverlay(page);
-  await expectOnlyActiveVideoSession(page, "Videos/bravo.mkv");
+  await expectOnlyActiveVideoSession(page, "Videos/bravo.mkv", undefined, bravoSessionPayload.session_id);
   await expectTrackSelectors(page, { subtitleValue: "4" });
   await waitForSubtitleStreamIndex(page, 4);
   await waitForMountedSubtitleTrackReady(page, 4);

@@ -8,17 +8,45 @@ from __future__ import annotations
 
 import heapq
 import threading
+from dataclasses import fields, is_dataclass
 from typing import Any, Callable
 
 
+class _QueueEntry:
+    """Heap wrapper that keeps differently typed priority items comparable."""
+
+    __slots__ = ("item", "key", "sequence")
+
+    def __init__(self, item: Any, sequence: int) -> None:
+        self.item = item
+        self.key = self._key_for(item)
+        self.sequence = sequence
+
+    @staticmethod
+    def _key_for(item: Any) -> Any:
+        if is_dataclass(item):
+            return tuple(
+                getattr(item, field.name)
+                for field in fields(item)
+                if field.compare
+            )
+        return item
+
+    def __lt__(self, other: "_QueueEntry") -> bool:
+        if self.key != other.key:
+            return self.key < other.key
+        return self.sequence < other.sequence
+
+
 class PriorityQueue:
-    """Thread-safe priority queue.  Items must be comparable (e.g. tuples)."""
+    """Thread-safe priority queue for scalar, tuple, or dataclass items."""
 
     def __init__(self) -> None:
-        self._heap: list[Any] = []
+        self._heap: list[_QueueEntry] = []
         self._lock = threading.Lock()
         self._not_empty = threading.Condition(self._lock)
         self._unfinished = 0
+        self._sequence = 0
 
     # ------------------------------------------------------------------
     # Core queue.PriorityQueue-compatible interface
@@ -27,7 +55,9 @@ class PriorityQueue:
     def put(self, item: Any) -> None:
         """Add an item (non-blocking; this queue is unbounded)."""
         with self._not_empty:
-            heapq.heappush(self._heap, item)
+            entry = _QueueEntry(item, self._sequence)
+            self._sequence += 1
+            heapq.heappush(self._heap, entry)
             self._unfinished += 1
             self._not_empty.notify()
 
@@ -36,7 +66,7 @@ class PriorityQueue:
         with self._not_empty:
             while not self._heap:
                 self._not_empty.wait()
-            return heapq.heappop(self._heap)
+            return heapq.heappop(self._heap).item
 
     def task_done(self) -> None:
         """Signal that a previously get()ted item has been processed."""
@@ -58,15 +88,15 @@ class PriorityQueue:
     def count_matching(self, predicate: Callable[[Any], bool]) -> int:
         """Return the number of queued items for which predicate returns True."""
         with self._lock:
-            return sum(1 for item in self._heap if predicate(item))
+            return sum(1 for entry in self._heap if predicate(entry.item))
 
     def remove_matching(self, predicate: Callable[[Any], bool]) -> list[Any]:
         """Remove and return queued items for which predicate returns True."""
         with self._not_empty:
-            removed = [item for item in self._heap if predicate(item)]
+            removed = [entry.item for entry in self._heap if predicate(entry.item)]
             if not removed:
                 return []
-            self._heap = [item for item in self._heap if not predicate(item)]
+            self._heap = [entry for entry in self._heap if not predicate(entry.item)]
             heapq.heapify(self._heap)
             self._unfinished = max(0, self._unfinished - len(removed))
             return removed

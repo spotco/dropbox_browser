@@ -1524,10 +1524,16 @@ class VideoEndpointTests(AppTestCase):
                 "source": "remote",
             })
             server.post_json("/video/endpoints/session/progress", {
+                "id": first["session_id"],
+                "playback_seconds": "4",
+                "playback_state": "paused",
+            })
+            server.post_json("/video/endpoints/session/progress", {
                 "id": second["session_id"],
                 "playback_seconds": "4",
                 "playback_state": "playing",
             })
+            video_session_manager(app)._sessions[first["session_id"]].process.returncode = 0
             third = server.post_json("/video/endpoints/session", {
                 "path": "third.mp4",
                 "source": "remote",
@@ -1556,6 +1562,46 @@ class VideoEndpointTests(AppTestCase):
             {second["session_id"], third["session_id"]},
         )
         evicted_ctx.exception.close()
+
+    def test_session_activity_ignores_exited_session_with_recent_playback(self) -> None:
+        app = self._build_app(
+            self._remote_media_rclone(),
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffprobe/bin/ffprobe.exe"),
+            ),
+        )
+        manager = video_session_manager(app)
+        session_dir = self.temp_dir / "exited_video_session"
+        session_dir.mkdir(parents=True, exist_ok=True)
+        process = FakeFfmpegProcess([])
+        process.returncode = 0
+        session = VideoHlsSession(
+            session_id="exited",
+            rel_path="movie.mp4",
+            file_size=10,
+            session_dir=session_dir,
+            playlist_path=session_dir / "stream.m3u8",
+            process=process,
+            command=[],
+            created_at=time.time(),
+            create_started_at=time.monotonic(),
+            last_accessed_at=time.time(),
+            client_id="client-exited",
+            audio_stream_index=1,
+            subtitle_stream_index=None,
+            start_time_seconds=0.0,
+            video_mode="video_copy",
+            video_mode_reason="test_fixture",
+            audio_mode="audio_copy",
+            audio_mode_reason="test_fixture",
+            reported_playback_seconds=4.0,
+            reported_playback_state="paused",
+            reported_playback_updated_at=time.time(),
+        )
+        with manager._lock:
+            self.assertFalse(manager._session_is_recently_active_locked(session))
 
     def test_tagged_input_session_matches_exact_session_id_and_path_after_second_session_exists(self) -> None:
         rclone = SimulatedRclone({

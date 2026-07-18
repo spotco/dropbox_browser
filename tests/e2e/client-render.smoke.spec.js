@@ -1,7 +1,7 @@
 const { test, expect } = require("@playwright/test");
 
-process.env.PLAYWRIGHT_PORT = "8012";
-const clientRenderBaseURL = "http://127.0.0.1:8012";
+process.env.PLAYWRIGHT_PORT = "8022";
+const clientRenderBaseURL = "http://127.0.0.1:8022";
 test.use({ baseURL: clientRenderBaseURL });
 
 const { startServer, stopServer } = require("./support/server");

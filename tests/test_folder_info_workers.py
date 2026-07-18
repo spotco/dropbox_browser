@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 import time
 from http import HTTPStatus
@@ -12,9 +13,11 @@ from urllib.request import Request, urlopen
 from unittest.mock import patch
 
 import dropbox_browser.foldercache as foldercache_module
+import dropbox_browser.cacheio as cacheio_module
 from dropbox_browser.errors import BrowserError
-from dropbox_browser.foldercache import DIFF_CACHE_SCHEMA_VERSION
+from dropbox_browser.foldercache import DIFF_CACHE_SCHEMA_VERSION, FolderJob, FolderShutdownJob
 from dropbox_browser.listingcache import ListingCacheManager
+from dropbox_browser.priorityqueue import PriorityQueue
 from dropbox_browser.services import DropboxBrowser
 
 try:
@@ -27,6 +30,40 @@ except ImportError:
 
 
 class FolderInfoWorkerTests(AppTestCase):
+    def test_folder_cache_queue_accepts_shutdown_with_queued_folder_job(self) -> None:
+        queue = PriorityQueue()
+
+        queue.put(FolderJob.create("dropbox:queued", page_epoch=1.0, breadth_depth=0))
+        queue.put(FolderShutdownJob())
+
+        self.assertIsInstance(queue.get(), FolderJob)
+        self.assertIsInstance(queue.get(), FolderShutdownJob)
+
+    def test_cache_write_ignores_directory_removed_during_atomic_replace(self) -> None:
+        cache_path = self.root / "Cache" / "FolderInfo" / "entry.json"
+        original_named_temporary_file = cacheio_module.tempfile.NamedTemporaryFile
+
+        def disappearing_temporary_file(*args, **kwargs):
+            temporary_file = original_named_temporary_file(*args, **kwargs)
+
+            class DisappearingTemporaryFile:
+                def __enter__(self):
+                    return temporary_file.__enter__()
+
+                def __exit__(self, *args):
+                    result = temporary_file.__exit__(*args)
+                    shutil.rmtree(cache_path.parent, ignore_errors=True)
+                    return result
+
+            return DisappearingTemporaryFile()
+
+        with patch.object(
+            cacheio_module.tempfile,
+            "NamedTemporaryFile",
+            side_effect=disappearing_temporary_file,
+        ):
+            cacheio_module.write_json_atomic(cache_path, {"complete": True})
+
     def test_page_load_and_background_poll_return_expected_data(self) -> None:
         local_root = self.create_local_root({
             "shared.txt": b"root data",
