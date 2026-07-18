@@ -37,11 +37,11 @@ leave the video player's CSS full-window mode.
 
 - [x] Record the current baseline with `npm run test:js`,
   `python -m tests.run web -v`, and the affected music/video Playwright suites.
-- [ ] Add or extend a Playwright bottom-panel test to cover: drag the panel to
+- [x] Add or extend a Playwright bottom-panel test to cover: drag the panel to
   the viewport limit, verify page chrome is hidden and the panel fills the
   viewport, use the topbar minimize control, and verify the normal page shell
   and minimum-height panel return.
-- [ ] Extend the existing video full-window browser coverage to press `Escape`
+- [x] Extend the existing video full-window browser coverage to press `Escape`
   in CSS full-window mode and assert the generic shell state and video-specific
   classes both clear, while native fullscreen behavior remains unchanged.
 - [ ] Add focused JavaScript tests for a media-kind presentation helper,
@@ -80,33 +80,33 @@ leave the video player's CSS full-window mode.
 
 ### Phase 2 — Add bottom-panel topbar controls and connect video
 
-- [ ] Update `assets/templates/page.html` with right-aligned, accessible icon
+- [x] Update `assets/templates/page.html` with right-aligned, accessible icon
   buttons in `#log-toolbar` for expand-to-full-page and minimize. Add stable
   element IDs, titles/ARIA labels, pressed/disabled state where appropriate,
   and a toolbar group that does not disturb the pane selector or status text.
-- [ ] Reuse appropriate vendored Material Icon Theme SVGs (or add matching
+- [x] Reuse appropriate vendored Material Icon Theme SVGs (or add matching
   vendored assets if required); never reference externally hosted icons.
-- [ ] Add toolbar CSS in `app.css` for a compact right-aligned control group,
+- [x] Add toolbar CSS in `app.css` for a compact right-aligned control group,
   visible focus treatment, and reliable small-window layout without clipping
   the pane selector/status area.
-- [ ] Wire the buttons in `log.js`: expand immediately enters the generic
+- [x] Wire the buttons in `log.js`: expand immediately enters the generic
   full-page path, and minimize immediately leaves it and sets minimum height.
   Synchronize labels/icons/state after drag, mode changes, toolbar actions,
   and window resize.
-- [ ] Refactor `assets/js/video/controls.js` to delegate page chrome and
+- [x] Refactor `assets/js/video/controls.js` to delegate page chrome and
   bottom-panel height ownership to the generic API. Keep only video-specific
   state/classes there: focused playback shell, playback-stage sizing, native
   fullscreen mutual exclusion, and restoring shared library grid columns.
-- [ ] Make the video full-window control enter the generic panel full-page
+- [x] Make the video full-window control enter the generic panel full-page
   state plus the focused video layout. When a generic minimize/exit action
   occurs while video is active, clear the focused video classes and restore its
   grid exactly once, avoiding recursive shell transitions or stale saved
   heights.
-- [ ] Preserve existing video cleanup paths in `video/pane.js`: switching away
+- [x] Preserve existing video cleanup paths in `video/pane.js`: switching away
   from the video pane, deactivating it, and entering native fullscreen must
   reliably leave CSS full-window mode without affecting browser native
   fullscreen semantics.
-- [ ] Update `handleVideoKeyboardShortcut()` so `Escape`, when the video pane
+- [x] Update `handleVideoKeyboardShortcut()` so `Escape`, when the video pane
   is in CSS full-window mode and focus is not an editable field, prevents the
   shortcut default and calls the existing asynchronous full-window exit path.
   Do not intercept `Escape` for text inputs/dialogs or replace browser-native
@@ -185,7 +185,7 @@ leave the video player's CSS full-window mode.
 - [x] Phase 0 — Focused regression coverage (baseline complete; behavior tests
   continue with their implementation phases)
 - [x] Phase 1 — Generic bottom-panel full-page controller
-- [ ] Phase 2 — Topbar controls and video integration
+- [x] Phase 2 — Topbar controls and video integration
 - [ ] Phase 3 — Shared media-kind playlist presentation
 - [ ] Phase 4 — Template contracts and documentation
 - [ ] Phase 5 — Full verification and handoff
