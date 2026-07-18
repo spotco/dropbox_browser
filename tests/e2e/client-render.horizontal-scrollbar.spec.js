@@ -71,3 +71,36 @@ test("client-render keeps horizontal browse scrollbar visible and synced when ta
     return Math.round(nextLogBox.y - (nextBarBox.y + nextBarBox.height));
   }).toBeLessThanOrEqual(1);
 });
+
+test("bottom panel can be dragged to full page and minimized from the topbar", async ({ page }) => {
+  await page.goto("/?path=Camera%20Uploads");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+
+  const resizer = page.locator("#log-resizer");
+  const resizerBox = await resizer.boundingBox();
+  expect(resizerBox).not.toBeNull();
+  await page.mouse.move(resizerBox.x + (resizerBox.width / 2), resizerBox.y + (resizerBox.height / 2));
+  await page.mouse.down();
+  await page.mouse.move(resizerBox.x + (resizerBox.width / 2), 0, { steps: 12 });
+  await page.mouse.up();
+
+  await expect(page.locator("body")).toHaveClass(/bottom-panel-full-window-mode/);
+  await expect(page.locator("header")).toBeHidden();
+  await expect(page.locator("main")).toBeHidden();
+  await expect
+    .poll(async () => page.locator("#log-panel").evaluate((node) => {
+      const rect = node.getBoundingClientRect();
+      return {top: Math.round(rect.top), height: Math.round(rect.height)};
+    }))
+    .toEqual({top: 0, height: 420});
+
+  const minimize = page.locator("#bottom-pane-minimize");
+  await expect(minimize).toBeVisible();
+  await minimize.click();
+  await expect(page.locator("body")).not.toHaveClass(/bottom-panel-full-window-mode/);
+  await expect(page.locator("header")).toBeVisible();
+  await expect(page.locator("main")).toBeVisible();
+  await expect
+    .poll(async () => page.locator("#log-panel").evaluate((node) => Math.round(node.getBoundingClientRect().height)))
+    .toBe(42);
+});

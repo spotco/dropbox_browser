@@ -3,6 +3,8 @@
   var entries = document.getElementById('log-entries');
   var resizer = document.getElementById('log-resizer');
   var grip = document.getElementById('log-grip');
+  var fullWindowButton = document.getElementById('bottom-pane-full-window-toggle');
+  var minimizeButton = document.getElementById('bottom-pane-minimize');
   var defaultHeight = 240;
   var minHeight = 42;
   var currentHeight = defaultHeight;
@@ -46,6 +48,26 @@
   function applyFullWindowShellClass(active) {
     if (typeof document !== 'undefined' && document.body) {
       document.body.classList.toggle('bottom-panel-full-window-mode', Boolean(active));
+    }
+  }
+
+  function syncToolbarButtons() {
+    var icon;
+    if (fullWindowButton) {
+      fullWindowButton.setAttribute('aria-pressed', fullWindowActive ? 'true' : 'false');
+      fullWindowButton.title = fullWindowActive
+        ? 'Exit full-page bottom panel'
+        : 'Expand bottom panel to full page';
+      fullWindowButton.setAttribute('aria-label', fullWindowButton.title);
+      icon = fullWindowButton.querySelector('img');
+      if (icon) {
+        icon.src = fullWindowActive
+          ? '/assets/icons/material-icon-theme/video-full-window-exit.svg'
+          : '/assets/icons/material-icon-theme/video-full-window-enter.svg';
+      }
+    }
+    if (minimizeButton) {
+      minimizeButton.disabled = !fullWindowActive && currentHeight <= minHeight;
     }
   }
 
@@ -104,6 +126,7 @@
     applyFullWindowShellClass(true);
     setResizerInteractionEnabled(false);
     applyFullWindowHeight();
+    syncToolbarButtons();
     emitFullWindowChange(opts.source || 'api');
     return heightBeforeFullWindow;
   }
@@ -120,13 +143,16 @@
     var result = Number.isFinite(restore) && restore > 0
       ? applyHeight(restore)
       : applyHeight(currentHeight);
+    syncToolbarButtons();
     emitFullWindowChange(opts.source || 'api');
     return result;
   }
 
   function minimizePanel() {
     if (fullWindowActive) exitFullWindow({source: 'minimize'});
-    return applyHeight(minHeight);
+    var result = applyHeight(minHeight);
+    syncToolbarButtons();
+    return result;
   }
 
   function toggleFullWindow() {
@@ -149,6 +175,7 @@
   }
 
   applyHeight(Settings.get('log-height', defaultHeight));
+  syncToolbarButtons();
 
   function startResize(ev) {
     if (fullWindowActive) {
@@ -185,12 +212,24 @@
 
   if (resizer) resizer.addEventListener('pointerdown', startResize);
   if (grip) grip.addEventListener('pointerdown', startResize);
+  if (fullWindowButton) {
+    fullWindowButton.addEventListener('click', function () {
+      toggleFullWindow();
+    });
+  }
+  if (minimizeButton) {
+    minimizeButton.addEventListener('click', function () {
+      minimizePanel();
+    });
+  }
   window.addEventListener('resize', function () {
     if (fullWindowActive) {
       applyFullWindowHeight();
+      syncToolbarButtons();
       return;
     }
     applyHeight(currentHeight);
+    syncToolbarButtons();
   });
   window.addEventListener('bottom-pane-mode-changed', function (ev) {
     if (!ev.detail) return;

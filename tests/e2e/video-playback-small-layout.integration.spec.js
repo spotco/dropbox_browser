@@ -388,7 +388,7 @@ test("full-window mode hides library/playlist and stretches stage across the vie
   await expect(fullWindowButton).toBeEnabled({ timeout: 15000 });
   await fullWindowButton.click();
 
-  await expect(page.locator("body")).toHaveClass(/video-full-window-mode/);
+  await expect(page.locator("body")).toHaveClass(/bottom-panel-full-window-mode/);
   await expect(page.locator("#video-player-pane")).toHaveClass(/video-full-window/);
   await expect(page.locator("#video-library-pane")).toBeHidden();
   await expect(page.locator("#video-playlist-pane")).toBeHidden();
@@ -408,7 +408,7 @@ test("full-window mode hides library/playlist and stretches stage across the vie
         const paneRect = pane.getBoundingClientRect();
         const viewportWidth = window.innerWidth;
         return {
-          bodyFullWindow: body.classList.contains("video-full-window-mode"),
+          bodyFullWindow: body.classList.contains("bottom-panel-full-window-mode"),
           paneFullWindow: pane.classList.contains("video-full-window"),
           libraryDisplay: library ? window.getComputedStyle(library).display : "none",
           playlistDisplay: playlist ? window.getComputedStyle(playlist).display : "none",
@@ -456,7 +456,8 @@ test("full-window mode hides library/playlist and stretches stage across the vie
   // Single track, not multi-column pixel list like "280px 8px 280px 8px 400px".
   expect(metrics.shellGridColumns.split(/\s+/).filter(Boolean).length).toBeLessThanOrEqual(2);
 
-  await fullWindowButton.click();
-  await expect(page.locator("body")).not.toHaveClass(/video-full-window-mode/);
+  await page.keyboard.press("Escape");
+  await expect(page.locator("body")).not.toHaveClass(/bottom-panel-full-window-mode/);
+  await expect(page.locator("#video-player-pane")).not.toHaveClass(/video-full-window/);
   await expect(page.locator("#video-library-pane")).toBeVisible();
 });

@@ -353,6 +353,11 @@ function videoKeyboardShortcutAllowed(event) {
 
 function handleVideoKeyboardShortcut(event) {
   if (!event || !videoKeyboardShortcutAllowed(event)) return;
+  if (event.key === 'Escape' && isFullWindowActive()) {
+    event.preventDefault();
+    void exitFullWindow();
+    return;
+  }
   if (event.key === ' ') {
     if (!videoControlsAvailable()) return;
     event.preventDefault();
@@ -519,9 +524,6 @@ function restoreShellPaneLayoutAfterFullWindow() {
 function applyFullWindowLayoutClasses(active) {
   var isActive = Boolean(active);
   ctx.state.fullWindowActive = isActive;
-  if (typeof document !== 'undefined' && document.body) {
-    document.body.classList.toggle('video-full-window-mode', isActive);
-  }
   if (ctx.pane) {
     ctx.pane.classList.toggle('video-full-window', isActive);
   }
@@ -544,11 +546,13 @@ function enterFullWindowLayout() {
   }
   var savedHeight = readLogPanelHeightPx();
   ctx.state.savedLogPanelHeight = savedHeight;
-  applyFullWindowLayoutClasses(true);
   var api = logPanelApi();
-  if (api && typeof api.setVideoFullWindowActive === 'function') {
+  if (api && typeof api.enterFullWindow === 'function') {
+    api.enterFullWindow({savedHeight: savedHeight, source: 'video'});
+  } else if (api && typeof api.setVideoFullWindowActive === 'function') {
     api.setVideoFullWindowActive(true, {savedHeight: savedHeight});
   }
+  applyFullWindowLayoutClasses(true);
 }
 
 function exitFullWindowLayout() {
@@ -558,6 +562,13 @@ function exitFullWindowLayout() {
   ctx.state.savedLogPanelHeight = null;
   if (wasActive) restoreShellPaneLayoutAfterFullWindow();
   var api = logPanelApi();
+  if (api && typeof api.exitFullWindow === 'function') {
+    api.exitFullWindow({
+      restoreHeight: Number.isFinite(Number(restoreHeight)) ? Number(restoreHeight) : null,
+      source: 'video',
+    });
+    return;
+  }
   if (api && typeof api.setVideoFullWindowActive === 'function') {
     api.setVideoFullWindowActive(false, {
       restoreHeight: Number.isFinite(Number(restoreHeight)) ? Number(restoreHeight) : null,
@@ -568,6 +579,16 @@ function exitFullWindowLayout() {
   if (wasActive && Number.isFinite(Number(restoreHeight)) && Number(restoreHeight) > 0) {
     document.documentElement.style.setProperty('--log-panel-height', Number(restoreHeight) + 'px');
   }
+}
+
+function handleBottomPanelFullWindowChange(event) {
+  if (!event || !event.detail || event.detail.active || !ctx.state.fullWindowActive) return;
+  // A generic toolbar action may exit the shared shell while video owns the
+  // focused playback layout. Clean up the video-only layer without asking the
+  // shell controller to exit a second time.
+  applyFullWindowLayoutClasses(false);
+  ctx.state.savedLogPanelHeight = null;
+  restoreShellPaneLayoutAfterFullWindow();
 }
 
 async function exitNativeFullscreenIfNeeded() {
@@ -647,7 +668,7 @@ function handleFullscreenChange() {
   if (!isNativeFullscreenActive() && !isFullWindowActive()) {
     // Ensure log-panel height lock is not left dangling if state drifted.
     var api = logPanelApi();
-    if (api && typeof api.isVideoFullWindowActive === 'function' && api.isVideoFullWindowActive()) {
+    if (api && typeof api.isFullWindowActive === 'function' && api.isFullWindowActive()) {
       exitFullWindowLayout();
     }
   }
@@ -893,6 +914,7 @@ async function toggleFullWindowMode() {
     if (typeof document !== 'undefined') {
       document.addEventListener('fullscreenchange', handleFullscreenChange);
       document.addEventListener('keydown', handleVideoKeyboardShortcut);
+      document.addEventListener('bottom-panel-full-window-changed', handleBottomPanelFullWindowChange);
     }
     ctx.els.videoEl.addEventListener('emptied', resetPlaybackProgress);
     ctx.els.videoEl.addEventListener('playing', function () {
