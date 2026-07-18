@@ -6,15 +6,16 @@
   var defaultHeight = 240;
   var minHeight = 42;
   var currentHeight = defaultHeight;
-  var videoFullWindowActive = false;
+  var fullWindowActive = false;
   var heightBeforeFullWindow = null;
+  var activeResize = null;
 
   function scrollLogToBottom() {
     entries.scrollTop = entries.scrollHeight;
   }
 
   function maxHeight() {
-    return Math.max(minHeight, window.innerHeight - 80);
+    return Math.max(minHeight, window.innerHeight || minHeight);
   }
 
   function clampHeight(height) {
@@ -36,10 +37,16 @@
   }
 
   function applyFullWindowHeight() {
-    // Bypass clampHeight (which reserves 80px for page chrome). Do not persist.
+    // Do not persist the viewport height as the normal panel setting.
     var fill = Math.max(minHeight, window.innerHeight || minHeight);
     document.documentElement.style.setProperty('--log-panel-height', fill + 'px');
     return fill;
+  }
+
+  function applyFullWindowShellClass(active) {
+    if (typeof document !== 'undefined' && document.body) {
+      document.body.classList.toggle('bottom-panel-full-window-mode', Boolean(active));
+    }
   }
 
   function setResizerInteractionEnabled(enabled) {
@@ -57,32 +64,74 @@
     }
   }
 
-  function setVideoFullWindowActive(active, options) {
-    var opts = options || {};
-    var nextActive = Boolean(active);
-    if (nextActive) {
-      if (!videoFullWindowActive) {
-        if (Number.isFinite(Number(opts.savedHeight))) {
-          heightBeforeFullWindow = Number(opts.savedHeight);
-        } else {
-          heightBeforeFullWindow = currentHeight;
-        }
-      }
-      videoFullWindowActive = true;
-      setResizerInteractionEnabled(false);
-      applyFullWindowHeight();
-      return heightBeforeFullWindow;
+  function emitFullWindowChange(source) {
+    if (typeof document === 'undefined' || typeof document.dispatchEvent !== 'function') return;
+    var event;
+    var detail = {
+      active: fullWindowActive,
+      source: source || 'api',
+      height: fullWindowActive ? applyFullWindowHeight() : currentHeight,
+    };
+    if (typeof CustomEvent === 'function') {
+      event = new CustomEvent('bottom-panel-full-window-changed', {detail: detail});
+    } else {
+      event = document.createEvent('CustomEvent');
+      event.initCustomEvent('bottom-panel-full-window-changed', false, false, detail);
     }
-    videoFullWindowActive = false;
-    setResizerInteractionEnabled(true);
+    document.dispatchEvent(event);
+  }
+
+  function stopResize() {
+    if (!activeResize) return;
+    if (resizer) resizer.classList.remove('dragging');
+    window.removeEventListener('pointermove', activeResize.move);
+    window.removeEventListener('pointerup', activeResize.end);
+    window.removeEventListener('pointercancel', activeResize.end);
+    activeResize = null;
+  }
+
+  function enterFullWindow(options) {
+    var opts = options || {};
+    stopResize();
+    if (!fullWindowActive) {
+      if (Number.isFinite(Number(opts.savedHeight))) {
+        heightBeforeFullWindow = Number(opts.savedHeight);
+      } else {
+        heightBeforeFullWindow = currentHeight;
+      }
+    }
+    fullWindowActive = true;
+    applyFullWindowShellClass(true);
+    setResizerInteractionEnabled(false);
+    applyFullWindowHeight();
+    emitFullWindowChange(opts.source || 'api');
+    return heightBeforeFullWindow;
+  }
+
+  function exitFullWindow(options) {
+    var opts = options || {};
     var restore = Number.isFinite(Number(opts.restoreHeight))
       ? Number(opts.restoreHeight)
       : heightBeforeFullWindow;
+    fullWindowActive = false;
+    applyFullWindowShellClass(false);
+    setResizerInteractionEnabled(true);
     heightBeforeFullWindow = null;
-    if (Number.isFinite(restore) && restore > 0) {
-      return applyHeight(restore);
-    }
-    return applyHeight(currentHeight);
+    var result = Number.isFinite(restore) && restore > 0
+      ? applyHeight(restore)
+      : applyHeight(currentHeight);
+    emitFullWindowChange(opts.source || 'api');
+    return result;
+  }
+
+  function minimizePanel() {
+    if (fullWindowActive) exitFullWindow({source: 'minimize'});
+    return applyHeight(minHeight);
+  }
+
+  function toggleFullWindow() {
+    if (fullWindowActive) return exitFullWindow({source: 'toggle'});
+    return enterFullWindow({source: 'toggle'});
   }
 
   function musicMinHeight() {
@@ -94,7 +143,7 @@
   }
 
   function ensureMusicPaneHeight() {
-    if (videoFullWindowActive) return;
+    if (fullWindowActive) return;
     var target = clampHeight(musicMinHeight());
     if (currentHeight < target) applyHeight(target);
   }
@@ -102,28 +151,33 @@
   applyHeight(Settings.get('log-height', defaultHeight));
 
   function startResize(ev) {
-    if (videoFullWindowActive) {
+    if (fullWindowActive) {
       ev.preventDefault();
       return;
     }
     ev.preventDefault();
     var startY = ev.clientY;
     var startHeight = currentHeight;
+    stopResize();
     resizer.classList.add('dragging');
 
     function move(moveEv) {
-      if (videoFullWindowActive) return;
-      applyHeight(startHeight + startY - moveEv.clientY);
+      if (fullWindowActive) return;
+      var nextHeight = startHeight + startY - moveEv.clientY;
+      var viewportHeight = Math.max(minHeight, window.innerHeight || minHeight);
+      if (nextHeight >= viewportHeight - 1) {
+        enterFullWindow({source: 'drag', savedHeight: startHeight});
+        return;
+      }
+      applyHeight(nextHeight);
       scrollLogToBottom();
     }
 
     function end() {
-      resizer.classList.remove('dragging');
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', end);
-      window.removeEventListener('pointercancel', end);
+      stopResize();
     }
 
+    activeResize = {move: move, end: end};
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', end);
     window.addEventListener('pointercancel', end);
@@ -132,7 +186,7 @@
   if (resizer) resizer.addEventListener('pointerdown', startResize);
   if (grip) grip.addEventListener('pointerdown', startResize);
   window.addEventListener('resize', function () {
-    if (videoFullWindowActive) {
+    if (fullWindowActive) {
       applyFullWindowHeight();
       return;
     }
@@ -148,8 +202,16 @@
     getHeight: getHeight,
     applyHeight: applyHeight,
     applyFullWindowHeight: applyFullWindowHeight,
-    setVideoFullWindowActive: setVideoFullWindowActive,
-    isVideoFullWindowActive: function () { return videoFullWindowActive; },
+    enterFullWindow: enterFullWindow,
+    exitFullWindow: exitFullWindow,
+    toggleFullWindow: toggleFullWindow,
+    minimize: minimizePanel,
+    isFullWindowActive: function () { return fullWindowActive; },
+    // Compatibility aliases for the video adapter during the migration.
+    setVideoFullWindowActive: function (active, options) {
+      return active ? enterFullWindow(options) : exitFullWindow(options);
+    },
+    isVideoFullWindowActive: function () { return fullWindowActive; },
   };
 
   var nextIndex = 0;

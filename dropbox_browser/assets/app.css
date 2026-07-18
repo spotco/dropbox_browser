@@ -57,25 +57,31 @@ body.has-log-panel main {
   overscroll-behavior: contain;
 }
 
-/* Video full-window layout: hide page chrome and let the bottom pane fill
-   the browser viewport. Height restore for --log-panel-height is Phase 4 JS;
-   while this class is present CSS forces a full viewport panel. */
+/* Bottom-panel full-window layout: hide page chrome and let the bottom pane
+   fill the browser viewport. The generic class is owned by log.js; the
+   video-specific class remains as a compatibility selector during migration. */
+body.bottom-panel-full-window-mode,
 body.video-full-window-mode {
   overflow: hidden;
 }
+body.bottom-panel-full-window-mode > header,
+body.bottom-panel-full-window-mode > main,
 body.video-full-window-mode > header,
 body.video-full-window-mode > main {
   display: none !important;
 }
+body.bottom-panel-full-window-mode .browse-horizontal-scrollbar,
 body.video-full-window-mode .browse-horizontal-scrollbar {
   display: none !important;
 }
+body.bottom-panel-full-window-mode #log-panel,
 body.video-full-window-mode #log-panel {
   flex: 1 1 auto;
   height: 100vh;
   max-height: none;
   min-height: 0;
 }
+body.bottom-panel-full-window-mode #log-resizer,
 body.video-full-window-mode #log-resizer {
   display: none;
 }
