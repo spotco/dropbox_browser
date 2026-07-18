@@ -211,6 +211,10 @@ async function readSettingsKey(page, key, fallback = null) {
 }
 
 test.beforeAll(async () => {
+  // The generated WAV fixture can be expensive to materialize when the full
+  // Playwright project set starts together. Match the integration server's
+  // 30-second readiness budget instead of the global 10-second hook timeout.
+  test.setTimeout(60000);
   server = await startIntegrationServer();
 });
 

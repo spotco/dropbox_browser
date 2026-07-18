@@ -2707,6 +2707,12 @@ class VideoSessionManager:
         return activity_at
 
     def _session_is_recently_active_locked(self, session: VideoHlsSession, now: float | None = None) -> bool:
+        # A finite HLS input can exit after producing its playlist while the
+        # session remains registered until its idle cleanup/eviction pass. Its
+        # last client progress must not keep an exited process counted as
+        # active against the concurrent-session limit.
+        if session.process.poll() is not None:
+            return False
         playback_state = str(session.reported_playback_state or "unknown").strip().casefold()
         if playback_state not in {"playing", "paused"}:
             return False
