@@ -35,7 +35,7 @@ leave the video player's CSS full-window mode.
 
 ### Phase 0 — Add focused regression coverage first
 
-- [ ] Record the current baseline with `npm run test:js`,
+- [x] Record the current baseline with `npm run test:js`,
   `python -m tests.run web -v`, and the affected music/video Playwright suites.
 - [ ] Add or extend a Playwright bottom-panel test to cover: drag the panel to
   the viewport limit, verify page chrome is hidden and the panel fills the
@@ -53,26 +53,26 @@ leave the video player's CSS full-window mode.
 
 ### Phase 1 — Centralize bottom-panel full-page state in `log.js`
 
-- [ ] Refactor `dropbox_browser/assets/js/log.js` so its full-page state is
+- [x] Refactor `dropbox_browser/assets/js/log.js` so its full-page state is
   generic bottom-panel state rather than `videoFullWindowActive` state. Keep
   one owner for saved height, resize enablement, viewport-height application,
   restoration, and resize-window handling.
-- [ ] Replace the video-named public API with explicit generic operations such
+- [x] Replace the video-named public API with explicit generic operations such
   as enter/exit/toggle full-page mode, minimize, current-height access, and
   full-page-state access. Provide an intentional transition/event contract so
   video code can synchronize its playback-only classes when a generic toolbar
   action exits or minimizes the panel.
-- [ ] Preserve current resize behavior between the minimum and normal maximum.
+- [x] Preserve current resize behavior between the minimum and normal maximum.
   When an upward drag reaches the viewport boundary, transition through the
   same generic full-page entry path used by the toolbar; do not persist a
   viewport-height value as the normal `log-height` setting.
-- [ ] Ensure leaving full-page mode restores the saved pre-expansion height.
+- [x] Ensure leaving full-page mode restores the saved pre-expansion height.
   Ensure minimizing explicitly exits full-page mode first, then applies and
   persists the existing minimum panel height.
-- [ ] Keep resize interactions disabled while full-page mode is active, prevent
+- [x] Keep resize interactions disabled while full-page mode is active, prevent
   stale pointer listeners from changing state after that transition, and keep
   viewport resizing locked to the current viewport height until exit.
-- [ ] Update `app.css` from the video-specific shell selector to a generic
+- [x] Update `app.css` from the video-specific shell selector to a generic
   bottom-panel full-page selector: hide `header`, `main`, and the browse
   horizontal scrollbar; make `#log-panel` fill the viewport; and preserve the
   existing flex/overflow constraints. Retain video-only selectors solely for
@@ -182,8 +182,9 @@ leave the video player's CSS full-window mode.
 
 ## Progress
 
-- [ ] Phase 0 — Focused regression coverage
-- [ ] Phase 1 — Generic bottom-panel full-page controller
+- [x] Phase 0 — Focused regression coverage (baseline complete; behavior tests
+  continue with their implementation phases)
+- [x] Phase 1 — Generic bottom-panel full-page controller
 - [ ] Phase 2 — Topbar controls and video integration
 - [ ] Phase 3 — Shared media-kind playlist presentation
 - [ ] Phase 4 — Template contracts and documentation
