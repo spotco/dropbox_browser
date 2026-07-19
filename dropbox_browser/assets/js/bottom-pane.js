@@ -1,4 +1,102 @@
 (function () {
+  // Gate bottom-panel interaction until music + video media-library layout has
+  // restored pane splits and active playlist column widths. Classic scripts
+  // (this file, log.js) run before those type=module hosts finish.
+  var MEDIA_LAYOUT_READY_KEYS = ['music', 'video'];
+  var mediaLayoutReady = Object.create(null);
+  var bottomPanelInteractionReady = false;
+  var bottomPanelReadyFallbackTimer = null;
+  var BOTTOM_PANEL_READY_FALLBACK_MS = 8000;
+  // Reuse the existing toolbar status text (#music-player-status-text); do not add nodes.
+  var statusBarEl = document.getElementById('music-player-status');
+  var statusTextEl = document.getElementById('music-player-status-text');
+  var loadStartedAtMs = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+    ? performance.now()
+    : Date.now();
+  var loadStatusTimer = null;
+  var loadStatusFinalized = false;
+  var LOAD_STATUS_TICK_MS = 100;
+
+  MEDIA_LAYOUT_READY_KEYS.forEach(function (key) {
+    mediaLayoutReady[key] = false;
+  });
+
+  function nowMs() {
+    return (typeof performance !== 'undefined' && typeof performance.now === 'function')
+      ? performance.now()
+      : Date.now();
+  }
+
+  function formatLoadSeconds() {
+    return ((nowMs() - loadStartedAtMs) / 1000).toFixed(1);
+  }
+
+  function setBootstrapStatusBarVisible(visible) {
+    if (!statusBarEl) return;
+    statusBarEl.hidden = !visible;
+    statusBarEl.classList.toggle('hidden', !visible);
+    statusBarEl.classList.toggle('is-visible', visible);
+  }
+
+  function paintLoadingStatus() {
+    if (loadStatusFinalized || !statusTextEl) return;
+    statusTextEl.textContent = 'Loading(' + formatLoadSeconds() + 's)...';
+    setBootstrapStatusBarVisible(true);
+  }
+
+  function finalizeLoadStatus() {
+    if (loadStatusFinalized) return;
+    loadStatusFinalized = true;
+    if (loadStatusTimer !== null) {
+      window.clearInterval(loadStatusTimer);
+      loadStatusTimer = null;
+    }
+    // Final bootstrap message only; never rewrite this from the loader again.
+    if (statusTextEl) {
+      statusTextEl.textContent = 'Loaded (' + formatLoadSeconds() + 's)!';
+    }
+    setBootstrapStatusBarVisible(true);
+  }
+
+  function setBottomPanelInteractionReady(ready) {
+    if (ready === bottomPanelInteractionReady) return;
+    bottomPanelInteractionReady = !!ready;
+    if (document.body) {
+      document.body.classList.toggle('bottom-panel-bootstrapping', !bottomPanelInteractionReady);
+      document.body.setAttribute(
+        'data-bottom-panel-ready',
+        bottomPanelInteractionReady ? '1' : '0'
+      );
+    }
+    if (bottomPanelInteractionReady) finalizeLoadStatus();
+  }
+
+  function allMediaLayoutsReady() {
+    return MEDIA_LAYOUT_READY_KEYS.every(function (key) {
+      return !!mediaLayoutReady[key];
+    });
+  }
+
+  function markBottomPanelMediaLayoutReady(key) {
+    if (MEDIA_LAYOUT_READY_KEYS.indexOf(key) < 0) return;
+    mediaLayoutReady[key] = true;
+    if (!allMediaLayoutsReady()) return;
+    if (bottomPanelReadyFallbackTimer !== null) {
+      window.clearTimeout(bottomPanelReadyFallbackTimer);
+      bottomPanelReadyFallbackTimer = null;
+    }
+    setBottomPanelInteractionReady(true);
+  }
+
+  window.markBottomPanelMediaLayoutReady = markBottomPanelMediaLayoutReady;
+  setBottomPanelInteractionReady(false);
+  paintLoadingStatus();
+  loadStatusTimer = window.setInterval(paintLoadingStatus, LOAD_STATUS_TICK_MS);
+  bottomPanelReadyFallbackTimer = window.setTimeout(function () {
+    bottomPanelReadyFallbackTimer = null;
+    setBottomPanelInteractionReady(true);
+  }, BOTTOM_PANEL_READY_FALLBACK_MS);
+
   var panel = document.getElementById('log-panel');
   var modeSelect = document.getElementById('bottom-pane-mode');
   var paneViews = Array.prototype.slice.call(document.querySelectorAll('.bottom-pane-view'));
