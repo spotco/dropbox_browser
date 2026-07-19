@@ -13,8 +13,12 @@ async function importModuleFromWorkspace(relativePath) {
     const storePath = path.resolve(path.dirname(absolutePath), "playlist-store.js");
     const storeSource = await fs.readFile(storePath, "utf8");
     const storeUrl = `data:text/javascript;base64,${Buffer.from(storeSource, "utf8").toString("base64")}`;
+    const mediaKindPath = path.resolve(path.dirname(absolutePath), "media-kind.js");
+    const mediaKindSource = await fs.readFile(mediaKindPath, "utf8");
+    const mediaKindUrl = `data:text/javascript;base64,${Buffer.from(mediaKindSource, "utf8").toString("base64")}`;
     source = source.replace("'./shared.js'", `'${sharedUrl}'`);
     source = source.replace("'./playlist-store.js'", `'${storeUrl}'`);
+    source = source.replace("'./media-kind.js'", `'${mediaKindUrl}'`);
   }
   return import(`data:text/javascript;base64,${Buffer.from(source, "utf8").toString("base64")}`);
 }

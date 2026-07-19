@@ -17,9 +17,8 @@ import {initPlayback} from './music/playback.js';
   var ctx = {
     pane: pane,
     mediaLibraryConfig: {
+      mediaKind: 'music',
       libraryEndpoint: '/music/endpoints/library',
-      itemNounSingular: 'song',
-      itemNounPlural: 'songs',
       emptyLibraryText: 'Load the current folder to show cached songs.',
       emptyLibraryNoItemsText: 'No supported cached songs found in this folder yet.',
       loadingLibraryText: 'Loading cached song library...',
@@ -59,6 +58,7 @@ import {initPlayback} from './music/playback.js';
       playlistOverwriteCancelButton: document.getElementById('music-playlist-overwrite-cancel'),
       playlistOverwriteConfirmButton: document.getElementById('music-playlist-overwrite-confirm'),
       playlistLoadDialog: document.getElementById('music-playlist-load-dialog'),
+      playlistLoadTitleEl: document.getElementById('music-playlist-load-title'),
       playlistLoadFilterInput: document.getElementById('music-playlist-load-filter-input'),
       playlistLoadListEl: document.getElementById('music-playlist-load-list'),
       playlistLoadNewButton: document.getElementById('music-playlist-load-new'),

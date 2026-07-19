@@ -1,4 +1,5 @@
 import {clearObject, formatShortDateTime} from './shared.js';
+import {formatMediaItemCount, mediaKindPresentation} from './media-kind.js';
 import {
   DEFAULT_PLAYLIST_NAME,
   parseM3uPlaylistText,
@@ -188,6 +189,8 @@ export function playlistMatchesLoadFilter(playlist, filterText) {
 export function initPlaylist(ctx) {
   var els = ctx.els;
   var state = ctx.state;
+  var cfg = ctx.mediaLibraryConfig || {};
+  var mediaPresentation = mediaKindPresentation(cfg.mediaKind);
   var playlistDrag = {
     active: false,
     activeHandle: null,
@@ -225,6 +228,11 @@ export function initPlaylist(ctx) {
   function updateActivePlaylistName() {
     if (!els.activePlaylistNameEl) return;
     els.activePlaylistNameEl.textContent = activePlaylistName();
+  }
+
+  function updatePlaylistMediaLabels() {
+    if (els.playlistLoadButton) els.playlistLoadButton.textContent = mediaPresentation.playlistLoadLabel;
+    if (els.playlistLoadTitleEl) els.playlistLoadTitleEl.textContent = mediaPresentation.playlistLoadLabel;
   }
 
   function resetPlaylistSelections() {
@@ -376,6 +384,7 @@ export function initPlaylist(ctx) {
     var visiblePlaylists;
     var visiblePlaylistNames;
     if (!els.playlistLoadListEl) return;
+    updatePlaylistMediaLabels();
     updatePlaylistLoadSortButtons();
     if (els.playlistLoadFilterInput && els.playlistLoadFilterInput.value !== state.playlistLoadFilterText) {
       els.playlistLoadFilterInput.value = state.playlistLoadFilterText;
@@ -431,7 +440,7 @@ export function initPlaylist(ctx) {
       modifiedCell.textContent = formatShortDateTime(playlist.last_modified);
       songCountCell.className = 'music-playlist-load-song-count';
       songCountCell.setAttribute('role', 'cell');
-      songCountCell.textContent = String(songCount) + ' song' + (songCount === 1 ? '' : 's');
+      songCountCell.textContent = formatMediaItemCount(songCount, mediaPresentation.kind);
       row.appendChild(nameCell);
       row.appendChild(modifiedCell);
       row.appendChild(songCountCell);
@@ -792,7 +801,7 @@ export function initPlaylist(ctx) {
       return false;
     }
     setPlaylistExportBusy(true);
-    downloadJsonFile('dropbox-browser-playlists.json', state.playlistStore.exportPersistedPlaylists()).finally(function () {
+    downloadJsonFile(mediaPresentation.playlistExportFilename, state.playlistStore.exportPersistedPlaylists()).finally(function () {
       setPlaylistExportBusy(false);
     });
     ctx.setStatus('Exported ' + state.persistedPlaylists.length + ' saved playlists.');
@@ -1405,6 +1414,7 @@ export function initPlaylist(ctx) {
 
   restorePlaylistLoadSort();
   restorePlaylistLoadFilter();
+  updatePlaylistMediaLabels();
   state.activePlaylistSavedSignature = activePlaylistSignature();
   syncActivePlaylistDirtyState();
   if (els.activePlaylistNameEl) updateActivePlaylistName();

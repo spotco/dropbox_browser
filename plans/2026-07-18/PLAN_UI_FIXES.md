@@ -47,7 +47,7 @@ leave the video player's CSS full-window mode.
 - [x] Add focused JavaScript tests for a media-kind presentation helper,
   including music/video singular and plural count labels, `Load Playlist:`
   labels, and the two export filenames.
-- [ ] Extend music and video playlist browser tests to assert the displayed
+- [x] Extend music and video playlist browser tests to assert the displayed
   saved-playlist count noun, load labels, and download `suggestedFilename` for
   each host.
 
@@ -114,24 +114,24 @@ leave the video player's CSS full-window mode.
 
 ### Phase 3 — Introduce one shared media-kind presentation contract
 
-- [ ] Add a small pure shared module under
+- [x] Add a small pure shared module under
   `assets/js/media-library/` that maps a host-supplied media kind (`music` or
   `videos`) to all user-facing playlist presentation details: singular/plural
   item nouns, title-cased `Songs`/`Videos` label, and export filename.
-- [ ] Replace duplicated host-specific playlist display values in
+- [x] Replace duplicated host-specific playlist display values in
   `assets/js/music.js` and `assets/js/video.js` with the one media-kind input
   passed through `ctx.mediaLibraryConfig`. Continue exposing existing library
   wording through that derived presentation so library status strings remain
   correct.
-- [ ] Update `assets/js/media-library/playlist.js` to consume that contract for
+- [x] Update `assets/js/media-library/playlist.js` to consume that contract for
   the right-side saved-playlist item count, including correct singular/plural
   grammar (`1 song`, `2 songs`, `1 video`, `2 videos`). Do not rename the
   persisted `playlist.songs` field.
-- [ ] Drive both the playlist load action and dialog heading from the same
+- [x] Drive both the playlist load action and dialog heading from the same
   presentation value: `Load Playlist: Songs` for music and
   `Load Playlist: Videos` for video. Add the necessary title/button element
   references in each host context and update the shared UI at initialization.
-- [ ] Replace the hard-coded export name in `playlist.js` with the media-kind
+- [x] Replace the hard-coded export name in `playlist.js` with the media-kind
   export filename, resulting in distinct music and video downloads while
   retaining the existing JSON schema and import behavior.
 
@@ -182,10 +182,9 @@ leave the video player's CSS full-window mode.
 
 ## Progress
 
-- [x] Phase 0 — Focused regression coverage (baseline complete; behavior tests
-  continue with their implementation phases)
+- [x] Phase 0 — Focused regression coverage
 - [x] Phase 1 — Generic bottom-panel full-page controller
 - [x] Phase 2 — Topbar controls and video integration
-- [ ] Phase 3 — Shared media-kind playlist presentation
+- [x] Phase 3 — Shared media-kind playlist presentation
 - [ ] Phase 4 — Template contracts and documentation
 - [ ] Phase 5 — Full verification and handoff
