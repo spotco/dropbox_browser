@@ -18,6 +18,17 @@ export function setTextOrFallback(el, text, fallback) {
   el.textContent = text || fallback;
 }
 
+export function setPlaylistPlaybackStatus(ctx, item) {
+  var activePlaylist = ctx && ctx.state ? ctx.state.activePlaylist : null;
+  var filename = item && (item.filename || item.display_name || item.stream_path);
+  var playlistName = activePlaylist && activePlaylist.name;
+  if (!ctx || typeof ctx.setStatus !== 'function') return;
+  ctx.setStatus(
+    'Playing "' + (filename || 'Unknown file') +
+    '" from playlist "' + (playlistName || 'New Playlist') + '".'
+  );
+}
+
 export function formatPlaybackTime(seconds) {
   var totalSeconds;
   var hours;

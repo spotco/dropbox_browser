@@ -6,7 +6,13 @@ const assert = require("node:assert/strict");
 async function importPlaybackModuleFromWorkspace() {
   const absolutePath = path.resolve(__dirname, "..", "..", "dropbox_browser/assets/js/music/playback.js");
   let source = await fs.readFile(absolutePath, "utf8");
-  const sharedSource = "export function formatPlaybackTime(value) { return String(value); }";
+  const sharedSource = [
+    "export function formatPlaybackTime(value) { return String(value); }",
+    "export function setPlaylistPlaybackStatus(ctx, item) {",
+    "  const playlistName = ctx.state.activePlaylist && ctx.state.activePlaylist.name || 'New Playlist';",
+    "  ctx.setStatus('Playing \\\"' + (item.filename || item.display_name) + '\\\" from playlist \\\"' + playlistName + '\\\".');",
+    "}",
+  ].join("\n");
   const metadataSource = [
     "export function createMetadataController() {",
     "  return {",
@@ -82,6 +88,7 @@ function createFakeAudio() {
 function createPlaybackContext(audio, songs, toastMessages, statusMessages) {
   const state = {
     currentPlaylistIndex: -1,
+    activePlaylist: {name: "Test Playlist"},
     currentArtObjectUrl: null,
     defaultLoopPlaylist: false,
     defaultShuffleEnabled: false,
@@ -199,6 +206,7 @@ test("initPlayback retries audio load failures and then skips to the next playli
 
     assert.equal(audio.src, "/file?path=music%2Falpha.mp3&source=remote");
     assert.equal(audio.playCalls, 1);
+    assert.equal(statusMessages.at(-1), 'Playing "alpha.mp3" from playlist "Test Playlist".');
 
     audio.dispatch("error");
     assert.match(statusMessages.at(-1), /Retrying "music\/alpha\.mp3" \(1\/3\)\.\.\./);
