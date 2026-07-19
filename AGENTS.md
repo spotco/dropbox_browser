@@ -183,6 +183,9 @@ the smallest fix, rerun that test, then run the relevant group. See
 ## Git Notes
 
 - Remote: `https://github.com/spotco/dropbox_browser`
+- When the human says **dev branch**, interpret that as the repository's
+  currently used development branch; do not create
+  or push a new branch literally named `dev` unless explicitly requested.
 - GitHub publishing uses the local git workflow only: after an explicit human
   request, commit the intended files and push with `git push origin <branch>`
   (for example, `git push origin master` or `git push origin dev-ui-fixes`).
