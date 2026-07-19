@@ -1150,6 +1150,28 @@ test("playback stale session create stops only the returned stale session id", a
   assert.equal(ctx.state.compatibilitySessionId, "session-newer");
 });
 
+test("playback leaving the active queue exits expanded layout before showing the empty state", async () => {
+  const {initPlayback} = await importModuleFromWorkspace("dropbox_browser/assets/js/video/playback.js");
+  const ctx = createCtx({path: "Videos/cleared.mkv"});
+  const exits = [];
+  ctx.activeQueueItem = function () {
+    return null;
+  };
+  ctx.state.activeQueueIndex = -1;
+  ctx.exitToEmbeddedPlaybackLayout = function () {
+    exits.push("embedded");
+  };
+  initPlayback(ctx);
+
+  await ctx.playbackApi.syncForActiveItem();
+
+  assert.deepEqual(exits, ["embedded"]);
+  assert.deepEqual(ctx._lastPlaceholder, {
+    title: "No video selected",
+    meta: "Queue a video to start compatibility playback.",
+  });
+});
+
 test("playback navigation stops the previous path before creating the next session", async () => {
   const {initPlayback} = await importModuleFromWorkspace("dropbox_browser/assets/js/video/playback.js");
   const alpha = {path: "Videos/alpha.mkv"};

@@ -276,6 +276,10 @@ Full-window mode has two layers: the generic bottom-panel controller owns the
 page-shell full-page state, while video controls own the focused playback layout
 that hides the library and playlist panes.
 
+The shared panel's explicit full-window preference is stored separately under
+`bottom-panel-full-window`. Restoring that preference restores the page shell only;
+it does not restore the video-focused `video-full-window` layout.
+
 ### Entry and Context
 
 `video.js` builds a shared `ctx` object:
@@ -386,7 +390,7 @@ Playback layout is separate from HLS/session playback mode. Three layouts:
 
 | Field | Type | Default | Persistence |
 |-------|------|---------|-------------|
-| `fullWindowActive` | boolean | `false` | session memory only; oversized saved panel heights may enter it for the current session |
+| `fullWindowActive` | boolean | `false` | session memory only; never restored from shared panel state |
 | `bottomPanelFullWindowOwned` | boolean | `false` | session memory only; whether video entered the shared bottom-panel full-page state |
 | `preferredExpandedMode` | `'fullscreen'` \| `'full-window'` | `'fullscreen'` | session memory only |
 

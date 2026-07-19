@@ -8,6 +8,7 @@
   var defaultHeight = 240;
   var minHeight = 42;
   var normalPanelMaxHeightOffset = 80;
+  var fullWindowSettingKey = 'bottom-panel-full-window';
   var currentHeight = defaultHeight;
   var preferredHeight = defaultHeight;
   var fullWindowActive = false;
@@ -46,10 +47,11 @@
     return clamped;
   }
 
-  function clearLegacyFullWindowSetting() {
-    try {
-      localStorage.removeItem('dropbox-browser.bottom-panel-full-window');
-    } catch (e) {}
+  function shouldPersistFullWindowState(source) {
+    // Video-focused full window and automatic overflow recovery are transient
+    // layout changes. Only explicit shared-panel actions become the user's
+    // persisted panel preference.
+    return source !== 'video' && source !== 'restore' && source !== 'restore-overflow' && source !== 'resize-overflow';
   }
 
   function getHeight() {
@@ -138,6 +140,9 @@
       }
     }
     fullWindowActive = true;
+    if (shouldPersistFullWindowState(opts.source || 'api')) {
+      Settings.set(fullWindowSettingKey, true);
+    }
     applyFullWindowShellClass(true);
     setResizerInteractionEnabled(false);
     applyFullWindowHeight();
@@ -148,6 +153,7 @@
 
   function exitFullWindow(options) {
     var opts = options || {};
+    var source = opts.source || 'api';
     var restore = Number.isFinite(Number(opts.restoreHeight))
       ? Number(opts.restoreHeight)
       : heightBeforeFullWindow;
@@ -158,8 +164,11 @@
     var result = Number.isFinite(restore) && restore > 0
       ? applyHeight(restore)
       : applyHeight(preferredHeight);
+    if (shouldPersistFullWindowState(source)) {
+      Settings.set(fullWindowSettingKey, false);
+    }
     syncToolbarButtons();
-    emitFullWindowChange(opts.source || 'api');
+    emitFullWindowChange(source);
     return result;
   }
 
@@ -190,11 +199,14 @@
   }
 
   preferredHeight = Math.max(minHeight, parseHeight(Settings.get('log-height', defaultHeight)));
-  clearLegacyFullWindowSetting();
+  var persistedFullWindow = Settings.get(fullWindowSettingKey, false) === true;
   applyHeight(preferredHeight, false);
   syncToolbarButtons();
-  if (preferredHeight > maxHeight()) {
-    enterFullWindow({source: 'restore', savedHeight: preferredHeight});
+  if (persistedFullWindow || preferredHeight > maxHeight()) {
+    enterFullWindow({
+      source: persistedFullWindow ? 'restore' : 'restore-overflow',
+      savedHeight: preferredHeight,
+    });
   }
 
   function startResize(ev) {

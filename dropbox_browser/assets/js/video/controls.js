@@ -560,15 +560,6 @@ function handleBottomPanelFullWindowChange(event) {
   restoreShellPaneLayoutAfterFullWindow();
 }
 
-function syncVideoFullWindowWithBottomPanel() {
-  var api = logPanelApi();
-  if (!ctx.state.paneActive || !api || typeof api.isFullWindowActive !== 'function') return;
-  if (api.isFullWindowActive()) {
-    ctx.state.bottomPanelFullWindowOwned = true;
-    applyFullWindowLayoutClasses(true);
-  }
-}
-
 async function exitNativeFullscreenIfNeeded() {
   var fullscreenHost = ctx.fullscreenHostElement();
   if (
@@ -720,7 +711,6 @@ async function toggleFullWindowMode() {
   ctx.enterPreferredExpandedMode = enterPreferredExpandedMode;
   ctx.exitToEmbeddedPlaybackLayout = exitToEmbeddedPlaybackLayout;
   ctx.toggleFullWindowMode = toggleFullWindowMode;
-  ctx.syncVideoFullWindowWithBottomPanel = syncVideoFullWindowWithBottomPanel;
 
   if (ctx.els.playbackSurfaceEl) {
     ctx.els.playbackSurfaceEl.addEventListener('mousemove', function (event) {

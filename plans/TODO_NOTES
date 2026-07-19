@@ -1,4 +1,7 @@
-recently played: include playlist in entry, resume state at playlist entry when selecting
+TODO FIX:
+	playlist area, persisted size restore - odd behaviour
+		snaps to restored size (?) on initial drag
+		not correct size initially
 
 plans/2026-07-05/PLAN_VIDEO_SUBTITLE_STYLING.md
 
