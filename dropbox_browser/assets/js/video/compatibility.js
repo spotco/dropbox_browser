@@ -18,6 +18,7 @@ import {
   COMPATIBILITY_START_BUFFER_FRAGMENTS,
   COMPATIBILITY_SUBTITLE_WAIT_META,
 } from './constants.js';
+import {setPlaylistPlaybackStatus} from '../media-library/shared.js';
 
 export function initCompatibility(ctx) {
 function clearCompatibilitySessionStatusPoll() {
@@ -1718,7 +1719,7 @@ async function restartCompatibilityAt(targetSeconds, reason, options) {
         level: 'info',
         message: 'Compatibility playback playing',
       });
-      ctx.setStatus('Playing remote video through HLS compatibility playback.');
+      setPlaylistPlaybackStatus(ctx, ctx.activeQueueItem());
     });
     ctx.els.videoEl.addEventListener('error', function () {
       var active = ctx.activeQueueItem();

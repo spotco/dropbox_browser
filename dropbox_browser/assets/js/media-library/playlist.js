@@ -566,7 +566,6 @@ export function initPlaylist(ctx) {
     if (!persistedPlaylist) {
       loadFallbackRecent(record);
       ctx.playbackApi.playPlaylistIndex(0);
-      ctx.setStatus('Playing "' + (record.item.filename || record.item.display_name) + '" from recent playback in a new playlist.');
       return true;
     }
     loadPlaylistForRecent(persistedPlaylist);
@@ -578,7 +577,6 @@ export function initPlaylist(ctx) {
       return true;
     }
     ctx.playbackApi.playPlaylistIndex(pathIndex);
-    ctx.setStatus('Playing "' + (record.item.filename || record.item.display_name) + '" from playlist "' + persistedPlaylist.name + '".');
     return true;
   }
 

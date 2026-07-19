@@ -1,4 +1,4 @@
-import {formatPlaybackTime} from '../media-library/shared.js';
+import {formatPlaybackTime, setPlaylistPlaybackStatus} from '../media-library/shared.js';
 import {createMetadataController} from './metadata.js';
 import {
   ensureShuffleState,
@@ -368,6 +368,7 @@ export function initPlayback(ctx) {
     metadata.resetNowPlayingForSong(song);
     setPlaybackStatus('');
     setPlayPauseVisualState(true);
+    setPlaylistPlaybackStatus(ctx, song);
     state.metadataLoadedRemotePath = null;
     restoreVolume();
     loadSongIntoAudio(song, false);
@@ -541,8 +542,10 @@ export function initPlayback(ctx) {
       syncCurrentTimeDisplay();
     });
     els.audio.addEventListener('playing', function () {
+      var song = currentSong();
       resetPlaybackLoadRetries(currentSong() && currentSong().remote_path);
       metadata.maybeStartCurrentSongMetadataLoad();
+      if (song) setPlaylistPlaybackStatus(ctx, song);
     });
     els.audio.addEventListener('pause', function () {
       setPlayPauseVisualState(false);

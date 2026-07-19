@@ -8,6 +8,7 @@ import {
   ensureShuffleState,
   rebuildShuffleSequence,
 } from '../music/shuffle-helpers.js';
+import {setPlaylistPlaybackStatus} from '../media-library/shared.js';
 
 export function initMediaLibraryBridge(ctx) {
   async function loadPlaybackStatus() {
@@ -119,6 +120,7 @@ export function initMediaLibraryBridge(ctx) {
     if (ctx.playlistApi && typeof ctx.playlistApi.renderPlaylist === 'function') {
       ctx.playlistApi.renderPlaylist();
     }
+    setPlaylistPlaybackStatus(ctx, ctx.state.playlist[index]);
     if (ctx.playbackApi && typeof ctx.playbackApi.syncForActiveItem === 'function') {
       void ctx.playbackApi.syncForActiveItem();
     }
