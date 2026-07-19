@@ -84,7 +84,8 @@ Rules:
 - Music player endpoints and audio filter wrappers:
   `dropbox_browser/music.py`.
 - Shared library/playlist client (tree, playlist store, layout, media-kind
-  labels): `dropbox_browser/assets/js/media-library/` +
+  labels, persisted Recent history, Recent modal, and restoration):
+  `dropbox_browser/assets/js/media-library/` +
   `assets/css/media-library.css`.
 - Generic bottom-panel shell state, drag resizing, full-page/minimize controls:
   `dropbox_browser/assets/js/log.js`, `assets/app.css`, and the shared page

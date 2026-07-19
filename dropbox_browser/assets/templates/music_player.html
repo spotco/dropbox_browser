@@ -23,7 +23,8 @@
           <h2 id="music-playlist-title">Active Playlist:</h2>
           <span id="music-active-playlist-name" class="music-active-playlist-name" data-default-name="New Playlist">New Playlist</span>
         </div>
-        <div class="music-playlist-toolbar-group music-playlist-toolbar-actions" role="group" aria-label="Playlist import and export">
+        <div class="music-playlist-toolbar-group music-playlist-toolbar-actions" role="group" aria-label="Playlist recents, import and export">
+          <button type="button" id="music-playlist-recent" aria-label="Show recent music playback">Recent</button>
           <button type="button" id="music-playlist-import">Import</button>
           <button type="button" id="music-playlist-export">Export</button>
         </div>
@@ -129,6 +130,29 @@
             <button type="button" id="music-playlist-load-new">New Playlist</button>
             <button type="button" id="music-playlist-load-cancel">Cancel</button>
             <button type="button" id="music-playlist-load-confirm">OK</button>
+          </div>
+        </div>
+      </div>
+      <div id="music-playlist-recent-dialog" class="music-playlist-modal hidden" role="dialog" aria-modal="true" aria-labelledby="music-playlist-recent-title" hidden>
+        <div class="music-playlist-modal-card music-playlist-recent-card">
+          <div class="music-playlist-modal-header">
+            <h3 id="music-playlist-recent-title">Recent Music</h3>
+          </div>
+          <div class="music-playlist-modal-body">
+            <div class="music-playlist-recent-table" role="table" aria-label="Recent music playback">
+              <div class="music-playlist-row music-playlist-heading music-playlist-recent-heading" role="row">
+                <button type="button" class="music-playlist-sort-button" data-recent-sort-key="played_at" aria-pressed="true">Date/Time</button>
+                <button type="button" class="music-playlist-sort-button" data-recent-sort-key="filename" aria-pressed="false">File Name</button>
+                <button type="button" class="music-playlist-sort-button" data-recent-sort-key="playlist_name" aria-pressed="false">Playlist Name</button>
+              </div>
+              <div id="music-playlist-recent-list" class="music-playlist-recent-list" role="rowgroup" tabindex="0">
+                <div class="music-empty-state">No recent playback.</div>
+              </div>
+            </div>
+          </div>
+          <div class="music-playlist-modal-actions">
+            <button type="button" id="music-playlist-recent-cancel">Cancel</button>
+            <button type="button" id="music-playlist-recent-confirm" disabled>OK</button>
           </div>
         </div>
       </div>

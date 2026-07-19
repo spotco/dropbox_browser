@@ -3,7 +3,8 @@ import {formatMediaItemCount, mediaKindPresentation} from './media-kind.js';
 import {
   DEFAULT_PLAYLIST_NAME,
   parseM3uPlaylistText,
-  playlistNameFromFilename
+  playlistNameFromFilename,
+  playlistAbsolutePathKey
 } from './playlist-store.js';
 
 function copySelectedRemotePathMap(selectedRemotePaths) {
@@ -179,6 +180,24 @@ export function normalizePlaylistLoadFilter(filterText) {
   return String(filterText || '').trim();
 }
 
+export function nextRecentSort(currentSortKey, currentSortDirection, requestedSortKey) {
+  var key = requestedSortKey === 'filename' || requestedSortKey === 'playlist_name'
+    ? requestedSortKey
+    : 'played_at';
+  if (key === currentSortKey) {
+    return {key: key, direction: currentSortDirection === 'desc' ? 'asc' : 'desc'};
+  }
+  return {key: key, direction: key === 'played_at' ? 'desc' : 'asc'};
+}
+
+export function recentRestorationDecision(record, persistedPlaylist) {
+  var targetKey = playlistAbsolutePathKey(record && record.item);
+  if (!persistedPlaylist) return 'fallback';
+  return (persistedPlaylist.songs || []).some(function (song) {
+    return targetKey && playlistAbsolutePathKey(song) === targetKey;
+  }) ? 'play-saved' : 'load-missing';
+}
+
 export function playlistMatchesLoadFilter(playlist, filterText) {
   var normalizedFilter = normalizePlaylistLoadFilter(filterText).toLocaleLowerCase();
   var playlistName = playlist && playlist.name ? playlist.name : '';
@@ -267,10 +286,16 @@ export function initPlaylist(ctx) {
     hidePlaylistLoadContextMenu();
   }
 
+  function closeRecentDialog() {
+    setPlaylistModalVisible(els.recentDialog, false);
+    state.selectedRecentId = null;
+  }
+
   function closePlaylistDialogs() {
     closeRenameDialog();
     closeOverwriteDialog();
     closeLoadDialog();
+    closeRecentDialog();
   }
 
   function hidePlaylistSaveToast() {
@@ -359,6 +384,206 @@ export function initPlaylist(ctx) {
       Settings.get(state.playlistLoadFilterSettingKey, state.playlistLoadFilterText)
     );
     if (els.playlistLoadFilterInput) els.playlistLoadFilterInput.value = state.playlistLoadFilterText;
+  }
+
+  function recentSortLabel(sortKey) {
+    var baseLabel = sortKey === 'filename' ? 'File Name' : (sortKey === 'playlist_name' ? 'Playlist Name' : 'Date/Time');
+    if (state.recentSortKey !== sortKey) return baseLabel;
+    return baseLabel + (state.recentSortDirection === 'desc' ? ' ↓' : ' ↑');
+  }
+
+  function persistRecentSort() {
+    if (typeof Settings === 'undefined' || !Settings || typeof Settings.set !== 'function') return;
+    Settings.set(state.recentSortSettingKey, {
+      key: state.recentSortKey,
+      direction: state.recentSortDirection
+    });
+  }
+
+  function restoreRecentSort() {
+    var saved = {};
+    var restoredKey;
+    var restoredDirection;
+    if (typeof Settings !== 'undefined' && Settings && typeof Settings.get === 'function') {
+      saved = Settings.get(state.recentSortSettingKey, {});
+    }
+    restoredKey = saved && (saved.key === 'filename' || saved.key === 'playlist_name') ? saved.key : 'played_at';
+    restoredDirection = saved && (saved.direction === 'asc' || saved.direction === 'desc')
+      ? saved.direction
+      : (restoredKey === 'played_at' ? 'desc' : 'asc');
+    state.recentSortKey = restoredKey;
+    state.recentSortDirection = restoredDirection;
+  }
+
+  function recentItems() {
+    if (!ctx.recentApi || typeof ctx.recentApi.list !== 'function') return [];
+    return ctx.recentApi.list(state.recentSortKey, state.recentSortDirection);
+  }
+
+  function selectedRecentItem() {
+    var selectedId = Number(state.selectedRecentId);
+    var items = recentItems();
+    for (var i = 0; i < items.length; i += 1) {
+      if (Number(items[i].id) === selectedId) return items[i];
+    }
+    return null;
+  }
+
+  function updateRecentSortButtons() {
+    if (!els.recentSortButtons) return;
+    Array.prototype.forEach.call(els.recentSortButtons, function (button) {
+      var key = button.getAttribute('data-recent-sort-key') || 'played_at';
+      button.setAttribute('aria-pressed', state.recentSortKey === key ? 'true' : 'false');
+      button.textContent = recentSortLabel(key);
+    });
+  }
+
+  function recentPlayedTime(record) {
+    var timestamp = Number(record && record.played_at || 0);
+    return timestamp > 0 ? formatShortDateTime(timestamp / 1000) : '--';
+  }
+
+  function renderRecentList() {
+    var items;
+    if (!els.recentListEl) return;
+    updateRecentSortButtons();
+    items = recentItems();
+    els.recentListEl.textContent = '';
+    if (!items.length) {
+      var empty = document.createElement('div');
+      empty.className = 'music-empty-state';
+      empty.textContent = 'No recent playback.';
+      els.recentListEl.appendChild(empty);
+      if (els.recentConfirmButton) els.recentConfirmButton.disabled = true;
+      return;
+    }
+    if (!items.some(function (item) { return Number(item.id) === Number(state.selectedRecentId); })) {
+      state.selectedRecentId = items[0].id;
+    }
+    items.forEach(function (record) {
+      var row = document.createElement('div');
+      var timeCell = document.createElement('div');
+      var fileCell = document.createElement('div');
+      var playlistCell = document.createElement('div');
+      var fileName = record.item && (record.item.filename || record.item.display_name) || '';
+      var filePath = record.item && (record.item.stream_path || record.item.rel_path || record.item.remote_path) || '';
+      var isSelected = Number(record.id) === Number(state.selectedRecentId);
+      row.className = 'music-playlist-row music-playlist-recent-entry';
+      row.setAttribute('role', 'row');
+      row.setAttribute('tabindex', '0');
+      row.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+      row.dataset.recentId = String(record.id);
+      if (isSelected) row.classList.add('selected');
+      timeCell.className = 'music-playlist-recent-time';
+      timeCell.setAttribute('role', 'cell');
+      timeCell.textContent = recentPlayedTime(record);
+      fileCell.setAttribute('role', 'cell');
+      var filePrimary = document.createElement('div');
+      filePrimary.className = 'music-playlist-recent-primary';
+      filePrimary.textContent = fileName;
+      var fileSecondary = document.createElement('div');
+      fileSecondary.className = 'music-playlist-recent-secondary';
+      fileSecondary.textContent = filePath;
+      fileCell.appendChild(filePrimary);
+      fileCell.appendChild(fileSecondary);
+      playlistCell.setAttribute('role', 'cell');
+      playlistCell.className = 'music-playlist-recent-primary';
+      playlistCell.textContent = record.playlist_name || '';
+      row.appendChild(timeCell);
+      row.appendChild(fileCell);
+      row.appendChild(playlistCell);
+      row.addEventListener('click', function () {
+        state.selectedRecentId = record.id;
+        renderRecentList();
+      });
+      row.addEventListener('dblclick', function () {
+        state.selectedRecentId = record.id;
+        confirmRecentSelection();
+      });
+      row.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          state.selectedRecentId = record.id;
+          confirmRecentSelection();
+        } else if (ev.key === 'Escape') {
+          ev.preventDefault();
+          closeRecentDialog();
+        }
+      });
+      els.recentListEl.appendChild(row);
+    });
+    if (els.recentConfirmButton) els.recentConfirmButton.disabled = !selectedRecentItem();
+  }
+
+  function openRecentDialog() {
+    closeLoadDialog();
+    closeRenameDialog();
+    closeOverwriteDialog();
+    restoreRecentSort();
+    state.selectedRecentId = null;
+    renderRecentList();
+    setPlaylistModalVisible(els.recentDialog, true);
+    if (els.recentListEl && typeof els.recentListEl.focus === 'function') {
+      window.setTimeout(function () { els.recentListEl.focus(); }, 0);
+    }
+  }
+
+  function loadPlaylistForRecent(persistedPlaylist) {
+    state.playlistStore.replaceActivePlaylist(persistedPlaylist.clone());
+    ctx.syncPlaylistState();
+    markActivePlaylistSaved(persistedPlaylist.name);
+    resetPlaylistSelections();
+    resetShuffleBag();
+    state.currentPlaylistIndex = -1;
+    updateActivePlaylistName();
+    renderPlaylist();
+    renderPlaylistLoadList();
+  }
+
+  function loadFallbackRecent(record) {
+    state.playlistStore.replaceActivePlaylist({
+      name: DEFAULT_PLAYLIST_NAME,
+      songs: [record.item]
+    });
+    ctx.syncPlaylistState();
+    state.activePlaylistSavedName = null;
+    state.activePlaylistSavedSignature = activePlaylistSignature();
+    state.activePlaylistDirty = false;
+    resetPlaylistSelections();
+    resetShuffleBag();
+    state.currentPlaylistIndex = -1;
+    updateActivePlaylistName();
+    renderPlaylist();
+    renderPlaylistLoadList();
+  }
+
+  function restoreRecentRecord(record) {
+    var persistedPlaylist;
+    var pathIndex;
+    if (!record) return false;
+    closeRecentDialog();
+    persistedPlaylist = state.playlistStore.findPersistedPlaylistByName(record.playlist_name);
+    if (!persistedPlaylist) {
+      loadFallbackRecent(record);
+      ctx.playbackApi.playPlaylistIndex(0);
+      ctx.setStatus('Playing "' + (record.item.filename || record.item.display_name) + '" from recent playback in a new playlist.');
+      return true;
+    }
+    loadPlaylistForRecent(persistedPlaylist);
+    pathIndex = playlistIndexByAbsolutePath(record.item);
+    if (pathIndex === -1) {
+      ctx.playbackApi.clearCurrentSong();
+      renderPlaylist();
+      ctx.setStatus('Loaded playlist "' + persistedPlaylist.name + '", but the recent file is no longer in it.');
+      return true;
+    }
+    ctx.playbackApi.playPlaylistIndex(pathIndex);
+    ctx.setStatus('Playing "' + (record.item.filename || record.item.display_name) + '" from playlist "' + persistedPlaylist.name + '".');
+    return true;
+  }
+
+  function confirmRecentSelection() {
+    return restoreRecentRecord(selectedRecentItem());
   }
 
   function filteredPlaylistLoadItems() {
@@ -845,8 +1070,19 @@ export function initPlaylist(ctx) {
   }
 
   function playlistIndexByRemotePath(remotePath) {
+    var remotePathKey = playlistAbsolutePathKey({remote_path: remotePath, stream_path: remotePath});
     for (var i = 0; i < state.playlist.length; i += 1) {
       if (state.playlist[i].remote_path === remotePath) return i;
+      if (remotePathKey && playlistAbsolutePathKey(state.playlist[i]) === remotePathKey) return i;
+    }
+    return -1;
+  }
+
+  function playlistIndexByAbsolutePath(song) {
+    var pathKey = playlistAbsolutePathKey(song);
+    if (!pathKey) return -1;
+    for (var i = 0; i < state.playlist.length; i += 1) {
+      if (playlistAbsolutePathKey(state.playlist[i]) === pathKey) return i;
     }
     return -1;
   }
@@ -1391,18 +1627,23 @@ export function initPlaylist(ctx) {
     importPlaylistFiles: importPlaylistFiles,
     loadPlaylistByName: loadPlaylistByName,
     openLoadDialog: openLoadDialog,
+    openRecentDialog: openRecentDialog,
     openRenameDialog: openRenameDialog,
     openPlaylistContextMenu: openPlaylistContextMenu,
     paintPlaylist: paintPlaylist,
     paintPlaylistSelection: paintPlaylistSelection,
     performPlaylistSelectAll: performPlaylistSelectAll,
     playlistIndexByRemotePath: playlistIndexByRemotePath,
+    playlistIndexByAbsolutePath: playlistIndexByAbsolutePath,
     playlistSelectedCount: playlistSelectedCount,
     playlistStateSignature: activePlaylistSignature,
     renderPlaylistLoadList: renderPlaylistLoadList,
     removeSelectedPlaylistSongs: removeSelectedPlaylistSongs,
     renderPlaylist: renderPlaylist,
     renderPlaylistSelection: renderPlaylistSelection,
+    closeRecentDialog: closeRecentDialog,
+    confirmRecentSelection: confirmRecentSelection,
+    renderRecentList: renderRecentList,
     resetShuffleBag: resetShuffleBag,
     savePlaylist: savePlaylist,
     selectAllPlaylistSongs: selectAllPlaylistSongs,
@@ -1414,6 +1655,7 @@ export function initPlaylist(ctx) {
 
   restorePlaylistLoadSort();
   restorePlaylistLoadFilter();
+  restoreRecentSort();
   updatePlaylistMediaLabels();
   state.activePlaylistSavedSignature = activePlaylistSignature();
   syncActivePlaylistDirtyState();
@@ -1448,6 +1690,32 @@ export function initPlaylist(ctx) {
   if (els.playlistLoadButton) {
     els.playlistLoadButton.addEventListener('click', function () {
       openLoadDialog();
+    });
+  }
+  if (els.recentButton) {
+    els.recentButton.addEventListener('click', function () {
+      openRecentDialog();
+    });
+  }
+  if (els.recentCancelButton) {
+    els.recentCancelButton.addEventListener('click', closeRecentDialog);
+  }
+  if (els.recentConfirmButton) {
+    els.recentConfirmButton.addEventListener('click', confirmRecentSelection);
+  }
+  if (els.recentSortButtons) {
+    Array.prototype.forEach.call(els.recentSortButtons, function (button) {
+      button.addEventListener('click', function () {
+        var nextSort = nextRecentSort(
+          state.recentSortKey,
+          state.recentSortDirection,
+          button.getAttribute('data-recent-sort-key')
+        );
+        state.recentSortKey = nextSort.key;
+        state.recentSortDirection = nextSort.direction;
+        persistRecentSort();
+        renderRecentList();
+      });
     });
   }
   if (els.playlistRenameCancelButton) {

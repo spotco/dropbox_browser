@@ -6,7 +6,8 @@ playing items through a local HLS compatibility session. Playback always uses
 ffmpeg-generated HLS; the browser does not stream remote files directly with
 native `<video src>`.
 
-**Shared library/playlist** (tree UI, save/load/import/export, pane layout, and
+**Shared library/playlist** (tree UI, save/load/import/export, persisted Recent
+history and restoration, pane layout, and
 music/video terminology) lives under `dropbox_browser/assets/js/media-library/`
 and `assets/css/media-library.css`, also used by the music player. The generic
 bottom-panel shell controller (drag resize, full-page mode, and minimize) lives
@@ -361,6 +362,7 @@ required:
 | `ctx.compatibilityApi.restartAt(seconds, reason)` | `compatibility.js` | Scrub, audio/subtitle track changes, recovery |
 | `ctx.compatibilityApi.stopSession()` | `compatibility.js` | Pane deactivate, beforeunload, item changes |
 | `ctx.playbackApi.syncForActiveItem()` | `playback.js` | Playlist/queue changes, pane activation |
+| `ctx.recentApi.recordPlaybackStart(...)` | `recent-store.js` + media-library bridge | Records selected video queue items in the independent video Recent history |
 | `ctx.playNextFromPlaylist` / `playPreviousFromPlaylist` | `media-library-bridge.js` | Transport next/prev with shuffle+loop |
 | `ctx.subtitlesApi.applyForSeek(...)` | `subtitles.js` | Post-seek subtitle remount |
 | `ctx.paneApi.syncPaneMode(mode)` | `pane.js` | Bottom pane mode changes |
