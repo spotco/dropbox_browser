@@ -58,9 +58,8 @@ import {initPane} from './video/pane.js';
   var ctx = {
     pane: pane,
     mediaLibraryConfig: {
+      mediaKind: 'videos',
       libraryEndpoint: '/video/endpoints/library',
-      itemNounSingular: 'video',
-      itemNounPlural: 'videos',
       emptyLibraryText: 'Load the current folder to show cached videos.',
       emptyLibraryNoItemsText: 'No supported cached videos found in this folder yet.',
       loadingLibraryText: 'Loading cached video library...',
@@ -151,6 +150,7 @@ import {initPane} from './video/pane.js';
       playlistOverwriteCancelButton: document.getElementById('video-playlist-overwrite-cancel'),
       playlistOverwriteConfirmButton: document.getElementById('video-playlist-overwrite-confirm'),
       playlistLoadDialog: document.getElementById('video-playlist-load-dialog'),
+      playlistLoadTitleEl: document.getElementById('video-playlist-load-title'),
       playlistLoadFilterInput: document.getElementById('video-playlist-load-filter-input'),
       playlistLoadListEl: document.getElementById('video-playlist-load-list'),
       playlistLoadNewButton: document.getElementById('video-playlist-load-new'),

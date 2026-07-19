@@ -420,6 +420,8 @@ test("playlist save, load, rename, overwrite, delete survive reload", async ({ p
   // New playlist, rename to same name, overwrite confirm
   await page.locator("#music-playlist-load").click();
   await expect(page.locator("#music-playlist-load-dialog")).toBeVisible();
+  await expect(page.locator("#music-playlist-load")).toHaveText("Load Playlist: Songs");
+  await expect(page.locator("#music-playlist-load-title")).toHaveText("Load Playlist: Songs");
   await page.locator("#music-playlist-load-new").click();
   // Dirty discard may prompt overwrite-style confirm
   const discardDialog = page.locator("#music-playlist-overwrite-dialog");
@@ -522,6 +524,11 @@ test("playlist m3u import and json export", async ({ page }) => {
       hasText: path.basename(m3uPath, path.extname(m3uPath)),
     }),
   ).toBeVisible({ timeout: 5000 });
+  await expect(
+    page.locator("#music-playlist-load-list .music-playlist-load-entry").filter({
+      hasText: path.basename(m3uPath, path.extname(m3uPath)),
+    }).locator(".music-playlist-load-song-count"),
+  ).toHaveText("2 songs");
 
   // Load imported playlist
   await page
@@ -536,7 +543,7 @@ test("playlist m3u import and json export", async ({ page }) => {
   const downloadPromise = page.waitForEvent("download", { timeout: 10000 });
   await page.locator("#music-playlist-export").click();
   const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe("dropbox-browser-playlists.json");
+  expect(download.suggestedFilename()).toBe("dropbox_browser_music_playlists.json");
   const downloadPath = await download.path();
   expect(downloadPath).toBeTruthy();
   const exported = JSON.parse(fs.readFileSync(downloadPath, "utf8"));

@@ -1479,6 +1479,31 @@ test.afterAll(async () => {
   server = null;
 });
 
+test("video playlist labels and export filename use video terminology", async ({ page }) => {
+  await openVideoPane(page);
+
+  await expect(page.locator("#video-playlist-load")).toHaveText("Load Playlist: Videos");
+  await queueLibraryFile(page, "alpha.mkv");
+  await page.locator("#video-playlist-save").click();
+  await page.locator("#video-playlist-rename-input").fill("Video Export");
+  await page.locator("#video-playlist-rename-confirm").click();
+  await expect(page.locator("#video-active-playlist-name")).toHaveText("Video Export");
+
+  await page.locator("#video-playlist-load").click();
+  await expect(page.locator("#video-playlist-load-dialog")).toBeVisible();
+  await expect(page.locator("#video-playlist-load-title")).toHaveText("Load Playlist: Videos");
+  await expect(
+    page.locator("#video-playlist-load-list .music-playlist-load-entry").filter({hasText: "Video Export"})
+      .locator(".music-playlist-load-song-count"),
+  ).toHaveText("1 video");
+  await page.locator("#video-playlist-load-cancel").click();
+
+  const downloadPromise = page.waitForEvent("download", { timeout: 10000 });
+  await page.locator("#video-playlist-export").click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe("dropbox_browser_videos_playlists.json");
+});
+
 test("video controls navigate the queue, persist loop, and wrap natural end when enabled", async ({ page }) => {
   test.setTimeout(90000);
 

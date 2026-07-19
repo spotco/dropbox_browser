@@ -1,4 +1,5 @@
 import {clearObject, formatShortDateTime, itemCount, plural} from './shared.js';
+import {mediaKindPresentation} from './media-kind.js';
 import {
   compareLibraryNames,
   firstSelectedVisibleNodeId,
@@ -15,13 +16,16 @@ export function initLibrary(ctx) {
   var els = ctx.els;
   var state = ctx.state;
   var cfg = libraryConfig(ctx);
+  var mediaPresentation = mediaKindPresentation(cfg.mediaKind);
   var libraryEndpoint = cfg.libraryEndpoint || '/music/endpoints/library';
-  var itemNounSingular = cfg.itemNounSingular || 'song';
-  var itemNounPlural = cfg.itemNounPlural || 'songs';
-  var emptyLibraryText = cfg.emptyLibraryText || 'Load the current folder to show cached songs.';
+  var itemNounSingular = cfg.itemNounSingular || mediaPresentation.itemNounSingular;
+  var itemNounPlural = cfg.itemNounPlural || mediaPresentation.itemNounPlural;
+  var emptyLibraryText = cfg.emptyLibraryText
+    || ('Load the current folder to show cached ' + itemNounPlural + '.');
   var emptyLibraryNoItemsText = cfg.emptyLibraryNoItemsText
     || ('No supported cached ' + itemNounPlural + ' found in this folder yet.');
-  var loadingLibraryText = cfg.loadingLibraryText || 'Loading cached song library...';
+  var loadingLibraryText = cfg.loadingLibraryText
+    || ('Loading cached ' + itemNounPlural + ' library...');
 
   function updateLoadButtonTimer() {
     var elapsedSeconds = 0;

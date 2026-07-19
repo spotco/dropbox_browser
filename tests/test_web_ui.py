@@ -370,10 +370,10 @@ class WebUiTests(AppTestCase):
         self.assertIn('id="music-playlist-import"', html)
         self.assertIn('id="music-playlist-export"', html)
         self.assertIn('id="music-playlist-controls"', html)
-        self.assertIn('id="music-playlist-load">Load Playlist</button>', html)
+        self.assertIn('id="music-playlist-load">Load Playlist: Songs</button>', html)
         self.assertIn('id="music-playlist-rename">Rename Playlist</button>', html)
         self.assertIn(
-            'id="music-playlist-load">Load Playlist</button>\n'
+            'id="music-playlist-load">Load Playlist: Songs</button>\n'
             '          <button type="button" id="music-playlist-rename">Rename Playlist</button>',
             html,
         )
