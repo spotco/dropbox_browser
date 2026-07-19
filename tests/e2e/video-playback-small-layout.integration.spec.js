@@ -520,6 +520,9 @@ test("full-window mode hides library/playlist and stretches stage across the vie
 test("video full-window expands a partial bottom pane and restores it on exit", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await openVideoPane(page);
+  await page.evaluate(() => {
+    localStorage.removeItem("dropbox-browser.bottom-panel-full-window");
+  });
 
   const partialHeight = 260;
   await page.evaluate((height) => {
@@ -543,6 +546,9 @@ test("video full-window expands a partial bottom pane and restores it on exit", 
   await expect(page.locator("body")).toHaveClass(/bottom-panel-full-window-mode/);
   await expect(page.locator("#video-player-pane")).toHaveClass(/video-full-window/);
   await expect(bottomPaneFullWindowButton).toBeDisabled();
+  await expect
+    .poll(async () => page.evaluate(() => localStorage.getItem("dropbox-browser.bottom-panel-full-window")))
+    .toBe(null);
 
   await videoFullWindowButton.click();
   await expect(page.locator("body")).not.toHaveClass(/bottom-panel-full-window-mode/);
@@ -551,4 +557,7 @@ test("video full-window expands a partial bottom pane and restores it on exit", 
   await expect
     .poll(async () => page.locator("#log-panel").evaluate((node) => Math.round(node.getBoundingClientRect().height)))
     .toBe(partialHeight);
+  await expect
+    .poll(async () => page.evaluate(() => localStorage.getItem("dropbox-browser.bottom-panel-full-window")))
+    .toBe(null);
 });

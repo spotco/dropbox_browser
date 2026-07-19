@@ -1,6 +1,14 @@
 export function initPlayback(ctx) {
+function exitExpandedLayoutWhenPlaybackIsUnavailable() {
+  if (typeof ctx.activeQueueItem !== 'function' || ctx.activeQueueItem()) return;
+  if (typeof ctx.exitToEmbeddedPlaybackLayout === 'function') {
+    void ctx.exitToEmbeddedPlaybackLayout();
+  }
+}
+
 function resetPlaybackSurface() {
   if (!ctx.els.videoEl) return;
+  exitExpandedLayoutWhenPlaybackIsUnavailable();
   ctx.clearCompatibilityRecoveryTimer();
   ctx.clearCompatibilitySessionStatusPoll();
   ctx.clearCompatibilitySessionProgressReport();

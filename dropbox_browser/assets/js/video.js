@@ -481,9 +481,6 @@ import {initPane} from './video/pane.js';
     ctx.paneApi.syncPaneMode(ev.detail.mode);
     if (ev.detail.mode === 'video-player') {
       restoreVideoPaneLayout();
-      if (typeof ctx.syncVideoFullWindowWithBottomPanel === 'function') {
-        ctx.syncVideoFullWindowWithBottomPanel();
-      }
     }
   });
 
@@ -531,8 +528,5 @@ import {initPane} from './video/pane.js';
   });
 
   ctx.paneApi.syncPaneMode(ctx.readVideoSetting('bottom-pane-mode', 'server-log'));
-  if (typeof ctx.syncVideoFullWindowWithBottomPanel === 'function') {
-    ctx.syncVideoFullWindowWithBottomPanel();
-  }
   restoreVideoPaneLayout();
 }());
