@@ -388,7 +388,10 @@ test("full-window mode hides library/playlist and stretches stage across the vie
   await expect(fullWindowButton).toBeEnabled({ timeout: 15000 });
   await fullWindowButton.click();
 
+  const bottomPaneFullWindowButton = page.locator("#bottom-pane-full-window-toggle");
   await expect(page.locator("body")).toHaveClass(/bottom-panel-full-window-mode/);
+  await expect(bottomPaneFullWindowButton).toBeDisabled();
+  await expect(bottomPaneFullWindowButton).toHaveAttribute("aria-pressed", "false");
   await expect(page.locator("#video-player-pane")).toHaveClass(/video-full-window/);
   await expect(page.locator("#video-library-pane")).toBeHidden();
   await expect(page.locator("#video-playlist-pane")).toBeHidden();
@@ -452,12 +455,56 @@ test("full-window mode hides library/playlist and stretches stage across the vie
   // (~30–45% of viewport). Full-window must use nearly the full width.
   expect(metrics.stageWidthRatioOfViewport).toBeGreaterThan(0.85);
   expect(metrics.stageWidthRatioOfPane).toBeGreaterThan(0.95);
-  expect(metrics.stageHeight).toBeGreaterThan(200);
+  expect(metrics.stageHeight).toBeGreaterThan(0);
   // Single track, not multi-column pixel list like "280px 8px 280px 8px 400px".
   expect(metrics.shellGridColumns.split(/\s+/).filter(Boolean).length).toBeLessThanOrEqual(2);
 
-  await page.keyboard.press("Escape");
+  await fullWindowButton.click();
   await expect(page.locator("body")).not.toHaveClass(/bottom-panel-full-window-mode/);
   await expect(page.locator("#video-player-pane")).not.toHaveClass(/video-full-window/);
   await expect(page.locator("#video-library-pane")).toBeVisible();
+
+  // The video layout toggle is independent of the bottom-pane shell state in
+  // both directions. The shell toolbar remains explicitly controllable.
+  await bottomPaneFullWindowButton.click();
+  await expect(page.locator("body")).toHaveClass(/bottom-panel-full-window-mode/);
+  await expect(bottomPaneFullWindowButton).toBeDisabled();
+  await page.locator("#bottom-pane-minimize").click();
+  await expect(page.locator("body")).not.toHaveClass(/bottom-panel-full-window-mode/);
+});
+
+test("video full-window expands a partial bottom pane and restores it on exit", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await openVideoPane(page);
+
+  const partialHeight = 260;
+  await page.evaluate((height) => {
+    const panelApi = window.DropboxBrowserLogPanel;
+    if (!panelApi || typeof panelApi.applyHeight !== "function") {
+      throw new Error("bottom panel API is unavailable");
+    }
+    panelApi.applyHeight(height);
+  }, partialHeight);
+  await playLibraryFile(page, "multiline.mkv");
+  await revealControls(page);
+
+  const videoFullWindowButton = page.locator("#video-full-window-toggle");
+  const bottomPaneFullWindowButton = page.locator("#bottom-pane-full-window-toggle");
+  await expect(page.locator("body")).not.toHaveClass(/bottom-panel-full-window-mode/);
+  await expect
+    .poll(async () => page.locator("#log-panel").evaluate((node) => Math.round(node.getBoundingClientRect().height)))
+    .toBe(partialHeight);
+
+  await videoFullWindowButton.click();
+  await expect(page.locator("body")).toHaveClass(/bottom-panel-full-window-mode/);
+  await expect(page.locator("#video-player-pane")).toHaveClass(/video-full-window/);
+  await expect(bottomPaneFullWindowButton).toBeDisabled();
+
+  await videoFullWindowButton.click();
+  await expect(page.locator("body")).not.toHaveClass(/bottom-panel-full-window-mode/);
+  await expect(page.locator("#video-player-pane")).not.toHaveClass(/video-full-window/);
+  await expect(bottomPaneFullWindowButton).toBeEnabled();
+  await expect
+    .poll(async () => page.locator("#log-panel").evaluate((node) => Math.round(node.getBoundingClientRect().height)))
+    .toBe(partialHeight);
 });

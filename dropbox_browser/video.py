@@ -2971,6 +2971,7 @@ def video_library_payload(app: Any, *, rel_path: str) -> dict[str, object]:
         enrich_file=video_file_enricher(
             compatibility_expected_extensions=COMPATIBILITY_EXPECTED_EXTENSIONS,
         ),
+        enrichment_mode="video",
     )
 
 

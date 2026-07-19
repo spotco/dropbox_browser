@@ -183,6 +183,11 @@ the smallest fix, rerun that test, then run the relevant group. See
 ## Git Notes
 
 - Remote: `https://github.com/spotco/dropbox_browser`
+- GitHub publishing uses the local git workflow only: after an explicit human
+  request, commit the intended files and push with `git push origin <branch>`
+  (for example, `git push origin master` or `git push origin dev-ui-fixes`).
+  Do not require GitHub CLI, create a PR, or use another GitHub publishing
+  flow unless the human explicitly asks for it.
 - For an explicit request to commit and push:
   1. Check the current branch with `git branch --show-current`.
   2. Inspect `git status --short`.
@@ -197,7 +202,10 @@ the smallest fix, rerun that test, then run the relevant group. See
      different branch or flow.
 - Do not waste time probing `.git/index.lock` unless a git command actually
   fails with an index-lock error. If that specific error happens, confirm there
-  is no live git process and then clear the stale lock before retrying.
+  is no live git process; if no Git process is active and the exact repository
+  lock remains, remove only `<repo>/.git/index.lock` and retry the failed
+  command. Never remove an index lock while another Git process is active, and
+  never delete or recreate the whole `.git` directory.
 - Use the approval-gated push tool call for network pushes.
 - `rclone.exe` is tracked and large. Do not rewrite history or remove it unless
   asked.

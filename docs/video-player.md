@@ -385,12 +385,18 @@ Playback layout is separate from HLS/session playback mode. Three layouts:
 | Field | Type | Default | Persistence |
 |-------|------|---------|-------------|
 | `fullWindowActive` | boolean | `false` | session memory only |
+| `bottomPanelFullWindowOwned` | boolean | `false` | session memory only; whether video entered the shared bottom-panel full-page state |
 | `preferredExpandedMode` | `'fullscreen'` \| `'full-window'` | `'fullscreen'` | session memory only |
-| `savedLogPanelHeight` | number \| `null` | `null` | session memory only; video-focused layout snapshot of the shared panel height |
 
 `preferredExpandedMode` is updated when the user explicitly enters either expanded
 mode via its toolbar button or via double-click from embedded. It is never written
 to `Settings` or `localStorage`.
+
+When video full-window starts from a partial bottom panel, it enters the shared
+bottom-panel full-page state and records ownership in `bottomPanelFullWindowOwned`.
+Exiting video full-window restores that panel state. If the bottom panel was
+already full-page before video entry, video leaves that existing shell state
+unchanged when it exits.
 
 #### Body / shell class strategy
 

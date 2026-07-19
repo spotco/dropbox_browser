@@ -266,4 +266,16 @@ test("music player library grows from staged background cache work", async ({ pa
   expect(callPayload.calls.some((call) => call.target === "dropbox:music/Blue Sky Sessions/Disc 2")).toBe(true);
   expect(callPayload.calls.some((call) => call.target === "dropbox:music/Midnight FM/Instrumentals")).toBe(true);
   expect(callPayload.calls.every((call) => Array.isArray(call.args) && !call.args.some((arg) => String(arg).toLowerCase().includes("rclone.exe")))).toBe(true);
+
+  const callsBeforeCachedReload = callPayload.calls.length;
+  const reloadStartedAt = Date.now();
+  await page.getByRole("button", { name: "Load Current Folder" }).click();
+  await expect(page.getByRole("button", { name: "Load Current Folder" })).toBeEnabled();
+  expect(Date.now() - reloadStartedAt).toBeLessThan(1000);
+  expect(await currentLibraryCounts(page)).toMatchObject({ complete: true, folderCount: 9, songCount: 26 });
+
+  const callsAfterCachedReload = await fetchJson(request, "/__integration/calls");
+  expect(callsAfterCachedReload.calls.length).toBe(callsBeforeCachedReload);
+  const traceAfterCachedReload = await fetchJson(request, "/__integration/trace");
+  expect(traceAfterCachedReload.events.some((event) => event.event === "music_library_poll" && event.snapshot_cache_hit === true)).toBe(true);
 });

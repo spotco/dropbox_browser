@@ -13,13 +13,18 @@ except ImportError:
 
 
 class DirectFilesFolderCache:
+    supports_record_lookup = True
+
     def __init__(self, records: dict[str, dict]) -> None:
         self.records = records
+        self.revision = 0
         self.requests: list[str] = []
+        self.get_calls = 0
         self.page_epoch_calls: list[str] = []
         self.ensure_calls: list[tuple[str, float]] = []
 
     def get(self, remote_path: str) -> dict | None:
+        self.get_calls += 1
         data = self.records.get(remote_path)
         return dict(data) if data is not None else None
 
@@ -36,7 +41,13 @@ class DirectFilesFolderCache:
         self.page_epoch_calls.append(page_key)
         return 1234.5
 
-    def ensure_known_subtree(self, remote_path: str, page_epoch: float) -> dict[str, int | float]:
+    def ensure_known_subtree(
+        self,
+        remote_path: str,
+        page_epoch: float,
+        record_lookup=None,
+        trace_dedup: bool = True,
+    ) -> dict[str, int | float]:
         self.ensure_calls.append((remote_path, page_epoch))
         queued_folder_count = 0
         pending_folder_count = 0
@@ -51,7 +62,7 @@ class DirectFilesFolderCache:
             if current_path in seen:
                 continue
             seen.add(current_path)
-            data = self.records.get(current_path)
+            data = record_lookup(current_path) if record_lookup is not None else self.records.get(current_path)
             if data is None:
                 self.requests.append(current_path)
                 queued_folder_count += 1
@@ -72,6 +83,17 @@ class DirectFilesFolderCache:
             "missing_folder_count": missing_folder_count,
         }
 
+    def advance_revision(self) -> None:
+        self.revision += 1
+
+    def invalidate(self, remote_path: str) -> None:
+        self.records.pop(remote_path, None)
+        self.advance_revision()
+
+    def invalidate_tree(self, remote_path: str) -> list[str]:
+        self.invalidate(remote_path)
+        return [remote_path]
+
 
 class TrapListingCache:
     def get(self, _remote_path: str) -> dict | None:
@@ -79,6 +101,205 @@ class TrapListingCache:
 
 
 class MusicEndpointTests(AppTestCase):
+
+    def _complete_library_cache(self) -> DirectFilesFolderCache:
+        return DirectFilesFolderCache({
+            "dropbox:Music": {
+                "complete": True,
+                "direct_files": [],
+                "direct_folders": [
+                    {
+                        "name": "Album",
+                        "path": "Album",
+                        "remote_path": "dropbox:Music/Album",
+                    },
+                ],
+            },
+            "dropbox:Music/Album": {
+                "complete": True,
+                "direct_files": [
+                    {
+                        "name": "Track.mp3",
+                        "path": "Track.mp3",
+                        "remote_path": "dropbox:Music/Album/Track.mp3",
+                        "size": 10,
+                        "mtime": 1704067200.0,
+                    },
+                ],
+                "direct_folders": [],
+            },
+        })
+
+    def test_music_library_reuses_unchanged_complete_snapshot(self) -> None:
+        rclone = SimulatedRclone()
+        app = self._build_app(rclone, local_root=None, workers=1)
+        app.listing_cache = TrapListingCache()
+        cache = self._complete_library_cache()
+        app.folder_cache = cache
+
+        with TestServer(app) as server:
+            first = server.get_json("/music/endpoints/library?path=Music")
+            reads_after_first = cache.get_calls
+            second = server.get_json("/music/endpoints/library?path=Music")
+
+        diagnostic_keys = {
+            "snapshot_cache_hit",
+            "snapshot_build_count",
+            "recursive_record_read_count",
+            "recursive_traversal_folder_count",
+            "payload_build_elapsed_ms",
+            "snapshot_cache_revision",
+            "snapshot_cache_entry_count",
+        }
+        first_status = {key: value for key, value in first["status"].items() if key not in diagnostic_keys}
+        second_status = {key: value for key, value in second["status"].items() if key not in diagnostic_keys}
+        self.assertEqual({**first, "status": first_status}, {**second, "status": second_status})
+        self.assertEqual(cache.get_calls, reads_after_first)
+        self.assertEqual(first["status"]["snapshot_cache_hit"], False)
+        self.assertEqual(second["status"]["snapshot_cache_hit"], True)
+        self.assertEqual(second["status"]["snapshot_build_count"], 0)
+        self.assertEqual(second["status"]["recursive_record_read_count"], 0)
+        self.assertEqual(rclone.calls, [])
+        events = [event for event in self.read_trace_events() if event.get("event") == "music_library_poll"]
+        self.assertEqual(events[-1]["snapshot_cache_hit"], True)
+        self.assertEqual(events[-1]["snapshot_build_count"], 0)
+
+    def test_music_library_reuses_partial_snapshot_until_revision_advances(self) -> None:
+        rclone = SimulatedRclone()
+        app = self._build_app(rclone, local_root=None, workers=1)
+        app.listing_cache = TrapListingCache()
+        cache = DirectFilesFolderCache({
+            "dropbox:Music": {
+                "complete": True,
+                "direct_files": [],
+                "direct_folders": [
+                    {"name": "Pending", "path": "Pending", "remote_path": "dropbox:Music/Pending"},
+                ],
+            },
+        })
+        app.folder_cache = cache
+
+        with TestServer(app) as server:
+            first = server.get_json("/music/endpoints/library?path=Music")
+            request_count = len(cache.requests)
+            second = server.get_json("/music/endpoints/library?path=Music")
+
+        diagnostic_keys = {
+            "snapshot_cache_hit",
+            "snapshot_build_count",
+            "recursive_record_read_count",
+            "recursive_traversal_folder_count",
+            "payload_build_elapsed_ms",
+            "snapshot_cache_revision",
+            "snapshot_cache_entry_count",
+        }
+        first_status = {key: value for key, value in first["status"].items() if key not in diagnostic_keys}
+        second_status = {key: value for key, value in second["status"].items() if key not in diagnostic_keys}
+        self.assertEqual({**first, "status": first_status}, {**second, "status": second_status})
+        self.assertTrue(second["status"]["pending"])
+        self.assertEqual(second["status"]["pending_folder_count"], 1)
+        self.assertEqual(second["status"]["missing_folder_count"], 1)
+        self.assertEqual(len(cache.requests), request_count)
+        self.assertTrue(second["status"]["snapshot_cache_hit"])
+
+    def test_music_library_revision_advance_rebuilds_snapshot_with_new_rows(self) -> None:
+        rclone = SimulatedRclone()
+        app = self._build_app(rclone, local_root=None, workers=1)
+        app.listing_cache = TrapListingCache()
+        cache = self._complete_library_cache()
+        app.folder_cache = cache
+
+        with TestServer(app) as server:
+            first = server.get_json("/music/endpoints/library?path=Music")
+            cache.records["dropbox:Music"]["direct_files"] = [{
+                "name": "New.wav",
+                "path": "New.wav",
+                "remote_path": "dropbox:Music/New.wav",
+                "size": 12,
+                "mtime": 1704067201.0,
+            }]
+            cache.advance_revision()
+            second = server.get_json("/music/endpoints/library?path=Music")
+
+        self.assertNotIn("New.wav", [song["display_name"] for song in first["songs"]])
+        self.assertIn("New.wav", [song["display_name"] for song in second["songs"]])
+        self.assertFalse(second["status"]["snapshot_cache_hit"])
+        self.assertEqual(second["status"]["snapshot_build_count"], 1)
+
+    def test_music_library_invalidation_revision_misses_direct_tree_and_sync_paths(self) -> None:
+        rclone = SimulatedRclone()
+        app = self._build_app(rclone, local_root=None, workers=1)
+        app.listing_cache = TrapListingCache()
+        cache = self._complete_library_cache()
+        app.folder_cache = cache
+
+        with TestServer(app) as server:
+            server.get_json("/music/endpoints/library?path=Music")
+            cache.invalidate("dropbox:Music/Album")
+            direct = server.get_json("/music/endpoints/library?path=Music")
+            cache.records["dropbox:Music/Album"] = {
+                "complete": True,
+                "direct_files": [],
+                "direct_folders": [],
+            }
+            cache.advance_revision()
+            cache.invalidate_tree("dropbox:Music")
+            cache.records.update(self._complete_library_cache().records)
+            tree = server.get_json("/music/endpoints/library?path=Music")
+            cache.advance_revision()  # Represents DropboxBrowser.invalidate_sync_parents().
+            sync = server.get_json("/music/endpoints/library?path=Music")
+
+        self.assertFalse(direct["status"]["snapshot_cache_hit"])
+        self.assertFalse(tree["status"]["snapshot_cache_hit"])
+        self.assertFalse(sync["status"]["snapshot_cache_hit"])
+
+    def test_music_library_large_tree_second_load_has_constant_snapshot_lookup(self) -> None:
+        records = {
+            "dropbox:Music": {"complete": True, "direct_files": [], "direct_folders": []},
+        }
+        for index in range(1200):
+            remote_path = f"dropbox:Music/Folder {index}"
+            records["dropbox:Music"]["direct_folders"].append({
+                "name": f"Folder {index}",
+                "path": f"Folder {index}",
+                "remote_path": remote_path,
+            })
+            records[remote_path] = {
+                "complete": True,
+                "direct_files": [{
+                    "name": f"Track {index}.mp3",
+                    "path": f"Track {index}.mp3",
+                    "remote_path": f"{remote_path}/Track {index}.mp3",
+                    "size": 1,
+                    "mtime": 1704067200.0,
+                }],
+                "direct_folders": [],
+            }
+        rclone = SimulatedRclone()
+        app = self._build_app(rclone, local_root=None, workers=1)
+        app.listing_cache = TrapListingCache()
+        cache = DirectFilesFolderCache(records)
+        app.folder_cache = cache
+
+        with TestServer(app) as server:
+            first = server.get_json("/music/endpoints/library?path=Music")
+            reads_after_first = cache.get_calls
+            second = server.get_json("/music/endpoints/library?path=Music")
+
+        self.assertEqual(len(first["folders"]), 1200)
+        self.assertEqual(len(first["songs"]), 1200)
+        self.assertEqual(cache.get_calls, reads_after_first)
+        self.assertEqual(second["status"]["recursive_record_read_count"], 0)
+        self.assertEqual(second["status"]["snapshot_cache_hit"], True)
+        self.assertEqual(rclone.calls, [])
+        events = [event for event in self.read_trace_events() if event.get("event") == "music_library_poll"]
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[-1]["snapshot_cache_hit"], True)
+        self.assertEqual(
+            [event for event in self.read_trace_events() if event.get("event") == "request_deduplicated"],
+            [],
+        )
+
     def test_music_status_endpoint_returns_supported_extensions(self) -> None:
         rclone = SimulatedRclone()
         app = self._build_app(rclone, local_root=None, workers=1)
@@ -362,6 +583,12 @@ class MusicEndpointTests(AppTestCase):
         self.assertEqual(event["missing_folder_count"], 0)
         self.assertEqual(event["folder_count"], 0)
         self.assertEqual(event["song_count"], 0)
+        self.assertEqual(event["snapshot_cache_hit"], False)
+        self.assertEqual(event["snapshot_build_count"], 1)
+        self.assertEqual(event["recursive_record_read_count"], 1)
+        self.assertEqual(event["recursive_traversal_folder_count"], 1)
+        self.assertIsInstance(event["payload_build_elapsed_ms"], float)
+        self.assertIsInstance(event["snapshot_cache_revision"], int)
         self.assertEqual(event["client_poll_seq"], "7")
         self.assertEqual(event["client_poll_delay_ms"], "4000")
         self.assertEqual(event["client_poll_refresh"], "1")
