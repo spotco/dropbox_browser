@@ -137,20 +137,20 @@ leave the video player's CSS full-window mode.
 
 ### Phase 4 — Templates, contracts, and documentation
 
-- [ ] Update `assets/templates/music_player.html` and
+- [x] Update `assets/templates/music_player.html` and
   `assets/templates/video_player.html` only where needed to supply stable load
   button/dialog-title hooks; leave the shared modal/table structure intact.
-- [ ] Update `tests/test_web_ui.py` shell, asset, playlist, and full-window
+- [x] Update `tests/test_web_ui.py` shell, asset, playlist, and full-window
   string contracts for the generic bottom-panel selector/API, the new topbar
   controls/icons, and media-aware load labels.
-- [ ] Update `docs/architecture.md` to document generic bottom-panel ownership
+- [x] Update `docs/architecture.md` to document generic bottom-panel ownership
   in `log.js` and the media-library host presentation contract.
-- [ ] Update `docs/video-player.md` to distinguish shared full-page panel
+- [x] Update `docs/video-player.md` to distinguish shared full-page panel
   ownership from video’s playback-only full-window styling, and document
   `Escape` as an exit path for CSS full-window mode.
-- [ ] Update `docs/testing.md` only if the added bottom-panel/media-kind tests
+- [x] Update `docs/testing.md` only if the added bottom-panel/media-kind tests
   introduce a new command or test grouping; otherwise keep the existing suite
-  guidance unchanged.
+  guidance unchanged (no new command or test grouping was introduced).
 
 ### Phase 5 — Verification and handoff
 
@@ -186,5 +186,5 @@ leave the video player's CSS full-window mode.
 - [x] Phase 1 — Generic bottom-panel full-page controller
 - [x] Phase 2 — Topbar controls and video integration
 - [x] Phase 3 — Shared media-kind playlist presentation
-- [ ] Phase 4 — Template contracts and documentation
+- [x] Phase 4 — Template contracts and documentation
 - [ ] Phase 5 — Full verification and handoff

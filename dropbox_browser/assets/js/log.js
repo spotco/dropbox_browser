@@ -246,11 +246,6 @@
     toggleFullWindow: toggleFullWindow,
     minimize: minimizePanel,
     isFullWindowActive: function () { return fullWindowActive; },
-    // Compatibility aliases for the video adapter during the migration.
-    setVideoFullWindowActive: function (active, options) {
-      return active ? enterFullWindow(options) : exitFullWindow(options);
-    },
-    isVideoFullWindowActive: function () { return fullWindowActive; },
   };
 
   var nextIndex = 0;

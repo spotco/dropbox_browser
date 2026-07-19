@@ -549,8 +549,6 @@ function enterFullWindowLayout() {
   var api = logPanelApi();
   if (api && typeof api.enterFullWindow === 'function') {
     api.enterFullWindow({savedHeight: savedHeight, source: 'video'});
-  } else if (api && typeof api.setVideoFullWindowActive === 'function') {
-    api.setVideoFullWindowActive(true, {savedHeight: savedHeight});
   }
   applyFullWindowLayoutClasses(true);
 }
@@ -566,12 +564,6 @@ function exitFullWindowLayout() {
     api.exitFullWindow({
       restoreHeight: Number.isFinite(Number(restoreHeight)) ? Number(restoreHeight) : null,
       source: 'video',
-    });
-    return;
-  }
-  if (api && typeof api.setVideoFullWindowActive === 'function') {
-    api.setVideoFullWindowActive(false, {
-      restoreHeight: Number.isFinite(Number(restoreHeight)) ? Number(restoreHeight) : null,
     });
     return;
   }
