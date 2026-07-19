@@ -54,16 +54,13 @@
   function syncToolbarButtons() {
     var icon;
     if (fullWindowButton) {
-      fullWindowButton.setAttribute('aria-pressed', fullWindowActive ? 'true' : 'false');
-      fullWindowButton.title = fullWindowActive
-        ? 'Exit full-page bottom panel'
-        : 'Expand bottom panel to full page';
+      fullWindowButton.disabled = fullWindowActive;
+      fullWindowButton.setAttribute('aria-pressed', 'false');
+      fullWindowButton.title = 'Expand bottom panel to full page';
       fullWindowButton.setAttribute('aria-label', fullWindowButton.title);
       icon = fullWindowButton.querySelector('img');
       if (icon) {
-        icon.src = fullWindowActive
-          ? '/assets/icons/material-icon-theme/video-full-window-exit.svg'
-          : '/assets/icons/material-icon-theme/video-full-window-enter.svg';
+        icon.src = '/assets/icons/material-icon-theme/video-full-window-enter.svg';
       }
     }
     if (minimizeButton) {
@@ -191,12 +188,8 @@
     function move(moveEv) {
       if (fullWindowActive) return;
       var nextHeight = startHeight + startY - moveEv.clientY;
-      var viewportHeight = Math.max(minHeight, window.innerHeight || minHeight);
-      if (nextHeight >= viewportHeight - 1) {
-        enterFullWindow({source: 'drag', savedHeight: startHeight});
-        return;
-      }
       applyHeight(nextHeight);
+      syncToolbarButtons();
       scrollLogToBottom();
     }
 

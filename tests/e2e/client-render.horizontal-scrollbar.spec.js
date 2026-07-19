@@ -72,7 +72,7 @@ test("client-render keeps horizontal browse scrollbar visible and synced when ta
   }).toBeLessThanOrEqual(1);
 });
 
-test("bottom panel can be dragged to full page and minimized from the topbar", async ({ page }) => {
+test("bottom panel drag does not snap to full page, while the topbar button still enters it", async ({ page }) => {
   await page.goto("/?path=Camera%20Uploads");
   await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
 
@@ -84,15 +84,23 @@ test("bottom panel can be dragged to full page and minimized from the topbar", a
   await page.mouse.move(resizerBox.x + (resizerBox.width / 2), 0, { steps: 12 });
   await page.mouse.up();
 
-  await expect(page.locator("body")).toHaveClass(/bottom-panel-full-window-mode/);
-  await expect(page.locator("header")).toBeHidden();
-  await expect(page.locator("main")).toBeHidden();
+  await expect(page.locator("body")).not.toHaveClass(/bottom-panel-full-window-mode/);
+  await expect(page.locator("header")).toBeVisible();
+  await expect(page.locator("main")).toBeVisible();
   await expect
     .poll(async () => page.locator("#log-panel").evaluate((node) => {
       const rect = node.getBoundingClientRect();
-      return {top: Math.round(rect.top), height: Math.round(rect.height)};
+      return rect.height > 0 && rect.height < window.innerHeight;
     }))
-    .toEqual({top: 0, height: 420});
+    .toBe(true);
+
+  const fullWindow = page.locator("#bottom-pane-full-window-toggle");
+  await expect(fullWindow).toBeEnabled();
+  await fullWindow.click();
+  await expect(page.locator("body")).toHaveClass(/bottom-panel-full-window-mode/);
+  await expect(fullWindow).toBeDisabled();
+  await expect(page.locator("header")).toBeHidden();
+  await expect(page.locator("main")).toBeHidden();
 
   const minimize = page.locator("#bottom-pane-minimize");
   await expect(minimize).toBeVisible();
@@ -100,6 +108,31 @@ test("bottom panel can be dragged to full page and minimized from the topbar", a
   await expect(page.locator("body")).not.toHaveClass(/bottom-panel-full-window-mode/);
   await expect(page.locator("header")).toBeVisible();
   await expect(page.locator("main")).toBeVisible();
+  await expect
+    .poll(async () => page.locator("#log-panel").evaluate((node) => Math.round(node.getBoundingClientRect().height)))
+    .toBe(42);
+
+  // A minimized panel must re-enable minimize as soon as dragging raises it
+  // above the minimum height.
+  await expect(minimize).toBeDisabled();
+  const minimizedResizerBox = await resizer.boundingBox();
+  expect(minimizedResizerBox).not.toBeNull();
+  await page.mouse.move(
+    minimizedResizerBox.x + (minimizedResizerBox.width / 2),
+    minimizedResizerBox.y + (minimizedResizerBox.height / 2)
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    minimizedResizerBox.x + (minimizedResizerBox.width / 2),
+    Math.max(0, minimizedResizerBox.y - 80),
+    {steps: 8}
+  );
+  await page.mouse.up();
+  await expect(minimize).toBeEnabled();
+  await expect
+    .poll(async () => page.locator("#log-panel").evaluate((node) => Math.round(node.getBoundingClientRect().height)))
+    .toBeGreaterThan(42);
+  await minimize.click();
   await expect
     .poll(async () => page.locator("#log-panel").evaluate((node) => Math.round(node.getBoundingClientRect().height)))
     .toBe(42);

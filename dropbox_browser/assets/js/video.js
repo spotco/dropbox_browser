@@ -343,11 +343,10 @@ import {initPane} from './video/pane.js';
       // Full-window layout mode (CSS viewport takeover; not native fullscreen).
       // See docs/video-player.md "Playback Layout Modes".
       fullWindowActive: false,
+      bottomPanelFullWindowOwned: false,
       // Session-only preferred expanded mode for double-click from embedded:
       // 'fullscreen' (native Fullscreen API, default) | 'full-window'.
       preferredExpandedMode: 'fullscreen',
-      // Pre-entry --log-panel-height (px number) restored on full-window exit.
-      savedLogPanelHeight: null,
     },
     setStatus: function (text) {
       if (ctx.els.statusEl) ctx.els.statusEl.textContent = text;

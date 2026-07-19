@@ -70,3 +70,63 @@ class MediaLibraryHelperTests(AppTestCase):
             payload["items"][0]["preview_url"],
             "/file?path=Videos%2Fclip.mkv&source=remote",
         )
+
+    def test_music_and_video_snapshot_keys_are_separate_and_video_enrichment_survives_hit(self) -> None:
+        rclone = SimulatedRclone()
+        app = self._build_app(rclone, local_root=None)
+        app.folder_cache = DirectFilesFolderCache({
+            "dropbox:Media": {
+                "complete": True,
+                "direct_files": [
+                    {
+                        "name": "track.mp3",
+                        "path": "track.mp3",
+                        "remote_path": "dropbox:Media/track.mp3",
+                        "size": 1,
+                    },
+                    {
+                        "name": "clip.mp4",
+                        "path": "clip.mp4",
+                        "remote_path": "dropbox:Media/clip.mp4",
+                        "size": 2,
+                    },
+                ],
+                "direct_folders": [],
+            },
+        })
+
+        music = build_recursive_library_payload(
+            app,
+            rel_path="Media",
+            supported_extensions=(".mp3",),
+            id_prefix="song",
+            include_songs_key=True,
+            include_items_key=True,
+        )
+        video = build_recursive_library_payload(
+            app,
+            rel_path="Media",
+            supported_extensions=(".mp4",),
+            id_prefix="song",
+            include_songs_key=True,
+            include_items_key=True,
+            enrich_file=video_file_enricher(compatibility_expected_extensions=(".mp4",)),
+            enrichment_mode="video",
+        )
+        video_hit = build_recursive_library_payload(
+            app,
+            rel_path="Media",
+            supported_extensions=(".mp4",),
+            id_prefix="song",
+            include_songs_key=True,
+            include_items_key=True,
+            enrich_file=video_file_enricher(compatibility_expected_extensions=(".mp4",)),
+            enrichment_mode="video",
+        )
+
+        self.assertEqual([item["display_name"] for item in music["songs"]], ["track.mp3"])
+        self.assertEqual([item["display_name"] for item in video["items"]], ["clip.mp4"])
+        self.assertTrue(video["items"][0]["compatibility_expected"])
+        self.assertEqual(video_hit["items"], video["items"])
+        self.assertTrue(video_hit["status"]["snapshot_cache_hit"])
+        self.assertFalse(music["status"]["snapshot_cache_hit"])

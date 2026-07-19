@@ -481,21 +481,6 @@ function logPanelApi() {
   return window.DropboxBrowserLogPanel || null;
 }
 
-function readLogPanelHeightPx() {
-  var api = logPanelApi();
-  if (api && typeof api.getHeight === 'function') {
-    var fromApi = Number(api.getHeight());
-    if (Number.isFinite(fromApi) && fromApi > 0) return fromApi;
-  }
-  if (typeof document === 'undefined' || !document.documentElement) return null;
-  var raw = String(
-    window.getComputedStyle(document.documentElement).getPropertyValue('--log-panel-height') || ''
-  ).trim();
-  var parsed = parseInt(raw, 10);
-  if (Number.isFinite(parsed) && parsed > 0) return parsed;
-  return null;
-}
-
 function clearShellInlineGridTemplate() {
   if (ctx.els.playerShell && ctx.els.playerShell.style) {
     ctx.els.playerShell.style.removeProperty('grid-template-columns');
@@ -537,49 +522,41 @@ function applyFullWindowLayoutClasses(active) {
 
 function enterFullWindowLayout() {
   if (ctx.state.fullWindowActive) {
-    var activeApi = logPanelApi();
-    if (activeApi && typeof activeApi.applyFullWindowHeight === 'function') {
-      activeApi.applyFullWindowHeight();
-    }
     clearShellInlineGridTemplate();
     return;
   }
-  var savedHeight = readLogPanelHeightPx();
-  ctx.state.savedLogPanelHeight = savedHeight;
   var api = logPanelApi();
-  if (api && typeof api.enterFullWindow === 'function') {
-    api.enterFullWindow({savedHeight: savedHeight, source: 'video'});
+  ctx.state.bottomPanelFullWindowOwned = false;
+  if (
+    api
+    && typeof api.isFullWindowActive === 'function'
+    && typeof api.enterFullWindow === 'function'
+    && !api.isFullWindowActive()
+  ) {
+    api.enterFullWindow({source: 'video'});
+    ctx.state.bottomPanelFullWindowOwned = true;
   }
   applyFullWindowLayoutClasses(true);
 }
 
 function exitFullWindowLayout() {
-  var restoreHeight = ctx.state.savedLogPanelHeight;
   var wasActive = Boolean(ctx.state.fullWindowActive);
-  applyFullWindowLayoutClasses(false);
-  ctx.state.savedLogPanelHeight = null;
-  if (wasActive) restoreShellPaneLayoutAfterFullWindow();
+  var shouldExitBottomPanel = Boolean(ctx.state.bottomPanelFullWindowOwned);
   var api = logPanelApi();
-  if (api && typeof api.exitFullWindow === 'function') {
-    api.exitFullWindow({
-      restoreHeight: Number.isFinite(Number(restoreHeight)) ? Number(restoreHeight) : null,
-      source: 'video',
-    });
-    return;
-  }
-  // Fallback when log panel API is unavailable: restore CSS variable only.
-  if (wasActive && Number.isFinite(Number(restoreHeight)) && Number(restoreHeight) > 0) {
-    document.documentElement.style.setProperty('--log-panel-height', Number(restoreHeight) + 'px');
+  applyFullWindowLayoutClasses(false);
+  ctx.state.bottomPanelFullWindowOwned = false;
+  if (wasActive) restoreShellPaneLayoutAfterFullWindow();
+  if (shouldExitBottomPanel && api && typeof api.exitFullWindow === 'function') {
+    api.exitFullWindow({source: 'video'});
   }
 }
 
 function handleBottomPanelFullWindowChange(event) {
   if (!event || !event.detail || event.detail.active || !ctx.state.fullWindowActive) return;
-  // A generic toolbar action may exit the shared shell while video owns the
-  // focused playback layout. Clean up the video-only layer without asking the
-  // shell controller to exit a second time.
+  // A generic minimize/exit action owns the shell transition. Clean up only
+  // the video-focused layer and leave the generic controller in charge.
+  ctx.state.bottomPanelFullWindowOwned = false;
   applyFullWindowLayoutClasses(false);
-  ctx.state.savedLogPanelHeight = null;
   restoreShellPaneLayoutAfterFullWindow();
 }
 
@@ -657,13 +634,6 @@ function handleFullscreenChange() {
   // Do not auto-enter full window here; full window is only entered explicitly
   // (toolbar or double-click preferred mode). Mutual exclusion already clears
   // full window before requestFullscreen, so both modes should not co-exist.
-  if (!isNativeFullscreenActive() && !isFullWindowActive()) {
-    // Ensure log-panel height lock is not left dangling if state drifted.
-    var api = logPanelApi();
-    if (api && typeof api.isFullWindowActive === 'function' && api.isFullWindowActive()) {
-      exitFullWindowLayout();
-    }
-  }
   syncTransportControls();
 }
 

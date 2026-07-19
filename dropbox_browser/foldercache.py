@@ -110,6 +110,8 @@ class ActiveFolderJob:
 
 
 class FolderCacheManager:
+    supports_record_lookup = True
+
     def __init__(
         self,
         rclone: "RcloneClient",
@@ -157,6 +159,9 @@ class FolderCacheManager:
         # and must not clobber disk with a stale partial snapshot.
         self._dirty_cache_writes: dict[str, tuple[bool, int]] = {}
         self._cache_write_epoch: dict[str, int] = {}
+        # In-process signal for recursive media snapshots. It is deliberately
+        # not persisted because a restart can safely rebuild snapshots.
+        self._revision = 0
         self._state = FolderAccumulationState(
             direct_done=self._direct_done,
             abandoned=self._abandoned,
@@ -285,9 +290,19 @@ class FolderCacheManager:
             return None
         return [dict(item) for item in direct_items]
 
+    @property
+    def revision(self) -> int:
+        """Return the current in-process cache revision."""
+        with self._lock:
+            return self._revision
+
+    def _advance_revision_locked(self) -> None:
+        self._revision += 1
+
     def invalidate(self, remote_path: str) -> None:
         """Forget cached and in-memory metadata for one remote folder."""
         with self._lock:
+            self._advance_revision_locked()
             self._generation[remote_path] = self._generation.get(remote_path, 0) + 1
             self._acc.pop(remote_path, None)
             self._direct_done.pop(remote_path, None)
@@ -380,11 +395,13 @@ class FolderCacheManager:
     def _write_cache(self, remote_path: str, complete: bool) -> None:
         """Flush one cache record to disk immediately."""
         with self._lock:
+            self._advance_revision_locked()
             data = self._cache_record_data_locked(remote_path, complete)
         self._write_cache_record(remote_path, data)
 
     def _mark_cache_dirty_locked(self, remote_path: str, complete: bool) -> None:
         """Mark one cache record for disk flush after the lock is released."""
+        self._advance_revision_locked()
         previous = self._dirty_cache_writes.get(remote_path)
         previous_complete = bool(previous[0]) if previous is not None else False
         epoch = self._cache_write_epoch.get(remote_path, 0) + 1
@@ -478,6 +495,7 @@ class FolderCacheManager:
                 "direct_files": direct_listing.direct_files,
                 "direct_folders": direct_listing.direct_folders,
             }
+            self._advance_revision_locked()
             self._mark_cache_dirty_locked(remote_path, complete=False)
             self._trace_locked(
                 "direct_listing_primed",
@@ -641,9 +659,18 @@ class FolderCacheManager:
         if page_epoch >= self._min_page_time:
             self._page_completed += 1
 
-    def _request_with_depth(self, remote_path: str, page_time: float, breadth_depth: int) -> bool:
+    def _request_with_depth(
+        self,
+        remote_path: str,
+        page_time: float,
+        breadth_depth: int,
+        *,
+        cached_data: dict | None = None,
+        cached_data_provided: bool = False,
+        trace_dedup: bool = True,
+    ) -> bool:
         """Ensure one folder is queued, preserving the requested breadth depth."""
-        data = self.get(remote_path)
+        data = cached_data if cached_data_provided else self.get(remote_path)
         if data is not None and data.get("complete"):
             self._trace("request_skipped_cached", remote_path, page_epoch=page_time)
             return False
@@ -660,7 +687,8 @@ class FolderCacheManager:
                 if self._pending_children.get(remote_path) and remote_path not in self._abandoned:
                     self._repair_complete_children_locked(remote_path)
                     if self._pending_children.get(remote_path) and remote_path not in self._abandoned:
-                        self._trace_locked("request_deduplicated", remote_path, page_epoch=page_time)
+                        if trace_dedup:
+                            self._trace_locked("request_deduplicated", remote_path, page_epoch=page_time)
                         return False
                 if remote_path not in self._abandoned and self._is_disk_complete_locked(remote_path):
                     # In-memory subtree is already complete (possibly after
@@ -700,13 +728,14 @@ class FolderCacheManager:
                         else:
                             self._trace_locked("request_refreshed", remote_path, page_epoch=page_time)
                     else:
-                        self._trace_locked(
-                            "request_deduplicated",
-                            remote_path,
-                            page_epoch=page_time,
-                            owner_page_epoch=current_page_time,
-                            active=active is not None,
-                        )
+                        if trace_dedup:
+                            self._trace_locked(
+                                "request_deduplicated",
+                                remote_path,
+                                page_epoch=page_time,
+                                owner_page_epoch=current_page_time,
+                                active=active is not None,
+                            )
                     if not enqueue_refresh:
                         return False
                 else:
@@ -729,7 +758,14 @@ class FolderCacheManager:
             page_time = time.time()
         self._request_with_depth(remote_path, page_time, 0)
 
-    def ensure_known_subtree(self, remote_path: str, page_epoch: float) -> dict[str, int | float]:
+    def ensure_known_subtree(
+        self,
+        remote_path: str,
+        page_epoch: float,
+        *,
+        record_lookup=None,
+        trace_dedup: bool = True,
+    ) -> dict[str, int | float]:
         """Queue known missing or incomplete subtree records without blocking.
 
         Traversal uses cached ``direct_folders`` only, so this never runs
@@ -753,13 +789,23 @@ class FolderCacheManager:
                 continue
             seen.add(current_path)
 
-            current_data = self.get(current_path)
-            current_status = self.status(current_path)
+            current_data = record_lookup(current_path) if record_lookup is not None else self.get(current_path)
+            if current_data is not None:
+                current_status = "complete" if current_data.get("complete") else "partial"
+            else:
+                current_status = self.status(current_path)
             if current_status != "complete":
                 result["pending_folder_count"] += 1
                 if current_data is None:
                     result["missing_folder_count"] += 1
-                if self._request_with_depth(current_path, page_epoch, breadth_depth):
+                if self._request_with_depth(
+                    current_path,
+                    page_epoch,
+                    breadth_depth,
+                    cached_data=current_data,
+                    cached_data_provided=record_lookup is not None,
+                    trace_dedup=trace_dedup,
+                ):
                     result["queued_folder_count"] += 1
 
             if current_data is None:

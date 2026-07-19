@@ -30,6 +30,43 @@ except ImportError:
 
 
 class FolderInfoWorkerTests(AppTestCase):
+    def test_folder_cache_revision_advances_for_worker_prime_and_invalidation_paths(self) -> None:
+        rclone = SimulatedRclone({
+            "dropbox:worker": [SimulatedLsjsonResponse(items=[{
+                "Name": "track.mp3",
+                "Path": "track.mp3",
+                "IsDir": False,
+                "Size": 1,
+                "ModTime": "2024-01-01T12:00:00Z",
+            }])],
+        })
+        app = self._build_app(rclone, local_root=None, workers=1)
+        cache = app.folder_cache
+        assert cache is not None
+        initial_revision = cache.revision
+
+        cache.request("dropbox:worker")
+        wait_until(
+            lambda: bool((cache.get("dropbox:worker") or {}).get("complete")),
+            description="worker folder cache completion",
+        )
+        worker_revision = cache.revision
+        self.assertGreater(worker_revision, initial_revision)
+
+        cache.prime_direct_listing(
+            "dropbox:primed",
+            [{"Name": "primed.mp3", "Path": "primed.mp3", "IsDir": False, "Size": 1}],
+        )
+        prime_revision = cache.revision
+        self.assertGreater(prime_revision, worker_revision)
+
+        cache.invalidate("dropbox:primed")
+        direct_revision = cache.revision
+        self.assertGreater(direct_revision, prime_revision)
+
+        cache.invalidate_tree("dropbox:worker")
+        self.assertGreater(cache.revision, direct_revision)
+
     def test_folder_cache_queue_accepts_shutdown_with_queued_folder_job(self) -> None:
         queue = PriorityQueue()
 
