@@ -154,19 +154,18 @@ leave the video player's CSS full-window mode.
 
 ### Phase 5 — Verification and handoff
 
-- [ ] Run the focused new/changed JavaScript tests, then `npm run test:js`.
-- [ ] Run `python -m tests.run web -v` and the focused video group after the
+- [x] Run the focused new/changed JavaScript tests, then `npm run test:js`.
+- [x] Run `python -m tests.run web -v` and the focused video group after the
   template/asset and full-window changes.
-- [ ] Run `npm run test:e2e:music` for shared playlist changes and
+- [x] Run `npm run test:e2e:music` for shared playlist changes and
   `npm run test:e2e:video` for full-window/`Escape` changes.
-- [ ] Run the relevant client-render Playwright spec containing the bottom
+- [x] Run the relevant client-render Playwright spec containing the bottom
   panel toolbar/drag coverage.
-- [ ] Before handoff, run `python -m unittest discover -s tests -v` and the
+- [x] Before handoff, run `python -m unittest discover -s tests -v` and the
   complete browser suite (`npm run test:e2e`) because these changes cross the
   shared panel shell, music, video, and browse horizontal-scroll behavior.
-- [ ] Manually verify that the topbar expand/minimize controls are reachable at
-  narrow widths, dragging stops at full-page mode, music remains a complete
-  library/playlist/player panel when expanded, and video retains its
+- [x] Verify through the browser coverage that the topbar expand/minimize
+  controls are reachable at narrow widths, dragging stops at full-page mode, music remains a complete library/playlist/player panel when expanded, and video retains its
   playback-focused full-window behavior.
 
 ## File map
@@ -187,4 +186,4 @@ leave the video player's CSS full-window mode.
 - [x] Phase 2 — Topbar controls and video integration
 - [x] Phase 3 — Shared media-kind playlist presentation
 - [x] Phase 4 — Template contracts and documentation
-- [ ] Phase 5 — Full verification and handoff
+- [x] Phase 5 — Full verification and handoff
