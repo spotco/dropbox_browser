@@ -3468,8 +3468,15 @@ test("video controls follow standard hover and idle visibility behavior", async 
 
   const box = await surface.boundingBox();
   expect(box).not.toBeNull();
-
-  await page.mouse.move(box.x + (box.width / 2), box.y + (box.height / 2));
+  // Keep the pointer on the surface via locator.hover. Absolute page.mouse.move
+  // to the bounding-box center can leave the hit target (and fire mouseleave,
+  // which hides controls) when layout/chrome shifts under the cursor.
+  await surface.hover({
+    position: {
+      x: Math.max(8, Math.floor(box.width / 2)),
+      y: Math.max(8, Math.floor(box.height / 2)),
+    },
+  });
   await expectControlsOverlayVisible(page);
 
   try {

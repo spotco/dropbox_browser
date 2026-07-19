@@ -57,6 +57,14 @@ body.has-log-panel main {
   overscroll-behavior: contain;
 }
 
+/* Until music/video media-library hosts finish restoring pane splits and
+   active playlist column widths, ignore bottom-panel interaction so users
+   cannot drag half-initialized UI. Cleared by bottom-pane.js when both
+   markBottomPanelMediaLayoutReady('music'|'video') have fired (or fallback). */
+body.bottom-panel-bootstrapping #log-panel {
+  pointer-events: none;
+}
+
 /* Bottom-panel full-window layout: hide page chrome and let the bottom pane
    fill the browser viewport. The generic class is owned by log.js. */
 body.bottom-panel-full-window-mode {

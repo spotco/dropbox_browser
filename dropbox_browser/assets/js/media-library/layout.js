@@ -131,6 +131,8 @@ export function initLayout(ctx) {
     if (!musicPaneRestorePending || !musicPaneCanApply()) return false;
     musicPaneRestorePending = false;
     applyMusicPanePercents(readSavedMusicPanePercents(), false);
+    // Pane width just became measurable; re-fit playlist columns to the new list width.
+    refreshPlaylistColumnWidths(false);
     return true;
   }
 

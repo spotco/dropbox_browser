@@ -387,11 +387,25 @@ import {initPane} from './video/pane.js';
   function restoreVideoPaneLayout() {
     if (ctx.layoutApi && typeof ctx.layoutApi.restoreMusicPanePercents === 'function') {
       ctx.layoutApi.restoreMusicPanePercents();
-      return;
+    } else if (
+      ctx.layoutApi
+      && typeof ctx.layoutApi.applyMusicPanePercents === 'function'
+      && typeof ctx.layoutApi.readSavedMusicPanePercents === 'function'
+    ) {
+      ctx.layoutApi.applyMusicPanePercents(ctx.layoutApi.readSavedMusicPanePercents(), false);
     }
-    if (!ctx.layoutApi || typeof ctx.layoutApi.applyMusicPanePercents !== 'function') return;
-    if (typeof ctx.layoutApi.readSavedMusicPanePercents !== 'function') return;
-    ctx.layoutApi.applyMusicPanePercents(ctx.layoutApi.readSavedMusicPanePercents(), false);
+    // Music parity: re-fit active playlist columns after the outer pane split
+    // is restored so filename/path widths are not left at the pre-restore fit
+    // (or minimums) until the first column drag.
+    if (ctx.layoutApi && typeof ctx.layoutApi.refreshPlaylistColumnWidths === 'function') {
+      ctx.layoutApi.refreshPlaylistColumnWidths(false);
+    }
+  }
+
+  function markVideoMediaLayoutReady() {
+    if (typeof window.markBottomPanelMediaLayoutReady === 'function') {
+      window.markBottomPanelMediaLayoutReady('video');
+    }
   }
 
   ctx.state.playlistStore = new PlaylistStore({
@@ -529,4 +543,5 @@ import {initPane} from './video/pane.js';
 
   ctx.paneApi.syncPaneMode(ctx.readVideoSetting('bottom-pane-mode', 'server-log'));
   restoreVideoPaneLayout();
+  markVideoMediaLayoutReady();
 }());

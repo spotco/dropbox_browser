@@ -324,4 +324,7 @@ import {initPlayback} from './music/playback.js';
   ctx.playbackApi.updateModeButtons();
   ctx.playlistApi.renderPlaylist();
   ctx.playbackApi.metadata.scheduleNowPlayingMarqueeRefresh();
+  if (typeof window.markBottomPanelMediaLayoutReady === 'function') {
+    window.markBottomPanelMediaLayoutReady('music');
+  }
 }());
