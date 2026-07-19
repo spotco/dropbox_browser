@@ -137,3 +137,62 @@ test("bottom panel drag does not snap to full page, while the topbar button stil
     .poll(async () => page.locator("#log-panel").evaluate((node) => Math.round(node.getBoundingClientRect().height)))
     .toBe(42);
 });
+
+test("bottom panel height and selected pane survive reload", async ({ page }) => {
+  await page.goto("/?path=Camera%20Uploads");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+
+  await page.evaluate(() => {
+    Settings.set("log-height", 280);
+    Settings.set("bottom-pane-mode", "file-search");
+  });
+  await page.reload();
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await expect(page.locator("#bottom-pane-mode")).toHaveValue("file-search");
+  await expect
+    .poll(async () => page.locator("#log-panel").evaluate((node) => Math.round(node.getBoundingClientRect().height)))
+    .toBe(280);
+});
+
+test("bottom panel full-window state does not survive reload", async ({ page }) => {
+  await page.goto("/?path=Camera%20Uploads");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await page.evaluate(() => {
+    Settings.set("log-height", 280);
+    Settings.set("bottom-pane-mode", "video-player");
+  });
+  await page.reload();
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await page.locator("#bottom-pane-full-window-toggle").click();
+  await expect(page.locator("body")).toHaveClass(/bottom-panel-full-window-mode/);
+  await expect.poll(async () => page.evaluate(() => localStorage.getItem("dropbox-browser.bottom-panel-full-window"))).toBe(null);
+
+  await page.reload();
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await expect(page.locator("#bottom-pane-mode")).toHaveValue("video-player");
+  await expect(page.locator("body")).not.toHaveClass(/bottom-panel-full-window-mode/);
+  await expect(page.locator("#video-player-pane")).not.toHaveClass(/video-full-window/);
+  await expect.poll(async () => page.evaluate(() => localStorage.getItem("dropbox-browser.bottom-panel-full-window"))).toBe(null);
+  await expect
+    .poll(async () => page.locator("#log-panel").evaluate((node) => Math.round(node.getBoundingClientRect().height)))
+    .toBe(280);
+});
+
+test("an oversized saved bottom panel restores as full-window", async ({ page }) => {
+  await page.goto("/?path=Camera%20Uploads");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await page.evaluate(() => {
+    Settings.set("log-height", 380);
+    Settings.set("bottom-pane-mode", "server-log");
+    localStorage.removeItem("dropbox-browser.bottom-panel-full-window");
+  });
+
+  await page.reload();
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await expect(page.locator("body")).toHaveClass(/bottom-panel-full-window-mode/);
+  await expect.poll(async () => page.evaluate(() => localStorage.getItem("dropbox-browser.bottom-panel-full-window"))).toBe(null);
+  await expect.poll(async () => page.evaluate(() => Settings.get("log-height", null))).toBe(380);
+  await expect
+    .poll(async () => page.locator("#log-panel").evaluate((node) => Math.round(node.getBoundingClientRect().height)))
+    .toBe(420);
+});

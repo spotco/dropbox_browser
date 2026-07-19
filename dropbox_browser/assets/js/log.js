@@ -7,7 +7,9 @@
   var minimizeButton = document.getElementById('bottom-pane-minimize');
   var defaultHeight = 240;
   var minHeight = 42;
+  var normalPanelMaxHeightOffset = 80;
   var currentHeight = defaultHeight;
+  var preferredHeight = defaultHeight;
   var fullWindowActive = false;
   var heightBeforeFullWindow = null;
   var activeResize = null;
@@ -17,21 +19,37 @@
   }
 
   function maxHeight() {
-    return Math.max(minHeight, window.innerHeight || minHeight);
+    return Math.max(
+      minHeight,
+      (window.innerHeight || minHeight) - normalPanelMaxHeightOffset
+    );
+  }
+
+  function parseHeight(height) {
+    var parsed = parseInt(height, 10);
+    return isFinite(parsed) ? parsed : defaultHeight;
   }
 
   function clampHeight(height) {
-    var parsed = parseInt(height, 10);
-    if (!isFinite(parsed)) parsed = defaultHeight;
+    var parsed = parseHeight(height);
     return Math.min(Math.max(parsed, minHeight), maxHeight());
   }
 
-  function applyHeight(height) {
+  function applyHeight(height, persist) {
     var clamped = clampHeight(height);
     currentHeight = clamped;
     document.documentElement.style.setProperty('--log-panel-height', clamped + 'px');
-    Settings.set('log-height', clamped);
+    if (persist !== false) {
+      preferredHeight = clamped;
+      Settings.set('log-height', clamped);
+    }
     return clamped;
+  }
+
+  function clearLegacyFullWindowSetting() {
+    try {
+      localStorage.removeItem('dropbox-browser.bottom-panel-full-window');
+    } catch (e) {}
   }
 
   function getHeight() {
@@ -114,9 +132,9 @@
     stopResize();
     if (!fullWindowActive) {
       if (Number.isFinite(Number(opts.savedHeight))) {
-        heightBeforeFullWindow = Number(opts.savedHeight);
+        heightBeforeFullWindow = Math.max(minHeight, parseHeight(opts.savedHeight));
       } else {
-        heightBeforeFullWindow = currentHeight;
+        heightBeforeFullWindow = preferredHeight;
       }
     }
     fullWindowActive = true;
@@ -139,7 +157,7 @@
     heightBeforeFullWindow = null;
     var result = Number.isFinite(restore) && restore > 0
       ? applyHeight(restore)
-      : applyHeight(currentHeight);
+      : applyHeight(preferredHeight);
     syncToolbarButtons();
     emitFullWindowChange(opts.source || 'api');
     return result;
@@ -171,8 +189,13 @@
     if (currentHeight < target) applyHeight(target);
   }
 
-  applyHeight(Settings.get('log-height', defaultHeight));
+  preferredHeight = Math.max(minHeight, parseHeight(Settings.get('log-height', defaultHeight)));
+  clearLegacyFullWindowSetting();
+  applyHeight(preferredHeight, false);
   syncToolbarButtons();
+  if (preferredHeight > maxHeight()) {
+    enterFullWindow({source: 'restore', savedHeight: preferredHeight});
+  }
 
   function startResize(ev) {
     if (fullWindowActive) {
@@ -221,7 +244,11 @@
       syncToolbarButtons();
       return;
     }
-    applyHeight(currentHeight);
+    if (preferredHeight > maxHeight()) {
+      enterFullWindow({source: 'resize-overflow', savedHeight: preferredHeight});
+      return;
+    }
+    applyHeight(preferredHeight, false);
     syncToolbarButtons();
   });
   window.addEventListener('bottom-pane-mode-changed', function (ev) {
