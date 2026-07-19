@@ -104,6 +104,12 @@ export function initMediaLibraryBridge(ctx) {
       clearCurrentSong();
       return;
     }
+    if (ctx.recentApi && typeof ctx.recentApi.recordPlaybackStart === 'function') {
+      ctx.recentApi.recordPlaybackStart(
+        ctx.state.playlist[index],
+        ctx.state.activePlaylist && ctx.state.activePlaylist.name ? ctx.state.activePlaylist.name : 'New Playlist'
+      );
+    }
     ctx.state.currentPlaylistIndex = index;
     ctx.state.activeQueueIndex = index;
     ctx.state.selectedQueueIndex = index;

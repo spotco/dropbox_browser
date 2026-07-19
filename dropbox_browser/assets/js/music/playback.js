@@ -356,6 +356,12 @@ export function initPlayback(ctx) {
       ctx.playlistApi.renderPlaylist();
       return;
     }
+    if (ctx.recentApi && typeof ctx.recentApi.recordPlaybackStart === 'function') {
+      ctx.recentApi.recordPlaybackStart(
+        song,
+        state.activePlaylist && state.activePlaylist.name ? state.activePlaylist.name : 'New Playlist'
+      );
+    }
     state.currentPlaylistIndex = index;
     resetPlaybackLoadRetries(song.remote_path || null);
     syncShuffleCursorForIndex(index);

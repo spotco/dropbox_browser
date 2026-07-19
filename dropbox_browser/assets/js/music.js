@@ -2,6 +2,7 @@ import {initLayout} from './media-library/layout.js';
 import {initPlaylist} from './media-library/playlist.js';
 import {initLibrary} from './media-library/library.js';
 import {PlaylistStore} from './media-library/playlist-store.js';
+import {RecentStore} from './media-library/recent-store.js';
 import {initPlayback} from './music/playback.js';
 
 (function () {
@@ -39,6 +40,7 @@ import {initPlayback} from './music/playback.js';
       playlistPane: document.getElementById('music-playlist-pane'),
       playlistPlaybackResizer: document.getElementById('music-resizer-playlist-playback'),
       activePlaylistNameEl: document.getElementById('music-active-playlist-name'),
+      recentButton: document.getElementById('music-playlist-recent'),
       playlistImportButton: document.getElementById('music-playlist-import'),
       playlistExportButton: document.getElementById('music-playlist-export'),
       playlistRenameButton: document.getElementById('music-playlist-rename'),
@@ -66,6 +68,12 @@ import {initPlayback} from './music/playback.js';
       playlistLoadConfirmButton: document.getElementById('music-playlist-load-confirm'),
       playlistLoadSortButtons: pane.querySelectorAll('[data-playlist-sort-key]'),
       playlistLoadMenu: document.getElementById('music-playlist-load-context-menu'),
+      recentDialog: document.getElementById('music-playlist-recent-dialog'),
+      recentTitleEl: document.getElementById('music-playlist-recent-title'),
+      recentListEl: document.getElementById('music-playlist-recent-list'),
+      recentCancelButton: document.getElementById('music-playlist-recent-cancel'),
+      recentConfirmButton: document.getElementById('music-playlist-recent-confirm'),
+      recentSortButtons: pane.querySelectorAll('[data-recent-sort-key]'),
       libraryMenu: document.getElementById('music-library-context-menu'),
       playlistMenu: document.getElementById('music-playlist-context-menu'),
       playbackPane: document.getElementById('music-playback-pane'),
@@ -127,6 +135,10 @@ import {initPlayback} from './music/playback.js';
       playlistLoadFilterSettingKey: 'music-playlist-load-filter',
       selectedPersistedPlaylistName: null,
       playlistLoadContextName: null,
+      recentSortKey: 'played_at',
+      recentSortDirection: 'desc',
+      recentSortSettingKey: 'music-recent-sort',
+      selectedRecentId: null,
       pendingPlaylistConfirmAction: null,
       playlistSaveToastTimer: null,
       currentPlaylistIndex: -1,
@@ -177,6 +189,7 @@ import {initPlayback} from './music/playback.js';
     playbackApi: null,
     libraryApi: null,
     layoutApi: null,
+    recentApi: new RecentStore({mediaKind: 'music', storage: Settings}),
     setStatus: function (text) {
       if (!ctx.els.statusEl) return;
       ctx.els.statusEl.textContent = text;

@@ -476,6 +476,12 @@
   width: min(100%, 520px);
 }
 
+.music-playlist-recent-card {
+  height: min(620px, 100%);
+  max-width: min(900px, 100%);
+  width: min(900px, 100%);
+}
+
 .music-playlist-modal-header {
   align-items: center;
   display: flex;
@@ -619,6 +625,71 @@
   flex: 1 1 auto;
   min-height: 280px;
   overflow: auto;
+}
+
+.music-playlist-recent-table {
+  border: 1px solid #2f4258;
+  border-radius: 8px;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.music-playlist-row.music-playlist-recent-heading,
+.music-playlist-row.music-playlist-recent-entry {
+  display: grid;
+  gap: 0;
+  grid-template-columns: minmax(170px, 0.9fr) minmax(260px, 1.35fr) minmax(180px, 0.95fr);
+  min-width: 0;
+  width: 100%;
+}
+
+.music-playlist-row.music-playlist-recent-entry {
+  align-items: start;
+  cursor: pointer;
+  gap: 10px;
+  line-height: 1.25;
+  padding-bottom: 8px;
+  padding-top: 8px;
+}
+
+.music-playlist-recent-list {
+  flex: 1 1 auto;
+  min-height: 220px;
+  overflow: auto;
+}
+
+.music-playlist-recent-entry.selected {
+  background: rgba(90, 149, 198, 0.3);
+  outline: 1px solid #78aee0;
+  outline-offset: -1px;
+}
+
+.music-playlist-recent-entry > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.music-playlist-recent-primary {
+  color: #edf5fb;
+  font-weight: 700;
+}
+
+.music-playlist-recent-secondary {
+  color: #91a7bb;
+  font-size: 11px;
+  font-weight: 400;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
+.music-playlist-recent-time {
+  color: #c5d2de;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .music-playlist-row {
@@ -985,8 +1056,19 @@ body.music-playlist-column-resizing {
   }
 
   .music-playlist-modal-card,
-  .music-playlist-load-card {
+  .music-playlist-load-card,
+  .music-playlist-recent-card {
     min-width: 100%;
+  }
+
+  .music-playlist-row.music-playlist-recent-heading,
+  .music-playlist-row.music-playlist-recent-entry {
+    grid-template-columns: minmax(100px, 0.8fr) minmax(130px, 1.2fr) minmax(100px, 0.8fr);
+    gap: 6px;
+  }
+
+  .music-playlist-recent-time {
+    white-space: normal;
   }
 }
 

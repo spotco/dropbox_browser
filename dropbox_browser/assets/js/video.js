@@ -3,6 +3,7 @@ import {initLayout} from './media-library/layout.js';
 import {initPlaylist} from './media-library/playlist.js';
 import {initLibrary as initMediaLibrary} from './media-library/library.js';
 import {PlaylistStore} from './media-library/playlist-store.js';
+import {RecentStore} from './media-library/recent-store.js';
 import {initShared} from './video/shared.js';
 import {initCache} from './video/cache.js';
 import {initDiagnostics} from './video/diagnostics.js';
@@ -131,6 +132,7 @@ import {initPane} from './video/pane.js';
       playlistPane: document.getElementById('video-playlist-pane'),
       playlistPlaybackResizer: document.getElementById('video-resizer-playlist-playback'),
       activePlaylistNameEl: document.getElementById('video-active-playlist-name'),
+      recentButton: document.getElementById('video-playlist-recent'),
       playlistImportButton: document.getElementById('video-playlist-import'),
       playlistExportButton: document.getElementById('video-playlist-export'),
       playlistRenameButton: document.getElementById('video-playlist-rename'),
@@ -158,6 +160,12 @@ import {initPane} from './video/pane.js';
       playlistLoadConfirmButton: document.getElementById('video-playlist-load-confirm'),
       playlistLoadSortButtons: pane.querySelectorAll('[data-playlist-sort-key]'),
       playlistLoadMenu: document.getElementById('video-playlist-load-context-menu'),
+      recentDialog: document.getElementById('video-playlist-recent-dialog'),
+      recentTitleEl: document.getElementById('video-playlist-recent-title'),
+      recentListEl: document.getElementById('video-playlist-recent-list'),
+      recentCancelButton: document.getElementById('video-playlist-recent-cancel'),
+      recentConfirmButton: document.getElementById('video-playlist-recent-confirm'),
+      recentSortButtons: pane.querySelectorAll('[data-recent-sort-key]'),
       libraryMenu: document.getElementById('video-library-context-menu'),
       playlistMenu: document.getElementById('video-playlist-context-menu'),
       playbackPane: document.getElementById('video-playback-pane'),
@@ -203,6 +211,10 @@ import {initPane} from './video/pane.js';
       playlistLoadFilterSettingKey: 'video-playlist-load-filter',
       selectedPersistedPlaylistName: null,
       playlistLoadContextName: null,
+      recentSortKey: 'played_at',
+      recentSortDirection: 'desc',
+      recentSortSettingKey: 'video-recent-sort',
+      selectedRecentId: null,
       pendingPlaylistConfirmAction: null,
       playlistSaveToastTimer: null,
       currentPlaylistIndex: -1,
@@ -369,6 +381,7 @@ import {initPane} from './video/pane.js';
     playlistApi: null,
     libraryApi: null,
     layoutApi: null,
+    recentApi: new RecentStore({mediaKind: 'video', storage: typeof Settings !== 'undefined' ? Settings : null}),
   };
 
   ctx.state.playlistStore = new PlaylistStore({
