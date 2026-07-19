@@ -6,10 +6,13 @@ playing items through a local HLS compatibility session. Playback always uses
 ffmpeg-generated HLS; the browser does not stream remote files directly with
 native `<video src>`.
 
-**Shared library/playlist** (tree UI, save/load/import/export, pane layout) lives
-under `dropbox_browser/assets/js/media-library/` and `assets/css/media-library.css`,
-also used by the music player. **Video-only playback** (HLS, tracks, subtitles,
-controls, diagnostics) stays under `dropbox_browser/assets/js/video/`.
+**Shared library/playlist** (tree UI, save/load/import/export, pane layout, and
+music/video terminology) lives under `dropbox_browser/assets/js/media-library/`
+and `assets/css/media-library.css`, also used by the music player. The generic
+bottom-panel shell controller (drag resize, full-page mode, and minimize) lives
+in `assets/js/log.js` and `assets/app.css`. **Video-only playback** (HLS,
+tracks, subtitles, focused playback layout, controls, diagnostics) stays under
+`dropbox_browser/assets/js/video/`.
 
 Server logic: `dropbox_browser/video.py`, `dropbox_browser/media_library.py`
 (recursive library listing), and `dropbox_browser/handlers.py`. Client entry:
@@ -268,8 +271,9 @@ Host markup IDs are `#video-*` (`video_player.html`). User flow: open Video Play
 → **Load Current Folder** → expand tree → add/dblclick items into the active
 playlist → play via transport or playlist context menu.
 
-Full-window mode is **video-only chrome**: CSS hides library + playlist panes;
-shared media-library modules do not own full-window logic.
+Full-window mode has two layers: the generic bottom-panel controller owns the
+page-shell full-page state, while video controls own the focused playback layout
+that hides the library and playlist panes.
 
 ### Entry and Context
 
@@ -296,9 +300,11 @@ the entry file.
 ```text
 dropbox_browser/assets/js/
   video.js                      # thin host entry + mediaLibraryConfig
+  log.js                         # shared bottom-panel resize/full-page controller
   video-core.js                 # barrel re-export of pure *-core modules
   media-library/
     shared.js                   # format/clear helpers
+    media-kind.js               # music/video labels and export filenames
     library-helpers.js          # pure sort/selection helpers
     library.js                  # recursive library UI + poll
     playlist-store.js           # PlaylistModel + PlaylistStore (video-playlists key)
@@ -358,6 +364,7 @@ required:
 | `ctx.playNextFromPlaylist` / `playPreviousFromPlaylist` | `media-library-bridge.js` | Transport next/prev with shuffle+loop |
 | `ctx.subtitlesApi.applyForSeek(...)` | `subtitles.js` | Post-seek subtitle remount |
 | `ctx.paneApi.syncPaneMode(mode)` | `pane.js` | Bottom pane mode changes |
+| `DropboxBrowserLogPanel` | `log.js` | Shared bottom-panel height and full-page shell state |
 
 ### Playback Modes
 
@@ -379,7 +386,7 @@ Playback layout is separate from HLS/session playback mode. Three layouts:
 |-------|------|---------|-------------|
 | `fullWindowActive` | boolean | `false` | session memory only |
 | `preferredExpandedMode` | `'fullscreen'` \| `'full-window'` | `'fullscreen'` | session memory only |
-| `savedLogPanelHeight` | number \| `null` | `null` | session memory only (px at full-window entry) |
+| `savedLogPanelHeight` | number \| `null` | `null` | session memory only; video-focused layout snapshot of the shared panel height |
 
 `preferredExpandedMode` is updated when the user explicitly enters either expanded
 mode via its toolbar button or via double-click from embedded. It is never written
@@ -389,7 +396,7 @@ to `Settings` or `localStorage`.
 
 | Selector | Owner | Purpose |
 |----------|-------|---------|
-| `body.video-full-window-mode` | `app.css` | Hide page `header` and `main`; force `#log-panel` to fill the viewport (`--log-panel-height: 100vh` or equivalent) |
+| `body.bottom-panel-full-window-mode` | `app.css` / `log.js` | Hide page `header` and `main`; force `#log-panel` to fill the viewport |
 | `#video-player-pane.video-full-window` (or shell ancestor) | `video.css` | Single-column playback-only shell: hide library, playlist, playback subpane header, track panel, and debug panel; stretch stage |
 | `.video-playback-stage.video-full-window` (or ancestor `.video-full-window`) | `video.css` | Subtitle overlay / `::cue` at full configured size, matching `.video-playback-stage:fullscreen` (not the embedded 65% scale) |
 
@@ -421,6 +428,8 @@ Full window and native fullscreen must never be active together:
   - full window or native fullscreen → return to embedded only
 - Exit full window also on: full-window toggle, bottom-pane mode change away from
   `video-player`, or video pane deactivate (`pane.js`).
+- Pressing `Escape` while the video-focused full-window layout is active exits
+  full window, matching the native fullscreen Escape behavior.
 
 Typical startup for the active playlist item:
 
