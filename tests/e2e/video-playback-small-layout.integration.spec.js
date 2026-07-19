@@ -96,6 +96,50 @@ test.use({
   viewport: { width: 560, height: 420 },
 });
 
+test("video pane restores its separate saved widths immediately on startup", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/?path=Videos");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await page.evaluate(() => {
+    Settings.set("bottom-pane-mode", "video-player");
+    Settings.set("video-media-library-pane-widths", [20, 50, 30]);
+    Settings.set("music-pane-widths", [70, 20, 10]);
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await expect(page.locator("#video-player-pane")).toBeVisible();
+
+  const startupLayout = await page.evaluate(() => {
+    const shell = document.querySelector("#video-player-pane .video-player-shell");
+    const columns = shell ? shell.style.gridTemplateColumns.trim().split(/\s+/) : [];
+    return {
+      music: Settings.get("music-pane-widths", null),
+      video: Settings.get("video-media-library-pane-widths", null),
+      widths: columns.length === 5
+        ? [Number.parseFloat(columns[0]), Number.parseFloat(columns[2]), Number.parseFloat(columns[4])]
+        : [],
+    };
+  });
+  expect(startupLayout).toMatchObject({
+    music: [70, 20, 10],
+    video: [20, 50, 30],
+  });
+  expect(startupLayout.widths).toHaveLength(3);
+
+  const layout = await page.evaluate(() => {
+    const shell = document.querySelector("#video-player-pane .video-player-shell");
+    const columns = shell ? shell.style.gridTemplateColumns.trim().split(/\s+/) : [];
+    return columns.length === 5
+      ? [Number.parseFloat(columns[0]), Number.parseFloat(columns[2]), Number.parseFloat(columns[4])]
+      : [];
+  });
+  expect(layout).toHaveLength(3);
+  const total = layout.reduce((sum, value) => sum + value, 0);
+  expect(layout[0] / total).toBeCloseTo(0.2, 1);
+  expect(layout[1] / total).toBeCloseTo(0.5, 1);
+  expect(layout[2] / total).toBeCloseTo(0.3, 1);
+});
+
 test.beforeAll(async () => {
   test.setTimeout(120000);
   server = await startIntegrationServer();

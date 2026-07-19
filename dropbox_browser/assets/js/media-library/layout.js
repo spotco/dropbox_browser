@@ -17,6 +17,9 @@ export function initLayout(ctx) {
     PLAYLIST_COLUMN_MIN_WIDTHS
   );
   var activePlaylistColumnDrag = null;
+  var musicPaneRestoreFrame = null;
+  var musicPaneRestorePending = false;
+  var musicPaneRestoreObserver = null;
 
   function isVisible() {
     return !ctx.pane.hidden && !ctx.pane.classList.contains('hidden');
@@ -106,6 +109,49 @@ export function initLayout(ctx) {
 
   function readSavedMusicPanePercents() {
     return normalizeMusicPanePercents(Settings.get(state.musicPaneWidthSettingKey, state.defaultMusicPanePercents));
+  }
+
+  function restoreMusicPanePercents() {
+    var savedWidths = readSavedMusicPanePercents();
+    if (!musicPaneCanApply()) {
+      musicPaneRestorePending = true;
+      observeMusicPaneRestore();
+      scheduleMusicPaneRestore();
+      return savedWidths;
+    }
+    musicPaneRestorePending = false;
+    return applyMusicPanePercents(savedWidths, false);
+  }
+
+  function musicPaneCanApply() {
+    return !!(els.playerShell && musicPaneResizeEnabled() && musicPaneAvailableWidth() > 0);
+  }
+
+  function applyPendingMusicPaneRestore() {
+    if (!musicPaneRestorePending || !musicPaneCanApply()) return false;
+    musicPaneRestorePending = false;
+    applyMusicPanePercents(readSavedMusicPanePercents(), false);
+    return true;
+  }
+
+  function observeMusicPaneRestore() {
+    if (
+      musicPaneRestoreObserver !== null
+      || !els.playerShell
+      || typeof window.ResizeObserver !== 'function'
+    ) return;
+    musicPaneRestoreObserver = new window.ResizeObserver(function () {
+      applyPendingMusicPaneRestore();
+    });
+    musicPaneRestoreObserver.observe(els.playerShell);
+  }
+
+  function scheduleMusicPaneRestore() {
+    if (musicPaneRestoreFrame !== null || typeof window.requestAnimationFrame !== 'function') return;
+    musicPaneRestoreFrame = window.requestAnimationFrame(function () {
+      musicPaneRestoreFrame = null;
+      applyPendingMusicPaneRestore();
+    });
   }
 
   function currentMusicPanePixels() {
@@ -305,6 +351,7 @@ export function initLayout(ctx) {
     playbackUiMayPaint: playbackUiMayPaint,
     refreshPlaylistColumnWidths: refreshPlaylistColumnWidths,
     readSavedMusicPanePercents: readSavedMusicPanePercents,
+    restoreMusicPanePercents: restoreMusicPanePercents,
     resumeLibraryUpdates: resumeLibraryUpdates,
     schedulePlaybackDisplayPaint: schedulePlaybackDisplayPaint,
     startMusicPaneResize: startMusicPaneResize
@@ -320,6 +367,9 @@ export function initLayout(ctx) {
       startMusicPaneResize(1, ev);
     });
   }
+  document.addEventListener('DOMContentLoaded', function () {
+    applyPendingMusicPaneRestore();
+  });
   Array.prototype.forEach.call(
     document.querySelectorAll('.music-playlist-column-resizer[data-music-playlist-column-resizer]'),
     function (handle) {

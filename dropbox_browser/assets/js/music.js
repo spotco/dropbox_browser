@@ -250,7 +250,7 @@ import {initPlayback} from './music/playback.js';
     if (!ev.detail) return;
     syncPlayerStatusBarForPaneMode(ev.detail.mode);
     if (ev.detail.mode === 'music-player') {
-      ctx.layoutApi.applyMusicPanePercents(ctx.layoutApi.readSavedMusicPanePercents(), false);
+      ctx.layoutApi.restoreMusicPanePercents();
       ctx.layoutApi.refreshPlaylistColumnWidths(false);
       ctx.layoutApi.flushDeferredMusicPaneUpdates();
       ctx.layoutApi.resumeLibraryUpdates();
@@ -313,7 +313,7 @@ import {initPlayback} from './music/playback.js';
   }
 
   ctx.libraryApi.resetLibraryForCurrentFolder();
-  ctx.layoutApi.applyMusicPanePercents(ctx.layoutApi.readSavedMusicPanePercents(), false);
+  ctx.layoutApi.restoreMusicPanePercents();
   ctx.layoutApi.refreshPlaylistColumnWidths(false);
   ctx.playbackApi.resetProgressDisplay();
   ctx.playbackApi.metadata.showUnknownMetadata();

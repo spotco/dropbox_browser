@@ -384,6 +384,16 @@ import {initPane} from './video/pane.js';
     recentApi: new RecentStore({mediaKind: 'video', storage: typeof Settings !== 'undefined' ? Settings : null}),
   };
 
+  function restoreVideoPaneLayout() {
+    if (ctx.layoutApi && typeof ctx.layoutApi.restoreMusicPanePercents === 'function') {
+      ctx.layoutApi.restoreMusicPanePercents();
+      return;
+    }
+    if (!ctx.layoutApi || typeof ctx.layoutApi.applyMusicPanePercents !== 'function') return;
+    if (typeof ctx.layoutApi.readSavedMusicPanePercents !== 'function') return;
+    ctx.layoutApi.applyMusicPanePercents(ctx.layoutApi.readSavedMusicPanePercents(), false);
+  }
+
   ctx.state.playlistStore = new PlaylistStore({
     storage: typeof Settings !== 'undefined' ? Settings : null,
     storageKey: 'video-playlists',
@@ -469,6 +479,12 @@ import {initPane} from './video/pane.js';
   window.addEventListener('bottom-pane-mode-changed', function (ev) {
     if (!ev.detail) return;
     ctx.paneApi.syncPaneMode(ev.detail.mode);
+    if (ev.detail.mode === 'video-player') {
+      restoreVideoPaneLayout();
+      if (typeof ctx.syncVideoFullWindowWithBottomPanel === 'function') {
+        ctx.syncVideoFullWindowWithBottomPanel();
+      }
+    }
   });
 
   window.addEventListener('browse-folder-changed', function (ev) {
@@ -515,4 +531,8 @@ import {initPane} from './video/pane.js';
   });
 
   ctx.paneApi.syncPaneMode(ctx.readVideoSetting('bottom-pane-mode', 'server-log'));
+  if (typeof ctx.syncVideoFullWindowWithBottomPanel === 'function') {
+    ctx.syncVideoFullWindowWithBottomPanel();
+  }
+  restoreVideoPaneLayout();
 }());

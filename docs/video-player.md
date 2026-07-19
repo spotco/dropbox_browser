@@ -386,7 +386,7 @@ Playback layout is separate from HLS/session playback mode. Three layouts:
 
 | Field | Type | Default | Persistence |
 |-------|------|---------|-------------|
-| `fullWindowActive` | boolean | `false` | session memory only |
+| `fullWindowActive` | boolean | `false` | session memory only; oversized saved panel heights may enter it for the current session |
 | `bottomPanelFullWindowOwned` | boolean | `false` | session memory only; whether video entered the shared bottom-panel full-page state |
 | `preferredExpandedMode` | `'fullscreen'` \| `'full-window'` | `'fullscreen'` | session memory only |
 
