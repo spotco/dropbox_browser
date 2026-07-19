@@ -220,6 +220,7 @@ class WebUiTests(AppTestCase):
         self.assertIn('id="bottom-pane-full-window-toggle"', html)
         self.assertIn('id="bottom-pane-minimize"', html)
         self.assertIn('/assets/icons/material-icon-theme/video-full-window-enter.svg', html)
+        self.assertIn('/assets/icons/material-icon-theme/shared-panel-minimize.svg', html)
         self.assertIn('<link rel="stylesheet" href="/assets/css/file-search.css">', html)
         self.assertIn('<link rel="stylesheet" href="/assets/css/media-library.css">', html)
         self.assertIn('<link rel="stylesheet" href="/assets/css/music.css">', html)
