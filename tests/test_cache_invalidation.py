@@ -226,6 +226,12 @@ class CacheInvalidationTests(AppTestCase):
         self.assertEqual(payload["search"]["query"], "track")
         self.assertEqual(payload["search"]["result_count"], 1)
         self.assertEqual(payload["search"]["scanned_folder_count"], 2)
+        self.assertEqual(payload["search"]["scanned_direct_item_count"], 3)
+        self.assertEqual(payload["search"]["hydrated_row_count"], 1)
+        self.assertGreaterEqual(payload["status"]["folder_cache_record_read_count"], 2)
+        self.assertIsInstance(payload["status"]["planning_elapsed_ms"], float)
+        self.assertIsInstance(payload["status"]["candidate_scan_elapsed_ms"], float)
+        self.assertIsInstance(payload["status"]["row_hydration_elapsed_ms"], float)
         self.assertEqual(payload["status"]["cache_status"], "complete")
         self.assertTrue(payload["status"]["complete"])
         self.assertFalse(payload["status"]["pending"])
@@ -410,6 +416,263 @@ class CacheInvalidationTests(AppTestCase):
 
         self.assertEqual(ctx.exception.code, HTTPStatus.BAD_REQUEST)
         self.assertEqual(rclone.calls, [])
+
+    def test_browse_search_session_returns_batches_and_completes_without_rclone(self) -> None:
+        class SearchFolderCache:
+            supports_record_lookup = True
+
+            def __init__(self) -> None:
+                self.records = {
+                    "dropbox:Music": {
+                        "complete": True,
+                        "direct_items": [
+                            {"Name": "Album", "Path": "Album", "IsDir": True, "Size": 0},
+                        ],
+                        "direct_folders": [
+                            {"name": "Album", "path": "Album", "remote_path": "dropbox:Music/Album"},
+                        ],
+                    },
+                    "dropbox:Music/Album": {
+                        "complete": True,
+                        "direct_items": [
+                            {"Name": "Track-one.mp3", "Path": "Track-one.mp3", "IsDir": False, "Size": 1},
+                            {"Name": "Track-two.mp3", "Path": "Track-two.mp3", "IsDir": False, "Size": 2},
+                        ],
+                        "direct_folders": [],
+                    },
+                }
+                self.reads: list[str] = []
+
+            def get(self, remote_path: str) -> dict | None:
+                self.reads.append(remote_path)
+                return self.records.get(remote_path)
+
+            def status(self, remote_path: str) -> str:
+                return "complete" if remote_path in self.records else "pending"
+
+            def page_epoch_for(self, _page_key: str) -> float:
+                return 123.0
+
+            def ensure_known_subtree(self, _remote_path: str, page_epoch: float, *, record_lookup=None, trace_dedup=True) -> dict[str, int | float]:
+                return {
+                    "page_epoch": page_epoch,
+                    "queued_folder_count": 0,
+                    "pending_folder_count": 0,
+                    "missing_folder_count": 0,
+                }
+
+        rclone = SimulatedRclone()
+        folder_cache = SearchFolderCache()
+        app = DropboxBrowser(
+            rclone,
+            "dropbox:",
+            None,
+            folder_cache=folder_cache,
+            listing_cache=ListingCacheManager(ttl_seconds=1800),
+        )
+        self.addCleanup(app.shutdown)
+
+        with TestServer(app) as server:
+            first = server.get_json("/browse/endpoints/search?path=Music&recursive=1&query=track&session=1&limit=1")
+            self.assertIsInstance(first.get("session_id"), str)
+            session_id = first["session_id"]
+            rows = list(first["results"])
+            payloads = [first]
+            deadline = time.time() + 5.0
+            while time.time() < deadline and not payloads[-1]["status"].get("complete"):
+                payload = server.get_json(
+                    "/browse/endpoints/search?path=Music&recursive=1&query=track&session_id="
+                    + quote(session_id)
+                    + "&limit=1"
+                )
+                payloads.append(payload)
+                rows.extend(payload["results"])
+                if payload["status"].get("complete"):
+                    break
+                time.sleep(0.01)
+
+        self.assertEqual([row["path"] for row in rows], ["Music/Album/Track-one.mp3", "Music/Album/Track-two.mp3"])
+        self.assertTrue(payloads[-1]["status"]["search_scan_complete"])
+        self.assertEqual(payloads[-1]["search"]["result_count"], 2)
+        self.assertEqual(rclone.calls, [])
+        self.assertTrue(folder_cache.reads)
+
+    def test_browse_search_session_rejects_unknown_ids_and_supports_cancel(self) -> None:
+        app = self._build_app(SimulatedRclone(), local_root=None, workers=1)
+        self.addCleanup(app.shutdown)
+
+        with TestServer(app) as server:
+            with self.assertRaises(HTTPError) as unknown:
+                server.get_json("/browse/endpoints/search?path=Music&recursive=1&session_id=missing&limit=1")
+            self.assertEqual(unknown.exception.code, HTTPStatus.NOT_FOUND)
+
+            first = server.get_json("/browse/endpoints/search?path=Music&recursive=1&session=1&query=track&limit=1")
+            cancelled = server.get_json(
+                "/browse/endpoints/search?path=Music&recursive=1&session_id="
+                + quote(first["session_id"])
+                + "&cancel=1&limit=1"
+            )
+            self.assertFalse(cancelled["status"]["complete"])
+            self.assertTrue(cancelled["status"]["search_scan_complete"])
+            self.assertIn("cancelled", cancelled["status"]["message"].lower())
+
+    def test_browse_search_session_returns_partial_before_blocked_descendant(self) -> None:
+        class BlockingFolderCache:
+            supports_record_lookup = True
+
+            def __init__(self) -> None:
+                self.child_started = threading.Event()
+                self.release_child = threading.Event()
+                self.records = {
+                    "dropbox:Music": {
+                        "complete": True,
+                        "direct_items": [
+                            {"Name": "Anime-root.mp3", "Path": "Anime-root.mp3", "IsDir": False, "Size": 1},
+                            {"Name": "Deep", "Path": "Deep", "IsDir": True, "Size": 0},
+                        ],
+                        "direct_folders": [
+                            {"name": "Deep", "path": "Deep", "remote_path": "dropbox:Music/Deep"},
+                        ],
+                    },
+                    "dropbox:Music/Deep": {
+                        "complete": True,
+                        "direct_items": [
+                            {"Name": "Anime-deep.mp3", "Path": "Anime-deep.mp3", "IsDir": False, "Size": 2},
+                        ],
+                        "direct_folders": [],
+                    },
+                }
+
+            def get(self, remote_path: str) -> dict | None:
+                if remote_path == "dropbox:Music/Deep":
+                    self.child_started.set()
+                    self.release_child.wait(timeout=5.0)
+                return self.records.get(remote_path)
+
+            def status(self, remote_path: str) -> str:
+                return "complete" if remote_path in self.records else "pending"
+
+            def page_epoch_for(self, _page_key: str) -> float:
+                return 123.0
+
+            def ensure_known_subtree(self, *_args, **_kwargs) -> dict[str, int | float]:
+                raise AssertionError("incremental search must not run the full subtree preflight")
+
+        folder_cache = BlockingFolderCache()
+        app = DropboxBrowser(
+            SimulatedRclone(),
+            "dropbox:",
+            None,
+            folder_cache=folder_cache,
+            listing_cache=ListingCacheManager(ttl_seconds=1800),
+        )
+        self.addCleanup(app.shutdown)
+
+        with TestServer(app) as server:
+            started = time.perf_counter()
+            first = server.get_json("/browse/endpoints/search?path=Music&recursive=1&query=anime&session=1&limit=10")
+            initial_elapsed = time.perf_counter() - started
+            self.assertLess(initial_elapsed, 2.0)
+            session_id = first["session_id"]
+            self.assertFalse(first["status"]["search_scan_complete"])
+            self.assertTrue(folder_cache.child_started.wait(timeout=2.0))
+
+            partial = server.get_json(
+                "/browse/endpoints/search?path=Music&recursive=1&query=anime&session_id="
+                + quote(session_id)
+                + "&limit=10"
+            )
+            self.assertFalse(partial["status"]["search_scan_complete"])
+            partial_rows = list(first["results"]) + list(partial["results"])
+            self.assertEqual([row["path"] for row in partial_rows], ["Music/Anime-root.mp3"])
+
+            folder_cache.release_child.set()
+            deadline = time.time() + 5.0
+            final = partial
+            while time.time() < deadline and not final["status"].get("complete"):
+                time.sleep(0.01)
+                final = server.get_json(
+                    "/browse/endpoints/search?path=Music&recursive=1&query=anime&session_id="
+                    + quote(session_id)
+                    + "&limit=10"
+                )
+
+        self.assertTrue(final["status"]["complete"])
+
+    def test_browse_search_candidate_pass_keeps_local_only_rows(self) -> None:
+        local_root = self.create_local_root({"Music/local-only.txt": b"local"})
+
+        class SearchFolderCache:
+            def get(self, remote_path: str) -> dict | None:
+                if remote_path == "dropbox:Music":
+                    return {"complete": True, "direct_items": [], "direct_folders": []}
+                return None
+
+            def status(self, _remote_path: str) -> str:
+                return "complete"
+
+            def page_epoch_for(self, _page_key: str) -> float:
+                return 123.0
+
+            def ensure_known_subtree(self, _remote_path: str, page_epoch: float) -> dict[str, int | float]:
+                return {"page_epoch": page_epoch, "queued_folder_count": 0, "pending_folder_count": 0, "missing_folder_count": 0}
+
+        app = DropboxBrowser(
+            SimulatedRclone(),
+            "dropbox:",
+            local_root,
+            folder_cache=SearchFolderCache(),
+            listing_cache=ListingCacheManager(ttl_seconds=1800),
+        )
+        self.addCleanup(app.shutdown)
+        with TestServer(app) as server:
+            payload = server.get_json("/browse/endpoints/search?path=Music&recursive=1&query=local+only")
+        self.assertEqual([row["path"] for row in payload["results"]], ["Music/local-only.txt"])
+        self.assertEqual(payload["results"][0]["status_label"], "Local Only")
+
+    def test_browse_search_exact_repeat_uses_revision_keyed_snapshot_cache(self) -> None:
+        class SearchFolderCache:
+            revision = 7
+
+            def __init__(self) -> None:
+                self.read_count = 0
+
+            def get(self, remote_path: str) -> dict | None:
+                self.read_count += 1
+                if remote_path == "dropbox:Music":
+                    return {
+                        "complete": True,
+                        "direct_items": [{"Name": "Track.mp3", "Path": "Track.mp3", "IsDir": False, "Size": 1}],
+                        "direct_folders": [],
+                    }
+                return None
+
+            def status(self, _remote_path: str) -> str:
+                return "complete"
+
+            def page_epoch_for(self, _page_key: str) -> float:
+                return 123.0
+
+            def ensure_known_subtree(self, _remote_path: str, page_epoch: float) -> dict[str, int | float]:
+                return {"page_epoch": page_epoch, "queued_folder_count": 0, "pending_folder_count": 0, "missing_folder_count": 0}
+
+        folder_cache = SearchFolderCache()
+        app = DropboxBrowser(
+            SimulatedRclone(),
+            "dropbox:",
+            None,
+            folder_cache=folder_cache,
+            listing_cache=ListingCacheManager(ttl_seconds=1800),
+        )
+        self.addCleanup(app.shutdown)
+        with TestServer(app) as server:
+            first = server.get_json("/browse/endpoints/search?path=Music&recursive=1&query=track")
+            reads_after_first = folder_cache.read_count
+            second = server.get_json("/browse/endpoints/search?path=Music&recursive=1&query=track")
+        self.assertFalse(first["status"]["snapshot_cache_hit"])
+        self.assertTrue(second["status"]["snapshot_cache_hit"])
+        self.assertEqual(folder_cache.read_count, reads_after_first)
+        self.assertEqual([row["path"] for row in second["results"]], ["Music/Track.mp3"])
 
     def test_browse_listing_endpoint_reuses_listing_cache_without_rclone_call(self) -> None:
         rclone = SimulatedRclone()

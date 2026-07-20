@@ -177,7 +177,6 @@ test("renderFileSearchResults renders result rows and file actions", async () =>
   assert.match(html, /data-copy-path="C:\/Dropbox\/Music\/Album\/Track\.m4a"/);
   assert.match(html, /status remote/);
 });
-
 test("renderFileSearchResults renders folders with open action", async () => {
   const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/file-search.js");
   const html = mod.renderFileSearchResults([
@@ -198,7 +197,6 @@ test("renderFileSearchResults renders folders with open action", async () => {
   assert.match(html, /href="\/\?path=Music%2FKnown"/);
   assert.match(html, /href="https:\/\/www\.dropbox\.com\/home\/Music\/Known"/);
 });
-
 test("defaultBrowseHrefForRow sends files to their containing folder with a reveal target", async () => {
   const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/file-search.js");
   assert.equal(mod.defaultBrowseHrefForRow({kind: "file", path: "Music/Album/Track.m4a"}), "/?path=Music%2FAlbum&reveal=Music%2FAlbum%2FTrack.m4a");
@@ -367,7 +365,7 @@ test("initFileSearch starts searching only after Search is pressed and uses the 
   dom.elements.get("bottom-pane-mode").value = "file-search";
   dom.elements.get("file-search-pane").hidden = false;
   await api.startSearch();
-  assert.deepEqual(requests, ["/browse/endpoints/search?path=Music&recursive=1&query=track"]);
+  assert.deepEqual(requests, ["/browse/endpoints/search?path=Music&recursive=1&query=track&session=1&limit=25"]);
   assert.match(dom.elements.get("file-search-results").innerHTML, /Track\.m4a/);
   assert.doesNotMatch(dom.elements.get("file-search-results").innerHTML, /Cover\.jpg/);
   assert.equal(dom.elements.get("file-search-root-path").textContent, "Music");
@@ -518,7 +516,7 @@ test("initFileSearch changing criteria after a run resets to press-search state 
   await api.startSearch();
   dom.elements.get("file-search-query").value = "cover";
   api.applyFilters();
-  assert.deepEqual(requests, ["/browse/endpoints/search?path=Music&recursive=1&query=track"]);
+  assert.deepEqual(requests, ["/browse/endpoints/search?path=Music&recursive=1&query=track&session=1&limit=25"]);
   assert.match(dom.elements.get("file-search-results").innerHTML, /Press Search to run with the current filters/);
   assert.equal(dom.elements.get("file-search-submit").textContent, "Search");
 });
@@ -560,7 +558,7 @@ test("initFileSearch Enter in the query blurs the field and starts searching", a
   await Promise.resolve();
   await Promise.resolve();
   assert.equal(query.blurCount, 1);
-  assert.deepEqual(requests, ["/browse/endpoints/search?path=Music&recursive=1&query=track"]);
+  assert.deepEqual(requests, ["/browse/endpoints/search?path=Music&recursive=1&query=track&session=1&limit=25"]);
 });
 
 test("initFileSearch stops polling when the pane is hidden", async () => {
@@ -672,4 +670,57 @@ test("initFileSearch stop button stops background polling and keeps current resu
   assert.equal(dom.window.timers.size, 0);
   assert.equal(dom.elements.get("file-search-submit").textContent, "Search");
   assert.match(dom.elements.get("file-search-results").innerHTML, /Track\.m4a/);
+});
+
+test("initFileSearch merges incremental session batches without duplicate rows", async () => {
+  const mod = await importModuleFromWorkspace("dropbox_browser/assets/js/file-search.js");
+  const dom = buildFakeDom({
+    mode: "file-search",
+    query: "track",
+    currentFolderPath: "Music",
+  });
+  const requests = [];
+  const payloads = [
+    {
+      session_id: "session-1",
+      root: {path: "Music"},
+      search: {query: "track", result_count: 1},
+      status: {search_pending: true, search_scan_complete: false, has_more_results: true, complete: false, pending: false, cache_status: "partial", scanned_folder_count: 1},
+      results: [{kind: "file", path: "Music/track-one.mp3", display_name: "track-one.mp3", relative_path: "track-one.mp3", type_label: "audio", sort_date: 1704067200, icon_href: "/icon.svg"}],
+    },
+    {
+      session_id: "session-1",
+      root: {path: "Music"},
+      search: {query: "track", result_count: 2},
+      status: {search_pending: false, search_scan_complete: true, has_more_results: false, complete: true, pending: false, cache_status: "complete"},
+      results: [
+        {kind: "file", path: "Music/track-one.mp3", display_name: "track-one.mp3", relative_path: "track-one.mp3", type_label: "audio", sort_date: 1704067200, icon_href: "/icon.svg"},
+        {kind: "file", path: "Music/track-two.mp3", display_name: "track-two.mp3", relative_path: "track-two.mp3", type_label: "audio", sort_date: 1704067200, icon_href: "/icon.svg"},
+      ],
+    },
+  ];
+  const api = mod.initFileSearch({
+    document: dom.document,
+    window: dom.window,
+    pollDelayMs: 25,
+    fetchImpl(url) {
+      requests.push(url);
+      const payload = payloads.shift();
+      return Promise.resolve({ok: true, json() { return Promise.resolve(payload); }});
+    },
+  });
+
+  await api.startSearch();
+  assert.match(dom.elements.get("file-search-status").textContent, /Search scan/);
+  dom.window.timers.clear();
+  await api.loadResults({isPolling: true});
+  assert.equal(dom.elements.get("file-search-result-count").textContent, "2 results");
+  const html = dom.elements.get("file-search-results").innerHTML;
+  assert.equal((html.match(/data-file-search-result-id=/g) || []).length, 2);
+  assert.match(html, /track-one\.mp3/);
+  assert.match(html, /track-two\.mp3/);
+  assert.deepEqual(requests, [
+    "/browse/endpoints/search?path=Music&recursive=1&query=track&session=1&limit=25",
+    "/browse/endpoints/search?path=Music&recursive=1&query=track&session_id=session-1&limit=25",
+  ]);
 });

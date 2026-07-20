@@ -19,7 +19,6 @@ test("buildFileSearchEndpoint normalizes path and query state", async () => {
     "/browse/endpoints/search?recursive=1",
   );
 });
-
 test("normalizeFileSearchState rejects parent traversal segments", async () => {
   const api = await importModuleFromWorkspace("dropbox_browser/assets/js/file-search-api.js");
   assert.throws(
@@ -27,5 +26,16 @@ test("normalizeFileSearchState rejects parent traversal segments", async () => {
       api.normalizeFileSearchState({path: "../Music"});
     },
     /Parent path segments are not allowed/,
+  );
+});
+test("buildFileSearchEndpoint emits bounded search session controls", async () => {
+  const api = await importModuleFromWorkspace("dropbox_browser/assets/js/file-search-api.js");
+  assert.equal(
+    api.buildFileSearchEndpoint({path: "Music", query: "track", session: true, limit: 25}),
+    "/browse/endpoints/search?path=Music&recursive=1&query=track&session=1&limit=25",
+  );
+  assert.equal(
+    api.buildFileSearchEndpoint({path: "Music", sessionId: "abc123", cancel: true, limit: 25}),
+    "/browse/endpoints/search?path=Music&recursive=1&session_id=abc123&cancel=1&limit=25",
   );
 });

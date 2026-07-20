@@ -901,6 +901,65 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _serve_search_session_payload(self, payload: dict, *, started: float) -> None:
+        result_serialization_started = time.perf_counter()
+        serialized_results = [
+            dict(
+                self._serialize_browse_row(
+                    posixpath.dirname(str(row["path"])),
+                    row,
+                    current_folder_cache=None,
+                    folder_cache_map=(
+                        {str(row["name"]): row.get("search_child_folder_cache")}
+                        if bool(row.get("is_dir"))
+                        else None
+                    ),
+                ),
+                relative_path=str(row.get("relative_path") or ""),
+            )
+            for row in payload.get("results", [])
+        ]
+        result_serialization_elapsed_ms = round((time.perf_counter() - result_serialization_started) * 1000, 3)
+        payload["results"] = serialized_results
+        status = payload.get("status")
+        if isinstance(status, dict):
+            status["response_serialization_elapsed_ms"] = result_serialization_elapsed_ms
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
+        search = payload.get("search") if isinstance(payload.get("search"), dict) else {}
+        status = payload.get("status") if isinstance(payload.get("status"), dict) else {}
+        workertrace.append(
+            "browse_search_endpoint",
+            rel_path=str((payload.get("root") or {}).get("path") or ""),
+            remote_path=str((payload.get("root") or {}).get("remote_path") or ""),
+            recursive=bool(search.get("recursive", True)),
+            query=str(search.get("query") or ""),
+            session_id=payload.get("session_id"),
+            cache_status=status.get("cache_status"),
+            complete=bool(status.get("complete")),
+            pending=bool(status.get("pending")),
+            search_scan_complete=bool(status.get("search_scan_complete")),
+            result_count=int(search.get("result_count") or 0),
+            batch_result_count=len(serialized_results),
+            first_batch_result_count=int(search.get("first_batch_result_count") or 0),
+            scanned_folder_count=int(search.get("scanned_folder_count") or 0),
+            scanned_direct_item_count=int(status.get("scanned_direct_item_count") or 0),
+            hydrated_row_count=int(status.get("hydrated_row_count") or 0),
+            folder_cache_record_read_count=int(status.get("folder_cache_record_read_count") or 0),
+            planning_elapsed_ms=float(status.get("planning_elapsed_ms") or 0.0),
+            candidate_scan_elapsed_ms=float(status.get("candidate_scan_elapsed_ms") or 0.0),
+            row_hydration_elapsed_ms=float(status.get("row_hydration_elapsed_ms") or 0.0),
+            response_serialization_elapsed_ms=result_serialization_elapsed_ms,
+            client_render=bool(getattr(self.app, "client_render", False)),
+            total_elapsed_ms=elapsed_ms,
+        )
+        body = _json.dumps(payload).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self._send_no_store_headers()
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def serve_browse_search_endpoint(self, query: str) -> None:
         started = time.perf_counter()
         params = parse_qs(query, keep_blank_values=True)
@@ -908,12 +967,52 @@ class RequestHandler(BaseHTTPRequestHandler):
         recursive = params.get("recursive", ["1"])[0]
         if recursive not in {"1", "true", "True"}:
             raise BrowserError(HTTPStatus.BAD_REQUEST, "Recursive cached search requires recursive=1.")
+        session_mode = params.get("session", [""])[0]
+        session_id = params.get("session_id", [""])[0]
+        if session_mode == "1" or session_id:
+            try:
+                limit = int(params.get("limit", ["100"])[0])
+            except (TypeError, ValueError):
+                raise BrowserError(HTTPStatus.BAD_REQUEST, "Search limit must be an integer.")
+            if limit < 1 or limit > 5000:
+                raise BrowserError(HTTPStatus.BAD_REQUEST, "Search limit must be between 1 and 5000.")
+            if session_id and params.get("cancel", [""])[0] in {"1", "true", "True"}:
+                payload = self.app.cancel_cached_search_session(session_id)
+            elif session_id:
+                payload = self.app.poll_cached_search_session(session_id, limit=limit)
+            else:
+                payload = self.app.start_cached_search_session(
+                    rel_path,
+                    params.get("query", [""])[0],
+                    recursive=True,
+                    limit=limit,
+                )
+            self._serve_search_session_payload(payload, started=started)
+            return
         snapshot = self.app.build_cached_recursive_search(
             rel_path,
             params.get("query", [""])[0],
             recursive=True,
         )
         root_label = posixpath.basename(snapshot.rel_path) if snapshot.rel_path else "Dropbox"
+        result_serialization_started = time.perf_counter()
+        serialized_results = [
+            dict(
+                self._serialize_browse_row(
+                    posixpath.dirname(str(row["path"])),
+                    row,
+                    current_folder_cache=None,
+                    folder_cache_map=(
+                        {str(row["name"]): row.get("search_child_folder_cache")}
+                        if bool(row.get("is_dir"))
+                        else None
+                    ),
+                ),
+                relative_path=str(row.get("relative_path") or ""),
+            )
+            for row in snapshot.entries
+        ]
+        result_serialization_elapsed_ms = round((time.perf_counter() - result_serialization_started) * 1000, 3)
         payload = {
             "root": {
                 "remote_path": snapshot.remote_path,
@@ -925,6 +1024,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                 "recursive": True,
                 "result_count": len(snapshot.entries),
                 "scanned_folder_count": snapshot.scanned_folder_count,
+                "scanned_direct_item_count": snapshot.scanned_direct_item_count,
+                "hydrated_row_count": snapshot.hydrated_row_count,
+                "first_batch_result_count": len(serialized_results),
             },
             "status": {
                 "cache_status": snapshot.cache_status,
@@ -944,23 +1046,17 @@ class RequestHandler(BaseHTTPRequestHandler):
                     else "No cached recursive search data is available for this folder yet."
                 ),
                 "generated_at": snapshot.generated_at,
+                "scanned_direct_item_count": snapshot.scanned_direct_item_count,
+                "hydrated_row_count": snapshot.hydrated_row_count,
+                "folder_cache_record_read_count": snapshot.folder_cache_record_read_count,
+                "planning_elapsed_ms": snapshot.planning_elapsed_ms,
+                "candidate_scan_elapsed_ms": snapshot.candidate_scan_elapsed_ms,
+                "row_hydration_elapsed_ms": snapshot.row_hydration_elapsed_ms,
+                "response_serialization_elapsed_ms": result_serialization_elapsed_ms,
+                "snapshot_cache_hit": snapshot.snapshot_cache_hit,
+                "snapshot_cache_entry_count": len(getattr(self.app, "_search_snapshot_cache", [])),
             },
-            "results": [
-                dict(
-                    self._serialize_browse_row(
-                        posixpath.dirname(str(row["path"])),
-                        row,
-                        current_folder_cache=None,
-                        folder_cache_map=(
-                            {str(row["name"]): row.get("search_child_folder_cache")}
-                            if bool(row.get("is_dir"))
-                            else None
-                        ),
-                    ),
-                    relative_path=str(row.get("relative_path") or ""),
-                )
-                for row in snapshot.entries
-            ],
+            "results": serialized_results,
         }
         elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
         if elapsed_ms >= workertrace.SLOW_OPERATION_THRESHOLD_MS:
@@ -979,6 +1075,16 @@ class RequestHandler(BaseHTTPRequestHandler):
                 pending_folder_count=snapshot.pending_folder_count,
                 missing_folder_count=snapshot.missing_folder_count,
                 missing_listing_count=snapshot.missing_listing_count,
+                scanned_direct_item_count=snapshot.scanned_direct_item_count,
+                hydrated_row_count=snapshot.hydrated_row_count,
+                first_batch_result_count=len(serialized_results),
+                folder_cache_record_read_count=snapshot.folder_cache_record_read_count,
+                planning_elapsed_ms=snapshot.planning_elapsed_ms,
+                candidate_scan_elapsed_ms=snapshot.candidate_scan_elapsed_ms,
+                row_hydration_elapsed_ms=snapshot.row_hydration_elapsed_ms,
+                response_serialization_elapsed_ms=result_serialization_elapsed_ms,
+                snapshot_cache_hit=snapshot.snapshot_cache_hit,
+                snapshot_cache_entry_count=len(getattr(self.app, "_search_snapshot_cache", [])),
                 client_render=bool(getattr(self.app, "client_render", False)),
                 total_elapsed_ms=elapsed_ms,
             )
@@ -997,6 +1103,16 @@ class RequestHandler(BaseHTTPRequestHandler):
             pending_folder_count=snapshot.pending_folder_count,
             missing_folder_count=snapshot.missing_folder_count,
             missing_listing_count=snapshot.missing_listing_count,
+            scanned_direct_item_count=snapshot.scanned_direct_item_count,
+            hydrated_row_count=snapshot.hydrated_row_count,
+            first_batch_result_count=len(serialized_results),
+            folder_cache_record_read_count=snapshot.folder_cache_record_read_count,
+            planning_elapsed_ms=snapshot.planning_elapsed_ms,
+            candidate_scan_elapsed_ms=snapshot.candidate_scan_elapsed_ms,
+            row_hydration_elapsed_ms=snapshot.row_hydration_elapsed_ms,
+            response_serialization_elapsed_ms=result_serialization_elapsed_ms,
+            snapshot_cache_hit=snapshot.snapshot_cache_hit,
+            snapshot_cache_entry_count=len(getattr(self.app, "_search_snapshot_cache", [])),
             client_render=bool(getattr(self.app, "client_render", False)),
             total_elapsed_ms=elapsed_ms,
         )
