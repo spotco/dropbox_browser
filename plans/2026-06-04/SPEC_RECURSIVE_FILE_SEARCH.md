@@ -1,5 +1,10 @@
 # Recursive File Search Spec
 
+> Updated July 19, 2026 after comparing this plan with the current recursive
+> search and shared media-library implementations. The feature described in the
+> "Current State" sections is shipped. The performance follow-up below remains
+> necessary, with the sequencing revised in **Recommended Implementation Plan**.
+
 ## Goal
 
 Provide a recursive file search pane in the existing bottom pane. It should let
@@ -323,12 +328,43 @@ Observed current behavior from the live trace:
 Current root-search cost drivers:
 
 - scanning every cached folder under the root
-- rebuilding browse-style entry rows for all scanned folders
-- local path matching and file status work during row hydration
+- rebuilding browse-style entry rows for all direct entries before applying the
+  query filter
+- local path matching, directory enumeration, and file status work during row
+  hydration when local comparison is enabled
 - child folder cache lookups for status labels
+- repeated folder-cache record reads: `ensure_known_subtree()` walks known
+  records and the later search traversal reads them again. Search does not yet
+  use the per-request record lookup added for media library.
 
 This feature currently optimizes for complete snapshot correctness, not
 time-to-first-result.
+
+### Recent Media-Library Cache
+
+The shared music/video recursive library now has a small app-local LRU response
+snapshot cache. It is keyed by the requested library shape and the folder-cache
+revision. It also uses a per-request `record_lookup` map so the recursive
+planning and payload traversal do not reread the same folder-cache record.
+
+This does **not** currently accelerate file search. It should be reused with
+care:
+
+- Reuse the per-request `record_lookup` pattern in recursive search. This is a
+  low-risk reduction in folder-cache file reads and must preserve the fallback
+  behavior used by test cache doubles.
+- A revision-keyed LRU can cache an exact repeated search request (same root and
+  query) after the cache is stable. It can make an unchanged polling/reload
+  request inexpensive, but does not improve the first request, a new query, or
+  a cache revision that is changing while workers are indexing.
+- Do not reuse media-library payloads or make file search depend on
+  `media_library.py`: those payloads intentionally include only supported media
+  extensions and have a different row contract. If an LRU is shared, extract
+  only the generic cache primitive into a neutral helper.
+- The current folder-cache revision is global. Any folder-cache update can
+  invalidate an otherwise unrelated root snapshot. Do not represent this small
+  LRU as a replacement for incremental search or as a first-search latency
+  solution.
 
 ## Testing
 
@@ -363,6 +399,29 @@ Not currently implemented:
 
 - browser E2E coverage dedicated to file search
 
+### Coverage Verification (July 19, 2026)
+
+The existing non-browser coverage is meaningful, but it does not cover a real
+file-search browser workflow end to end.
+
+- Python endpoint tests cover cache-only traversal without `rclone`, recursive
+  path/query matching, listing-cache fallback, partial cache status, parent-path
+  rejection, image thumbnail fields, and the endpoint trace contract.
+- JavaScript unit tests cover endpoint construction/path rejection, rendering,
+  result actions, query/type/date filtering, virtualization, Search/Enter/Reset
+  behavior, incomplete-cache polling, pane-hide polling cancellation, and Stop.
+- Web shell tests cover pane markup and serving the search assets (including
+  `HEAD`), but not interactive search behavior.
+- There is no dedicated Playwright search test. The only browser-level
+  reference to `file-search` currently verifies that the selected bottom-pane
+  mode survives reload; it does not start a search, verify results, poll a
+  partial tree, or exercise result actions.
+
+The feature therefore has solid unit and endpoint coverage for the shipped
+stateless snapshot contract, but no E2E confidence in the browser/server
+integration. The session work below must add both E2E coverage and new focused
+contract tests; it must not rely on manual testing alone.
+
 ## Open Decisions
 
 - Should result rows remain files and folders, or become files-only?
@@ -372,44 +431,98 @@ Not currently implemented:
 - Should file search become incremental or session-based instead of one full
   snapshot per request?
   This is now the main performance follow-up for root search.
+- When local comparison is enabled, must recursive search continue to include
+  local-only files and folders? Current browse-style row hydration can surface
+  them. A raw Dropbox `direct_items` candidate pass must not silently remove
+  that behavior; retaining it efficiently may need a local candidate index or
+  a documented scope decision.
+- What bounds should protect an in-memory incremental session (maximum active
+  sessions, result rows, idle lifetime, and cancellation behavior)?
 
-## Next Steps
+## Recommended Implementation Plan
 
 Goal: reduce time-to-first-result for root searches from Dropbox root without
 breaking the current cache-only and safe-path behavior.
 
-### Step 1 - Fast Candidate Pass
+### Step 0 - Baseline And Instrumentation
 
-- Split recursive search into two phases:
-  - cheap candidate matching over cached `direct_items`
-  - row hydration only for matched results
-- Avoid rebuilding browse-style entry rows for folders that produce no matches.
-- Keep text matching based on normalized filename and relative path tokens.
+- Keep the existing total endpoint trace and add fields for:
+  - recursive planning time
+  - candidate scan time
+  - row hydration time
+  - response serialization time
+  - scanned folder count
+  - scanned direct-item count
+  - hydrated row count
+  - first-batch result count
+  - folder-cache record-read count
+- Capture a current root-search baseline with a selective query and with a
+  no-match query before changing behavior. The June 7 ~6.3-second observation
+  is useful context, not a current performance guarantee.
+- Add focused test helpers that can assert work counts without wall-clock timing.
 
 Expected outcome:
 
-- substantially lower first-response time for selective root queries
+- a reproducible comparison point and regressions based on observable work,
+  rather than timing-sensitive tests
+
+### Step 1 - Fast Candidate Pass And Record Reuse
+
+- Split recursive search into two phases:
+  - cheap candidate matching over cached Dropbox `direct_items`, while still
+    traversing every remote child folder needed to discover descendants
+  - browse-style row hydration only for matched entries
+- Avoid rebuilding browse-style entry rows for folders that produce no matches.
+- Keep text matching based on normalized filename and relative path tokens.
+- Carry a request-local record map through both `ensure_known_subtree()` and the
+  search traversal, following the media-library `record_lookup` pattern.
+- Preserve safe Windows name matching and the visible row/action contract when
+  hydrating a candidate.
+- Explicitly preserve local-only search semantics, or add and approve a
+  replacement local candidate strategy before optimizing the remote-only path.
+
+Expected outcome:
+
+- substantially lower CPU, local filesystem, status, and serialization work for
+  selective root queries
 - same visible result shape for matched rows
+- no claim of bounded first-response time: a rare/no-match query still needs a
+  full cached-tree candidate scan to establish completeness
 
-### Step 2 - First-Page Limit
+### Step 2 - Incremental Search Session And First Batch
 
-- Add a server-side `limit=<n>` path for search results.
-- Stop scanning once enough matches are found for the first page or first batch.
-- Keep endpoint status fields rich enough for the client to know whether more
-  cached scanning remains.
+- Add an app-local, cancellable background search session keyed by a generated
+  opaque session id. Keep cache-only input rules: the session may inspect cached
+  records and request existing folder-cache background work, but must not run
+  synchronous recursive `rclone` work on the HTTP request thread.
+- Add `limit=<n>` for the first batch and subsequent batches. The session should
+  return a batch as soon as enough candidates have been found and hydrated.
+- Return separate state for cache completeness and search-scan completeness;
+  they are not the same while a session is progressing.
+- Bound session count, result retention, and idle lifetime. Stop work when the
+  client cancels, hides the pane, supersedes a query, or the session expires.
+- Keep result identity stable and deduplicate rows by remote/local path across
+  batches and cache updates.
 
 Expected outcome:
 
 - root searches can return the first visible batch without paying the cost of a
   complete full-tree scan up front
+- later batches and final completeness are reachable without rescanning the
+  same first page on every poll
 
-### Step 3 - Incremental Search Session
+### Step 3 - Client Session Polling And Result Merge
 
-- Convert root recursive search from a single full snapshot request into an
-  incremental background search session.
-- Return the first batch as soon as matches are found.
-- Continue scanning and append more results through polling until complete.
-- Reuse existing search-pane polling patterns where possible.
+- Reuse the pane's existing cancellation, visibility, and polling lifecycle.
+- Replace whole-snapshot polling with session polling that merges new batches
+  into the virtualized result collection without duplicates.
+- Distinguish user-facing messages for:
+  - folder metadata still indexing
+  - search scan in progress
+  - first batch available while more results are scanning
+  - complete search
+- Retain the existing local type/date filtering, and apply it to accumulated
+  results without forcing a new server scan.
 
 Expected outcome:
 
@@ -417,17 +530,68 @@ Expected outcome:
 - improved perceived responsiveness for root search
 - preserved complete-result behavior after background search settles
 
-### Step 4 - Validate And Instrument
+### Step 4 - Revision-Keyed Repeat-Request Cache (Optional)
 
-- Add trace fields that distinguish:
-  - candidate-scan time
-  - row-hydration time
-  - first-batch result count
-  - total scanned folders before first response
-- Add regression tests for root-search latency-oriented behavior:
-  - first batch returns before full scan completion
-  - limit handling
-  - incremental polling and final completion
+- After Steps 0-3, consider an LRU for completed exact search responses or
+  session snapshots, keyed by root, server query, row-shape-affecting options,
+  and folder-cache revision.
+- Reuse a generalized form of `MediaLibrarySnapshotCache`, not the media payload
+  itself. Return fresh status metadata on a hit.
+- Add a size/entry bound appropriate for arbitrary file-search result sets.
+
+Expected outcome:
+
+- inexpensive identical searches or polls when the folder-cache revision is
+  unchanged
+- no reliance on this cache for initial-query responsiveness
+
+### Step 5 - Validate
+
+- Add regression tests for:
+  - candidate filtering hydrates only matches while preserving result semantics
+  - local-only behavior under `--local-root`
+  - per-request record lookup avoids duplicate cache reads
+  - first batch returns before full search-scan completion
+  - session cancellation, expiry, deduplication, limit handling, and final
+    completion
+  - cache revision invalidates an exact-result snapshot
+- Add endpoint/unit contract tests for:
+  - invalid, expired, cancelled, and unknown session ids
+  - a session that returns a first batch before its full scan completes, then
+    returns every later row exactly once
+  - separate cache-indexing and search-scanning status fields
+  - a selective query, an empty query, and a no-match query
+  - Unicode/separator-normalized matching and Windows-renamed local paths
+  - no foreground recursive `rclone` call from session creation or polling
+- Extend `tests/js/file-search.test.js` for the new session payload instead of
+  weakening existing snapshot tests. Cover:
+  - first-batch append/merge and duplicate suppression
+  - virtualization after multiple appended batches
+  - Stop, pane hide, query change, and superseding search cancellation
+  - distinct indexing-versus-search-progress copy and terminal states
+  - retained local type/date filters while batches continue arriving
+- Add a real-browser Playwright suite, preferably
+  `tests/e2e/client-render.file-search.spec.js` so it runs in the existing
+  `client-render` project. Use an isolated fake-rclone fixture with a nested
+  tree and a controllable partial-cache phase. It must exercise:
+  - selecting the File Search pane, capturing the current browse folder, and
+    receiving a matching nested result through the real HTTP endpoint
+  - partial cached metadata followed by a completed search, with no duplicate
+    visible rows
+  - Stop/cancellation and hiding the pane preventing further visible polling
+  - a result action that navigates to its containing folder with the file
+    revealed; include a safe encoded/Unicode path case
+  - a large enough result fixture to verify virtualization remains usable after
+    batch merging
+- Run the relevant `cache`, `names`, and `web` test groups, plus JavaScript
+  file-search tests and the client-render Playwright project; run the full
+  suite before handoff because the shared folder-cache contract is involved.
+
+`limit` must not be implemented as an isolated endpoint change: the current
+client replaces its full result snapshot on every poll, so a stateless limited
+endpoint would repeatedly return the first page and never safely advance to
+later matches. Pair it with a cursor or, preferably, the bounded session in
+Steps 2-3.
 
 This work should be treated as the next phase of the existing recursive file
 search feature rather than a separate search product.
