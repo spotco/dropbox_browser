@@ -2,8 +2,9 @@
 
 > Updated July 19, 2026 after comparing this plan with the current recursive
 > search and shared media-library implementations. The feature described in the
-> "Current State" sections is shipped. The performance follow-up below remains
-> necessary, with the sequencing revised in **Recommended Implementation Plan**.
+> "Current State" sections is shipped. The performance follow-up below is now
+> implemented; the status markers in **Recommended Implementation Plan** record
+> the completed work and validation.
 
 ## Goal
 
@@ -412,15 +413,21 @@ file-search browser workflow end to end.
   behavior, incomplete-cache polling, pane-hide polling cancellation, and Stop.
 - Web shell tests cover pane markup and serving the search assets (including
   `HEAD`), but not interactive search behavior.
-- There is no dedicated Playwright search test. The only browser-level
-  reference to `file-search` currently verifies that the selected bottom-pane
-  mode survives reload; it does not start a search, verify results, poll a
-  partial tree, or exercise result actions.
+- Before this implementation there was no dedicated Playwright search test.
+  The prior browser-level reference only verified that the selected
+  bottom-pane mode survived reload; it did not start a search, verify results,
+  poll a partial tree, or exercise result actions.
 
-The feature therefore has solid unit and endpoint coverage for the shipped
+At that point the feature had solid unit and endpoint coverage for the shipped
 stateless snapshot contract, but no E2E confidence in the browser/server
-integration. The session work below must add both E2E coverage and new focused
-contract tests; it must not rely on manual testing alone.
+integration. The session work below therefore added both E2E coverage and new
+focused contract tests rather than relying on manual testing alone.
+
+Implementation update: `tests/e2e/client-render.file-search.spec.js` now covers
+batched nested results and virtualization, encoded containing-folder/reveal
+navigation, and Stop/cancellation against the real HTTP server. The focused
+endpoint tests cover session batching, cancellation, unknown ids, local-only
+rows, work metrics, and revision-keyed repeat responses.
 
 ## Open Decisions
 
@@ -446,6 +453,10 @@ breaking the current cache-only and safe-path behavior.
 
 ### Step 0 - Baseline And Instrumentation
 
+**Status: ✅ Complete** — endpoint traces now include planning, candidate-scan,
+hydration, serialization, work-count, first-batch, and folder-record metrics;
+tests assert the observable counts without wall-clock timing.
+
 - Keep the existing total endpoint trace and add fields for:
   - recursive planning time
   - candidate scan time
@@ -467,6 +478,10 @@ Expected outcome:
   rather than timing-sensitive tests
 
 ### Step 1 - Fast Candidate Pass And Record Reuse
+
+**Status: ✅ Complete** — recursive search performs a cheap remote candidate
+pass, hydrates only matching rows, preserves local-only candidates, and reuses
+folder-cache records through a request-local lookup.
 
 - Split recursive search into two phases:
   - cheap candidate matching over cached Dropbox `direct_items`, while still
@@ -491,6 +506,13 @@ Expected outcome:
 
 ### Step 2 - Incremental Search Session And First Batch
 
+**Status: ✅ Complete** — bounded cancellable sessions provide opaque ids,
+limited batches, separate cache/search completeness, deduplication, expiry, and
+background traversal without recursive request-thread `rclone` work. Incremental
+sessions skip the full-tree `ensure_known_subtree()` preflight, begin cached
+folder scanning immediately, and request metadata only when a visited folder is
+missing its cached listing.
+
 - Add an app-local, cancellable background search session keyed by a generated
   opaque session id. Keep cache-only input rules: the session may inspect cached
   records and request existing folder-cache background work, but must not run
@@ -513,6 +535,10 @@ Expected outcome:
 
 ### Step 3 - Client Session Polling And Result Merge
 
+**Status: ✅ Complete** — the file-search pane starts and polls sessions,
+merges batches without duplicates, retains local filters, reports distinct
+progress states, and cancels on Stop, hide, or superseding searches.
+
 - Reuse the pane's existing cancellation, visibility, and polling lifecycle.
 - Replace whole-snapshot polling with session polling that merges new batches
   into the virtualized result collection without duplicates.
@@ -532,6 +558,10 @@ Expected outcome:
 
 ### Step 4 - Revision-Keyed Repeat-Request Cache (Optional)
 
+**Status: ✅ Complete** — completed remote-only snapshots use a bounded
+revision-keyed LRU; local-root searches remain uncached and cache hits expose
+fresh status/trace metadata.
+
 - After Steps 0-3, consider an LRU for completed exact search responses or
   session snapshots, keyed by root, server query, row-shape-affecting options,
   and folder-cache revision.
@@ -546,6 +576,13 @@ Expected outcome:
 - no reliance on this cache for initial-query responsiveness
 
 ### Step 5 - Validate
+
+**Status: ✅ Complete** — focused endpoint, cache/name/web, JavaScript, full
+Python, and client-render Playwright coverage are passing, including the
+session contract, cancellation, local-only rows, duplicate suppression,
+virtualization, encoded reveal navigation, and cache invalidation cases.
+The regression suite also proves a partial result is returned while a
+descendant listing remains blocked.
 
 - Add regression tests for:
   - candidate filtering hydrates only matches while preserving result semantics

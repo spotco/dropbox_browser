@@ -170,6 +170,7 @@ export function filterFileSearchResults(results, criteria) {
 
 export function shouldPollFileSearchStatus(status) {
   var snapshot = status || {};
+  if (snapshot.search_pending || snapshot.search_scan_complete === false || snapshot.has_more_results) return true;
   if (snapshot.complete) return false;
   if (snapshot.pending) return true;
   return Number(snapshot.missing_listing_count) > 0;
@@ -177,6 +178,11 @@ export function shouldPollFileSearchStatus(status) {
 
 export function fileSearchPendingStatusMessage(status) {
   var snapshot = status || {};
+  if (snapshot.search_pending || snapshot.search_scan_complete === false) {
+    var scanned = Number(snapshot.scanned_folder_count) || 0;
+    return scanned > 0 ? 'Search scan is still running (' + scanned + ' folders scanned).' : 'Search scan is starting...';
+  }
+  if (snapshot.has_more_results) return 'More search results are available.';
   var parts = [];
   var pendingFolders = Number(snapshot.pending_folder_count) || 0;
   var queuedFolders = Number(snapshot.queued_folder_count) || 0;
@@ -314,7 +320,7 @@ export function initFileSearch(options) {
   var doc = options.document;
   var win = options.window;
   var fetchImpl = options.fetchImpl;
-  var pollDelayMs = Math.max(0, Number(options.pollDelayMs) || 2000);
+  var pollDelayMs = Math.max(0, Number(options.pollDelayMs) || 250);
   var queryDebounceMs = Math.max(0, Number(options.queryDebounceMs) || 250);
   var pane = doc.getElementById('file-search-pane');
   var rootPathEl = doc.getElementById('file-search-root-path');
@@ -347,6 +353,8 @@ export function initFileSearch(options) {
     snapshotLoaded: false,
     snapshotQuery: '',
     searchRootPath: '',
+    sessionId: '',
+    batchLimit: 25,
     searchActive: false,
     filteredResults: [],
     criteria: {
@@ -413,6 +421,7 @@ export function initFileSearch(options) {
     state.status = {};
     state.snapshotLoaded = false;
     state.snapshotQuery = '';
+    state.sessionId = '';
     state.filteredResults = [];
     state.virtual.rowHeight = DEFAULT_VIRTUAL_ROW_HEIGHT;
     state.virtual.rowHeightMeasured = false;
@@ -421,8 +430,26 @@ export function initFileSearch(options) {
   }
 
   function stopSearchRun() {
+    var sessionId = state.sessionId;
+    var shouldCancelSession = !!(sessionId && state.searchActive && shouldPollFileSearchStatus(state.status));
     state.searchActive = false;
     stopPolling();
+    if (shouldCancelSession) {
+      state.sessionId = '';
+      try {
+        Promise.resolve(fetchImpl(buildFileSearchEndpoint({
+          path: state.searchRootPath,
+          recursive: true,
+          sessionId: sessionId,
+          cancel: true,
+          limit: state.batchLimit,
+        }))).catch(function () { return false; });
+      } catch (_error) {
+        // Cancellation is best-effort; the local request state is authoritative.
+      }
+    } else if (sessionId) {
+      state.sessionId = '';
+    }
     updateSearchButton();
   }
 
@@ -649,8 +676,16 @@ export function initFileSearch(options) {
       isPolling: !!options.isPolling,
       isActive: isActive(),
     });
+    var endpointState = {
+      path: state.searchRootPath,
+      query: serverQuery,
+      recursive: true,
+      limit: state.batchLimit,
+    };
+    if (state.sessionId) endpointState.sessionId = state.sessionId;
+    else endpointState.session = true;
     return fetchImpl(
-      buildFileSearchEndpoint({path: state.searchRootPath, query: serverQuery, recursive: true}),
+      buildFileSearchEndpoint(endpointState),
       currentController ? {signal: currentController.signal} : undefined,
     )
       .then(function (response) {
@@ -661,7 +696,22 @@ export function initFileSearch(options) {
         if (version !== requestVersion) return false;
         if (!isActive()) return false;
         currentController = null;
-        state.rawResults = Array.isArray(payload && payload.results) ? payload.results : [];
+        if (payload && payload.session_id) state.sessionId = String(payload.session_id);
+        var incomingResults = Array.isArray(payload && payload.results) ? payload.results : [];
+        var resultByKey = new Map();
+        state.rawResults.forEach(function (row) {
+          resultByKey.set(String((row && row.kind) || '') + ':' + String((row && (row.path || row.display_name)) || ''), row);
+        });
+        incomingResults.forEach(function (row) {
+          var key = String((row && row.kind) || '') + ':' + String((row && (row.path || row.display_name)) || '');
+          if (resultByKey.has(key)) {
+            var index = state.rawResults.indexOf(resultByKey.get(key));
+            if (index >= 0) state.rawResults[index] = row;
+          } else {
+            state.rawResults.push(row);
+          }
+          resultByKey.set(key, row);
+        });
         state.status = payload && payload.status ? payload.status : {};
         state.snapshotLoaded = true;
         state.snapshotQuery = serverQuery;
