@@ -16,6 +16,7 @@ from .errors import BrowserError
 from .formatting import display_date, file_type, human_size, status_class
 from .music import MUSIC_ENDPOINT_PREFIX, handle_music_get
 from .namekeys import filename_compare_key
+from .photo_map_cache import normalize_cache_path
 from .paths import clean_rel_path, remote_target, safe_join_local
 from .services import DropboxBrowser, diff_label
 from .streaming import (
@@ -52,12 +53,21 @@ from .video import (
     log_video_debug,
     video_session_manager,
 )
-from .views import dropbox_home_url, folder_page_title, icon_for_entry, error_html, page_html
+from .views import (
+    PHOTO_MAP_VENDOR_ASSETS,
+    dropbox_home_url,
+    error_html,
+    folder_page_title,
+    icon_for_entry,
+    page_html,
+)
 
 
 ASSET_DIR = Path(__file__).resolve().parent / "assets"
 ASSET_ROUTE_PREFIX = "/assets/"
+PHOTO_MAP_ENDPOINT_PREFIX = "/photo-map/endpoints/"
 TAGGED_INPUT_COPY_BUFFER_SIZE = 2 * 1024 * 1024
+PHOTO_MAP_MAX_JSON_BODY_BYTES = 2 * 1024 * 1024
 
 
 class _FirstByteTimingReader:
@@ -162,6 +172,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.serve_sync_status(parsed.query)
             elif parsed.path == "/folder-info":
                 self.serve_folder_info(parsed.query)
+            elif parsed.path.startswith(PHOTO_MAP_ENDPOINT_PREFIX):
+                self.serve_photo_map_endpoint(parsed.path, parsed.query)
             elif parsed.path.startswith(MUSIC_ENDPOINT_PREFIX):
                 self.serve_music_endpoint(parsed.path, parsed.query)
             elif parsed.path.startswith(VIDEO_ENDPOINT_PREFIX):
@@ -212,6 +224,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.handle_refresh_cache()
             elif parsed.path == "/client-log":
                 self.handle_client_log()
+            elif parsed.path.startswith(PHOTO_MAP_ENDPOINT_PREFIX):
+                self.handle_photo_map_endpoint(parsed.path)
             elif parsed.path.startswith(VIDEO_ENDPOINT_PREFIX):
                 self.serve_video_endpoint_post(parsed.path)
             else:
@@ -1549,6 +1563,48 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def serve_photo_map_endpoint(self, path: str, query: str) -> None:
+        endpoint = path.removeprefix(PHOTO_MAP_ENDPOINT_PREFIX)
+        if endpoint != "cache":
+            raise BrowserError(HTTPStatus.NOT_FOUND, "Photo Map endpoint not found.")
+        params = parse_qs(query, keep_blank_values=True)
+        folder_path = normalize_cache_path(params.get("path", [""])[0], allow_empty=True)
+        entries = self.app.photo_map_cache.read(folder_path)
+        self._send_photo_map_json({"status": "ok", "path": folder_path, "entries": entries})
+
+    def handle_photo_map_endpoint(self, path: str) -> None:
+        endpoint = path.removeprefix(PHOTO_MAP_ENDPOINT_PREFIX)
+        if endpoint != "cache":
+            raise BrowserError(HTTPStatus.NOT_FOUND, "Photo Map endpoint not found.")
+        payload = self._read_json_body()
+        entries = payload.get("entries") if isinstance(payload, dict) else None
+        folder_path = normalize_cache_path(payload.get("path", "") if isinstance(payload, dict) else "", allow_empty=True)
+        written = self.app.photo_map_cache.write_batch(folder_path, entries)
+        self._send_photo_map_json({"status": "ok", "path": folder_path, "written": written})
+
+    def _send_photo_map_json(self, payload: dict[str, object]) -> None:
+        body = _json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self._send_no_store_headers()
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _read_json_body(self) -> object:
+        raw_length = self.headers.get("Content-Length") or "0"
+        try:
+            length = int(raw_length)
+        except ValueError as exc:
+            raise BrowserError(HTTPStatus.BAD_REQUEST, "Invalid JSON request length.") from exc
+        if length < 0 or length > PHOTO_MAP_MAX_JSON_BODY_BYTES:
+            raise BrowserError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Photo Map JSON request is too large.")
+        raw = self.rfile.read(length)
+        try:
+            return _json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, _json.JSONDecodeError) as exc:
+            raise BrowserError(HTTPStatus.BAD_REQUEST, "Photo Map request body must be valid JSON.") from exc
+
     def serve_asset(self, request_path: str, head_only: bool = False) -> None:
         rel = unquote(request_path.removeprefix(ASSET_ROUTE_PREFIX))
         if "\\" in rel:
@@ -1556,7 +1612,10 @@ class RequestHandler(BaseHTTPRequestHandler):
         parts = Path(rel).parts
         if not parts or any(part in {"", ".", ".."} for part in parts):
             raise BrowserError(HTTPStatus.NOT_FOUND, "Not found.")
-        if parts == ("app.css",) or (len(parts) == 2 and parts[0] == "css" and parts[1].endswith(".css")):
+        vendor_content_type = PHOTO_MAP_VENDOR_ASSETS.get(rel)
+        if vendor_content_type is not None:
+            content_type = vendor_content_type
+        elif parts == ("app.css",) or (len(parts) == 2 and parts[0] == "css" and parts[1].endswith(".css")):
             content_type = "text/css; charset=utf-8"
         elif (
             len(parts) >= 2

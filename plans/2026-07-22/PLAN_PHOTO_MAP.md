@@ -25,38 +25,38 @@
 
 ## Implementation checklist
 
-- [ ] Add vendored Leaflet 1.9.4 JS/CSS/image assets and its BSD-2 license
+- [x] Add vendored Leaflet 1.9.4 JS/CSS/image assets and its BSD-2 license
   under `dropbox_browser/assets/vendor/leaflet/`.  Add a vendored clustering
   dependency and license (for example, Leaflet.markercluster) rather than a
   CDN dependency.  Serve only the exact expected asset paths from `views.py`.
 
-- [ ] Add a `Photo Map` option to `#bottom-pane-mode`, a hidden
+- [x] Add a `Photo Map` option to `#bottom-pane-mode`, a hidden
   `.bottom-pane-view[data-pane-mode="photo-map"]`, and dedicated CSS.  The
   map container must fill the pane's flex height, remain hidden when inactive,
   preserve the existing resize/full-window behavior, and have accessible
   controls and status text.
 
-- [ ] Create a focused `assets/js/photo-map/` client module with a thin host
+- [x] Create a focused `assets/js/photo-map/` client module with a thin host
   entry.  On activation it reads the current `browse/endpoints/listing` data
   (or fetches the same endpoint if the browse page has not completed), selects
   direct media rows in the date range, and orders them newest-first.  Do not
   perform a recursive listing or block browse-page rendering.
 
-- [ ] Define supported candidate recognition in one configuration module:
+- [x] Define supported candidate recognition in one configuration module:
   JPEG/JPEG EXIF first; iPhone MOV/MP4 QuickTime location metadata as the
   video path; leave PNG, HEIC, and other formats as cleanly reported
   unsupported/no-location states until format-specific parsers are added.
   Keep extensions, range-byte budgets, and metadata/thumbnail concurrency as
   named, documented defaults for straightforward tuning.
 
-- [ ] Implement browser-side range parsers with no third-party runtime parser:
+- [x] Implement browser-side range parsers with no third-party runtime parser:
   extract latitude/longitude from JPEG EXIF GPS tags; read QuickTime atom
   metadata from appropriately bounded head/tail range requests for iPhone
   video location values.  Validate finite coordinate ranges and preserve the
   capture/listing date and source path.  A parser failure is a per-item result,
   never a failed map load.
 
-- [ ] Add a server-owned `Cache/PhotoMap` cache and small cache-only HTTP
+- [x] Add a server-owned `Cache/PhotoMap` cache and small cache-only HTTP
   endpoints.  The browser should be able to read cached metadata for the
   current folder in one response and batch-write discoveries.  Cache entries
   are keyed by normalized path plus listing identity (size and modification
@@ -64,13 +64,13 @@
   existing remote-path safety validation and strict JSON shape/coordinate
   validation; never accept filesystem paths or arbitrary cache locations.
 
-- [ ] Make cancellation strict.  Each map activation/folder/date-range change
+- [x] Make cancellation strict.  Each map activation/folder/date-range change
   creates a generation and an `AbortController`; switching away immediately
   clears pending metadata and thumbnail queues, aborts active `/file` range
   fetches and cache writes, removes map listeners, and ignores late results.
   Reopening starts a fresh generation and reuses valid server cache records.
 
-- [ ] Reuse `/thumbnail` only from a separate low-concurrency browser queue
+- [x] Reuse `/thumbnail` only from a separate low-concurrency browser queue
   after a location is known and is visible/selected on the map.  Do not request
   thumbnails for an entire 25k-item folder.  Use cached thumbnails in
   individual-pin preview widgets or visible unclustered pins.  A pin click
@@ -78,29 +78,29 @@
   a deliberate link to the existing file preview; video pins receive a neutral
   media icon in this prototype.
 
-- [ ] Initialize Leaflet only after the Photo Map view is visible.  Call
+- [x] Initialize Leaflet only after the Photo Map view is visible.  Call
   `invalidateSize()` after a map-mode switch, panel drag, browser resize, and
   `bottom-panel-full-window-changed`; destroy the instance when the page is
   torn down.  Ensure the generic bottom-panel wheel handler does not suppress
   Leaflet pan/zoom events.
 
-- [ ] Configure direct browser tile use with explicit constants for tile URL,
+- [x] Configure direct browser tile use with explicit constants for tile URL,
   attribution, initial/fallback view, minimum/maximum zoom, marker-cluster
   radius, metadata concurrency, thumbnail concurrency, and date presets.  Add
   an opt-in `photo-map` client-log subsystem and concise cache/queue counters
   so live `Camera Uploads` troubleshooting does not require noisy logs.
 
-- [ ] Implement user-facing map states: initial loading, cached-result paint,
+- [x] Implement user-facing map states: initial loading, cached-result paint,
   progressive pin/cluster appearance, no in-range media, no geotagged media,
   and partial errors.  Fit the map to the first useful coordinate set without
   repeatedly stealing a user's chosen pan/zoom after they interact.
 
-- [ ] Add fast Python tests for photo-map cache keying, cache read/write
+- [x] Add fast Python tests for photo-map cache keying, cache read/write
   validation, stale-entry rejection, batched endpoint limits, and path
   traversal rejection.  Use isolated cache paths and fake rclone only; no live
   Dropbox or real tile requests.
 
-- [ ] Add fast Node tests for JPEG EXIF GPS parsing, malformed metadata,
+- [x] Add fast Node tests for JPEG EXIF GPS parsing, malformed metadata,
   QuickTime location extraction fixtures, date-range filtering/newest-first
   ordering, cache merge behavior, queue concurrency, and abort/generation
   suppression of late results.

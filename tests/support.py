@@ -23,6 +23,7 @@ from dropbox_browser.handlers import RequestHandler
 import dropbox_browser.config as config_module
 import dropbox_browser.foldercache as foldercache_module
 import dropbox_browser.listingcache as listingcache_module
+import dropbox_browser.photo_map_cache as photo_map_cache_module
 import dropbox_browser.video as video_module
 import dropbox_browser.workertrace as workertrace_module
 from dropbox_browser.rclone import RcloneCancelled
@@ -300,11 +301,13 @@ class IsolatedPathsTestCase(unittest.TestCase):
         self.root = Path(self._tmp.name)
         self.folder_cache_dir = self.root / "Cache" / "FolderInfo"
         self.listing_cache_dir = self.root / "Cache" / "ListingCache"
+        self.photo_map_cache_dir = self.root / "Cache" / "PhotoMap"
         self.temp_dir = self.root / "Temp"
         self.trace_log_path = self.temp_dir / "foldercache_threads.jsonl"
         self._patchers = [
             patch.object(foldercache_module, "CACHE_DIR", self.folder_cache_dir),
             patch.object(listingcache_module, "CACHE_DIR", self.listing_cache_dir),
+            patch.object(photo_map_cache_module, "CACHE_DIR", self.photo_map_cache_dir),
             patch.object(config_module, "TEMP_DIR", self.temp_dir),
             patch.object(video_module, "TEMP_DIR", self.temp_dir),
             patch.object(workertrace_module, "TEMP_DIR", self.temp_dir),

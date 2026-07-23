@@ -1,0 +1,122 @@
+/* Photo Map bottom-pane shell. The map client owns the Leaflet layers and
+   controls later; this file only establishes the pane's responsive layout. */
+#photo-map-pane {
+  background: #e8edf1;
+  color: #1f2933;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+#photo-map-pane.hidden {
+  display: none;
+}
+.photo-map-shell {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.photo-map-toolbar {
+  align-items: center;
+  background: #252b3a;
+  border-bottom: 1px solid #3a4a5e;
+  color: #c8d0db;
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 6px 10px;
+}
+.photo-map-date-control,
+.photo-map-custom-range {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+.photo-map-toolbar label {
+  color: #b7c3d0;
+  font-size: 12px;
+  font-weight: 600;
+}
+.photo-map-toolbar select,
+.photo-map-toolbar input,
+.photo-map-toolbar-button {
+  background: #1a1f2e;
+  border: 1px solid #52647a;
+  border-radius: 4px;
+  box-sizing: border-box;
+  color: #e6edf3;
+  font: inherit;
+  font-size: 12px;
+  min-height: 26px;
+  padding: 3px 7px;
+}
+.photo-map-toolbar input {
+  color-scheme: dark;
+  max-width: 142px;
+}
+.photo-map-toolbar-button {
+  cursor: pointer;
+  margin-left: auto;
+}
+.photo-map-toolbar select:focus-visible,
+.photo-map-toolbar input:focus-visible,
+.photo-map-toolbar-button:focus-visible,
+.photo-map-map:focus-visible {
+  border-color: #8bb8e8;
+  outline: 2px solid #8bb8e8;
+  outline-offset: 1px;
+}
+.photo-map-toolbar-button:hover:not(:disabled) {
+  background: #34445a;
+}
+.photo-map-toolbar-button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.photo-map-status {
+  background: #f5f7f9;
+  border-bottom: 1px solid #cfd7df;
+  color: #536273;
+  flex: 0 0 auto;
+  font-size: 12px;
+  line-height: 1.35;
+  min-height: 16px;
+  padding: 5px 10px;
+}
+.photo-map-status[data-state="loading"],
+.photo-map-status[data-state="progressive"] {
+  color: #385a78;
+}
+.photo-map-status[data-state="cached"] {
+  color: #285f4c;
+}
+.photo-map-status[data-state="no-media"],
+.photo-map-status[data-state="no-geotagged"] {
+  color: #59636d;
+}
+.photo-map-status[data-state="partial-errors"] {
+  color: #8a4f18;
+}
+.photo-map-map {
+  background: #dce6ee;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+  width: 100%;
+}
+@media (max-width: 640px) {
+  .photo-map-toolbar-button {
+    margin-left: 0;
+  }
+  .photo-map-custom-range {
+    flex-basis: 100%;
+  }
+  .photo-map-toolbar input {
+    flex: 1 1 110px;
+    max-width: none;
+    min-width: 0;
+  }
+}

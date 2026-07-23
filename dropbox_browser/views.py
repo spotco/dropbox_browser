@@ -16,6 +16,22 @@ from .services import diff_label
 
 
 ICON_BASE_URL = "/assets/icons/material-icon-theme/"
+PHOTO_MAP_VENDOR_BASE_URL = "/assets/vendor/leaflet/"
+# Keep this list deliberately explicit.  The photo-map client may load these
+# vendored files, but the asset handler must not expose licenses, source trees,
+# or arbitrary files placed beside the runtime distribution.
+PHOTO_MAP_VENDOR_ASSETS = {
+    "vendor/leaflet/leaflet.css": "text/css; charset=utf-8",
+    "vendor/leaflet/leaflet.js": "application/javascript; charset=utf-8",
+    "vendor/leaflet/images/layers.png": "image/png",
+    "vendor/leaflet/images/layers-2x.png": "image/png",
+    "vendor/leaflet/images/marker-icon.png": "image/png",
+    "vendor/leaflet/images/marker-icon-2x.png": "image/png",
+    "vendor/leaflet/images/marker-shadow.png": "image/png",
+    "vendor/leaflet/markercluster/MarkerCluster.css": "text/css; charset=utf-8",
+    "vendor/leaflet/markercluster/MarkerCluster.Default.css": "text/css; charset=utf-8",
+    "vendor/leaflet/markercluster/leaflet.markercluster.js": "application/javascript; charset=utf-8",
+}
 TEMPLATE_DIR = Path(__file__).resolve().parent / "assets" / "templates"
 FOLDER_ICON = "folder-base.svg"
 DEFAULT_FILE_ICON = "document.svg"
@@ -239,6 +255,7 @@ def browse_script_tags(client_render: bool) -> str:
         '<script type="module" src="/assets/js/file-search.js"></script>',
         '<script type="module" src="/assets/js/music.js"></script>',
         '<script type="module" src="/assets/js/video.js"></script>',
+        '<script type="module" src="/assets/js/photo-map.js"></script>',
         '<script src="/assets/js/refresh.js"></script>',
         '<script src="/assets/js/sync.js"></script>',
     ]
@@ -385,6 +402,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         file_search_html=_render_static_template("file_search.html"),
         music_player_html=_render_static_template("music_player.html"),
         video_player_html=_render_static_template("video_player.html"),
+        photo_map_html=_render_static_template("photo_map.html"),
         current_folder_attr=html.escape(rel_path, quote=True),
         current_sort_key_attr=html.escape(sort_key, quote=True),
         current_sort_direction_attr=html.escape(direction, quote=True),
