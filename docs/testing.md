@@ -42,6 +42,13 @@ Run full suite:
 python -m unittest discover -s tests -v
 ```
 
+Photo Map-only checks:
+
+```powershell
+python -m tests.run photo-map -v
+npm run test:js:photo-map
+```
+
 Use the full suite before checkin/commit, before handoff of broad cross-module
 changes, or when a shared helper used by multiple groups changes.
 

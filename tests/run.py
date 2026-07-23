@@ -29,6 +29,12 @@ GROUPS: dict[str, list[str]] = {
     "folderdiff": ["tests.test_folderdiff"],
     "status": ["tests.test_diff_status"],
     "cache": ["tests.test_cache_invalidation"],
+    "photo-map": [
+        "tests.test_photo_map_cache",
+        "tests.test_photo_map_web",
+        "tests.test_config.ConfigDefaultsTests.test_client_log_defaults_are_present",
+    ],
+    "photo-map-cache": ["tests.test_photo_map_cache"],
     "client-log": ["tests.test_clientlog"],
     "cli": ["tests.test_cli"],
     "names": ["tests.test_listing_merge_names", "tests.test_windows_names"],

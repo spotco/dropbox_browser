@@ -840,6 +840,14 @@ function initBrowse() {
     isActive: function () {
       return !!(body && body.dataset.clientRender === '1');
     },
+    getCurrentListing: function () {
+      return {
+        path: state.path,
+        rows: Array.isArray(state.rows) ? state.rows.slice() : [],
+        loading: !!state.loading,
+        error: state.error || null,
+      };
+    },
     reloadCurrentFolder: function (options) {
       var settings = options || {};
       var nextState = readBrowseLocation(window.location.search);
