@@ -23,98 +23,84 @@
   metadata and serves existing thumbnail-cache results.  It must not launch a
   folder-wide rclone scan or independently schedule photo-map work.
 
-## Implementation checklist
+## Completed foundation
 
-- [x] Add vendored Leaflet 1.9.4 JS/CSS/image assets and its BSD-2 license
-  under `dropbox_browser/assets/vendor/leaflet/`.  Add a vendored clustering
-  dependency and license (for example, Leaflet.markercluster) rather than a
-  CDN dependency.  Serve only the exact expected asset paths from `views.py`.
+- [x] Vendored Leaflet 1.9.4, Leaflet.markercluster, licenses, exact asset
+  serving, the Photo Map pane shell, responsive CSS, accessible controls, and
+  Leaflet-safe panel wheel handling.
+- [x] Client listing integration: current-folder-only candidate selection,
+  date ranges, newest-first ordering, non-recursive loading, and thin host
+  modules.
+- [x] Supported-format configuration and bounded browser parsers for JPEG EXIF
+  GPS and iPhone MOV/MP4 QuickTime location metadata, including validation,
+  capture/listing dates, source paths, and per-item failures.
+- [x] Disk cache API and validation: normalized remote paths, size/mtime
+  identity keys, stale-entry rejection, safe cache files, batch limits, and
+  current-folder read/merge behavior.
+- [x] Generation cancellation: abortable listing/range/cache requests,
+  thumbnail queue cancellation, late-result suppression, map cleanup on pane
+  deactivation, and cache-aware reopening.
+- [x] Map rendering foundation: clustered markers, direct OSM tiles and
+  attribution, configured defaults, diagnostics counters, progressive/cached/
+  empty/error states, and one-time fit-to-results behavior.
+- [x] Thumbnail foundation: a separate low-concurrency queue that only selects
+  located photos marked visible or selected.
+- [x] Focused Python and Node coverage for cache validation, parsers, listing
+  filtering/order, queue behavior, cancellation, and web asset contracts.
 
-- [x] Add a `Photo Map` option to `#bottom-pane-mode`, a hidden
-  `.bottom-pane-view[data-pane-mode="photo-map"]`, and dedicated CSS.  The
-  map container must fill the pane's flex height, remain hidden when inactive,
-  preserve the existing resize/full-window behavior, and have accessible
-  controls and status text.
+## Remaining implementation checklist
 
-- [x] Create a focused `assets/js/photo-map/` client module with a thin host
-  entry.  On activation it reads the current `browse/endpoints/listing` data
-  (or fetches the same endpoint if the browse page has not completed), selects
-  direct media rows in the date range, and orders them newest-first.  Do not
-  perform a recursive listing or block browse-page rendering.
+### 1. Persist metadata incrementally — next step
 
-- [x] Define supported candidate recognition in one configuration module:
-  JPEG/JPEG EXIF first; iPhone MOV/MP4 QuickTime location metadata as the
-  video path; leave PNG, HEIC, and other formats as cleanly reported
-  unsupported/no-location states until format-specific parsers are added.
-  Keep extensions, range-byte budgets, and metadata/thumbnail concurrency as
-  named, documented defaults for straightforward tuning.
+- [ ] Persist each completed Photo Map metadata result (parsed EXIF/QuickTime
+  coordinates, capture date, and status) as the metadata queue produces it.
+- [ ] Flush in bounded batches without waiting for the entire folder queue to
+  finish; completed results must survive a page refresh or server restart.
+- [ ] Keep writes generation-safe so results completed before cancellation are
+  retained, while late results and aborted writes are ignored.
+- [ ] On a fresh load, paint matching cached pins immediately and issue range
+  requests only for uncached or changed listing identities.
+- [ ] Add regression coverage for partial queue completion, refresh/abort, and
+  reuse of already-written per-image records.
 
-- [x] Implement browser-side range parsers with no third-party runtime parser:
-  extract latitude/longitude from JPEG EXIF GPS tags; read QuickTime atom
-  metadata from appropriately bounded head/tail range requests for iPhone
-  video location values.  Validate finite coordinate ranges and preserve the
-  capture/listing date and source path.  A parser failure is a per-item result,
-  never a failed map load.
+### 2. Complete individual-pin previews
 
-- [x] Add a server-owned `Cache/PhotoMap` cache and small cache-only HTTP
-  endpoints.  The browser should be able to read cached metadata for the
-  current folder in one response and batch-write discoveries.  Cache entries
-  are keyed by normalized path plus listing identity (size and modification
-  timestamp), so changed or replaced Dropbox files naturally requeue.  Apply
-  existing remote-path safety validation and strict JSON shape/coordinate
-  validation; never accept filesystem paths or arbitrary cache locations.
+- [ ] Connect marker selection/click handling to the thumbnail queue and retain
+  the loaded thumbnail for that marker's preview.
+- [ ] Replace the current text-only popup with an accessible preview widget
+  containing the thumbnail, filename, latitude/longitude, capture date, and
+  listing date.
+- [ ] Make the thumbnail a deliberate link to the existing `/file` preview,
+  opening the full image in a new tab with safe link attributes.
+- [ ] Give video pins a neutral media icon and useful GPS-only preview state;
+  keep video thumbnail extraction deferred.
+- [ ] Add focused tests for popup contents, thumbnail loading on pin selection,
+  preview-link target behavior, and the video fallback.
 
-- [x] Make cancellation strict.  Each map activation/folder/date-range change
-  creates a generation and an `AbortController`; switching away immediately
-  clears pending metadata and thumbnail queues, aborts active `/file` range
-  fetches and cache writes, removes map listeners, and ignores late results.
-  Reopening starts a fresh generation and reuses valid server cache records.
+### 3. Report unsupported candidate formats cleanly
 
-- [x] Reuse `/thumbnail` only from a separate low-concurrency browser queue
-  after a location is known and is visible/selected on the map.  Do not request
-  thumbnails for an entire 25k-item folder.  Use cached thumbnails in
-  individual-pin preview widgets or visible unclustered pins.  A pin click
-  shows its thumbnail, filename, latitude/longitude, capture/listing date, and
-  a deliberate link to the existing file preview; video pins receive a neutral
-  media icon in this prototype.
+- [ ] Carry PNG, HEIC, and other recognized-but-unsupported candidate rows
+  through Photo Map result/status accounting instead of filtering them out
+  before the map can report their unsupported state.
+- [ ] Preserve the no-range-request behavior for unsupported formats and show a
+  concise unsupported/no-location distinction in the user-facing state.
+- [ ] Add focused coverage for unsupported rows in the normal listing-to-state
+  flow.
 
-- [x] Initialize Leaflet only after the Photo Map view is visible.  Call
-  `invalidateSize()` after a map-mode switch, panel drag, browser resize, and
-  `bottom-panel-full-window-changed`; destroy the instance when the page is
-  torn down.  Ensure the generic bottom-panel wheel handler does not suppress
-  Leaflet pan/zoom events.
+### 4. Finish Leaflet lifecycle cleanup
 
-- [x] Configure direct browser tile use with explicit constants for tile URL,
-  attribution, initial/fallback view, minimum/maximum zoom, marker-cluster
-  radius, metadata concurrency, thumbnail concurrency, and date presets.  Add
-  an opt-in `photo-map` client-log subsystem and concise cache/queue counters
-  so live `Camera Uploads` troubleshooting does not require noisy logs.
+- [ ] Register an explicit page-teardown path so the map instance is destroyed
+  when the page is torn down, not only when the pane is deactivated.
 
-- [x] Implement user-facing map states: initial loading, cached-result paint,
-  progressive pin/cluster appearance, no in-range media, no geotagged media,
-  and partial errors.  Fit the map to the first useful coordinate set without
-  repeatedly stealing a user's chosen pan/zoom after they interact.
-
-- [x] Add fast Python tests for photo-map cache keying, cache read/write
-  validation, stale-entry rejection, batched endpoint limits, and path
-  traversal rejection.  Use isolated cache paths and fake rclone only; no live
-  Dropbox or real tile requests.
-
-- [x] Add fast Node tests for JPEG EXIF GPS parsing, malformed metadata,
-  QuickTime location extraction fixtures, date-range filtering/newest-first
-  ordering, cache merge behavior, queue concurrency, and abort/generation
-  suppression of late results.
+### 5. Browser-level validation
 
 - [ ] Add one narrow Playwright smoke test with an isolated fixture and mocked
-  map-tile responses: open Photo Map, verify the map has a nonzero pane size,
-  observe a cached pin/cluster, switch tabs, and assert queued requests are
-  aborted.  Keep it independent of the live `Camera Uploads` folder and under
-  the existing client-render project.
-
-- [ ] Manually validate against `/?path=Camera+Uploads`: default All-time
-  loading begins immediately, newest media appears first, clustered pins are
-  usable at wide and close zooms, date controls requeue correctly, the pane is
-  responsive during loading, and changing away stops network/cache activity.
+  map tiles: open Photo Map, verify nonzero pane size, observe a cached
+  pin/cluster, switch tabs, and assert queued requests are aborted.
+- [ ] Manually validate `/?path=Camera+Uploads`: immediate All-time loading,
+  newest-first results, usable clustering at wide/close zooms, date-control
+  requeueing, responsive loading, and no network/cache activity after leaving
+  the pane.
 
 ## Deferred deliberately
 
