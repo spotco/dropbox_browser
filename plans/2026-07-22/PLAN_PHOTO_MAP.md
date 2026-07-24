@@ -50,46 +50,46 @@
 
 ## Remaining implementation checklist
 
-### 1. Persist metadata incrementally — next step
+### 1. Persist metadata incrementally — completed
 
-- [ ] Persist each completed Photo Map metadata result (parsed EXIF/QuickTime
+- [x] Persist each completed Photo Map metadata result (parsed EXIF/QuickTime
   coordinates, capture date, and status) as the metadata queue produces it.
-- [ ] Flush in bounded batches without waiting for the entire folder queue to
+- [x] Flush in bounded batches without waiting for the entire folder queue to
   finish; completed results must survive a page refresh or server restart.
-- [ ] Keep writes generation-safe so results completed before cancellation are
+- [x] Keep writes generation-safe so results completed before cancellation are
   retained, while late results and aborted writes are ignored.
-- [ ] On a fresh load, paint matching cached pins immediately and issue range
+- [x] On a fresh load, paint matching cached pins immediately and issue range
   requests only for uncached or changed listing identities.
-- [ ] Add regression coverage for partial queue completion, refresh/abort, and
+- [x] Add regression coverage for partial queue completion, refresh/abort, and
   reuse of already-written per-image records.
 
-### 2. Complete individual-pin previews
+### 2. Complete individual-pin previews — completed
 
-- [ ] Connect marker selection/click handling to the thumbnail queue and retain
+- [x] Connect marker selection/click handling to the thumbnail queue and retain
   the loaded thumbnail for that marker's preview.
-- [ ] Replace the current text-only popup with an accessible preview widget
+- [x] Replace the current text-only popup with an accessible preview widget
   containing the thumbnail, filename, latitude/longitude, capture date, and
   listing date.
-- [ ] Make the thumbnail a deliberate link to the existing `/file` preview,
+- [x] Make the thumbnail a deliberate link to the existing `/file` preview,
   opening the full image in a new tab with safe link attributes.
-- [ ] Give video pins a neutral media icon and useful GPS-only preview state;
+- [x] Give video pins a neutral media icon and useful GPS-only preview state;
   keep video thumbnail extraction deferred.
-- [ ] Add focused tests for popup contents, thumbnail loading on pin selection,
+- [x] Add focused tests for popup contents, thumbnail loading on pin selection,
   preview-link target behavior, and the video fallback.
 
-### 3. Report unsupported candidate formats cleanly
+### 3. Report unsupported candidate formats cleanly — completed
 
-- [ ] Carry PNG, HEIC, and other recognized-but-unsupported candidate rows
+- [x] Carry PNG, HEIC, and other recognized-but-unsupported candidate rows
   through Photo Map result/status accounting instead of filtering them out
   before the map can report their unsupported state.
-- [ ] Preserve the no-range-request behavior for unsupported formats and show a
+- [x] Preserve the no-range-request behavior for unsupported formats and show a
   concise unsupported/no-location distinction in the user-facing state.
-- [ ] Add focused coverage for unsupported rows in the normal listing-to-state
+- [x] Add focused coverage for unsupported rows in the normal listing-to-state
   flow.
 
-### 4. Finish Leaflet lifecycle cleanup
+### 4. Finish Leaflet lifecycle cleanup — completed
 
-- [ ] Register an explicit page-teardown path so the map instance is destroyed
+- [x] Register an explicit page-teardown path so the map instance is destroyed
   when the page is torn down, not only when the pane is deactivated.
 
 ### 5. Browser-level validation

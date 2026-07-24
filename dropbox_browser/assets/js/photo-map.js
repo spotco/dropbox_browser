@@ -48,11 +48,15 @@ export function initPhotoMap(options) {
   var runId = 0;
   var candidates = [];
   var metadataResults = new Map();
+  var thumbnailResults = new Map();
   var abortController = null;
   var thumbnailQueue = null;
   var thumbnailController = null;
   var mapController = null;
   var mapResizeObserver = null;
+  var activeCacheWriter = null;
+  var cacheWriteTail = Promise.resolve();
+  var debugEnabled = config.photoMapDebug === undefined ? true : Boolean(config.photoMapDebug);
   var diagnostics = createPhotoMapDiagnostics(win);
   var mapUserInteracted = false;
   var mapFittedToResults = false;
@@ -64,13 +68,91 @@ export function initPhotoMap(options) {
     return {signal: undefined, abort: function () {}};
   }
 
+  function scheduleCacheWrite(folderPath, entries) {
+    var operation = cacheWriteTail.then(function () {
+      diagnostics.increment('cacheWriteBatches');
+      diagnostics.increment('cacheWriteEntries', entries.length);
+      return writePhotoMapCache(fetchImpl, folderPath, entries);
+    });
+    cacheWriteTail = operation.catch(function () {});
+    return operation;
+  }
+
+  function createCacheWriter(folderPath, generation) {
+    var pending = [];
+    var flushTimer = null;
+    var writeChain = Promise.resolve();
+    var firstError = null;
+    var accepting = true;
+
+    function clearFlushTimer() {
+      if (flushTimer === null) return;
+      if (win && typeof win.clearTimeout === 'function') win.clearTimeout(flushTimer);
+      else clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+
+    function appendBatch() {
+      if (!pending.length) return;
+      var batch = pending.splice(0, PHOTO_MAP_CACHE_BATCH_LIMIT);
+      writeChain = writeChain.then(function () {
+        return scheduleCacheWrite(folderPath, batch);
+      }).catch(function (error) {
+        if (!firstError) firstError = error;
+        diagnostics.increment('cacheWriteErrors');
+      });
+    }
+
+    function scheduleFlush() {
+      if (flushTimer !== null || !pending.length) return;
+      var setTimer = win && typeof win.setTimeout === 'function' ? win.setTimeout : setTimeout;
+      flushTimer = setTimer(function () {
+        flushTimer = null;
+        appendBatch();
+      }, 0);
+    }
+
+    function flushNow() {
+      clearFlushTimer();
+      appendBatch();
+      return writeChain;
+    }
+
+    function enqueue(item, result) {
+      if (!accepting || !generationIsCurrent(generation)) return false;
+      pending.push(photoMapCacheRecordForResult(item, result));
+      if (pending.length >= PHOTO_MAP_CACHE_BATCH_LIMIT) flushNow();
+      else scheduleFlush();
+      return true;
+    }
+
+    async function finish() {
+      accepting = false;
+      await flushNow();
+      if (firstError) throw firstError;
+    }
+
+    function cancel() {
+      accepting = false;
+      // Records accepted before cancellation remain valid persistence work.
+      // Late queue callbacks are rejected by both `accepting` and the
+      // generation check above.
+      flushNow();
+    }
+
+    return {enqueue: enqueue, finish: finish, cancel: cancel};
+  }
+
   function cancelGeneration() {
+    if (activeCacheWriter) activeCacheWriter.cancel();
+    activeCacheWriter = null;
     runId += 1;
     if (abortController) abortController.abort();
     if (thumbnailController) thumbnailController.abort();
     abortController = null;
     thumbnailController = null;
     metadataResults.clear();
+    thumbnailResults.clear();
     thumbnailQueue = null;
   }
 
@@ -96,7 +178,13 @@ export function initPhotoMap(options) {
   function renderMapResults(phase) {
     var summary = mapResultsSummary();
     if (mapController && typeof mapController.setMarkerItems === 'function') {
-      mapController.setMarkerItems(summary.locatedItems);
+      var markerItems = summary.locatedItems.map(function (item) {
+        var thumbnail = thumbnailResults.get(item.path);
+        return thumbnail && thumbnail.url
+          ? Object.assign({}, item, {photoMapThumbnailUrl: thumbnail.url})
+          : item;
+      });
+      mapController.setMarkerItems(markerItems);
       if (summary.locatedItems.length > 0 && !mapFittedToResults && !mapUserInteracted &&
           typeof mapController.fitToItems === 'function') {
         fittingMap = true;
@@ -145,7 +233,11 @@ export function initPhotoMap(options) {
     var expectedRunId = runId;
     return ensurePhotoMapLeaflet(doc, win).then(function (leaflet) {
       if (!active || expectedRunId !== runId) return null;
-      mapController = createPhotoMap(leaflet, doc.getElementById('photo-map-map'));
+      mapController = createPhotoMap(leaflet, doc.getElementById('photo-map-map'), {
+        onMarkerSelect: handleMarkerSelection,
+        debug: debugEnabled,
+        console: config.console || win.console,
+      });
       attachMapInteractionGuards();
       if (typeof win.ResizeObserver === 'function') {
         mapResizeObserver = new win.ResizeObserver(function () { invalidateMapSize(); });
@@ -246,6 +338,11 @@ export function initPhotoMap(options) {
 
       var cachedEntries = [];
       try {
+        // A previous generation may have accepted records just before a
+        // refresh or folder change. Let those persistence writes settle
+        // before reading the cache for the new generation.
+        await cacheWriteTail;
+        if (!generationIsCurrent(generation)) return [];
         diagnostics.increment('cacheReads');
         cachedEntries = await readPhotoMapCache(fetchImpl, snapshot.path, generation.signal);
         if (!generationIsCurrent(generation)) return [];
@@ -266,7 +363,8 @@ export function initPhotoMap(options) {
       merged.cached.forEach(function (entry) { metadataResults.set(entry.item.path, entry.result); });
       renderMapResults(merged.cached.length > 0 ? 'cached' : 'progressive');
 
-      var discovered = [];
+      var cacheWriter = createCacheWriter(snapshot.path, generation);
+      activeCacheWriter = cacheWriter;
       diagnostics.increment('metadataQueued', merged.pending.length);
       var queueReport = await runPhotoMapMetadataQueue(
         merged.pending,
@@ -282,9 +380,10 @@ export function initPhotoMap(options) {
             diagnostics.increment('metadataCompleted');
             if (result && result.status === 'located') diagnostics.increment('metadataLocated');
             else if (result && result.status === 'no-location') diagnostics.increment('metadataNoLocation');
+            else if (result && result.status === 'unsupported') diagnostics.increment('metadataUnsupported');
             else diagnostics.increment('metadataErrors');
             metadataResults.set(item.path, result);
-            discovered.push(photoMapCacheRecordForResult(item, result));
+            cacheWriter.enqueue(item, result);
             renderMapResults('progressive');
           },
         },
@@ -299,26 +398,8 @@ export function initPhotoMap(options) {
         diagnostics.increment('metadataAborted');
         return [];
       }
-      if (discovered.length > 0) {
-        for (var batchStart = 0; batchStart < discovered.length; batchStart += PHOTO_MAP_CACHE_BATCH_LIMIT) {
-          if (!generationIsCurrent(generation)) return [];
-          var batch = discovered.slice(batchStart, batchStart + PHOTO_MAP_CACHE_BATCH_LIMIT);
-          diagnostics.increment('cacheWriteBatches');
-          diagnostics.increment('cacheWriteEntries', batch.length);
-          try {
-            await writePhotoMapCache(
-              fetchImpl,
-              snapshot.path,
-              batch,
-              generation.signal,
-            );
-          } catch (cacheError) {
-            if (!generationIsCurrent(generation)) return [];
-            diagnostics.increment('cacheWriteErrors');
-            throw cacheError;
-          }
-        }
-      }
+      await cacheWriter.finish();
+      if (activeCacheWriter === cacheWriter) activeCacheWriter = null;
       if (!generationIsCurrent(generation)) return [];
       renderMapResults('complete');
       diagnostics.logSummary('Photo Map generation complete', {
@@ -328,6 +409,8 @@ export function initPhotoMap(options) {
       return candidates.slice();
     } catch (error) {
       if (!generationIsCurrent(generation)) return [];
+      if (activeCacheWriter) activeCacheWriter.cancel();
+      activeCacheWriter = null;
       candidates = [];
       metadataResults.clear();
       clearMapMarkers();
@@ -363,6 +446,36 @@ export function initPhotoMap(options) {
     if (active) loadCandidates();
   }
 
+  function setDebugEnabled(value) {
+    debugEnabled = Boolean(value);
+    if (mapController && typeof mapController.setDebugEnabled === 'function') {
+      mapController.setDebugEnabled(debugEnabled);
+    }
+    return debugEnabled;
+  }
+
+  function applyThumbnailResult(item, result) {
+    if (!item || !result || result.status !== 'loaded' || !result.url) return;
+    var path = String(item.path || item.photoMapSourcePath || '');
+    thumbnailResults.set(path, result);
+    if (mapController && typeof mapController.setMarkerThumbnail === 'function') {
+      mapController.setMarkerThumbnail(path, result);
+    }
+  }
+
+  function handleMarkerSelection(item) {
+    if (!active || !item) return;
+    var path = String(item.path || item.photoMapSourcePath || '');
+    var cachedThumbnail = thumbnailResults.get(path);
+    if (cachedThumbnail) {
+      if (mapController && typeof mapController.setMarkerThumbnail === 'function') {
+        mapController.setMarkerThumbnail(path, cachedThumbnail);
+      }
+      return;
+    }
+    requestThumbnails([item], {selectedPath: path});
+  }
+
   function requestThumbnails(items, options) {
     var config = options || {};
     if (!active) return Promise.resolve({results: [], aborted: true, queued: false});
@@ -385,6 +498,7 @@ export function initPhotoMap(options) {
         if (result && result.status === 'loaded') diagnostics.increment('thumbnailCompleted');
         else if (result && result.reason === 'aborted') diagnostics.increment('thumbnailAborted');
         else diagnostics.increment('thumbnailErrors');
+        applyThumbnailResult(item, result);
         if (typeof config.onResult === 'function') config.onResult(item, result);
       },
     });
@@ -409,6 +523,7 @@ export function initPhotoMap(options) {
   if (dateToEl) dateToEl.addEventListener('change', applyDateRange);
   if (refreshEl) refreshEl.addEventListener('click', refresh);
   win.addEventListener('resize', invalidateMapSize);
+  win.addEventListener('beforeunload', deactivate);
   doc.addEventListener('bottom-panel-full-window-changed', invalidateMapSize);
   win.addEventListener('bottom-pane-mode-changed', function (event) {
     var mode = event && event.detail ? event.detail.mode : '';
@@ -438,6 +553,8 @@ export function initPhotoMap(options) {
   win.DropboxBrowserPhotoMap.selectThumbnailItems = selectPhotoMapThumbnailItems;
   win.DropboxBrowserPhotoMap.requestThumbnails = requestThumbnails;
   win.DropboxBrowserPhotoMap.getDiagnostics = function () { return diagnostics.snapshot(); };
+  win.DropboxBrowserPhotoMap.setDebugEnabled = setDebugEnabled;
+  win.DropboxBrowserPhotoMap.isDebugEnabled = function () { return debugEnabled; };
   win.DropboxBrowserPhotoMap.getMap = function () { return mapController ? mapController.map : null; };
   win.DropboxBrowserPhotoMap.invalidateSize = invalidateMapSize;
   win.DropboxBrowserPhotoMap.destroyMap = destroyMap;

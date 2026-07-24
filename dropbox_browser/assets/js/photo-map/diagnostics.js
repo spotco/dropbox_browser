@@ -11,6 +11,7 @@ const COUNTER_NAMES = [
   'metadataCompleted',
   'metadataLocated',
   'metadataNoLocation',
+  'metadataUnsupported',
   'metadataErrors',
   'metadataAborted',
   'thumbnailQueued',

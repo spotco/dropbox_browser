@@ -30,13 +30,15 @@ test("selectPhotoMapCandidates keeps direct remote iPhone media and orders newes
   ], "Camera Uploads", "all");
 
   assert.deepEqual(candidates.map((item) => item.path), [
+    "Camera Uploads/unsupported.heic",
     "Camera Uploads/new.MOV",
     "Camera Uploads/other.mp4",
     "Camera Uploads/old.jpg",
   ]);
-  assert.equal(candidates[0].photoMapMediaKind, "video");
-  assert.equal(candidates[0].photoMapSourcePath, "Camera Uploads/new.MOV");
-  assert.equal(candidates[0].photoMapRecognition.parser, "quicktime-location");
+  assert.equal(candidates[0].photoMapMediaKind, "photo");
+  assert.equal(candidates[0].photoMapRecognition.status, "unsupported");
+  assert.equal(candidates[1].photoMapSourcePath, "Camera Uploads/new.MOV");
+  assert.equal(candidates[1].photoMapRecognition.parser, "quicktime-location");
 });
 
 test("Photo Map config recognizes supported formats and reports unsupported formats", async () => {

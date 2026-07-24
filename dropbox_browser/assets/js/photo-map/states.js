@@ -6,6 +6,7 @@ export const PHOTO_MAP_STATES = Object.freeze({
   ready: 'ready',
   noMedia: 'no-media',
   noGeotagged: 'no-geotagged',
+  unsupported: 'unsupported',
   partialErrors: 'partial-errors',
 });
 
@@ -25,6 +26,7 @@ export function summarizePhotoMapResults(candidates, metadataResults) {
     pendingCount: 0,
     locatedCount: 0,
     noLocationCount: 0,
+    unsupportedCount: 0,
     errorCount: 0,
     locatedItems: [],
   };
@@ -42,6 +44,8 @@ export function summarizePhotoMapResults(candidates, metadataResults) {
       }));
     } else if (result.status === 'no-location') {
       summary.noLocationCount += 1;
+    } else if (result.status === 'unsupported') {
+      summary.unsupportedCount += 1;
     } else {
       summary.errorCount += 1;
     }
@@ -54,8 +58,21 @@ export function photoMapStatusForSummary(summary, phase) {
   var candidateCount = Number(value.candidateCount) || 0;
   var pendingCount = Number(value.pendingCount) || 0;
   var locatedCount = Number(value.locatedCount) || 0;
+  var noLocationCount = Number(value.noLocationCount) || 0;
+  var unsupportedCount = Number(value.unsupportedCount) || 0;
   var errorCount = Number(value.errorCount) || 0;
   var phaseName = String(phase || '');
+
+  function summaryMessage() {
+    var details = [];
+    if (locatedCount > 0) details.push(String(locatedCount) + ' geotagged media shown');
+    if (noLocationCount > 0) details.push(String(noLocationCount) + ' media had no location');
+    if (unsupportedCount > 0) {
+      details.push(String(unsupportedCount) + ' recognized media use unsupported formats');
+    }
+    if (errorCount > 0) details.push(String(errorCount) + ' media could not be read');
+    return details.join('; ') + '.';
+  }
 
   if (phaseName === 'loading') {
     return {state: PHOTO_MAP_STATES.loading, message: 'Loading Photo Map media...'};
@@ -78,12 +95,14 @@ export function photoMapStatusForSummary(summary, phase) {
         String(pendingCount) + ' more...',
     };
   }
-  if (errorCount > 0) {
+  if (errorCount > 0 || (locatedCount > 0 && (noLocationCount > 0 || unsupportedCount > 0))) {
     return {
       state: PHOTO_MAP_STATES.partialErrors,
-      message: String(locatedCount) + ' geotagged media shown; ' + String(errorCount) +
-        ' media could not be read.',
+      message: summaryMessage(),
     };
+  }
+  if (unsupportedCount > 0) {
+    return {state: PHOTO_MAP_STATES.unsupported, message: summaryMessage()};
   }
   if (locatedCount === 0) {
     return {
