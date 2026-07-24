@@ -19,14 +19,17 @@ def _patch_isolated_paths(temp_root: Path) -> None:
     from dropbox_browser import config as config_module
     from dropbox_browser import foldercache as foldercache_module
     from dropbox_browser import listingcache as listingcache_module
+    from dropbox_browser import photo_map_cache as photo_map_cache_module
     from dropbox_browser import workertrace as workertrace_module
 
     folder_cache_dir = temp_root / "Cache" / "FolderInfo"
     listing_cache_dir = temp_root / "Cache" / "ListingCache"
+    photo_map_cache_dir = temp_root / "Cache" / "PhotoMap"
     temp_dir = temp_root / "Temp"
     config_module.TEMP_DIR = temp_dir
     foldercache_module.CACHE_DIR = folder_cache_dir
     listingcache_module.CACHE_DIR = listing_cache_dir
+    photo_map_cache_module.CACHE_DIR = photo_map_cache_dir
     workertrace_module.TEMP_DIR = temp_dir
     workertrace_module.TRACE_LOG_PATH = temp_dir / "foldercache_threads.jsonl"
 

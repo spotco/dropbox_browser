@@ -95,6 +95,17 @@ Rules:
 - Video player endpoints, HLS sessions, and browser modules:
   `docs/video-player.md` (`dropbox_browser/video.py`, `assets/js/video/`).
 
+## Photo Map Lifecycle Contract
+
+Photo Map client code is loaded with the page, but its map, cache reads,
+remote byte-range metadata requests, and thumbnail requests start only when
+the Photo Map bottom-pane mode is selected (or when a persisted Photo Map mode
+is restored as the initial pane). Switching to another pane destroys the
+Leaflet map, aborts active metadata and thumbnail work, and suppresses late
+results from the closed generation. Metadata already accepted by the cache
+writer may finish a local cache POST after deactivation; this is persistence
+of completed work, not continued Dropbox scanning or Photo Map UI activity.
+
 ## Current Known Issues
 
 - Empty local-only folders do not sync to Dropbox unless recursive sync creates
