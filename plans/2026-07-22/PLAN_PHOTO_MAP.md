@@ -9,13 +9,18 @@
   and cancels all active/queued work when the mode or folder changes.
 - The default date range is **All time**, with 90-day, 1-year, and custom date
   range controls.  Results still enter the queue newest-first within the
-  chosen range.
+  chosen range.  From/to inputs are shown only for modes that declare they use
+  them; an untouched custom range defaults from `1900-01-01` through today.
+  The toolbar keeps date controls separate from trailing actions and provides
+  one controls region for future additions.
 - Start with iPhone-originated still photos and videos.  Initial video support
   is GPS-only; a video thumbnail is explicitly a later enhancement.
 - Use iOS-style clustered location pins.  Clusters show a count and expand as
-  the user zooms.  Clicking an individual pin opens a small preview widget
-  with its cached thumbnail, filename, GPS coordinates, capture/listing date,
-  and an explicit link to the existing file preview.
+  the user zooms.  Each individually visible photo pin shows an attached
+  thumbnail card above the pin (with a clear stem/anchor connecting it to that
+  pin); clicking it opens the existing detailed preview widget with filename,
+  GPS coordinates, capture/listing date, and an explicit link to the existing
+  file preview.
 - Vendor Leaflet and its license with the application.  Fetch standard
   OpenStreetMap raster tiles directly from the browser, show the required
   attribution, and do not prefetch or proxy map tiles.
@@ -101,6 +106,41 @@
   newest-first results, usable clustering at wide/close zooms, date-control
   requeueing, responsive loading, and no network/cache activity after leaving
   the pane.
+
+### 6. Show and schedule thumbnails on visible photo pins
+
+- [x] Replace the default individual-photo marker with a Leaflet `DivIcon`
+  that retains a clear location pin and places a fixed-size thumbnail card
+  directly above it, connected by an obvious stem/anchor.  Use an equivalent
+  loading card while its thumbnail is pending so the marker does not jump;
+  preserve the marker's click target, title, accessibility, clustering, and
+  popup behavior.
+- [x] Keep thumbnail URLs on the existing shared path only:
+  `/thumbnail?path=<remote-path>&source=remote`.  Do not add a Photo-Map-only
+  thumbnail endpoint or server-side scheduler.
+- [x] Replace click-triggered whole-queue cancellation with one persistent,
+  browser-only, rate-controlled Photo Map thumbnail scheduler.  Keep the
+  existing thumbnail concurrency limit and route both visible-pin demand and
+  marker-click/popup promotion through this same queue.
+- [x] On map moves, zooms, cluster expansion/collapse, and progressive marker
+  updates, derive the desired jobs from photo markers that are both inside the
+  current map bounds and individually rendered (not children hidden by a
+  cluster).  Prioritize the selected/open marker first, then visible pins;
+  do not schedule thumbnails merely because a pin is a child of a cluster.
+- [x] When a marker leaves that visible set, immediately remove its unstarted
+  job and abort its active browser image request.  The abort must not create a
+  broken/error thumbnail cache entry, overwrite a successful cached result,
+  or allow a late result to update an out-of-date marker.  Already-loaded
+  in-memory results may remain reusable if the pin returns to view.
+- [x] Keep video pins on their existing neutral fallback; this work applies to
+  photos only and does not introduce video thumbnail extraction or previews.
+- [x] Add focused unit coverage for priority, deduplication, offscreen queued
+  removal, in-flight abort, late-result suppression, and preservation/reuse of
+  successfully loaded thumbnails.  Extend map tests for loading/loaded marker
+  icons and viewport/cluster visibility.
+- [ ] Extend the Playwright smoke test to verify visible pin thumbnails start
+  through the shared endpoint, an offscreen request is cancelled, and a
+  returned pin can load normally.
 
 ## Deferred deliberately
 

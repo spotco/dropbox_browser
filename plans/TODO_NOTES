@@ -1,3 +1,20 @@
+	instead of spiderweb-ing large groups (this becomes unusable in spiderwebbed groups of 50+ ), group into one differently displayed pin (a more emphasized/possibly slightly larger pin, larger for more absorbed images, show a badge with how many images are in the grouped pin)
+		analyze brave mcp my clicking on some recently high density areas to get real data (stop and tell me if not accessible)
+		the preview popup for clicking on this pin should show a scrollable grid of the grouped pin thumbnails, clicking on thumbnail shows the info of the grouped pin
+		there should be a control next to date range for how far away to group pins. make it some reasonable default value based on the real data you got from brave mcp
+
 plans\2026-07-22\PLAN_PHOTO_MAP.md
+
+photo map:
+	check code - if I upload more new photos, should everything work as expected?
+
+	don't zoom in on group split - maintain current zoom
+		
+	
+	video preview
+		plan for ios mov to be preview in browser
+		
+	- Recursive folder map aggregation.
+
 
 - music player: add playback intensity graph of current song at bottom (do not render if pane not open)
