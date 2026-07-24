@@ -138,6 +138,9 @@ export function createPhotoMap(L, element, options) {
     ['clusterclick', 'clustermouseover', 'clustermouseout', 'spiderfied', 'unspiderfied',
       'animationstart', 'animationend'].forEach(function (eventName) {
       markerLayer.on(eventName, function (event) {
+        if (eventName === 'unspiderfied') {
+          setTimeout(flushDeferredMarkerLayer, 0);
+        }
         debug.log('cluster-' + eventName, clusterDetails(event));
       });
     });
@@ -153,16 +156,16 @@ export function createPhotoMap(L, element, options) {
     });
   }
   var markerEntries = new Map();
+  var layerEntries = new Map();
+  var layerSyncDeferred = false;
   var activePopupPath = null;
 
   function itemPath(item) {
     return String((item && (item.photoMapSourcePath || item.path)) || '');
   }
 
-  function itemCoordinatesChanged(marker, item) {
-    if (!marker || typeof marker.getLatLng !== 'function') return false;
-    var current = marker.getLatLng();
-    return !current || current.lat !== item.latitude || current.lng !== item.longitude;
+  function itemCoordinatesChanged(entry, item) {
+    return entry.latitude !== item.latitude || entry.longitude !== item.longitude;
   }
 
   function updatePopupContent(entry) {
@@ -178,7 +181,17 @@ export function createPhotoMap(L, element, options) {
 
   function createMarker(path, item) {
     var marker = L.marker([item.latitude, item.longitude], {title: markerLabel(item)});
-    var entry = {item: item, marker: marker};
+    var entry = {
+      item: item,
+      marker: marker,
+      // MarkerClusterGroup temporarily changes marker.getLatLng() while a
+      // cluster is spiderfied. Keep the source coordinates separately so
+      // progressive metadata renders do not mistake spider legs for moves.
+      latitude: item.latitude,
+      longitude: item.longitude,
+      layerLatitude: item.latitude,
+      layerLongitude: item.longitude,
+    };
     var popupWasOpenForClick = false;
     if (typeof marker.on === 'function') {
       // Leaflet's built-in popup handler is registered by bindPopup below.
@@ -221,48 +234,60 @@ export function createPhotoMap(L, element, options) {
     return entry;
   }
 
-  function captureSpiderfiedState() {
-    var cluster = markerLayer._spiderfied;
-    if (!cluster || typeof cluster.getAllChildMarkers !== 'function') return null;
-    var paths = cluster.getAllChildMarkers().map(function (marker) {
-      for (var entry of markerEntries.values()) {
-        if (entry.marker === marker) return itemPath(entry.item);
+  function syncMarkerLayer() {
+    if (markerLayer._spiderfied) {
+      layerSyncDeferred = true;
+      return false;
+    }
+    var removedEntries = [];
+    layerEntries.forEach(function (entry, path) {
+      if (!markerEntries.has(path)) removedEntries.push(entry);
+    });
+    var addedEntries = [];
+    markerEntries.forEach(function (entry, path) {
+      var previous = layerEntries.get(path);
+      if (!previous) {
+        addedEntries.push(entry);
+      } else if (entry.layerLatitude !== entry.latitude || entry.layerLongitude !== entry.longitude) {
+        if (typeof entry.marker.setLatLng === 'function') {
+          entry.marker.setLatLng([entry.latitude, entry.longitude]);
+        }
+        entry.layerLatitude = entry.latitude;
+        entry.layerLongitude = entry.longitude;
       }
-      return '';
-    }).filter(Boolean);
-    return paths.length ? {paths: paths} : null;
+    });
+    var canReconcile = typeof markerLayer.addLayer === 'function' &&
+      typeof markerLayer.removeLayer === 'function';
+    if (canReconcile) {
+      removedEntries.forEach(function (entry) { markerLayer.removeLayer(entry.marker); });
+      addedEntries.forEach(function (entry) { markerLayer.addLayer(entry.marker); });
+    } else {
+      // Compatibility fallback for minimal Leaflet doubles; real
+      // MarkerClusterGroup supports incremental addLayer/removeLayer.
+      var markers = Array.from(markerEntries.values()).map(function (entry) { return entry.marker; });
+      if (typeof markerLayer.clearLayers === 'function') markerLayer.clearLayers();
+      if (typeof markerLayer.addLayers === 'function') markerLayer.addLayers(markers);
+      else markers.forEach(function (marker) { markerLayer.addLayer(marker); });
+      markerEntries.forEach(function (entry) {
+        entry.layerLatitude = entry.latitude;
+        entry.layerLongitude = entry.longitude;
+      });
+    }
+    layerEntries = new Map(markerEntries);
+    layerSyncDeferred = false;
+    debug.log('marker-layer-synced', {
+      added: addedEntries.length,
+      removed: removedEntries.length,
+    });
+    return true;
   }
 
-  function restoreSpiderfiedState(state) {
-    if (!state || !state.paths.length) return false;
-    var cluster = null;
-    for (var i = 0; i < state.paths.length; i += 1) {
-      var entry = markerEntries.get(state.paths[i]);
-      if (!entry) continue;
-      var visibleParent = typeof markerLayer.getVisibleParent === 'function'
-        ? markerLayer.getVisibleParent(entry.marker)
-        : null;
-      if (visibleParent && typeof visibleParent.spiderfy === 'function') {
-        cluster = visibleParent;
-        break;
-      }
-      var parent = entry.marker.__parent;
-      if (parent && typeof parent.spiderfy === 'function') {
-        cluster = parent;
-        break;
-      }
-    }
-    var bounds = typeof map.getBounds === 'function' ? map.getBounds() : null;
-    if (!cluster || (bounds && typeof bounds.contains === 'function' &&
-        typeof cluster.getLatLng === 'function' && !bounds.contains(cluster.getLatLng()))) return false;
-    cluster.spiderfy();
-    debug.log('cluster-restored', {paths: state.paths});
-    return true;
+  function flushDeferredMarkerLayer() {
+    if (layerSyncDeferred && !markerLayer._spiderfied) syncMarkerLayer();
   }
 
   function setMarkerItems(items) {
     var previousEntries = markerEntries;
-    var spiderfiedState = captureSpiderfiedState();
     var nextEntries = new Map();
     var addedEntries = [];
     var changedEntries = [];
@@ -279,12 +304,11 @@ export function createPhotoMap(L, element, options) {
       if (previous) {
         entry.item = markerItem;
         if (entry.marker.options) entry.marker.options.title = markerLabel(markerItem);
-        var coordinatesChangedForEntry = itemCoordinatesChanged(entry.marker, markerItem);
+        var coordinatesChangedForEntry = itemCoordinatesChanged(entry, markerItem);
         if (coordinatesChangedForEntry) {
           coordinatesChanged = true;
-        }
-        if (coordinatesChangedForEntry && typeof entry.marker.setLatLng === 'function') {
-          entry.marker.setLatLng([markerItem.latitude, markerItem.longitude]);
+          entry.latitude = markerItem.latitude;
+          entry.longitude = markerItem.longitude;
         }
         updatePopupContent(entry);
         changedEntries.push(entry);
@@ -300,27 +324,32 @@ export function createPhotoMap(L, element, options) {
     });
     markerEntries = nextEntries;
 
-    var canReconcile = typeof markerLayer.addLayer === 'function' &&
-      typeof markerLayer.removeLayer === 'function';
-    if (canReconcile) {
-      removedEntries.forEach(function (entry) { markerLayer.removeLayer(entry.marker); });
-      addedEntries.forEach(function (entry) { markerLayer.addLayer(entry.marker); });
-    } else {
-      // Compatibility fallback for minimal Leaflet doubles; real
-      // MarkerClusterGroup supports incremental addLayer/removeLayer.
-      var markers = Array.from(nextEntries.values()).map(function (entry) { return entry.marker; });
-      if (typeof markerLayer.clearLayers === 'function') markerLayer.clearLayers();
-      if (typeof markerLayer.addLayers === 'function') markerLayer.addLayers(markers);
-      else markers.forEach(function (marker) { markerLayer.addLayer(marker); });
+    var layerChanges = addedEntries.length || removedEntries.length || coordinatesChanged;
+    if (layerChanges) {
+      if (markerLayer._spiderfied) {
+        // MarkerClusterGroup.addLayer/removeLayer always unspiderfies the
+        // active cluster. Hold membership/coordinate changes until the
+        // cluster naturally closes, so progressive metadata never collapses
+        // an otherwise visible expansion.
+        layerSyncDeferred = true;
+        debug.log('marker-layer-sync-deferred', {
+          added: addedEntries.length,
+          removed: removedEntries.length,
+          coordinatesChanged: coordinatesChanged,
+        });
+      } else {
+        syncMarkerLayer();
+      }
+    } else if (layerSyncDeferred && !markerLayer._spiderfied) {
+      syncMarkerLayer();
     }
     if (typeof markerLayer.refreshClusters === 'function' && changedEntries.length) {
-      markerLayer.refreshClusters(changedEntries.map(function (entry) { return entry.marker; }));
+      markerLayer.refreshClusters(changedEntries.filter(function (entry) {
+        return layerEntries.has(itemPath(entry.item));
+      }).map(function (entry) { return entry.marker; }));
     }
     if (activePopupPath && !nextEntries.has(activePopupPath) && typeof map.closePopup === 'function') {
       map.closePopup();
-    }
-    if (spiderfiedState && (addedEntries.length || removedEntries.length || coordinatesChanged)) {
-      restoreSpiderfiedState(spiderfiedState);
     }
     debug.log('markers-reconciled', {
       count: nextEntries.size,

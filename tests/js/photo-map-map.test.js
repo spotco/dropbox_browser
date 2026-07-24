@@ -372,7 +372,7 @@ test("Photo Map keeps the same pin popup open when the pin is clicked again", as
   assert.equal(currentMarker.isPopupOpen(), true);
 });
 
-test("Photo Map restores a visible spiderfied cluster after membership changes", async () => {
+test("Photo Map defers membership changes until a spiderfied cluster closes", async () => {
   const mapModule = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/map.js");
   const createdMarkers = [];
   const fakeMap = {
@@ -388,8 +388,29 @@ test("Photo Map restores a visible spiderfied cluster after membership changes",
   };
   const markerLayer = {
     _spiderfied: null,
+    _layerAddCount: 0,
+    _listeners: new Map(),
     addTo() {},
+    on(name, callback) {
+      if (!this._listeners.has(name)) this._listeners.set(name, []);
+      this._listeners.get(name).push(callback);
+    },
+    once(name, callback) {
+      const layer = this;
+      const onceCallback = function (event) {
+        layer.off(name, onceCallback);
+        callback(event);
+      };
+      this.on(name, onceCallback);
+    },
+    off(name, callback) {
+      this._listeners.set(name, (this._listeners.get(name) || []).filter((entry) => entry !== callback));
+    },
+    trigger(name, event) {
+      (this._listeners.get(name) || []).slice().forEach((callback) => callback(event));
+    },
     addLayer(marker) {
+      this._layerAddCount += 1;
       marker.__parent = cluster;
       this._spiderfied = null;
     },
@@ -403,10 +424,11 @@ test("Photo Map restores a visible spiderfied cluster after membership changes",
     marker(point) {
       const marker = {
         _point: point,
+        setLatLngCount: 0,
         bindPopup() {},
         on() {},
         getLatLng() { return {lat: this._point[0], lng: this._point[1]}; },
-        setLatLng(next) { this._point = next; },
+        setLatLng(next) { this.setLatLngCount += 1; this._point = next; },
       };
       createdMarkers.push(marker);
       return marker;
@@ -418,12 +440,27 @@ test("Photo Map restores a visible spiderfied cluster after membership changes",
     {path: "one.jpg", latitude: 1, longitude: 2},
     {path: "two.jpg", latitude: 1, longitude: 2},
   ]);
+  // Spiderfy moves the rendered marker, but must not look like a source
+  // coordinate update on the next progressive metadata render.
+  createdMarkers[0]._point = [8, 9];
   markerLayer._spiderfied = cluster;
   controller.setMarkerItems([
     {path: "one.jpg", latitude: 1, longitude: 2},
     {path: "two.jpg", latitude: 1, longitude: 2},
+  ]);
+  assert.equal(createdMarkers[0].setLatLngCount, 0);
+  assert.equal(markerLayer._spiderfied, cluster);
+  controller.setMarkerItems([
+    {path: "one.jpg", latitude: 3, longitude: 4},
+    {path: "two.jpg", latitude: 1, longitude: 2},
     {path: "three.jpg", latitude: 1, longitude: 2},
   ]);
 
-  assert.equal(cluster.spiderfyCount, 1);
+  assert.equal(markerLayer._layerAddCount, 2);
+  assert.equal(createdMarkers[0].setLatLngCount, 0);
+  markerLayer._spiderfied = null;
+  markerLayer.trigger("unspiderfied", {cluster});
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(markerLayer._layerAddCount, 3);
+  assert.equal(createdMarkers[0].setLatLngCount, 1);
 });
