@@ -12,11 +12,12 @@ import {
 } from './photo-map/cache.js';
 import {
   PHOTO_MAP_CACHE_BATCH_LIMIT,
+  PHOTO_MAP_DEFAULT_FROM_DATE,
   PHOTO_MAP_METADATA_CONCURRENCY,
 } from './photo-map/config.js';
 import {runPhotoMapMetadataQueue} from './photo-map/queue.js';
 import {
-  runPhotoMapThumbnailQueue,
+  createPhotoMapThumbnailScheduler,
   selectPhotoMapThumbnailItems,
 } from './photo-map/thumbnails.js';
 import {ensurePhotoMapLeaflet} from './photo-map/leaflet.js';
@@ -50,8 +51,7 @@ export function initPhotoMap(options) {
   var metadataResults = new Map();
   var thumbnailResults = new Map();
   var abortController = null;
-  var thumbnailQueue = null;
-  var thumbnailController = null;
+  var thumbnailScheduler = null;
   var mapController = null;
   var mapResizeObserver = null;
   var activeCacheWriter = null;
@@ -62,6 +62,9 @@ export function initPhotoMap(options) {
   var mapFittedToResults = false;
   var fittingMap = false;
   var mapInteractionHandler = null;
+  var thumbnailGenerationId = 0;
+  var selectedThumbnailPath = '';
+  var dateInputDefaultsInitialized = false;
 
   function newAbortController() {
     if (typeof AbortController === 'function') return new AbortController();
@@ -148,17 +151,53 @@ export function initPhotoMap(options) {
     activeCacheWriter = null;
     runId += 1;
     if (abortController) abortController.abort();
-    if (thumbnailController) thumbnailController.abort();
     abortController = null;
-    thumbnailController = null;
     metadataResults.clear();
     thumbnailResults.clear();
-    thumbnailQueue = null;
+    if (thumbnailScheduler) thumbnailScheduler.reset({clearCache: true});
   }
 
   function generationIsCurrent(generation) {
     return active && generation.id === runId && abortController === generation.controller &&
       !(generation.signal && generation.signal.aborted);
+  }
+
+  function ensureThumbnailScheduler() {
+    if (thumbnailScheduler) return thumbnailScheduler;
+    thumbnailScheduler = createPhotoMapThumbnailScheduler({
+      imageFactory: function () { return new win.Image(); },
+      isCurrent: function () {
+        return active && thumbnailGenerationId === runId;
+      },
+      onState: function (item, state) {
+        if (mapController && typeof mapController.setMarkerThumbnailState === 'function') {
+          mapController.setMarkerThumbnailState(item.path || item.photoMapSourcePath, state);
+        }
+      },
+      onResult: function (item, result) {
+        if (result && result.status === 'loaded') {
+          diagnostics.increment('thumbnailCompleted');
+          applyThumbnailResult(item, result);
+        } else if (result && result.reason === 'thumbnail-load-failure') {
+          diagnostics.increment('thumbnailErrors');
+        }
+      },
+    });
+    return thumbnailScheduler;
+  }
+
+  function syncVisiblePinThumbnails(items) {
+    if (!active) return;
+    var scheduler = ensureThumbnailScheduler();
+    var visibleItems = selectPhotoMapThumbnailItems(items, {
+      metadataResults: metadataResults,
+      visiblePaths: (Array.isArray(items) ? items : []).map(function (item) {
+        return item.path || item.photoMapSourcePath;
+      }),
+      selectedPath: selectedThumbnailPath,
+    });
+    diagnostics.increment('thumbnailQueued', visibleItems.length);
+    scheduler.update(visibleItems, {selectedPath: selectedThumbnailPath});
   }
 
   function invalidateMapSize() {
@@ -235,6 +274,7 @@ export function initPhotoMap(options) {
       if (!active || expectedRunId !== runId) return null;
       mapController = createPhotoMap(leaflet, doc.getElementById('photo-map-map'), {
         onMarkerSelect: handleMarkerSelection,
+        onVisibleMarkers: syncVisiblePinThumbnails,
         debug: debugEnabled,
         console: config.console || win.console,
       });
@@ -270,7 +310,18 @@ export function initPhotoMap(options) {
   }
 
   function updateCustomRangeVisibility() {
-    var visible = currentRange().preset === 'custom';
+    var preset = currentRange().preset;
+    var visible = !!(PHOTO_MAP_DATE_PRESETS[preset] && PHOTO_MAP_DATE_PRESETS[preset].usesFromTo);
+    if (!dateInputDefaultsInitialized) {
+      var today = new Date();
+      var todayValue = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') +
+        '-' + String(today.getDate()).padStart(2, '0');
+      if (dateFromEl && !dateFromEl.value) dateFromEl.value = PHOTO_MAP_DEFAULT_FROM_DATE;
+      if (dateToEl && !dateToEl.value) dateToEl.value = todayValue;
+      if (dateFromEl) dateFromEl.max = todayValue;
+      if (dateToEl) dateToEl.max = todayValue;
+      dateInputDefaultsInitialized = true;
+    }
     if (customRangeEl) {
       customRangeEl.hidden = !visible;
       customRangeEl.classList.toggle('hidden', !visible);
@@ -323,6 +374,7 @@ export function initPhotoMap(options) {
   async function loadCandidates() {
     cancelGeneration();
     var generation = {id: runId, controller: newAbortController()};
+    thumbnailGenerationId = generation.id;
     abortController = generation.controller;
     generation.signal = generation.controller.signal;
     diagnostics.beginGeneration(generation.id);
@@ -466,6 +518,7 @@ export function initPhotoMap(options) {
   function handleMarkerSelection(item) {
     if (!active || !item) return;
     var path = String(item.path || item.photoMapSourcePath || '');
+    selectedThumbnailPath = path;
     var cachedThumbnail = thumbnailResults.get(path);
     if (cachedThumbnail) {
       if (mapController && typeof mapController.setMarkerThumbnail === 'function') {
@@ -479,38 +532,21 @@ export function initPhotoMap(options) {
   function requestThumbnails(items, options) {
     var config = options || {};
     if (!active) return Promise.resolve({results: [], aborted: true, queued: false});
-    if (thumbnailController) thumbnailController.abort();
-    thumbnailController = newAbortController();
-    var generationId = runId;
+    var scheduler = ensureThumbnailScheduler();
     var requestItems = selectPhotoMapThumbnailItems(items, Object.assign({}, config, {
       metadataResults: metadataResults,
     }));
     diagnostics.increment('thumbnailQueued', requestItems.length);
-    thumbnailQueue = runPhotoMapThumbnailQueue(requestItems, {
-      imageFactory: config.imageFactory || function () { return new win.Image(); },
-      loader: config.loader,
-      signal: thumbnailController.signal,
-      isCurrent: function () {
-        return active && generationId === runId && !(thumbnailController.signal && thumbnailController.signal.aborted);
-      },
-      onResult: function (item, result) {
-        if (!diagnostics.isGeneration(generationId)) return;
-        if (result && result.status === 'loaded') diagnostics.increment('thumbnailCompleted');
-        else if (result && result.reason === 'aborted') diagnostics.increment('thumbnailAborted');
-        else diagnostics.increment('thumbnailErrors');
-        applyThumbnailResult(item, result);
-        if (typeof config.onResult === 'function') config.onResult(item, result);
-      },
-    });
-    thumbnailQueue.then(function (report) {
-      if (!diagnostics.isGeneration(generationId)) return;
-      diagnostics.logSummary('Photo Map thumbnail queue summary', {
-        queued: requestItems.length,
-        completed: report.results.length,
-        aborted: report.aborted,
+    scheduler.promote(requestItems[0] || (Array.isArray(items) ? items[0] : null));
+    if (typeof config.onResult === 'function') {
+      // Preserve the old extension point for callers that used the explicit
+      // click queue. Results from the persistent scheduler still flow through
+      // the shared host callback above.
+      requestItems.forEach(function (item) {
+        if (thumbnailResults.has(item.path)) config.onResult(item, thumbnailResults.get(item.path));
       });
-    });
-    return thumbnailQueue;
+    }
+    return Promise.resolve({results: [], aborted: false, queued: requestItems.length > 0});
   }
 
   function initialPaneMode() {

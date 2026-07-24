@@ -44,6 +44,11 @@ test("selectPhotoMapCandidates keeps direct remote iPhone media and orders newes
 test("Photo Map config recognizes supported formats and reports unsupported formats", async () => {
   const config = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/config.js");
 
+  assert.equal(config.PHOTO_MAP_DATE_PRESETS.all.usesFromTo, false);
+  assert.equal(config.PHOTO_MAP_DATE_PRESETS["90-days"].usesFromTo, false);
+  assert.equal(config.PHOTO_MAP_DATE_PRESETS["1-year"].usesFromTo, false);
+  assert.equal(config.PHOTO_MAP_DATE_PRESETS.custom.usesFromTo, true);
+
   assert.deepEqual(config.classifyPhotoMapCandidate({display_name: "IMG_0001.JPG"}), {
     status: "supported",
     extension: ".jpg",

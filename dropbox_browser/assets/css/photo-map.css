@@ -28,11 +28,29 @@
   gap: 8px 12px;
   padding: 6px 10px;
 }
+.photo-map-toolbar-controls {
+  align-items: center;
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  min-width: 0;
+}
+.photo-map-toolbar-actions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+  margin-left: auto;
+}
 .photo-map-date-control,
 .photo-map-custom-range {
   align-items: center;
   display: flex;
   gap: 6px;
+}
+.photo-map-custom-range[hidden] {
+  display: none !important;
 }
 .photo-map-toolbar label {
   color: #b7c3d0;
@@ -58,7 +76,6 @@
 }
 .photo-map-toolbar-button {
   cursor: pointer;
-  margin-left: auto;
 }
 .photo-map-toolbar select:focus-visible,
 .photo-map-toolbar input:focus-visible,
@@ -109,6 +126,71 @@
   min-width: 0;
   position: relative;
   width: 100%;
+}
+.photo-map-marker-icon {
+  background: transparent;
+  border: 0;
+}
+.photo-map-marker-visual {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  height: 110px;
+  justify-content: flex-start;
+  pointer-events: none;
+  position: relative;
+  width: 88px;
+}
+.photo-map-marker-thumbnail {
+  align-items: center;
+  background: #fff;
+  border: 2px solid #34495e;
+  border-radius: 6px;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 35%);
+  box-sizing: border-box;
+  display: flex;
+  height: 64px;
+  justify-content: center;
+  overflow: hidden;
+  width: 76px;
+}
+.photo-map-marker-thumbnail-image {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+.photo-map-marker-thumbnail-loading {
+  align-items: center;
+  background: linear-gradient(110deg, #e4e9ee 30%, #f8fafb 45%, #e4e9ee 60%);
+  background-size: 200% 100%;
+  color: #526273;
+  display: flex;
+  font-size: 25px;
+  height: 100%;
+  justify-content: center;
+  width: 100%;
+}
+.photo-map-marker-state-loading .photo-map-marker-thumbnail-loading {
+  animation: photo-map-thumbnail-loading 1.35s linear infinite;
+}
+.photo-map-marker-stem {
+  background: #34495e;
+  height: 8px;
+  width: 3px;
+}
+.photo-map-marker-pin {
+  background: #e74c3c;
+  border: 2px solid #fff;
+  border-radius: 50% 50% 50% 0;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 45%);
+  height: 17px;
+  margin-top: -1px;
+  transform: rotate(-45deg);
+  width: 17px;
+}
+@keyframes photo-map-thumbnail-loading {
+  to { background-position: -200% 0; }
 }
 .photo-map-preview {
   min-width: 210px;
@@ -163,7 +245,7 @@
   overflow-wrap: anywhere;
 }
 @media (max-width: 640px) {
-  .photo-map-toolbar-button {
+  .photo-map-toolbar-actions {
     margin-left: 0;
   }
   .photo-map-custom-range {

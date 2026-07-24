@@ -128,6 +128,70 @@ test("Photo Map renders located media into markers and fits once to useful bound
   assert.deepEqual(calls[4][2], {padding: [24, 24], maxZoom: 15});
 });
 
+test("Photo Map attaches loading/ready thumbnail cards and reports individually visible pins", async () => {
+  const mapModule = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/map.js");
+  const createdMarkers = [];
+  const visible = new Set();
+  const mapListeners = {};
+  let visibleItems = [];
+  const markerLayer = {
+    addTo() {},
+    addLayer(marker) {
+      visible.add(marker);
+      if (marker.point[0] === 3) visible.delete(marker);
+    },
+    removeLayer() {},
+    getVisibleParent(marker) { return visible.has(marker) ? marker : null; },
+  };
+  const fakeLeaflet = {
+    map() {
+      return {
+        setView() {},
+        invalidateSize() {},
+        remove() {},
+        on(name, callback) { mapListeners[name] = callback; },
+        getBounds() { return {contains() { return true; }}; },
+      };
+    },
+    tileLayer() { return {addTo() {}}; },
+    markerClusterGroup() { return markerLayer; },
+    divIcon(options) { return options; },
+    marker(point, options) {
+      const marker = {
+        point,
+        options,
+        icons: [options.icon],
+        bindPopup(content) { this.popup = content; },
+        setPopupContent(content) { this.popup = content; },
+        setIcon(icon) { this.icons.push(icon); },
+        getLatLng() { return {lat: this.point[0], lng: this.point[1]}; },
+        on() {},
+      };
+      createdMarkers.push(marker);
+      return marker;
+    },
+  };
+
+  const controller = mapModule.createPhotoMap(fakeLeaflet, "map-element", {
+    onVisibleMarkers(items) { visibleItems = items; },
+  });
+  controller.setMarkerItems([
+    {path: "visible.jpg", display_name: "visible.jpg", latitude: 1, longitude: 2},
+    {path: "clustered.jpg", display_name: "clustered.jpg", latitude: 3, longitude: 4},
+  ]);
+
+  assert.deepEqual(visibleItems.map((item) => item.path), ["visible.jpg"]);
+  visible.clear();
+  mapListeners.moveend({});
+  assert.deepEqual(visibleItems, []);
+  assert.match(createdMarkers[0].icons[0].html, /photo-map-marker-thumbnail-loading/);
+  controller.setMarkerThumbnail("visible.jpg", {
+    url: "/thumbnail?path=visible.jpg&source=remote",
+  });
+  assert.match(createdMarkers[0].icons.at(-1).html, /photo-map-marker-thumbnail-image/);
+  assert.match(createdMarkers[0].icons.at(-1).html, /visible\.jpg/);
+});
+
 test("Photo Map popup exposes metadata and a safe full-preview link", async () => {
   const mapModule = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/map.js");
   let popup = "";

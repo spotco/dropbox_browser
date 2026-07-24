@@ -26,6 +26,32 @@ function markerLabel(item) {
   return String((item && (item.display_name || item.name || item.path)) || 'Photo Map media');
 }
 
+function markerIconHtml(item, state) {
+  if (mediaKind(item) === 'video') return '';
+  var label = escapeHtml(markerLabel(item));
+  var url = item && item.photoMapThumbnailUrl;
+  var thumbnail = url
+    ? '<img class="photo-map-marker-thumbnail-image" src="' + escapeHtml(url) +
+      '" alt="Thumbnail for ' + label + '">'
+    : '<span class="photo-map-marker-thumbnail-loading" role="status" aria-label="Loading thumbnail">' +
+      '<span aria-hidden="true">&hellip;</span></span>';
+  var stateName = state || (url ? 'ready' : 'loading');
+  return '<span class="photo-map-marker-visual photo-map-marker-state-' + escapeHtml(stateName) +
+    '"><span class="photo-map-marker-thumbnail">' + thumbnail +
+    '</span><span class="photo-map-marker-stem" aria-hidden="true"></span><span class="photo-map-marker-pin" aria-hidden="true"></span></span>';
+}
+
+function markerIcon(L, item, state) {
+  if (typeof L.divIcon !== 'function' || mediaKind(item) === 'video') return null;
+  return L.divIcon({
+    className: 'photo-map-marker-icon',
+    html: markerIconHtml(item, state),
+    iconSize: [88, 110],
+    iconAnchor: [44, 108],
+    popupAnchor: [0, -106],
+  });
+}
+
 function detailValue(value) {
   return value === null || value === undefined || value === '' ? 'Unavailable' : String(value);
 }
@@ -139,7 +165,12 @@ export function createPhotoMap(L, element, options) {
       'animationstart', 'animationend'].forEach(function (eventName) {
       markerLayer.on(eventName, function (event) {
         if (eventName === 'unspiderfied') {
-          setTimeout(flushDeferredMarkerLayer, 0);
+          setTimeout(function () {
+            flushDeferredMarkerLayer();
+            notifyVisibleMarkers();
+          }, 0);
+        } else if (eventName === 'spiderfied') {
+          notifyVisibleMarkers();
         }
         debug.log('cluster-' + eventName, clusterDetails(event));
       });
@@ -152,6 +183,7 @@ export function createPhotoMap(L, element, options) {
           hasLayer: !!(event && event.layer),
           hasPopup: !!(event && event.popup),
         });
+        if (eventName === 'moveend' || eventName === 'zoomend') notifyVisibleMarkers();
       });
     });
   }
@@ -159,6 +191,25 @@ export function createPhotoMap(L, element, options) {
   var layerEntries = new Map();
   var layerSyncDeferred = false;
   var activePopupPath = null;
+
+  function visibleMarkerItems() {
+    var bounds = typeof map.getBounds === 'function' ? map.getBounds() : null;
+    var canCheckParent = typeof markerLayer.getVisibleParent === 'function';
+    return Array.from(markerEntries.values()).filter(function (entry) {
+      var latLng = typeof entry.marker.getLatLng === 'function'
+        ? entry.marker.getLatLng()
+        : {lat: entry.latitude, lng: entry.longitude};
+      if (bounds && typeof bounds.contains === 'function' && !bounds.contains(latLng)) return false;
+      if (canCheckParent && markerLayer.getVisibleParent(entry.marker) !== entry.marker) return false;
+      return true;
+    }).map(function (entry) { return entry.item; });
+  }
+
+  function notifyVisibleMarkers() {
+    if (typeof config.onVisibleMarkers === 'function') {
+      config.onVisibleMarkers(visibleMarkerItems());
+    }
+  }
 
   function itemPath(item) {
     return String((item && (item.photoMapSourcePath || item.path)) || '');
@@ -180,7 +231,10 @@ export function createPhotoMap(L, element, options) {
   }
 
   function createMarker(path, item) {
-    var marker = L.marker([item.latitude, item.longitude], {title: markerLabel(item)});
+    var icon = markerIcon(L, item, item.photoMapThumbnailState);
+    var markerOptions = {title: markerLabel(item)};
+    if (icon) markerOptions.icon = icon;
+    var marker = L.marker([item.latitude, item.longitude], markerOptions);
     var entry = {
       item: item,
       marker: marker,
@@ -300,6 +354,9 @@ export function createPhotoMap(L, element, options) {
       var markerItem = previous && previous.item.photoMapThumbnailUrl && !item.photoMapThumbnailUrl
         ? Object.assign({}, item, {photoMapThumbnailUrl: previous.item.photoMapThumbnailUrl})
         : item;
+      if (previous && previous.item.photoMapThumbnailState && !item.photoMapThumbnailState) {
+        markerItem = Object.assign({}, markerItem, {photoMapThumbnailState: previous.item.photoMapThumbnailState});
+      }
       var entry = previous || createMarker(path, markerItem);
       if (previous) {
         entry.item = markerItem;
@@ -358,15 +415,31 @@ export function createPhotoMap(L, element, options) {
       updated: changedEntries.length,
       paths: Array.from(nextEntries.keys()),
     });
+    notifyVisibleMarkers();
     return nextEntries.size;
   }
   function setMarkerThumbnail(path, thumbnail) {
     var entry = markerEntries.get(String(path || ''));
     var url = typeof thumbnail === 'string' ? thumbnail : (thumbnail && thumbnail.url);
     if (!entry || !url) return false;
-    entry.item = Object.assign({}, entry.item, {photoMapThumbnailUrl: url});
+    entry.item = Object.assign({}, entry.item, {photoMapThumbnailUrl: url, photoMapThumbnailState: 'ready'});
+    if (typeof entry.marker.setIcon === 'function') {
+      var readyIcon = markerIcon(L, entry.item, 'ready');
+      if (readyIcon) entry.marker.setIcon(readyIcon);
+    }
     updatePopupContent(entry);
     debug.log('popup-thumbnail-updated', {path: String(path || ''), url: url});
+    return true;
+  }
+  function setMarkerThumbnailState(path, state) {
+    var entry = markerEntries.get(String(path || ''));
+    if (!entry || mediaKind(entry.item) === 'video') return false;
+    var nextState = String(state || 'loading');
+    entry.item = Object.assign({}, entry.item, {photoMapThumbnailState: nextState});
+    if (typeof entry.marker.setIcon === 'function') {
+      var nextIcon = markerIcon(L, entry.item, nextState);
+      if (nextIcon) entry.marker.setIcon(nextIcon);
+    }
     return true;
   }
   function fitToItems(items) {
@@ -384,6 +457,8 @@ export function createPhotoMap(L, element, options) {
     invalidateSize: function () { map.invalidateSize({debounceMoveend: true}); },
     setMarkerItems: setMarkerItems,
     setMarkerThumbnail: setMarkerThumbnail,
+    setMarkerThumbnailState: setMarkerThumbnailState,
+    getVisibleMarkerItems: visibleMarkerItems,
     setDebugEnabled: debug.setEnabled,
     isDebugEnabled: debug.isEnabled,
     fitToItems: fitToItems,

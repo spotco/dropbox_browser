@@ -12,6 +12,12 @@ function item(path, mediaKind = "photo") {
   return {path, photoMapSourcePath: path, photoMapMediaKind: mediaKind};
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((finish) => { resolve = finish; });
+  return {promise, resolve};
+}
+
 test("Photo Map thumbnail selection requires located visible/selected photos", async () => {
   const thumbnails = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/thumbnails.js");
   const candidates = [
@@ -89,4 +95,90 @@ test("Photo Map thumbnail queue aborts active and queued work", async () => {
   assert.equal(report.aborted, true);
   assert.equal(report.queued, true);
   assert.deepEqual(report.results, []);
+});
+
+test("Photo Map thumbnail scheduler prioritizes selected pins and drops offscreen work", async () => {
+  const thumbnails = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/thumbnails.js");
+  const firstGate = deferred();
+  const selectedGate = deferred();
+  const started = [];
+  const states = [];
+  const scheduler = thumbnails.createPhotoMapThumbnailScheduler({
+    concurrency: 1,
+    loader: async (candidate, signal) => {
+      started.push(candidate.path);
+      if (candidate.path === "two.jpg") {
+        await Promise.race([
+          selectedGate.promise,
+          new Promise((resolve) => signal.addEventListener("abort", resolve, {once: true})),
+        ]);
+        if (signal.aborted) {
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          throw error;
+        }
+      }
+      if (candidate.path === "one.jpg") {
+        await Promise.race([
+          firstGate.promise,
+          new Promise((resolve) => signal.addEventListener("abort", resolve, {once: true})),
+        ]);
+        if (signal.aborted) {
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          throw error;
+        }
+      }
+      return {url: `/thumbnail?path=${candidate.path}&source=remote`};
+    },
+    onState: (candidate, state) => states.push([candidate.path, state]),
+  });
+
+  scheduler.update([{path: "one.jpg"}, {path: "two.jpg"}], {selectedPath: "two.jpg"});
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(started, ["two.jpg"]);
+
+  // The selected request is active; removing it from view aborts it and lets
+  // the remaining visible pin become the next job.
+  scheduler.update([{path: "one.jpg"}]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(started, ["two.jpg", "one.jpg"]);
+  assert.deepEqual(scheduler.getPendingPaths(), []);
+  assert.ok(states.some(([path, state]) => path === "two.jpg" && state === "idle"));
+  selectedGate.resolve();
+  firstGate.resolve();
+});
+
+test("Photo Map thumbnail scheduler suppresses late offscreen results and reuses loaded cache", async () => {
+  const thumbnails = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/thumbnails.js");
+  const late = deferred();
+  const loaded = deferred();
+  let loadCount = 0;
+  const results = [];
+  const scheduler = thumbnails.createPhotoMapThumbnailScheduler({
+    concurrency: 1,
+    loader: async (candidate) => {
+      loadCount += 1;
+      if (candidate.path === "late.jpg") return late.promise;
+      return loaded.promise;
+    },
+    onResult: (_candidate, result) => results.push(result),
+  });
+
+  scheduler.update([{path: "late.jpg"}]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  scheduler.update([]);
+  late.resolve({url: "/thumbnail?path=late.jpg&source=remote"});
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(scheduler.getCached("late.jpg"), null);
+  assert.equal(results.length, 0);
+
+  scheduler.update([{path: "cached.jpg"}]);
+  loaded.resolve({url: "/thumbnail?path=cached.jpg&source=remote"});
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(scheduler.getCached("cached.jpg"));
+  scheduler.update([]);
+  scheduler.update([{path: "cached.jpg"}]);
+  assert.equal(loadCount, 2);
+  assert.equal(results.length, 1);
 });

@@ -118,6 +118,27 @@ async function waitFor(predicate, timeoutMs = 1000) {
   assert.fail("Timed out waiting for Photo Map test state");
 }
 
+test("Photo Map date inputs stay hidden outside from/to modes and default to an open-ended current range", async () => {
+  const host = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map.js");
+  const allFixture = photoMapHostFixture();
+  const noOpFetch = () => Promise.resolve(jsonResponse({page: {path: "Camera Uploads"}, rows: []}));
+  host.initPhotoMap({document: allFixture.doc, window: allFixture.win, fetchImpl: noOpFetch});
+
+  assert.equal(allFixture.elements["photo-map-custom-range"].hidden, true);
+  assert.equal(allFixture.elements["photo-map-date-from"].value, "1900-01-01");
+  const today = new Date();
+  const todayValue = today.getFullYear() + "-" + String(today.getMonth() + 1).padStart(2, "0") +
+    "-" + String(today.getDate()).padStart(2, "0");
+  assert.equal(allFixture.elements["photo-map-date-to"].value, todayValue);
+
+  const customFixture = photoMapHostFixture();
+  customFixture.elements["photo-map-date-range"].value = "custom";
+  host.initPhotoMap({document: customFixture.doc, window: customFixture.win, fetchImpl: noOpFetch});
+  assert.equal(customFixture.elements["photo-map-custom-range"].hidden, false);
+  assert.equal(customFixture.elements["photo-map-date-from"].max, todayValue);
+  assert.equal(customFixture.elements["photo-map-date-to"].max, todayValue);
+});
+
 test("Photo Map activation initializes Leaflet after starting its generation", async () => {
   const host = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map.js");
   const pane = element();

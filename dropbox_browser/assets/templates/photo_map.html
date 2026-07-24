@@ -1,22 +1,27 @@
 <div id="photo-map-pane" class="bottom-pane-view hidden" data-pane-mode="photo-map" hidden>
   <div class="photo-map-shell" aria-label="Photo Map">
     <div class="photo-map-toolbar" role="toolbar" aria-label="Photo Map controls">
-      <div class="photo-map-date-control">
-        <label for="photo-map-date-range">Date range</label>
-        <select id="photo-map-date-range" aria-describedby="photo-map-status">
-          <option value="all">All time</option>
-          <option value="90-days">Last 90 days</option>
-          <option value="1-year">Last year</option>
-          <option value="custom">Custom range</option>
-        </select>
+      <div class="photo-map-toolbar-controls">
+        <div class="photo-map-date-control">
+          <label for="photo-map-date-range">Date range</label>
+          <select id="photo-map-date-range" aria-describedby="photo-map-status">
+            <option value="all">All time</option>
+            <option value="90-days">Last 90 days</option>
+            <option value="1-year">Last year</option>
+            <option value="custom">Custom range</option>
+          </select>
+        </div>
+        <div id="photo-map-custom-range" class="photo-map-custom-range hidden" hidden>
+          <label for="photo-map-date-from">From</label>
+          <input type="date" id="photo-map-date-from" aria-label="Photo Map start date">
+          <label for="photo-map-date-to">To</label>
+          <input type="date" id="photo-map-date-to" aria-label="Photo Map end date">
+        </div>
+        <!-- Add future Photo Map controls here, after the date controls. -->
       </div>
-      <div id="photo-map-custom-range" class="photo-map-custom-range hidden" hidden>
-        <label for="photo-map-date-from">From</label>
-        <input type="date" id="photo-map-date-from" aria-label="Photo Map start date">
-        <label for="photo-map-date-to">To</label>
-        <input type="date" id="photo-map-date-to" aria-label="Photo Map end date">
+      <div class="photo-map-toolbar-actions">
+        <button type="button" id="photo-map-refresh" class="photo-map-toolbar-button">Reload map data</button>
       </div>
-      <button type="button" id="photo-map-refresh" class="photo-map-toolbar-button">Reload map data</button>
     </div>
     <div id="photo-map-status" class="photo-map-status" data-state="idle" aria-busy="false" role="status" aria-live="polite">
       Select a date range to load geotagged media from this folder.

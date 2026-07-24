@@ -16,11 +16,15 @@ export const PHOTO_MAP_MEDIA_EXTENSIONS = Object.freeze({
 });
 
 export const PHOTO_MAP_DATE_PRESETS = Object.freeze({
-  all: Object.freeze({label: 'All time'}),
-  '90-days': Object.freeze({label: 'Last 90 days', days: 90}),
-  '1-year': Object.freeze({label: 'Last year', days: 365}),
-  custom: Object.freeze({label: 'Custom range'}),
+  all: Object.freeze({label: 'All time', usesFromTo: false}),
+  '90-days': Object.freeze({label: 'Last 90 days', days: 90, usesFromTo: false}),
+  '1-year': Object.freeze({label: 'Last year', days: 365, usesFromTo: false}),
+  custom: Object.freeze({label: 'Custom range', usesFromTo: true}),
 });
+
+// Date-input defaults make an untouched custom range equivalent to all dates
+// through today while remaining valid for the browser's date input control.
+export const PHOTO_MAP_DEFAULT_FROM_DATE = '1900-01-01';
 
 // JPEG EXIF is normally near the beginning of the file. This bounded first
 // range is intentionally large enough for common camera metadata without
