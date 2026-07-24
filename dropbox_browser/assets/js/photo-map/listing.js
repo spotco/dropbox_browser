@@ -76,7 +76,10 @@ export function selectPhotoMapCandidates(rows, folderPath, range, nowMs) {
       if (!row || row.kind !== 'file' || row.remote !== true) return false;
       if (!isDirectChildPath(row.path, folderPath)) return false;
       var recognition = classifyPhotoMapCandidate(row);
-      if (recognition.status !== 'supported') return false;
+      // Keep configured media formats that Photo Map recognizes but cannot
+      // parse yet so the result state can explain why they are absent.
+      if (recognition.status !== 'supported' &&
+          !(recognition.status === 'unsupported' && recognition.mediaKind)) return false;
       var dateMs = rowDateMs(row);
       if (bounds.minMs !== null && (dateMs === null || dateMs < bounds.minMs)) return false;
       if (bounds.maxMs !== null && (dateMs === null || dateMs > bounds.maxMs)) return false;

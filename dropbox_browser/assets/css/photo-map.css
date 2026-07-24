@@ -96,6 +96,9 @@
 .photo-map-status[data-state="no-geotagged"] {
   color: #59636d;
 }
+.photo-map-status[data-state="unsupported"] {
+  color: #856404;
+}
 .photo-map-status[data-state="partial-errors"] {
   color: #8a4f18;
 }
@@ -106,6 +109,58 @@
   min-width: 0;
   position: relative;
   width: 100%;
+}
+.photo-map-preview {
+  min-width: 210px;
+  max-width: 280px;
+}
+.photo-map-preview-filename {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.photo-map-preview-media {
+  margin: 8px 0;
+  text-align: center;
+}
+.photo-map-preview-link {
+  color: inherit;
+  display: inline-block;
+}
+.photo-map-preview-thumbnail {
+  display: block;
+  max-height: 150px;
+  max-width: 240px;
+  object-fit: contain;
+}
+.photo-map-preview-loading,
+.photo-map-preview-video {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+  min-height: 32px;
+}
+.photo-map-preview-video-icon {
+  align-items: center;
+  background: #6b7280;
+  border-radius: 50%;
+  color: #fff;
+  display: inline-flex;
+  height: 24px;
+  justify-content: center;
+  width: 24px;
+}
+.photo-map-preview-details {
+  display: grid;
+  gap: 2px 8px;
+  grid-template-columns: auto minmax(0, 1fr);
+  margin: 0;
+}
+.photo-map-preview-details dt {
+  font-weight: 600;
+}
+.photo-map-preview-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 @media (max-width: 640px) {
   .photo-map-toolbar-button {
