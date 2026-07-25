@@ -13,6 +13,7 @@ import {
 import {
   PHOTO_MAP_CACHE_BATCH_LIMIT,
   PHOTO_MAP_DEFAULT_FROM_DATE,
+  PHOTO_MAP_GROUPING_DISTANCE_DEFAULT_METERS,
   PHOTO_MAP_METADATA_CONCURRENCY,
 } from './photo-map/config.js';
 import {runPhotoMapMetadataQueue} from './photo-map/queue.js';
@@ -23,6 +24,7 @@ import {
 import {ensurePhotoMapLeaflet} from './photo-map/leaflet.js';
 import {createPhotoMap} from './photo-map/map.js';
 import {createPhotoMapDiagnostics} from './photo-map/diagnostics.js';
+import {groupPhotoMapItems} from './photo-map/grouping.js';
 import {
   photoMapStatusForSummary,
   summarizePhotoMapResults,
@@ -43,6 +45,7 @@ export function initPhotoMap(options) {
   var customRangeEl = doc.getElementById('photo-map-custom-range');
   var dateFromEl = doc.getElementById('photo-map-date-from');
   var dateToEl = doc.getElementById('photo-map-date-to');
+  var groupingDistanceEl = doc.getElementById('photo-map-grouping-distance');
   var refreshEl = doc.getElementById('photo-map-refresh');
   var statusEl = doc.getElementById('photo-map-status');
   var active = false;
@@ -64,6 +67,9 @@ export function initPhotoMap(options) {
   var mapInteractionHandler = null;
   var thumbnailGenerationId = 0;
   var selectedThumbnailPath = '';
+  var selectedGroupedMemberPath = '';
+  var activeGroupedPopup = null;
+  var groupedDemandPaths = new Set();
   var dateInputDefaultsInitialized = false;
 
   function newAbortController() {
@@ -154,7 +160,18 @@ export function initPhotoMap(options) {
     abortController = null;
     metadataResults.clear();
     thumbnailResults.clear();
-    if (thumbnailScheduler) thumbnailScheduler.reset({clearCache: true});
+    activeGroupedPopup = null;
+    selectedGroupedMemberPath = '';
+    if (thumbnailScheduler) {
+      var groupedInFlight = new Set(
+        thumbnailScheduler.getActivePaths().concat(thumbnailScheduler.getPendingPaths()),
+      );
+      groupedInFlight.forEach(function (path) {
+        if (groupedDemandPaths.has(path)) diagnostics.increment('groupedThumbnailCancelled');
+      });
+      thumbnailScheduler.reset({clearCache: true});
+    }
+    groupedDemandPaths.clear();
   }
 
   function generationIsCurrent(generation) {
@@ -170,34 +187,102 @@ export function initPhotoMap(options) {
         return active && thumbnailGenerationId === runId;
       },
       onState: function (item, state) {
-        if (mapController && typeof mapController.setMarkerThumbnailState === 'function') {
-          mapController.setMarkerThumbnailState(item.path || item.photoMapSourcePath, state);
+        if (!mapController) return;
+        var path = item.path || item.photoMapSourcePath;
+        var grouped = typeof mapController.setGroupedMemberThumbnailState === 'function' &&
+          mapController.setGroupedMemberThumbnailState(path, state);
+        if (!grouped && typeof mapController.setMarkerThumbnailState === 'function') {
+          mapController.setMarkerThumbnailState(path, state);
         }
       },
       onResult: function (item, result) {
         if (result && result.status === 'loaded') {
           diagnostics.increment('thumbnailCompleted');
+          if (isActiveGroupedMemberPath(item)) diagnostics.increment('groupedThumbnailCompleted');
           applyThumbnailResult(item, result);
         } else if (result && result.reason === 'thumbnail-load-failure') {
           diagnostics.increment('thumbnailErrors');
+          if (isActiveGroupedMemberPath(item)) diagnostics.increment('groupedThumbnailErrors');
         }
       },
     });
     return thumbnailScheduler;
   }
 
-  function syncVisiblePinThumbnails(items) {
+  function itemSourcePath(item) {
+    return String((item && (item.photoMapSourcePath || item.path)) || '');
+  }
+
+  function isActiveGroupedMemberPath(item) {
+    if (!activeGroupedPopup || !item) return false;
+    var path = itemSourcePath(item);
+    return (activeGroupedPopup.group.photoMapGroupMembers || []).some(function (member) {
+      return itemSourcePath(member) === path;
+    });
+  }
+
+  function groupedPopupIsVisible() {
+    if (!activeGroupedPopup || !mapController || typeof mapController.getVisibleMarkerItems !== 'function') return false;
+    var visibleItems = mapController.getVisibleMarkerItems();
+    return visibleItems.some(function (item) {
+      return itemSourcePath(item) === itemSourcePath(activeGroupedPopup.group);
+    });
+  }
+
+  function groupedPopupItems(group, visibleMembers) {
+    var members = Array.isArray(group && group.photoMapGroupMembers) ? group.photoMapGroupMembers : [];
+    var paths = new Set((Array.isArray(visibleMembers) ? visibleMembers : []).map(itemSourcePath));
+    return members.filter(function (member) { return paths.has(itemSourcePath(member)); });
+  }
+
+  function refreshThumbnailDemand() {
     if (!active) return;
     var scheduler = ensureThumbnailScheduler();
-    var visibleItems = selectPhotoMapThumbnailItems(items, {
+    var visibleMarkerItems = mapController && typeof mapController.getVisibleMarkerItems === 'function'
+      ? mapController.getVisibleMarkerItems() : [];
+    var visibleIndividualItems = visibleMarkerItems.filter(function (item) { return !item.photoMapGrouped; });
+    var visibleItems = selectPhotoMapThumbnailItems(visibleIndividualItems, {
       metadataResults: metadataResults,
-      visiblePaths: (Array.isArray(items) ? items : []).map(function (item) {
-        return item.path || item.photoMapSourcePath;
-      }),
+      visiblePaths: visibleIndividualItems.map(itemSourcePath),
       selectedPath: selectedThumbnailPath,
     });
+    var groupedItems = [];
+    if (activeGroupedPopup && groupedPopupIsVisible()) {
+      groupedItems = selectPhotoMapThumbnailItems(
+        groupedPopupItems(activeGroupedPopup.group, activeGroupedPopup.visibleMembers),
+        {
+          metadataResults: metadataResults,
+          visiblePaths: activeGroupedPopup.visibleMembers.map(itemSourcePath),
+          selectedPath: selectedGroupedMemberPath,
+        },
+      );
+      visibleItems = visibleItems.concat(groupedItems);
+    }
+    var inFlightBeforeUpdate = new Set(
+      scheduler.getActivePaths().concat(scheduler.getPendingPaths()),
+    );
+    var nextGroupedPaths = new Set(groupedItems.map(itemSourcePath));
+    inFlightBeforeUpdate.forEach(function (path) {
+      if (groupedDemandPaths.has(path) && !nextGroupedPaths.has(path)) {
+        diagnostics.increment('groupedThumbnailCancelled');
+      }
+    });
+    groupedDemandPaths = nextGroupedPaths;
     diagnostics.increment('thumbnailQueued', visibleItems.length);
-    scheduler.update(visibleItems, {selectedPath: selectedThumbnailPath});
+    diagnostics.increment('groupedThumbnailQueued', groupedItems.length);
+    scheduler.update(visibleItems, {
+      selectedPath: selectedGroupedMemberPath || selectedThumbnailPath,
+    });
+  }
+
+  function syncVisiblePinThumbnails(items) {
+    if (!active) return;
+    // Group members get their own demand-driven popup queue in the grouped
+    // preview step. Do not eagerly request hundreds of hidden members merely
+    // because their aggregate pin is visible.
+    // The current map visibility is authoritative for an open grouped popup;
+    // refreshThumbnailDemand re-evaluates it before combining the two queues.
+    refreshThumbnailDemand();
   }
 
   function invalidateMapSize() {
@@ -217,17 +302,43 @@ export function initPhotoMap(options) {
   function renderMapResults(phase) {
     var summary = mapResultsSummary();
     if (mapController && typeof mapController.setMarkerItems === 'function') {
-      var markerItems = summary.locatedItems.map(function (item) {
+      var locatedItems = summary.locatedItems.map(function (item) {
         var thumbnail = thumbnailResults.get(item.path);
         return thumbnail && thumbnail.url
           ? Object.assign({}, item, {photoMapThumbnailUrl: thumbnail.url})
           : item;
       });
+      var markerItems = groupPhotoMapItems(locatedItems, currentGroupingDistance());
+      var groupedItems = markerItems.filter(function (item) { return item.photoMapGrouped; });
+      diagnostics.setGroupedState({
+        groupCount: groupedItems.length,
+        groupedMemberCount: groupedItems.reduce(function (total, item) {
+          return total + Number(item.photoMapGroupCount || 0);
+        }, 0),
+        groupingDistanceMeters: currentGroupingDistance(),
+      });
       mapController.setMarkerItems(markerItems);
-      if (summary.locatedItems.length > 0 && !mapFittedToResults && !mapUserInteracted &&
+      if (activeGroupedPopup) {
+        var activePath = itemSourcePath(activeGroupedPopup.group);
+        var currentGroup = markerItems.find(function (item) {
+          return item.photoMapGrouped && itemSourcePath(item) === activePath;
+        });
+        if (!currentGroup) {
+          activeGroupedPopup = null;
+          selectedGroupedMemberPath = '';
+        } else {
+          var currentMembers = new Set((currentGroup.photoMapGroupMembers || []).map(itemSourcePath));
+          activeGroupedPopup.group = currentGroup;
+          activeGroupedPopup.visibleMembers = activeGroupedPopup.visibleMembers.filter(function (member) {
+            return currentMembers.has(itemSourcePath(member));
+          });
+        }
+        refreshThumbnailDemand();
+      }
+      if (markerItems.length > 0 && !mapFittedToResults && !mapUserInteracted &&
           typeof mapController.fitToItems === 'function') {
         fittingMap = true;
-        mapFittedToResults = mapController.fitToItems(summary.locatedItems);
+        mapFittedToResults = mapController.fitToItems(markerItems);
         fittingMap = false;
       }
     }
@@ -275,6 +386,10 @@ export function initPhotoMap(options) {
       mapController = createPhotoMap(leaflet, doc.getElementById('photo-map-map'), {
         onMarkerSelect: handleMarkerSelection,
         onVisibleMarkers: syncVisiblePinThumbnails,
+        onGroupedPopupOpen: openGroupedPopup,
+        onGroupedPopupScroll: updateGroupedPopupViewport,
+        onGroupedPopupClose: closeGroupedPopup,
+        onGroupedMemberSelect: selectGroupedMember,
         debug: debugEnabled,
         console: config.console || win.console,
       });
@@ -307,6 +422,15 @@ export function initPhotoMap(options) {
       from: dateFromEl ? dateFromEl.value : '',
       to: dateToEl ? dateToEl.value : '',
     };
+  }
+
+  function currentGroupingDistance() {
+    var value = groupingDistanceEl
+      ? Number(groupingDistanceEl.value)
+      : PHOTO_MAP_GROUPING_DISTANCE_DEFAULT_METERS;
+    return Number.isFinite(value) && value >= 0
+      ? value
+      : PHOTO_MAP_GROUPING_DISTANCE_DEFAULT_METERS;
   }
 
   function updateCustomRangeVisibility() {
@@ -494,6 +618,10 @@ export function initPhotoMap(options) {
     if (active) loadCandidates();
   }
 
+  function applyGroupingDistance() {
+    if (active) renderMapResults('progressive');
+  }
+
   function refresh() {
     if (active) loadCandidates();
   }
@@ -510,13 +638,53 @@ export function initPhotoMap(options) {
     if (!item || !result || result.status !== 'loaded' || !result.url) return;
     var path = String(item.path || item.photoMapSourcePath || '');
     thumbnailResults.set(path, result);
-    if (mapController && typeof mapController.setMarkerThumbnail === 'function') {
-      mapController.setMarkerThumbnail(path, result);
+    if (mapController) {
+      var grouped = typeof mapController.setGroupedMemberThumbnail === 'function' &&
+        mapController.setGroupedMemberThumbnail(path, result);
+      if (!grouped && typeof mapController.setMarkerThumbnail === 'function') {
+        mapController.setMarkerThumbnail(path, result);
+      }
     }
+  }
+
+  function openGroupedPopup(group, visibleMembers) {
+    if (!active || !group || !group.photoMapGrouped) return;
+    activeGroupedPopup = {
+      group: group,
+      visibleMembers: Array.isArray(visibleMembers) && visibleMembers.length
+        ? visibleMembers.slice() : (group.photoMapGroupMembers || []).slice(0, 16),
+    };
+    selectedGroupedMemberPath = '';
+    refreshThumbnailDemand();
+  }
+
+  function updateGroupedPopupViewport(group, visibleMembers) {
+    if (!activeGroupedPopup || itemSourcePath(activeGroupedPopup.group) !== itemSourcePath(group)) return;
+    activeGroupedPopup.visibleMembers = Array.isArray(visibleMembers) ? visibleMembers.slice() : [];
+    refreshThumbnailDemand();
+  }
+
+  function closeGroupedPopup(group) {
+    if (!activeGroupedPopup || !group || itemSourcePath(activeGroupedPopup.group) !== itemSourcePath(group)) return;
+    activeGroupedPopup = null;
+    selectedGroupedMemberPath = '';
+    refreshThumbnailDemand();
+  }
+
+  function selectGroupedMember(group, member) {
+    if (!activeGroupedPopup || itemSourcePath(activeGroupedPopup.group) !== itemSourcePath(group)) {
+      openGroupedPopup(group, [member].filter(Boolean));
+    }
+    selectedGroupedMemberPath = member ? itemSourcePath(member) : '';
+    refreshThumbnailDemand();
   }
 
   function handleMarkerSelection(item) {
     if (!active || !item) return;
+    if (item.photoMapGrouped) {
+      openGroupedPopup(item);
+      return;
+    }
     var path = String(item.path || item.photoMapSourcePath || '');
     selectedThumbnailPath = path;
     var cachedThumbnail = thumbnailResults.get(path);
@@ -557,6 +725,7 @@ export function initPhotoMap(options) {
   if (dateRangeEl) dateRangeEl.addEventListener('change', applyDateRange);
   if (dateFromEl) dateFromEl.addEventListener('change', applyDateRange);
   if (dateToEl) dateToEl.addEventListener('change', applyDateRange);
+  if (groupingDistanceEl) groupingDistanceEl.addEventListener('change', applyGroupingDistance);
   if (refreshEl) refreshEl.addEventListener('click', refresh);
   win.addEventListener('resize', invalidateMapSize);
   win.addEventListener('beforeunload', deactivate);
@@ -573,6 +742,13 @@ export function initPhotoMap(options) {
   updateCustomRangeVisibility();
   if (typeof win.DropboxBrowserPhotoMap === 'undefined') win.DropboxBrowserPhotoMap = {};
   win.DropboxBrowserPhotoMap.getCandidates = function () { return candidates.slice(); };
+  win.DropboxBrowserPhotoMap.getGroupingDistance = currentGroupingDistance;
+  win.DropboxBrowserPhotoMap.setGroupingDistance = function (value) {
+    if (!groupingDistanceEl) return currentGroupingDistance();
+    groupingDistanceEl.value = String(value);
+    applyGroupingDistance();
+    return currentGroupingDistance();
+  };
   win.DropboxBrowserPhotoMap.getMetadataResults = function () {
     return Array.from(metadataResults.values());
   };

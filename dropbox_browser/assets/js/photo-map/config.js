@@ -25,6 +25,8 @@ export const PHOTO_MAP_DATE_PRESETS = Object.freeze({
 // Date-input defaults make an untouched custom range equivalent to all dates
 // through today while remaining valid for the browser's date input control.
 export const PHOTO_MAP_DEFAULT_FROM_DATE = '1900-01-01';
+export const PHOTO_MAP_GROUPING_DISTANCE_OPTIONS = Object.freeze([0, 5, 10, 20, 50, 100]);
+export const PHOTO_MAP_GROUPING_DISTANCE_DEFAULT_METERS = 20;
 
 // JPEG EXIF is normally near the beginning of the file. This bounded first
 // range is intentionally large enough for common camera metadata without

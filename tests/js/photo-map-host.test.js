@@ -29,6 +29,7 @@ function photoMapHostFixture(folderPath = "Camera Uploads") {
     "photo-map-custom-range": element(),
     "photo-map-date-from": element(),
     "photo-map-date-to": element(),
+    "photo-map-grouping-distance": element({value: "20"}),
     "photo-map-refresh": element(),
     "photo-map-status": element(),
     "photo-map-map": element(),
@@ -137,6 +138,107 @@ test("Photo Map date inputs stay hidden outside from/to modes and default to an 
   assert.equal(customFixture.elements["photo-map-custom-range"].hidden, false);
   assert.equal(customFixture.elements["photo-map-date-from"].max, todayValue);
   assert.equal(customFixture.elements["photo-map-date-to"].max, todayValue);
+});
+
+test("Photo Map regrouping changes markers without rereading metadata", async () => {
+  const host = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map.js");
+  const fixture = photoMapHostFixture();
+  const rows = [photoRow("Camera Uploads/one.jpg"), photoRow("Camera Uploads/two.jpg")];
+  const cachedEntries = ["one.jpg", "two.jpg"].map((name) => ({
+    path: "Camera Uploads/" + name,
+    size: 123,
+    modified_time: 1700000000,
+    status: "located",
+    media_kind: "photo",
+    latitude: 40.5,
+    longitude: -74,
+    capture_date: "2024:01:01 12:00:00",
+    listing_date_ms: 1700000000000,
+  }));
+  let listingReads = 0;
+  let cacheReads = 0;
+  const fetchImpl = (url) => {
+    if (url.startsWith("/browse/endpoints/listing")) {
+      listingReads += 1;
+      return Promise.resolve(jsonResponse({page: {path: "Camera Uploads"}, rows}));
+    }
+    if (url.startsWith("/photo-map/endpoints/cache?")) {
+      cacheReads += 1;
+      return Promise.resolve(jsonResponse({status: "ok", entries: cachedEntries}));
+    }
+    throw new Error(`Unexpected Photo Map request: ${url}`);
+  };
+
+  const api = host.initPhotoMap({document: fixture.doc, window: fixture.win, fetchImpl});
+  await api.activate();
+  await waitFor(() => fixture.markers.length === 1);
+  assert.equal(listingReads, 1);
+  assert.equal(cacheReads, 1);
+
+  assert.equal(fixture.win.DropboxBrowserPhotoMap.getGroupingDistance(), 20);
+  fixture.win.DropboxBrowserPhotoMap.setGroupingDistance(0);
+  await waitFor(() => fixture.markers.length === 2);
+  assert.equal(listingReads, 1);
+  assert.equal(cacheReads, 1);
+});
+
+test("Photo Map grouped popup queues only its initial visible member window", async () => {
+  const host = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map.js");
+  const fixture = photoMapHostFixture();
+  const rows = Array.from({length: 20}, (_value, index) => photoRow("Camera Uploads/photo-" + index + ".jpg"));
+  const cachedEntries = rows.map((row, index) => ({
+    path: row.path,
+    size: 123,
+    modified_time: 1700000000,
+    status: "located",
+    media_kind: "photo",
+    latitude: 40.5,
+    longitude: -74,
+    capture_date: "2024:01:01 12:00:00",
+    listing_date_ms: 1700000000000 - index,
+  }));
+  const thumbnailStarts = [];
+  fixture.win.Image = function () {
+    const image = this;
+    Object.defineProperty(image, "src", {
+      configurable: true,
+      get() { return image._src || ""; },
+      set(value) {
+        image._src = value;
+        thumbnailStarts.push(value);
+        setTimeout(() => { if (image.onload) image.onload(); }, 0);
+      },
+    });
+  };
+  const fetchImpl = (url) => {
+    if (url.startsWith("/browse/endpoints/listing")) {
+      return Promise.resolve(jsonResponse({page: {path: "Camera Uploads"}, rows}));
+    }
+    if (url.startsWith("/photo-map/endpoints/cache?")) {
+      return Promise.resolve(jsonResponse({status: "ok", entries: cachedEntries}));
+    }
+    throw new Error(`Unexpected Photo Map request: ${url}`);
+  };
+
+  const api = host.initPhotoMap({document: fixture.doc, window: fixture.win, fetchImpl});
+  await api.activate();
+  await waitFor(() => fixture.markers.length === 1);
+  const beforeOpenDiagnostics = fixture.win.DropboxBrowserPhotoMap.getDiagnostics();
+  assert.equal(beforeOpenDiagnostics.groupCount, 1);
+  assert.equal(beforeOpenDiagnostics.groupedMemberCount, 20);
+  assert.equal(beforeOpenDiagnostics.groupingDistanceMeters, 20);
+  const marker = fixture.markers[0];
+  assert.match(marker.popup, /photo-map-group-grid/);
+  marker.trigger("click");
+  await waitFor(() => thumbnailStarts.length === 16);
+  assert.equal(thumbnailStarts.length, 16);
+  await waitFor(() => fixture.win.DropboxBrowserPhotoMap.getDiagnostics().groupedThumbnailCompleted === 16);
+  const afterLoadDiagnostics = fixture.win.DropboxBrowserPhotoMap.getDiagnostics();
+  assert.equal(afterLoadDiagnostics.groupedThumbnailQueued, 16);
+  assert.equal(afterLoadDiagnostics.groupedThumbnailCompleted, 16);
+  await waitFor(() => /photo-map-group-grid-thumbnail/.test(marker.popup));
+  assert.match(marker.popup, /photo-0\.jpg/);
+  assert.doesNotMatch(marker.popup, /photo-19\.jpg[^<]*photo-map-group-grid-thumbnail/);
 });
 
 test("Photo Map activation initializes Leaflet after starting its generation", async () => {

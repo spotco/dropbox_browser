@@ -24,6 +24,7 @@ class PhotoMapWebTests(AppTestCase):
             "/assets/js/photo-map/config.js",
             "/assets/js/photo-map/cache.js",
             "/assets/js/photo-map/diagnostics.js",
+            "/assets/js/photo-map/grouping.js",
             "/assets/js/photo-map/leaflet.js",
             "/assets/js/photo-map/listing.js",
             "/assets/js/photo-map/map.js",
@@ -40,6 +41,7 @@ class PhotoMapWebTests(AppTestCase):
         self.assertIn('<option value="photo-map">Photo Map</option>', html)
         self.assertIn('id="photo-map-pane" class="bottom-pane-view hidden" data-pane-mode="photo-map" hidden', html)
         self.assertIn('id="photo-map-date-range"', html)
+        self.assertIn('id="photo-map-grouping-distance"', html)
         self.assertIn('class="photo-map-toolbar-controls"', html)
         self.assertIn('class="photo-map-toolbar-actions"', html)
         self.assertIn('id="photo-map-custom-range" class="photo-map-custom-range hidden" hidden', html)
@@ -51,6 +53,7 @@ class PhotoMapWebTests(AppTestCase):
         self.assertIn("tile.openstreetmap.org", assets["/assets/js/photo-map/map.js"])
         self.assertIn("createPhotoMapDiagnostics", assets["/assets/js/photo-map/diagnostics.js"])
         self.assertIn("PHOTO_MAP_METADATA_CONCURRENCY", assets["/assets/js/photo-map/config.js"])
+        self.assertIn("PHOTO_MAP_GROUPING_DISTANCE_DEFAULT_METERS", assets["/assets/js/photo-map/config.js"])
         self.assertIn(".photo-map-custom-range[hidden]", assets["/assets/css/photo-map.css"])
 
     def test_photo_map_vendor_assets_are_explicitly_served(self) -> None:
