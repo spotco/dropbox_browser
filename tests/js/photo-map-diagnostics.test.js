@@ -43,6 +43,13 @@ test("Photo Map diagnostics stay quiet unless the subsystem is enabled", async (
     thumbnailCompleted: 0,
     thumbnailErrors: 0,
     thumbnailAborted: 0,
+    groupedThumbnailQueued: 0,
+    groupedThumbnailCompleted: 0,
+    groupedThumbnailErrors: 0,
+    groupedThumbnailCancelled: 0,
+    groupCount: 0,
+    groupedMemberCount: 0,
+    groupingDistanceMeters: 0,
   });
   assert.deepEqual(calls, []);
 });
@@ -87,6 +94,13 @@ test("Photo Map diagnostics emit concise generation counters when enabled", asyn
     thumbnailCompleted: 0,
     thumbnailErrors: 0,
     thumbnailAborted: 0,
+    groupedThumbnailQueued: 0,
+    groupedThumbnailCompleted: 0,
+    groupedThumbnailErrors: 0,
+    groupedThumbnailCancelled: 0,
+    groupCount: 0,
+    groupedMemberCount: 0,
+    groupingDistanceMeters: 0,
     queued: 5,
     completed: 5,
   });

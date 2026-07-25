@@ -18,6 +18,10 @@ const COUNTER_NAMES = [
   'thumbnailCompleted',
   'thumbnailErrors',
   'thumbnailAborted',
+  'groupedThumbnailQueued',
+  'groupedThumbnailCompleted',
+  'groupedThumbnailErrors',
+  'groupedThumbnailCancelled',
 ];
 
 function emptyCounters() {
@@ -33,6 +37,11 @@ function numericAmount(value) {
 export function createPhotoMapDiagnostics(win) {
   var generation = 0;
   var counters = emptyCounters();
+  var groupedState = {
+    groupCount: 0,
+    groupedMemberCount: 0,
+    groupingDistanceMeters: 0,
+  };
 
   function enabled() {
     return !!(win && win.ClientLogger && typeof win.ClientLogger.enabledFor === 'function' &&
@@ -45,7 +54,7 @@ export function createPhotoMapDiagnostics(win) {
   }
 
   function snapshot(extra) {
-    return Object.assign({generation: generation}, counters, extra || {});
+    return Object.assign({generation: generation}, counters, groupedState, extra || {});
   }
 
   function logSummary(message, extra) {
@@ -58,6 +67,19 @@ export function createPhotoMapDiagnostics(win) {
     beginGeneration: function (value) {
       generation = Number.isFinite(value) ? value : generation + 1;
       counters = emptyCounters();
+      groupedState = {
+        groupCount: 0,
+        groupedMemberCount: 0,
+        groupingDistanceMeters: 0,
+      };
+    },
+    setGroupedState: function (next) {
+      var value = next || {};
+      if (Number.isFinite(value.groupCount)) groupedState.groupCount = value.groupCount;
+      if (Number.isFinite(value.groupedMemberCount)) groupedState.groupedMemberCount = value.groupedMemberCount;
+      if (Number.isFinite(value.groupingDistanceMeters)) {
+        groupedState.groupingDistanceMeters = value.groupingDistanceMeters;
+      }
     },
     isGeneration: function (value) { return generation === value; },
     increment: increment,
