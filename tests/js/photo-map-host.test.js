@@ -227,6 +227,8 @@ test("Photo Map grouped popup queues only its initial visible member window", as
   assert.equal(beforeOpenDiagnostics.groupCount, 1);
   assert.equal(beforeOpenDiagnostics.groupedMemberCount, 20);
   assert.equal(beforeOpenDiagnostics.groupingDistanceMeters, 20);
+  await waitFor(() => thumbnailStarts.length === 1);
+  assert.match(thumbnailStarts[0], /photo-0\.jpg/);
   const marker = fixture.markers[0];
   assert.match(marker.popup, /photo-map-group-grid/);
   marker.trigger("click");
@@ -239,6 +241,59 @@ test("Photo Map grouped popup queues only its initial visible member window", as
   await waitFor(() => /photo-map-group-grid-thumbnail/.test(marker.popup));
   assert.match(marker.popup, /photo-0\.jpg/);
   assert.doesNotMatch(marker.popup, /photo-19\.jpg[^<]*photo-map-group-grid-thumbnail/);
+});
+
+test("Photo Map grouped popup visible thumbnails preempt ordinary visible map pins", async () => {
+  const host = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map.js");
+  const fixture = photoMapHostFixture();
+  const mapPin = photoRow("Camera Uploads/map-pin.jpg");
+  const groupRows = Array.from({length: 3}, (_value, index) => photoRow("Camera Uploads/group-" + index + ".jpg"));
+  const rows = [mapPin].concat(groupRows);
+  const cachedEntries = rows.map((row, index) => ({
+    path: row.path,
+    size: 123,
+    modified_time: 1700000000,
+    status: "located",
+    media_kind: "photo",
+    latitude: index === 0 ? 41.5 : 40.5,
+    longitude: -74,
+    capture_date: "2024:01:01 12:00:00",
+    listing_date_ms: 1700000000000 - index,
+  }));
+  const thumbnailStarts = [];
+  fixture.win.Image = function () {
+    const image = this;
+    Object.defineProperty(image, "src", {
+      configurable: true,
+      get() { return image._src || ""; },
+      set(value) {
+        image._src = value;
+        if (!value) return;
+        thumbnailStarts.push(value);
+        if (!value.includes("map-pin.jpg")) setTimeout(() => { if (image.onload) image.onload(); }, 0);
+      },
+    });
+  };
+  const fetchImpl = (url) => {
+    if (url.startsWith("/browse/endpoints/listing")) {
+      return Promise.resolve(jsonResponse({page: {path: "Camera Uploads"}, rows}));
+    }
+    if (url.startsWith("/photo-map/endpoints/cache?")) {
+      return Promise.resolve(jsonResponse({status: "ok", entries: cachedEntries}));
+    }
+    throw new Error(`Unexpected Photo Map request: ${url}`);
+  };
+
+  const api = host.initPhotoMap({document: fixture.doc, window: fixture.win, fetchImpl});
+  await api.activate();
+  await waitFor(() => thumbnailStarts.some((url) => url.includes("map-pin.jpg")));
+  const groupMarker = fixture.markers.find((marker) => /photo-map-group-grid/.test(marker.popup));
+  assert.ok(groupMarker);
+  groupMarker.trigger("click");
+  await waitFor(() => thumbnailStarts.some((url) => url.includes("group-0.jpg")));
+  assert.match(thumbnailStarts[0], /map-pin\.jpg/);
+  assert.match(thumbnailStarts[1], /group-0\.jpg/);
+  api.deactivate();
 });
 
 test("Photo Map activation initializes Leaflet after starting its generation", async () => {

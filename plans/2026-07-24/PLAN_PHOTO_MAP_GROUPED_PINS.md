@@ -3,21 +3,26 @@
 ## Confirmed product decisions
 
 - Replace unusable 50+ item spiderfied clusters with one emphasized grouped
-  photo pin.  The pin has a count badge and grows through a small number of
+  media pin.  The pin has a count badge and grows through a small number of
   count tiers so larger groups are visibly more important without becoming
   enormous.
 - Grouping is based on geographic distance in meters, controlled by a Photo
   Map toolbar control immediately next to Date range.  The initial default is
-  **20 m**; this is an intentionally conservative value derived from the live
-  data below.  Include an explicit Off/0 m option for users who want individual
+  **100 m**, with 50 m, 500 m, 1000 m, and 10 km alternatives.  Include an
+  explicit Off/0 m option for users who want individual
   photo pins.
-- Grouped pins contain photos only for now.  Video pins retain their current
-  neutral GPS-only marker and popup because video thumbnail extraction remains
-  deferred.
+- Grouped pins contain both photos and videos.  Video members use a neutral,
+  intentional thumbnail placeholder in the grouped grid; selecting one shows
+  its metadata and existing direct file-preview link without generating a
+  video thumbnail.
+- An individually visible grouped pin displays the newest photo in that
+  group, with its count badge overlaid.  It requests only that one photo
+  through the shared browser thumbnail queue; all-video groups retain the
+  intentional generic group icon.
 - A grouped-pin click opens a scrollable thumbnail grid.  The existing shared
-  thumbnail URL and rate-controlled browser queue are reused; the grid loads
-  visible/near-visible members first rather than issuing hundreds of requests
-  at once.
+  thumbnail URL and rate-controlled browser queue are reused; currently
+  visible photo cells preempt lower-priority map-pin work, while video cells
+  remain placeholders rather than issuing thumbnail requests.
 - Clicking a thumbnail selects that member in the same popup and shows its
   existing filename, coordinates, capture/listing dates, and full-preview link
   while keeping the grouped grid available for navigation.
@@ -40,18 +45,20 @@ repeatable dense location near `39.04317, -77.11745`:
   (an earlier view showed 328) with an observed maximum pairwise spread of
   about 21 m.
 
-The 20 m default groups the recent burst and the one-year group while avoiding
-an unnecessarily broad neighborhood radius.  The implementation should show
-the current value in meters so the choice remains understandable and
-adjustable.
+The original 20 m default grouped the recent burst and the one-year group
+without reaching across a broader neighborhood.  The product default was later
+raised to 100 m to make the dense Photo Map areas useful at normal viewing
+zooms; the 50 m option remains available for the narrower behavior.  The
+implementation should show the current value in meters so the choice remains
+understandable and adjustable.
 
 ## Implementation checklist
 
 ### 1. Add the grouping-distance control
 
 - [x] Add a `Grouping distance` control beside Date range in the existing
-  toolbar-controls region.  Offer Off/0 m, 5 m, 10 m, 20 m, 50 m, and 100 m;
-  select 20 m by default.
+  toolbar-controls region.  Offer Off/0 m, 50 m, 100 m, 500 m, 1000 m, and
+  10 km; select 100 m by default.
 - [x] Keep future controls in the existing extensible controls region and keep
   reload/actions in the separate trailing-actions region.  Preserve the
   responsive wrapping behavior established for Date range.
@@ -61,9 +68,9 @@ adjustable.
 - [x] Add focused host/config tests for the default, Off option, numeric values,
   and re-grouping without a new metadata request.
 
-### 2. Build deterministic browser-side photo groups
+### 2. Build deterministic browser-side media groups
 
-- [x] Add a pure grouping helper that accepts located photo items and a meter
+- [x] Add a pure grouping helper that accepts located photo/video items and a meter
   radius, returning stable singleton/group records.  Use a geographic distance
   calculation and a spatial index/grid so large folders do not become an
   O(n²) scan.
@@ -71,13 +78,14 @@ adjustable.
   the selected radius.  Use deterministic input ordering and keep every
   member within the selected radius of the group's first-item anchor; the
   centroid is display-only.  Document the representative rule in the helper.
-- [x] Preserve each member's source path, metadata, and existing thumbnail
+- [x] Preserve each member's source path, metadata, media kind, and existing thumbnail
   cache identity.  Group records should expose a stable group id, center,
   member list, member count, and a grouped/photo kind marker.
-- [x] Leave videos out of groups and keep them as their current individual
-  marker records.
+- [x] Include videos in nearby grouped records, with a neutral grouped-grid
+  placeholder and no video-thumbnail request.  Keep isolated videos as their
+  current individual marker records.
 - [x] Add tests for singleton behavior, radius boundaries, stable ordering,
-  multiple separated groups, large-group counts, and photo/video separation.
+  multiple separated groups, large-group counts, and mixed photo/video groups.
 
 ### 3. Render emphasized grouped pins without spiderfy
 
@@ -95,6 +103,8 @@ adjustable.
   disabling broad Leaflet clustering there; a count bubble at max zoom cannot
   zoom farther and would otherwise appear to ignore clicks when spiderfy is
   disabled.
+- [x] Make lower-zoom Leaflet cluster badges sum the media represented by
+  grouped child pins rather than merely counting those aggregate markers.
 - [x] Add map tests for grouped icon markup, badge counts, size tiers,
   accessibility labels, stable marker reuse, and disabled spiderfy behavior.
 
@@ -113,6 +123,9 @@ adjustable.
   additional rows using viewport/scroll observation.  Keep the existing
   concurrency limit and abort queued/offscreen member work when the popup
   closes, the group is no longer visible, or the map generation changes.
+- [x] Put the currently visible grouped photo cells ahead of ordinary map-pin
+  thumbnails in the shared browser scheduler.  If lower-priority map pins are
+  occupying all slots, abort and requeue them after the grouped demand.
 - [x] Clicking a grid thumbnail selects that member's details in the popup:
   filename, coordinates, capture/listing dates, and the existing full-preview
   link.  Keep a clear way to return to the grid/member overview.
@@ -125,9 +138,10 @@ adjustable.
 - [x] Keep grouped members out of the individual-photo thumbnail scheduler;
   grouped-member demand will be handled by the grouped popup queue so a
   visible aggregate pin does not eagerly request every hidden member.
-- [x] Make visible grouped pins request member thumbnails only while the group
-  marker is individually visible.  A clustered/hidden grouped pin must not
-  schedule all of its members.
+- [x] Make visible grouped pins request only their newest photo thumbnail while
+  the group marker is individually visible.  A clustered/hidden grouped pin
+  must not schedule that thumbnail or any other member; all-video groups keep
+  their generic icon.
 - [x] On distance changes, map moves, date changes, pane switches, and folder
   changes, abort stale grouped-member requests without deleting successful
   in-memory thumbnail results within the active generation or allowing late
@@ -147,7 +161,7 @@ adjustable.
 - [ ] Add a Playwright fixture with a dense burst containing at least 25
   photos, a 90+ photo group, separated nearby photos, and videos.  Verify the
   map shows emphasized grouped pins rather than spiderwebs, with correct
-  count badges and singleton video fallbacks.
+  count badges, mixed-media grouping, and singleton-video fallbacks.
 - [ ] Verify 20 m, Off, and another distance setting regroup without metadata
   rereads; open a large group and scroll its grid while observing bounded
   thumbnail requests and correct member details.
@@ -155,9 +169,15 @@ adjustable.
   one year, and All time, including popup usability and map movement away from
   the group.
 
+### 7. iOS Camera Upload movie previews
+
+- [ ] Add thumbnail generation and full-preview handling for iOS Camera
+  Upload `.mov` files.  Reuse the grouped-video placeholder until a generated
+  thumbnail is available, and retain the direct-file fallback for unsupported
+  or failed previews.
+
 ## Deferred deliberately
 
-- Video thumbnail extraction and grouped video previews.
 - Server-side grouping, persisted group records, reverse geocoding, and
   clustering across descendant folders.
 - Full thumbnail prefetching for every member of a very large group; loading

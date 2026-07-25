@@ -149,6 +149,119 @@ test("Photo Map thumbnail scheduler prioritizes selected pins and drops offscree
   firstGate.resolve();
 });
 
+test("Photo Map thumbnail scheduler gives visible grouped popup cells priority over map pins", async () => {
+  const thumbnails = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/thumbnails.js");
+  const firstGate = deferred();
+  const secondGate = deferred();
+  const started = [];
+  const scheduler = thumbnails.createPhotoMapThumbnailScheduler({
+    concurrency: 1,
+    loader: async (candidate) => {
+      started.push(candidate.path);
+      if (candidate.path === "group-first.jpg") await firstGate.promise;
+      if (candidate.path === "group-second.jpg") await secondGate.promise;
+      return {url: `/thumbnail?path=${candidate.path}&source=remote`};
+    },
+  });
+
+  scheduler.update([
+    {path: "selected-map-pin.jpg"},
+    {path: "group-first.jpg", photoMapThumbnailPriority: -1000000},
+    {path: "group-second.jpg", photoMapThumbnailPriority: -999999},
+  ], {selectedPath: "selected-map-pin.jpg"});
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(started, ["group-first.jpg"]);
+
+  firstGate.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(started, ["group-first.jpg", "group-second.jpg"]);
+  secondGate.resolve();
+});
+
+test("Photo Map thumbnail scheduler keeps popup priority when a group-pin representative is duplicated", async () => {
+  const thumbnails = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/thumbnails.js");
+  const started = [];
+  const gate = deferred();
+  const scheduler = thumbnails.createPhotoMapThumbnailScheduler({
+    concurrency: 1,
+    loader: async (candidate) => {
+      started.push(candidate.path);
+      await gate.promise;
+      return {url: `/thumbnail?path=${candidate.path}&source=remote`};
+    },
+  });
+
+  scheduler.update([
+    {path: "map-pin.jpg"},
+    {path: "group-latest.jpg"},
+    {path: "group-latest.jpg", photoMapThumbnailPriority: -1000000},
+  ]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(started, ["group-latest.jpg"]);
+  gate.resolve();
+});
+
+test("Photo Map thumbnail scheduler promotes an active group-pin representative without restarting it", async () => {
+  const thumbnails = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/thumbnails.js");
+  const started = [];
+  const active = deferred();
+  const scheduler = thumbnails.createPhotoMapThumbnailScheduler({
+    concurrency: 1,
+    loader: async (candidate) => {
+      started.push(candidate.path);
+      await active.promise;
+      return {url: `/thumbnail?path=${candidate.path}&source=remote`};
+    },
+  });
+
+  scheduler.update([{path: "group-latest.jpg"}]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  scheduler.update([
+    {path: "group-latest.jpg", photoMapThumbnailPriority: -1000000},
+    {path: "group-next.jpg", photoMapThumbnailPriority: -999999},
+  ]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(started, ["group-latest.jpg"]);
+  active.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(started, ["group-latest.jpg", "group-next.jpg"]);
+  scheduler.cancel();
+});
+
+test("Photo Map thumbnail scheduler preempts lower-priority active map pins for a grouped popup", async () => {
+  const thumbnails = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/thumbnails.js");
+  const started = [];
+  const groupGate = deferred();
+  const scheduler = thumbnails.createPhotoMapThumbnailScheduler({
+    concurrency: 1,
+    loader: async (candidate, signal) => {
+      started.push(candidate.path);
+      if (candidate.path === "map-pin.jpg") {
+        await new Promise((resolve) => signal.addEventListener("abort", resolve, {once: true}));
+        const error = new Error("aborted");
+        error.name = "AbortError";
+        throw error;
+      }
+      await groupGate.promise;
+      return {url: `/thumbnail?path=${candidate.path}&source=remote`};
+    },
+  });
+
+  scheduler.update([{path: "map-pin.jpg"}]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(started, ["map-pin.jpg"]);
+
+  scheduler.update([
+    {path: "map-pin.jpg"},
+    {path: "group-visible.jpg", photoMapThumbnailPriority: -1000000},
+  ]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(started, ["map-pin.jpg", "group-visible.jpg"]);
+  groupGate.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  scheduler.cancel();
+});
+
 test("Photo Map thumbnail scheduler suppresses late offscreen results and reuses loaded cache", async () => {
   const thumbnails = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/thumbnails.js");
   const late = deferred();

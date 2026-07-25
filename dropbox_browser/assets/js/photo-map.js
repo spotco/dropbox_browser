@@ -235,21 +235,50 @@ export function initPhotoMap(options) {
     return members.filter(function (member) { return paths.has(itemSourcePath(member)); });
   }
 
-  function refreshThumbnailDemand() {
+  function groupedPinThumbnailItems(items) {
+    return (Array.isArray(items) ? items : []).map(function (group) {
+      var wanted = itemSourcePath({path: group && group.photoMapGroupThumbnailPath});
+      var members = Array.isArray(group && group.photoMapGroupMembers) ? group.photoMapGroupMembers : [];
+      return members.find(function (member) { return itemSourcePath(member) === wanted; }) || null;
+    }).filter(Boolean);
+  }
+
+  function prioritizeGroupedPopupThumbnails(items) {
+    return (Array.isArray(items) ? items : []).map(function (item, index) {
+      var selected = itemSourcePath(item) === selectedGroupedMemberPath;
+      // Group-grid cells are what the user is actively reading. Give them a
+      // dedicated priority band ahead of ordinary map pins, with the selected
+      // cell first, while continuing to use the one shared browser scheduler.
+      return Object.assign({}, item, {
+        photoMapThumbnailPriority: selected ? -2000000 : -1000000 + index,
+      });
+    });
+  }
+
+  function refreshThumbnailDemand(visibleMarkerItemsOverride) {
     if (!active) return;
     var scheduler = ensureThumbnailScheduler();
-    var visibleMarkerItems = mapController && typeof mapController.getVisibleMarkerItems === 'function'
-      ? mapController.getVisibleMarkerItems() : [];
+    var visibleMarkerItems = Array.isArray(visibleMarkerItemsOverride)
+      ? visibleMarkerItemsOverride
+      : (mapController && typeof mapController.getVisibleMarkerItems === 'function'
+        ? mapController.getVisibleMarkerItems() : []);
+    if (!Array.isArray(visibleMarkerItems)) visibleMarkerItems = [];
     var visibleIndividualItems = visibleMarkerItems.filter(function (item) { return !item.photoMapGrouped; });
-    var visibleItems = selectPhotoMapThumbnailItems(visibleIndividualItems, {
+    var visibleGroupThumbnailItems = groupedPinThumbnailItems(visibleMarkerItems.filter(function (item) {
+      return item.photoMapGrouped;
+    }));
+    var visiblePinThumbnailItems = visibleIndividualItems.concat(visibleGroupThumbnailItems);
+    var visibleItems = selectPhotoMapThumbnailItems(visiblePinThumbnailItems, {
       metadataResults: metadataResults,
-      visiblePaths: visibleIndividualItems.map(itemSourcePath),
+      visiblePaths: visiblePinThumbnailItems.map(itemSourcePath),
       selectedPath: selectedThumbnailPath,
     });
     var groupedItems = [];
     if (activeGroupedPopup && groupedPopupIsVisible()) {
       groupedItems = selectPhotoMapThumbnailItems(
-        groupedPopupItems(activeGroupedPopup.group, activeGroupedPopup.visibleMembers),
+        prioritizeGroupedPopupThumbnails(
+          groupedPopupItems(activeGroupedPopup.group, activeGroupedPopup.visibleMembers),
+        ),
         {
           metadataResults: metadataResults,
           visiblePaths: activeGroupedPopup.visibleMembers.map(itemSourcePath),
@@ -282,7 +311,7 @@ export function initPhotoMap(options) {
     // because their aggregate pin is visible.
     // The current map visibility is authoritative for an open grouped popup;
     // refreshThumbnailDemand re-evaluates it before combining the two queues.
-    refreshThumbnailDemand();
+    refreshThumbnailDemand(items);
   }
 
   function invalidateMapSize() {
