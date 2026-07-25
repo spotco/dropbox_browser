@@ -131,6 +131,11 @@
   }
 
   function handlePanelWheel(ev) {
+    var node = ev.target;
+    while (node && node !== panel && node !== document.body) {
+      if (node.classList && node.classList.contains('leaflet-container')) return;
+      node = node.parentElement;
+    }
     var scrollable = nearestScrollableAncestor(ev.target);
     if (!scrollable) {
       ev.preventDefault();

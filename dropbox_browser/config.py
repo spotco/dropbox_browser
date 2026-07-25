@@ -9,6 +9,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEMP_DIR = PROJECT_ROOT / "Temp"
+PHOTO_MAP_CACHE_DIR = PROJECT_ROOT / "Cache" / "PhotoMap"
+PHOTO_MAP_CACHE_BATCH_LIMIT = 200
 THUMBNAIL_CACHE_DIR = PROJECT_ROOT / "ThumbnailCache"
 VENDORED_MAGICK_EXE = PROJECT_ROOT / "ImageMagick" / "magick.exe"
 VENDORED_FFMPEG_EXE = PROJECT_ROOT / "FFmpeg" / "bin" / "ffmpeg.exe"
@@ -55,6 +57,7 @@ _APP_CONFIG_DEFAULTS: dict = {
         "browse-reveal": False,
         "file-search": False,
         "music-metadata": False,
+        "photo-map": False,
     },
     "FolderCacheWorkers": 4,
     "SyncJobWorkers": 4,
