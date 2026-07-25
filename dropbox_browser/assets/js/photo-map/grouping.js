@@ -5,8 +5,36 @@ function pathForItem(item) {
   return String((item && (item.photoMapSourcePath || item.path)) || '');
 }
 
+function isGroupableMedia(item) {
+  var kind = String((item && (item.mediaKind || item.photoMapMediaKind)) || 'photo');
+  return kind === 'photo' || kind === 'video';
+}
+
 function isPhoto(item) {
   return String((item && (item.mediaKind || item.photoMapMediaKind)) || 'photo') === 'photo';
+}
+
+function newestPhotoTimestamp(item) {
+  var listingDate = Number(item && (item.listingDateMs || item.photoMapListingDateMs));
+  if (Number.isFinite(listingDate)) return listingDate;
+  var captureDate = Number(item && item.captureDateMs);
+  return Number.isFinite(captureDate) ? captureDate : -Infinity;
+}
+
+function newestPhotoMember(members) {
+  var newest = null;
+  var newestTimestamp = -Infinity;
+  members.forEach(function (item) {
+    if (!isPhoto(item)) return;
+    var timestamp = newestPhotoTimestamp(item);
+    // Keep the source ordering as a stable tiebreaker. Candidates are already
+    // newest-first by listing date before they reach the grouping helper.
+    if (!newest || timestamp > newestTimestamp) {
+      newest = item;
+      newestTimestamp = timestamp;
+    }
+  });
+  return newest;
 }
 
 function coordinatesForItem(item) {
@@ -47,6 +75,10 @@ function groupedRecord(group) {
   var members = group.members.slice();
   var center = averageCenter(members);
   var firstPath = pathForItem(members[0]);
+  var thumbnailMember = newestPhotoMember(members);
+  var videoCount = members.filter(function (item) {
+    return String((item && (item.mediaKind || item.photoMapMediaKind)) || 'photo') === 'video';
+  }).length;
   return {
     path: 'photo-map-group:' + firstPath,
     photoMapSourcePath: 'photo-map-group:' + firstPath,
@@ -55,16 +87,26 @@ function groupedRecord(group) {
     photoMapGrouped: true,
     photoMapGroupId: 'photo-map-group:' + firstPath,
     photoMapGroupCount: members.length,
+    photoMapGroupVideoCount: videoCount,
+    photoMapGroupPhotoCount: members.length - videoCount,
     photoMapGroupMembers: members,
+    // The group itself is represented by one ordinary photo thumbnail.  Keep
+    // its source member explicit so the shared browser scheduler can request
+    // and update only that thumbnail while the pin is visible.
+    photoMapGroupThumbnailPath: thumbnailMember ? pathForItem(thumbnailMember) : '',
+    photoMapThumbnailUrl: thumbnailMember && thumbnailMember.photoMapThumbnailUrl
+      ? thumbnailMember.photoMapThumbnailUrl : '',
+    photoMapThumbnailState: thumbnailMember && thumbnailMember.photoMapThumbnailState
+      ? thumbnailMember.photoMapThumbnailState : '',
     latitude: center.latitude,
     longitude: center.longitude,
-    display_name: String(members.length) + ' photos',
+    display_name: String(members.length) + ' media items',
   };
 }
 
 /*
- * Groups photos around a stable anchor, not through transitive chaining. A
- * member is eligible only when it is within radiusMeters of the first photo
+ * Groups located photos and videos around a stable anchor, not through
+ * transitive chaining. A member is eligible only when it is within radiusMeters of the first media item
  * that created the group. A small geographic grid limits neighbor checks to
  * nearby anchors while keeping the output deterministic in listing order.
  */
@@ -87,7 +129,7 @@ export function groupPhotoMapItems(items, radiusMeters) {
   }
 
   source.forEach(function (item, index) {
-    if (!isPhoto(item)) {
+    if (!isGroupableMedia(item)) {
       outputRecords.push({item: item, firstIndex: index});
       return;
     }

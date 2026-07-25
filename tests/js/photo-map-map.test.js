@@ -45,6 +45,34 @@ test("Photo Map creates a Leaflet map with direct tiles and cluster layer", asyn
   assert.equal(calls[7][0], "remove");
 });
 
+test("Photo Map cluster badges sum represented grouped media", async () => {
+  const mapModule = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/map.js");
+  let clusterOptions;
+  const fakeLeaflet = {
+    map() { return {setView() {}, invalidateSize() {}, remove() {}}; },
+    tileLayer() { return {addTo() {}}; },
+    markerClusterGroup(options) { clusterOptions = options; return {addTo() {}}; },
+    divIcon(options) { return options; },
+  };
+
+  mapModule.createPhotoMap(fakeLeaflet, "map-element");
+  const icon = clusterOptions.iconCreateFunction({
+    getAllChildMarkers() {
+      return [
+        {options: {photoMapRepresentedMediaCount: 105}},
+        {options: {photoMapRepresentedMediaCount: 42}},
+        {options: {}},
+        {options: {photoMapRepresentedMediaCount: 74}},
+        {options: {photoMapRepresentedMediaCount: 2}},
+      ];
+    },
+  });
+
+  assert.match(icon.html, />224</);
+  assert.equal(icon.className, "marker-cluster marker-cluster-large");
+  assert.deepEqual(icon.iconSize, [40, 40]);
+});
+
 test("Photo Map Leaflet loader injects vendored assets once", async () => {
   const loader = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/leaflet.js");
   const elements = new Map();
@@ -173,11 +201,11 @@ test("Photo Map renders grouped pins with count tiers and accessible labels", as
   assert.match(iconCalls[2].html, /photo-map-group-marker-badge[^>]*aria-hidden="true">50</);
   assert.ok(iconCalls[0].iconSize[0] < iconCalls[1].iconSize[0]);
   assert.ok(iconCalls[1].iconSize[0] < iconCalls[2].iconSize[0]);
-  assert.equal(markerOptions[0].title, "Grouped photo pin containing 3 photos");
-  assert.equal(markerOptions[2].alt, "Grouped photo pin containing 50 photos");
+  assert.equal(markerOptions[0].title, "Grouped media pin containing 3 media items");
+  assert.equal(markerOptions[2].alt, "Grouped media pin containing 50 media items");
   assert.match(popups[2], /photo-map-group-grid/);
   assert.match(popups[2], /Select a thumbnail to view its details/);
-  assert.match(popups[2], /50 photos/);
+  assert.match(popups[2], /50 media items/);
   assert.doesNotMatch(popups[2], /photo-map-group:group-large/);
 });
 
@@ -211,7 +239,52 @@ test("Photo Map reuses a grouped marker while updating its count tier", async ()
   assert.equal(createdMarkers.length, 1);
   assert.equal(createdMarkers[0].icons.length, 2);
   assert.match(createdMarkers[0].icons[1].className, /tier-medium/);
-  assert.equal(createdMarkers[0].options.title, "Grouped photo pin containing 12 photos");
+  assert.equal(createdMarkers[0].options.title, "Grouped media pin containing 12 media items");
+});
+
+test("Photo Map grouped pin renders and refreshes its newest-photo thumbnail", async () => {
+  const mapModule = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/map.js");
+  const icons = [];
+  let marker;
+  const fakeLeaflet = {
+    map() { return {setView() {}, invalidateSize() {}, remove() {}}; },
+    tileLayer() { return {addTo() {}}; },
+    markerClusterGroup() { return {addTo() {}, addLayer() {}, removeLayer() {}}; },
+    divIcon(options) { icons.push(options); return options; },
+    marker(_point, options) {
+      marker = {
+        options,
+        icons: [options.icon],
+        bindPopup() {},
+        on() {},
+        setIcon(icon) { this.icons.push(icon); },
+      };
+      return marker;
+    },
+  };
+  const controller = mapModule.createPhotoMap(fakeLeaflet, "map-element");
+  controller.setMarkerItems([{
+    path: "group",
+    display_name: "2 media items",
+    photoMapGrouped: true,
+    photoMapGroupCount: 2,
+    photoMapGroupThumbnailPath: "newest.jpg",
+    latitude: 40.5,
+    longitude: -74,
+    photoMapGroupMembers: [
+      {path: "older.jpg", display_name: "older.jpg", latitude: 40.5, longitude: -74},
+      {path: "newest.jpg", display_name: "newest.jpg", latitude: 40.5, longitude: -74},
+    ],
+  }]);
+
+  assert.match(icons[0].html, /Loading newest group thumbnail/);
+  assert.equal(controller.setGroupedMemberThumbnail("older.jpg", {url: "/thumbnail?older"}), true);
+  assert.equal(marker.icons.length, 1);
+  assert.equal(controller.setGroupedMemberThumbnail("newest.jpg", {url: "/thumbnail?newest"}), true);
+  assert.equal(marker.icons.length, 2);
+  assert.match(marker.icons[1].html, /photo-map-group-marker-thumbnail/);
+  assert.match(marker.icons[1].html, /thumbnail\?newest/);
+  assert.equal(marker.options.title, "Grouped media pin containing 2 media items");
 });
 
 test("Photo Map grouped popup renders member grid and updates shared thumbnail state", async () => {
@@ -234,14 +307,15 @@ test("Photo Map grouped popup renders member grid and updates shared thumbnail s
   const controller = mapModule.createPhotoMap(fakeLeaflet, "map-element");
   controller.setMarkerItems([{
     path: "group",
-    display_name: "2 photos",
+    display_name: "3 media items",
     photoMapGrouped: true,
-    photoMapGroupCount: 2,
+    photoMapGroupCount: 3,
     latitude: 40.5,
     longitude: -74,
     photoMapGroupMembers: [
       {path: "one.jpg", display_name: "one.jpg", latitude: 40.5, longitude: -74, captureDate: "2024:01:01"},
       {path: "two.jpg", display_name: "two.jpg", latitude: 40.5, longitude: -74, captureDate: "2024:01:02"},
+      {path: "clip.mov", display_name: "clip.mov", mediaKind: "video", photoMapMediaKind: "video", latitude: 40.5, longitude: -74},
     ],
   }]);
 
@@ -249,6 +323,8 @@ test("Photo Map grouped popup renders member grid and updates shared thumbnail s
   assert.match(popup, /data-photo-map-group-member-path="one.jpg"/);
   assert.match(popup, /data-photo-map-group-member-path="two.jpg"/);
   assert.match(popup, /photo-map-group-grid-loading/);
+  assert.match(popup, /photo-map-group-grid-video-placeholder/);
+  assert.match(popup, /Video thumbnail unavailable/);
   assert.match(popup, /Select a thumbnail to view its details/);
   assert.doesNotMatch(popup, /photo-map-group:group/);
 
@@ -260,7 +336,7 @@ test("Photo Map grouped popup renders member grid and updates shared thumbnail s
   assert.match(popup, /photo-map-group-grid-error/);
 });
 
-test("Photo Map grouped popup selects member details and keeps a safe grid return", async () => {
+test("Photo Map grouped popup selects video member details and keeps a safe grid return", async () => {
   const mapModule = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/map.js");
   const listeners = {};
   const cells = [];
@@ -288,8 +364,10 @@ test("Photo Map grouped popup selects member details and keeps a safe grid retur
     },
   };
   const member = {
-    path: "Camera Uploads/one & two.jpg",
-    display_name: "one & two.jpg",
+    path: "Camera Uploads/one & two.mov",
+    display_name: "one & two.mov",
+    photoMapMediaKind: "video",
+    mediaKind: "video",
     latitude: 40.5,
     longitude: -74,
     captureDate: "2024:01:01 12:00:00",
@@ -349,9 +427,11 @@ test("Photo Map grouped popup selects member details and keeps a safe grid retur
   assert.equal(grid.scrollTop, 180);
   listeners["grid-click"]({target: cell});
 
-  assert.match(selection.innerHTML, /one &amp; two\.jpg/);
+  assert.match(selection.innerHTML, /one &amp; two\.mov/);
   assert.match(selection.innerHTML, /Latitude/);
-  assert.match(selection.innerHTML, /href="\/file\?path=Camera\+Uploads%2Fone\+%26\+two\.jpg/);
+  assert.match(selection.innerHTML, /Video thumbnail unavailable/);
+  assert.match(selection.innerHTML, /Open video preview/);
+  assert.match(selection.innerHTML, /href="\/file\?path=Camera\+Uploads%2Fone\+%26\+two\.mov/);
   assert.match(selection.innerHTML, /Back to group overview/);
 
   const back = {
@@ -361,6 +441,85 @@ test("Photo Map grouped popup selects member details and keeps a safe grid retur
   listeners["root-click"]({target: back});
   assert.match(selection.innerHTML, /Select a thumbnail to view its details/);
   assert.match(popup, /photo-map-group-grid/);
+});
+
+test("Photo Map keeps an open grouped grid mounted while thumbnail state reconciles", async () => {
+  const mapModule = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/map.js");
+  const listeners = {};
+  let popupContentUpdates = 0;
+  const contentRoot = {};
+  Object.defineProperty(contentRoot, "innerHTML", {
+    get() { return ""; },
+    set(_value) { popupContentUpdates += 1; },
+  });
+  const member = {
+    path: "Camera Uploads/member.jpg",
+    display_name: "member.jpg",
+    latitude: 40.5,
+    longitude: -74,
+  };
+  const cell = {
+    attrs: {"data-photo-map-group-member-path": member.path},
+    getAttribute(name) { return this.attrs[name] || null; },
+    setAttribute(name, value) { this.attrs[name] = value; },
+    parentNode: null,
+  };
+  const grid = {
+    clientHeight: 120,
+    scrollTop: 90,
+    addEventListener(name, callback) { listeners["grid-" + name] = callback; },
+    removeEventListener() {},
+    querySelectorAll() { return [cell]; },
+  };
+  cell.parentNode = grid;
+  const root = {
+    addEventListener(name, callback) { listeners["root-" + name] = callback; },
+    removeEventListener() {},
+    querySelector(selector) {
+      if (selector === ".leaflet-popup-content") return contentRoot;
+      if (selector === "[data-photo-map-group-grid]") return grid;
+      return null;
+    },
+  };
+  let marker;
+  const fakeLeaflet = {
+    map() { return {setView() {}, invalidateSize() {}, remove() {}}; },
+    tileLayer() { return {addTo() {}}; },
+    markerClusterGroup() { return {addTo() {}, addLayer() {}, removeLayer() {}}; },
+    divIcon(options) { return options; },
+    marker() {
+      marker = {
+        bindPopup() {},
+        setPopupContent() { popupContentUpdates += 1; },
+        getPopup() { return {getElement() { return root; }}; },
+        on(name, callback) { listeners["marker-" + name] = callback; },
+        trigger(name, event) { listeners["marker-" + name](event); },
+      };
+      return marker;
+    },
+  };
+  const group = {
+    path: "group",
+    display_name: "1 photo",
+    photoMapGrouped: true,
+    photoMapGroupCount: 1,
+    latitude: 40.5,
+    longitude: -74,
+    photoMapGroupMembers: [member],
+  };
+  const controller = mapModule.createPhotoMap(fakeLeaflet, "map-element");
+  controller.setMarkerItems([group]);
+  marker.trigger("popupopen", {popup: {getElement() { return root; }}});
+
+  assert.equal(controller.setGroupedMemberThumbnail(member.path, {url: "/thumbnail?member"}), true);
+  assert.equal(popupContentUpdates, 0);
+  assert.equal(grid.scrollTop, 90);
+
+  controller.setMarkerItems([Object.assign({}, group, {
+    photoMapGroupMembers: [Object.assign({}, member, {photoMapThumbnailUrl: "/thumbnail?member"})],
+  })]);
+  assert.equal(popupContentUpdates, 0);
+  assert.equal(grid.scrollTop, 90);
 });
 
 test("Photo Map attaches loading/ready thumbnail cards and reports individually visible pins", async () => {

@@ -214,8 +214,32 @@
   display: flex;
   flex: 0 0 auto;
   justify-content: center;
+  overflow: hidden;
   position: relative;
   z-index: 1;
+}
+.photo-map-group-marker-card-thumbnail {
+  background: #e4e9ee;
+}
+.photo-map-group-marker-thumbnail {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+.photo-map-group-marker-thumbnail-loading {
+  align-items: center;
+  background: linear-gradient(110deg, #e4e9ee 30%, #f8fafb 45%, #e4e9ee 60%);
+  background-size: 200% 100%;
+  color: #526273;
+  display: flex;
+  font-size: 25px;
+  height: 100%;
+  justify-content: center;
+  width: 100%;
+}
+.photo-map-group-marker-state-loading .photo-map-group-marker-thumbnail-loading {
+  animation: photo-map-thumbnail-loading 1.35s linear infinite;
 }
 .photo-map-group-marker-symbol {
   font-size: 28px;
@@ -326,6 +350,11 @@
   justify-content: center;
   overflow: hidden;
   width: 100%;
+}
+.photo-map-group-grid-video-placeholder {
+  background: #dbe3ea;
+  color: #526273;
+  font-size: 20px;
 }
 .photo-map-group-grid-thumbnail {
   display: block;

@@ -42,9 +42,37 @@ function groupedPhotoTier(item) {
   return 'small';
 }
 
+function representedMediaCount(marker) {
+  var count = Number(marker && marker.options && marker.options.photoMapRepresentedMediaCount);
+  return Number.isFinite(count) && count > 0 ? Math.floor(count) : 1;
+}
+
+function clusterRepresentedMediaCount(cluster) {
+  if (!cluster || typeof cluster.getAllChildMarkers !== 'function') {
+    return cluster && typeof cluster.getChildCount === 'function' ? cluster.getChildCount() : 0;
+  }
+  return cluster.getAllChildMarkers().reduce(function (total, marker) {
+    return total + representedMediaCount(marker);
+  }, 0);
+}
+
+function clusterIconClassName(count) {
+  var tier = count < 10 ? 'small' : (count < 100 ? 'medium' : 'large');
+  return 'marker-cluster marker-cluster-' + tier;
+}
+
+function clusterIcon(L, cluster) {
+  var count = clusterRepresentedMediaCount(cluster);
+  return L.divIcon({
+    html: '<div><span>' + count + '</span></div>',
+    className: clusterIconClassName(count),
+    iconSize: [40, 40],
+  });
+}
+
 function markerAccessibleLabel(item) {
   if (isGroupedPhoto(item)) {
-    return 'Grouped photo pin containing ' + groupedPhotoCount(item) + ' photos';
+    return 'Grouped media pin containing ' + groupedPhotoCount(item) + ' media items';
   }
   return markerLabel(item);
 }
@@ -64,12 +92,49 @@ function markerIconHtml(item, state) {
     '</span><span class="photo-map-marker-stem" aria-hidden="true"></span><span class="photo-map-marker-pin" aria-hidden="true"></span></span>';
 }
 
-function groupedMarkerIconHtml(item) {
+function groupThumbnailMember(item) {
+  if (!isGroupedPhoto(item)) return null;
+  var wanted = String(item.photoMapGroupThumbnailPath || '');
+  if (!wanted) return null;
+  var members = Array.isArray(item.photoMapGroupMembers) ? item.photoMapGroupMembers : [];
+  return members.find(function (member) { return groupMemberPath(member) === wanted; }) || null;
+}
+
+function groupThumbnailPresentationChanged(previousItem, nextItem) {
+  return String((previousItem && previousItem.photoMapGroupThumbnailPath) || '') !==
+      String((nextItem && nextItem.photoMapGroupThumbnailPath) || '') ||
+    String((previousItem && previousItem.photoMapThumbnailUrl) || '') !==
+      String((nextItem && nextItem.photoMapThumbnailUrl) || '') ||
+    String((previousItem && previousItem.photoMapThumbnailState) || '') !==
+      String((nextItem && nextItem.photoMapThumbnailState) || '');
+}
+
+function withGroupThumbnailPresentation(item) {
+  var member = groupThumbnailMember(item);
+  if (!member) return item;
+  return Object.assign({}, item, {
+    photoMapThumbnailUrl: member.photoMapThumbnailUrl || '',
+    photoMapThumbnailState: member.photoMapThumbnailState || '',
+  });
+}
+
+function groupedMarkerIconHtml(item, state) {
   var count = groupedPhotoCount(item);
   var label = escapeHtml(markerAccessibleLabel(item));
+  var thumbnailPath = String(item && item.photoMapGroupThumbnailPath || '');
+  var url = item && item.photoMapThumbnailUrl;
+  var stateName = state || (url ? 'ready' : 'loading');
+  var cardContents = thumbnailPath
+    ? (url
+      ? '<img class="photo-map-group-marker-thumbnail" src="' + escapeHtml(url) +
+        '" alt="Thumbnail for newest photo in group: ' + label + '">'
+      : '<span class="photo-map-group-marker-thumbnail-loading" role="status" aria-label="Loading newest group thumbnail">' +
+        '<span aria-hidden="true">&hellip;</span></span>')
+    : '<span class="photo-map-group-marker-symbol" aria-hidden="true">&#9638;</span>';
   return '<span class="photo-map-group-marker photo-map-group-marker-tier-' + groupedPhotoTier(item) +
-    '" role="img" aria-label="' + label + '">' +
-    '<span class="photo-map-group-marker-card" aria-hidden="true"><span class="photo-map-group-marker-symbol">&#9638;</span></span>' +
+    ' photo-map-group-marker-state-' + escapeHtml(stateName) + '" role="img" aria-label="' + label + '">' +
+    '<span class="photo-map-group-marker-card' + (thumbnailPath ? ' photo-map-group-marker-card-thumbnail' : '') + '">' +
+      cardContents + '</span>' +
     '<span class="photo-map-group-marker-badge" aria-hidden="true">' + count + '</span>' +
     '<span class="photo-map-group-marker-stem" aria-hidden="true"></span>' +
     '<span class="photo-map-group-marker-pin" aria-hidden="true"></span>' +
@@ -114,6 +179,10 @@ function groupedMemberLoadingMarkup(item) {
 
 function groupedMemberMediaMarkup(item) {
   var label = escapeHtml(markerLabel(item));
+  if (mediaKind(item) === 'video') {
+    return '<span class="photo-map-group-grid-media photo-map-group-grid-video-placeholder" role="img" ' +
+      'aria-label="Video thumbnail unavailable"><span aria-hidden="true">&#9654;</span></span>';
+  }
   var url = item && item.photoMapThumbnailUrl;
   var media = url
     ? '<img class="photo-map-group-grid-thumbnail" src="' + escapeHtml(url) +
@@ -146,11 +215,19 @@ function groupedMemberDetails(item) {
   var longitude = item && Number.isFinite(item.longitude) ? item.longitude : 'Unavailable';
   var filename = markerLabel(item);
   var thumbnailUrl = item && item.photoMapThumbnailUrl;
-  var mediaPreview = thumbnailUrl
-    ? previewLink(item, '<img class="photo-map-preview-thumbnail" src="' + escapeHtml(thumbnailUrl) +
-      '" alt="Thumbnail for ' + label + '">', 'Open full preview for ' + filename)
-    : previewLink(item, '<span class="photo-map-preview-loading">Thumbnail loading&hellip;</span>',
+  var mediaPreview;
+  if (mediaKind(item) === 'video') {
+    mediaPreview = '<div class="photo-map-preview-video" role="img" aria-label="Video thumbnail unavailable">' +
+      '<span class="photo-map-preview-video-icon" aria-hidden="true">&#9654;</span>' +
+      '<span>Video thumbnail unavailable</span></div>' +
+      previewLink(item, 'Open video preview', 'Open full preview for ' + filename);
+  } else if (thumbnailUrl) {
+    mediaPreview = previewLink(item, '<img class="photo-map-preview-thumbnail" src="' + escapeHtml(thumbnailUrl) +
+      '" alt="Thumbnail for ' + label + '">', 'Open full preview for ' + filename);
+  } else {
+    mediaPreview = previewLink(item, '<span class="photo-map-preview-loading">Thumbnail loading&hellip;</span>',
       'Open full preview for ' + filename);
+  }
   return '<div class="photo-map-group-selection-details">' +
     '<strong class="photo-map-preview-filename">' + label + '</strong>' +
     '<div class="photo-map-preview-media">' + mediaPreview + '</div>' +
@@ -171,7 +248,7 @@ function groupedPopupMarkup(item) {
     escapeHtml(markerAccessibleLabel(item)) + '">' +
     '<strong class="photo-map-preview-filename">' + label + '</strong>' +
     '<p class="photo-map-grouped-preview-message"><span class="photo-map-grouped-preview-count">' +
-      groupedPhotoCount(item) + ' photos</span> in this location.</p>' +
+      groupedPhotoCount(item) + ' media items</span> in this location.</p>' +
     '<div class="photo-map-group-grid" data-photo-map-group-grid="true" role="list" aria-label="Photos in this group">' +
       members.map(groupedMemberGridItem).join('') +
     '</div>' +
@@ -292,6 +369,10 @@ export function createPhotoMap(L, element, options) {
     // whose max-zoom click appears to do nothing (spiderfying is disabled).
     disableClusteringAtZoom: PHOTO_MAP_MAX_ZOOM,
     spiderfyOnMaxZoom: false,
+    // Leaflet normally counts rendered markers. Grouped markers each stand
+    // for many media items, so the badge must instead sum what their child
+    // markers represent.
+    iconCreateFunction: function (cluster) { return clusterIcon(L, cluster); },
   });
   markerLayer.addTo(map);
   debug.log('map-created', {
@@ -359,6 +440,13 @@ export function createPhotoMap(L, element, options) {
   }
 
   function updatePopupContent(entry) {
+    var popup = markerPopup(entry.item);
+    // Progressive metadata reconciliation visits every marker.  A grouped
+    // popup's grid is a native scroll target, so replacing equivalent markup
+    // after each unrelated result destroys an in-progress scrollbar drag.
+    // Keep the established DOM and listeners when this marker's popup has not
+    // actually changed; direct thumbnail-cell updates keep popupMarkup current.
+    if (popup === entry.popupMarkup) return false;
     var groupedPopupWasOpen = isGroupedPhoto(entry && entry.item) && !!entry.groupPopupElement;
     var groupedPopupScrollTop = null;
     var groupedPopupSelectedPath = '';
@@ -375,12 +463,12 @@ export function createPhotoMap(L, element, options) {
       // arriving.
       detachGroupedPopupListeners(entry);
     }
-    var popup = markerPopup(entry.item);
     if (groupedPopupWasOpen && existingGroupedPopupElement &&
         typeof existingGroupedPopupElement.querySelector === 'function') {
       var contentElement = existingGroupedPopupElement.querySelector('.leaflet-popup-content');
       if (contentElement) {
         contentElement.innerHTML = popup;
+        entry.popupMarkup = popup;
         entry.groupPopupElement = existingGroupedPopupElement;
         attachGroupedPopupListeners(entry);
         if (groupedPopupScrollTop !== null && entry.groupGrid) {
@@ -398,6 +486,7 @@ export function createPhotoMap(L, element, options) {
       // updates the existing popup without replacing the marker binding.
       entry.marker.bindPopup(popup);
     }
+    entry.popupMarkup = popup;
     if (groupedPopupWasOpen) {
       attachGroupedPopupListeners(entry);
       if (groupedPopupScrollTop !== null && entry.groupGrid) {
@@ -570,7 +659,8 @@ export function createPhotoMap(L, element, options) {
       return Object.assign({}, member, patch || {});
     });
     if (!found) return false;
-    entry.item = Object.assign({}, entry.item, {photoMapGroupMembers: members});
+    var previousItem = entry.item;
+    entry.item = withGroupThumbnailPresentation(Object.assign({}, entry.item, {photoMapGroupMembers: members}));
     var member = groupMemberFor(entry, wanted);
     var cell = groupCellFor(entry, wanted);
     if (cell) renderGroupCell(cell, member);
@@ -579,7 +669,18 @@ export function createPhotoMap(L, element, options) {
       var selection = groupSelectionFor(entry);
       if (selection) selection.innerHTML = groupedMemberDetails(member);
     }
-    if (!cell && !entry.groupPopupElement) updatePopupContent(entry);
+    if (groupThumbnailPresentationChanged(previousItem, entry.item) &&
+        typeof entry.marker.setIcon === 'function') {
+      var groupIcon = markerIcon(L, entry.item, entry.item.photoMapThumbnailState);
+      if (groupIcon) entry.marker.setIcon(groupIcon);
+    }
+    if (cell) {
+      // This is intentionally a cell-only DOM update so loading a thumbnail
+      // never replaces the scroll container that the user may be dragging.
+      entry.popupMarkup = markerPopup(entry.item);
+    } else if (!entry.groupPopupElement) {
+      updatePopupContent(entry);
+    }
     return true;
   }
 
@@ -588,12 +689,15 @@ export function createPhotoMap(L, element, options) {
     var markerOptions = {
       title: markerAccessibleLabel(item),
       alt: markerAccessibleLabel(item),
+      photoMapRepresentedMediaCount: isGroupedPhoto(item) ? groupedPhotoCount(item) : 1,
     };
     if (icon) markerOptions.icon = icon;
     var marker = L.marker([item.latitude, item.longitude], markerOptions);
+    var popupMarkup = markerPopup(item);
     var entry = {
       item: item,
       marker: marker,
+      popupMarkup: popupMarkup,
       // MarkerClusterGroup temporarily changes marker.getLatLng() while a
       // cluster is spiderfied. Keep the source coordinates separately so
       // progressive metadata renders do not mistake spider legs for moves.
@@ -612,7 +716,7 @@ export function createPhotoMap(L, element, options) {
       });
     }
     if (typeof marker.bindPopup === 'function') {
-      marker.bindPopup(markerPopup(item));
+      marker.bindPopup(popupMarkup);
       debug.log('popup-bound', {path: path, hasThumbnail: !!item.photoMapThumbnailUrl});
     }
     if (typeof marker.on === 'function') {
@@ -726,9 +830,12 @@ export function createPhotoMap(L, element, options) {
         if (entry.marker.options) {
           entry.marker.options.title = markerAccessibleLabel(markerItem);
           entry.marker.options.alt = markerAccessibleLabel(markerItem);
+          entry.marker.options.photoMapRepresentedMediaCount = isGroupedPhoto(markerItem)
+            ? groupedPhotoCount(markerItem) : 1;
         }
         var groupedPresentationChanged = isGroupedPhoto(markerItem) &&
-          (!isGroupedPhoto(previousItem) || groupedPhotoCount(previousItem) !== groupedPhotoCount(markerItem));
+          (!isGroupedPhoto(previousItem) || groupedPhotoCount(previousItem) !== groupedPhotoCount(markerItem) ||
+            groupThumbnailPresentationChanged(previousItem, markerItem));
         if (groupedPresentationChanged && typeof entry.marker.setIcon === 'function') {
           var groupedIcon = markerIcon(L, markerItem, markerItem.photoMapThumbnailState);
           if (groupedIcon) entry.marker.setIcon(groupedIcon);

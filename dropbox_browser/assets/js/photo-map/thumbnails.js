@@ -129,6 +129,8 @@ export function createPhotoMapThumbnailScheduler(options) {
 
   function priorityFor(item, selectedPath, index) {
     var path = itemPath(item);
+    var explicitPriority = Number(item && item.photoMapThumbnailPriority);
+    if (Number.isFinite(explicitPriority)) return explicitPriority;
     if (path && path === selectedPath) return -1;
     var distance = Number(item && item.photoMapThumbnailDistance);
     return Number.isFinite(distance) ? distance : 1000000 + index;
@@ -165,7 +167,13 @@ export function createPhotoMapThumbnailScheduler(options) {
       signal: undefined,
       abort: function () { this.aborted = true; },
     };
-    var record = {item: entry.item, controller: controller, sequence: entry.sequence};
+    var record = {
+      item: entry.item,
+      controller: controller,
+      priority: entry.priority,
+      sequence: entry.sequence,
+      preempted: false,
+    };
     active.set(entry.path, record);
     running += 1;
     emitState(entry.item, 'loading');
@@ -189,9 +197,31 @@ export function createPhotoMapThumbnailScheduler(options) {
         reason: 'thumbnail-load-failure',
       });
     }).finally(function () {
-      if (active.get(entry.path) === record) active.delete(entry.path);
+      if (active.get(entry.path) === record) {
+        active.delete(entry.path);
+        // A higher-priority grouped popup cell displaced this still-desired
+        // request. Put it back behind the current demand after its aborted
+        // browser image operation has settled.
+        if (record.preempted && desired.has(entry.path) && !cache.has(entry.path) && !failed.has(entry.path)) {
+          pending.set(entry.path, desired.get(entry.path));
+        }
+      }
       running = Math.max(0, running - 1);
       pump();
+    });
+  }
+
+  function preemptLowerPriorityActive() {
+    if (!pending.size || !active.size) return;
+    sortPending();
+    var firstPending = pending.values().next();
+    if (firstPending.done) return;
+    var highestPendingPriority = firstPending.value.priority;
+    active.forEach(function (record) {
+      if (record.preempted || record.priority <= highestPendingPriority) return;
+      record.preempted = true;
+      emitState(record.item, 'idle');
+      record.controller.abort();
     });
   }
 
@@ -218,23 +248,45 @@ export function createPhotoMapThumbnailScheduler(options) {
     var next = new Map();
     (Array.isArray(items) ? items : []).forEach(function (item, index) {
       var path = itemPath(item);
-      if (!path || !isPhoto(item) || next.has(path)) return;
-      next.set(path, {
+      if (!path || !isPhoto(item)) return;
+      var candidate = {
         path: path,
         item: Object.assign({}, item, {photoMapThumbnailUrl: buildPhotoMapThumbnailUrl(path)}),
         priority: priorityFor(item, selectedPath, index),
         sequence: sequence++,
-      });
+      };
+      var existing = next.get(path);
+      // A group-pin representative may also be visible in its popup grid.
+      // Preserve the more urgent of the two demands in the one shared queue.
+      if (!existing || candidate.priority < existing.priority) next.set(path, candidate);
     });
     desired = next;
     removeUndesired();
     desired.forEach(function (entry, path) {
-      if (cache.has(path) || failed.has(path) || active.has(path) || pending.has(path)) return;
+      if (cache.has(path) || failed.has(path)) return;
+      var activeRecord = active.get(path);
+      if (activeRecord) {
+        // The same thumbnail can be the ordinary visible group-pin image and
+        // then become a high-priority popup cell. Promote that in-flight job
+        // rather than aborting and restarting identical browser work.
+        if (entry.priority < activeRecord.priority) activeRecord.priority = entry.priority;
+        activeRecord.item = entry.item;
+        return;
+      }
+      if (pending.has(path)) {
+        pending.set(path, entry);
+        return;
+      }
       pending.set(path, entry);
     });
     desired.forEach(function (entry, path) {
       if (cache.has(path)) emitState(entry.item, 'ready');
     });
+    // If a user opens a grouped popup while ordinary map-pin thumbnails are
+    // occupying every slot, abort those lower-priority client-side image
+    // requests. Once their aborts settle, pump() immediately starts the
+    // currently visible grouped cells and later requeues the displaced pins.
+    preemptLowerPriorityActive();
     pump();
     return {
       queued: pending.size,
