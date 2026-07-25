@@ -1,0 +1,477 @@
+/* Photo Map bottom-pane shell. The map client owns the Leaflet layers and
+   controls later; this file only establishes the pane's responsive layout. */
+#photo-map-pane {
+  background: #e8edf1;
+  color: #1f2933;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+#photo-map-pane.hidden {
+  display: none;
+}
+.photo-map-shell {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.photo-map-toolbar {
+  align-items: center;
+  background: #252b3a;
+  border-bottom: 1px solid #3a4a5e;
+  color: #c8d0db;
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 6px 10px;
+}
+.photo-map-toolbar-controls {
+  align-items: center;
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  min-width: 0;
+}
+.photo-map-toolbar-actions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+  margin-left: auto;
+}
+.photo-map-date-control,
+.photo-map-custom-range,
+.photo-map-grouping-control {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+.photo-map-custom-range[hidden] {
+  display: none !important;
+}
+.photo-map-toolbar label {
+  color: #b7c3d0;
+  font-size: 12px;
+  font-weight: 600;
+}
+.photo-map-toolbar select,
+.photo-map-toolbar input,
+.photo-map-toolbar-button {
+  background: #1a1f2e;
+  border: 1px solid #52647a;
+  border-radius: 4px;
+  box-sizing: border-box;
+  color: #e6edf3;
+  font: inherit;
+  font-size: 12px;
+  min-height: 26px;
+  padding: 3px 7px;
+}
+.photo-map-toolbar input {
+  color-scheme: dark;
+  max-width: 142px;
+}
+.photo-map-toolbar-button {
+  cursor: pointer;
+}
+.photo-map-toolbar select:focus-visible,
+.photo-map-toolbar input:focus-visible,
+.photo-map-toolbar-button:focus-visible,
+.photo-map-map:focus-visible {
+  border-color: #8bb8e8;
+  outline: 2px solid #8bb8e8;
+  outline-offset: 1px;
+}
+.photo-map-toolbar-button:hover:not(:disabled) {
+  background: #34445a;
+}
+.photo-map-toolbar-button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.photo-map-status {
+  background: #f5f7f9;
+  border-bottom: 1px solid #cfd7df;
+  color: #536273;
+  flex: 0 0 auto;
+  font-size: 12px;
+  line-height: 1.35;
+  min-height: 16px;
+  padding: 5px 10px;
+}
+.photo-map-status[data-state="loading"],
+.photo-map-status[data-state="progressive"] {
+  color: #385a78;
+}
+.photo-map-status[data-state="cached"] {
+  color: #285f4c;
+}
+.photo-map-status[data-state="no-media"],
+.photo-map-status[data-state="no-geotagged"] {
+  color: #59636d;
+}
+.photo-map-status[data-state="unsupported"] {
+  color: #856404;
+}
+.photo-map-status[data-state="partial-errors"] {
+  color: #8a4f18;
+}
+.photo-map-map {
+  background: #dce6ee;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+  width: 100%;
+}
+.photo-map-marker-icon {
+  background: transparent;
+  border: 0;
+}
+.photo-map-marker-visual {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  height: 110px;
+  justify-content: flex-start;
+  pointer-events: none;
+  position: relative;
+  width: 88px;
+}
+.photo-map-marker-thumbnail {
+  align-items: center;
+  background: #fff;
+  border: 2px solid #34495e;
+  border-radius: 6px;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 35%);
+  box-sizing: border-box;
+  display: flex;
+  height: 64px;
+  justify-content: center;
+  overflow: hidden;
+  width: 76px;
+}
+.photo-map-marker-thumbnail-image {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+.photo-map-marker-thumbnail-loading {
+  align-items: center;
+  background: linear-gradient(110deg, #e4e9ee 30%, #f8fafb 45%, #e4e9ee 60%);
+  background-size: 200% 100%;
+  color: #526273;
+  display: flex;
+  font-size: 25px;
+  height: 100%;
+  justify-content: center;
+  width: 100%;
+}
+.photo-map-marker-state-loading .photo-map-marker-thumbnail-loading {
+  animation: photo-map-thumbnail-loading 1.35s linear infinite;
+}
+.photo-map-marker-stem {
+  background: #34495e;
+  height: 8px;
+  width: 3px;
+}
+.photo-map-marker-pin {
+  background: #e74c3c;
+  border: 2px solid #fff;
+  border-radius: 50% 50% 50% 0;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 45%);
+  height: 17px;
+  margin-top: -1px;
+  transform: rotate(-45deg);
+  width: 17px;
+}
+.photo-map-group-icon {
+  background: transparent;
+  border: 0;
+}
+.photo-map-group-marker {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  pointer-events: none;
+  position: relative;
+  width: 100%;
+}
+.photo-map-group-marker-card {
+  align-items: center;
+  background: #24527a;
+  border: 3px solid #fff;
+  border-radius: 14px;
+  box-shadow: 0 2px 7px rgb(0 0 0 / 45%);
+  box-sizing: border-box;
+  color: #fff;
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+  z-index: 1;
+}
+.photo-map-group-marker-card-thumbnail {
+  background: #e4e9ee;
+}
+.photo-map-group-marker-thumbnail {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+.photo-map-group-marker-thumbnail-loading {
+  align-items: center;
+  background: linear-gradient(110deg, #e4e9ee 30%, #f8fafb 45%, #e4e9ee 60%);
+  background-size: 200% 100%;
+  color: #526273;
+  display: flex;
+  font-size: 25px;
+  height: 100%;
+  justify-content: center;
+  width: 100%;
+}
+.photo-map-group-marker-state-loading .photo-map-group-marker-thumbnail-loading {
+  animation: photo-map-thumbnail-loading 1.35s linear infinite;
+}
+.photo-map-group-marker-symbol {
+  font-size: 28px;
+  line-height: 1;
+}
+.photo-map-group-marker-badge {
+  align-items: center;
+  background: #d83a2e;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 45%);
+  box-sizing: border-box;
+  color: #fff;
+  display: flex;
+  font-size: 14px;
+  font-weight: 700;
+  justify-content: center;
+  min-width: 27px;
+  padding: 2px 6px;
+  position: absolute;
+  right: 0;
+  top: -4px;
+  z-index: 2;
+}
+.photo-map-group-marker-stem {
+  background: #24527a;
+  flex: 0 0 auto;
+  height: 8px;
+  width: 4px;
+}
+.photo-map-group-marker-pin {
+  background: #f08a24;
+  border: 2px solid #fff;
+  border-radius: 50% 50% 50% 0;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 45%);
+  flex: 0 0 auto;
+  height: 20px;
+  margin-top: -2px;
+  transform: rotate(-45deg);
+  width: 20px;
+}
+.photo-map-group-marker-tier-small .photo-map-group-marker-card {
+  height: 54px;
+  width: 58px;
+}
+.photo-map-group-marker-tier-medium .photo-map-group-marker-card {
+  border-radius: 16px;
+  height: 64px;
+  width: 68px;
+}
+.photo-map-group-marker-tier-medium .photo-map-group-marker-symbol,
+.photo-map-group-marker-tier-large .photo-map-group-marker-symbol {
+  font-size: 32px;
+}
+.photo-map-group-marker-tier-medium .photo-map-group-marker-badge,
+.photo-map-group-marker-tier-large .photo-map-group-marker-badge {
+  font-size: 15px;
+  min-width: 31px;
+}
+.photo-map-group-marker-tier-large .photo-map-group-marker-card {
+  border-radius: 18px;
+  height: 74px;
+  width: 78px;
+}
+.photo-map-group-marker-tier-large .photo-map-group-marker-badge {
+  font-size: 16px;
+  min-width: 35px;
+  padding-left: 7px;
+  padding-right: 7px;
+}
+.photo-map-grouped-preview-message {
+  margin: 8px 0;
+}
+.photo-map-group-grid {
+  background: #f4f7fa;
+  border: 1px solid #c8d3dd;
+  border-radius: 5px;
+  box-sizing: border-box;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  max-height: 230px;
+  overflow: auto;
+  padding: 6px;
+}
+.photo-map-group-grid-item {
+  background: #fff;
+  border: 1px solid #c0ccd6;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  min-width: 0;
+  padding: 3px;
+  text-align: left;
+}
+.photo-map-group-grid-item:hover,
+.photo-map-group-grid-item:focus-visible,
+.photo-map-group-grid-item[aria-pressed="true"] {
+  border-color: #24527a;
+  box-shadow: 0 0 0 2px rgb(36 82 122 / 25%);
+  outline: none;
+}
+.photo-map-group-grid-media {
+  align-items: center;
+  background: #e4e9ee;
+  display: flex;
+  height: 58px;
+  justify-content: center;
+  overflow: hidden;
+  width: 100%;
+}
+.photo-map-group-grid-video-placeholder {
+  background: #dbe3ea;
+  color: #526273;
+  font-size: 20px;
+}
+.photo-map-group-grid-thumbnail {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+.photo-map-group-grid-loading,
+.photo-map-group-grid-error {
+  align-items: center;
+  color: #526273;
+  display: flex;
+  font-size: 20px;
+  height: 100%;
+  justify-content: center;
+  width: 100%;
+}
+.photo-map-group-grid-loading {
+  animation: photo-map-thumbnail-loading 1.35s linear infinite;
+  background: linear-gradient(110deg, #e4e9ee 30%, #f8fafb 45%, #e4e9ee 60%);
+  background-size: 200% 100%;
+}
+.photo-map-group-grid-error {
+  background: #f7e0df;
+  color: #a52b25;
+  font-weight: 700;
+}
+.photo-map-group-grid-name {
+  display: block;
+  font-size: 11px;
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.photo-map-group-selection {
+  border-top: 1px solid #d7e0e7;
+  margin-top: 8px;
+  padding-top: 8px;
+}
+.photo-map-group-selection-empty {
+  color: #526273;
+  margin: 0;
+}
+.photo-map-group-selection-back {
+  background: transparent;
+  border: 1px solid #8ea2b2;
+  border-radius: 3px;
+  color: inherit;
+  cursor: pointer;
+  padding: 3px 6px;
+}
+@keyframes photo-map-thumbnail-loading {
+  to { background-position: -200% 0; }
+}
+.photo-map-preview {
+  min-width: 210px;
+  max-width: 280px;
+}
+.photo-map-preview-filename {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.photo-map-preview-media {
+  margin: 8px 0;
+  text-align: center;
+}
+.photo-map-preview-link {
+  color: inherit;
+  display: inline-block;
+}
+.photo-map-preview-thumbnail {
+  display: block;
+  max-height: 150px;
+  max-width: 240px;
+  object-fit: contain;
+}
+.photo-map-preview-loading,
+.photo-map-preview-video {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+  min-height: 32px;
+}
+.photo-map-preview-video-icon {
+  align-items: center;
+  background: #6b7280;
+  border-radius: 50%;
+  color: #fff;
+  display: inline-flex;
+  height: 24px;
+  justify-content: center;
+  width: 24px;
+}
+.photo-map-preview-details {
+  display: grid;
+  gap: 2px 8px;
+  grid-template-columns: auto minmax(0, 1fr);
+  margin: 0;
+}
+.photo-map-preview-details dt {
+  font-weight: 600;
+}
+.photo-map-preview-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 640px) {
+  .photo-map-toolbar-actions {
+    margin-left: 0;
+  }
+  .photo-map-custom-range {
+    flex-basis: 100%;
+  }
+  .photo-map-toolbar input {
+    flex: 1 1 110px;
+    max-width: none;
+    min-width: 0;
+  }
+}

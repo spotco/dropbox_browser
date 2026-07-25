@@ -23,6 +23,7 @@ from .foldercache_compute import parse_direct_listing
 from .ignored import is_ignored_name
 from .listingcache import ListingCacheManager
 from .namekeys import filename_compare_key
+from .photo_map_cache import PhotoMapCache
 from .paths import remote_target, safe_join_local
 from .rclone import RcloneClient
 from .thumbnails import ThumbnailService
@@ -402,6 +403,7 @@ class DropboxBrowser:
         client_render: bool = True,
         thumbnail_config: ThumbnailConfig | None = None,
         video_tools_config: VideoToolsConfig | None = None,
+        photo_map_cache: PhotoMapCache | None = None,
     ):
         self.rclone = rclone
         self.remote = remote
@@ -411,6 +413,7 @@ class DropboxBrowser:
         self.client_render = bool(client_render)
         self.thumbnail_config = thumbnail_config
         self.video_tools_config = video_tools_config
+        self.photo_map_cache = photo_map_cache or PhotoMapCache()
         self.video_debug_logs = False
         self.client_log_enabled = True
         self.client_log_subsystems = {

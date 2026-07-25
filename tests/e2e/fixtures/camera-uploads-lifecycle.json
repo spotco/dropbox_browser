@@ -1,0 +1,22 @@
+{
+  "entries": [
+    {
+      "path": "Camera Uploads",
+      "type": "dir",
+      "mod_time": "2024-03-01T12:00:00Z"
+    },
+    {
+      "path": "Camera Uploads/lifecycle-01.jpg",
+      "type": "file",
+      "content": "not a real jpeg 1\n",
+      "mod_time": "2024-03-01T12:01:00Z"
+    },
+    {
+      "path": "Camera Uploads/lifecycle-02.jpg",
+      "type": "file",
+      "content": "not a real jpeg 2\n",
+      "mod_time": "2024-03-01T12:02:00Z"
+    }
+  ],
+  "local_files": []
+}

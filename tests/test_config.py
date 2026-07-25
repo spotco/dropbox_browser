@@ -90,6 +90,7 @@ class ConfigDefaultsTests(unittest.TestCase):
         self.assertFalse(config["ClientLogSubsystems"]["browse-reveal"])
         self.assertFalse(config["ClientLogSubsystems"]["file-search"])
         self.assertFalse(config["ClientLogSubsystems"]["music-metadata"])
+        self.assertFalse(config["ClientLogSubsystems"]["photo-map"])
 
     def test_rclone_write_retry_defaults_match_policy_defaults(self) -> None:
         config = dict(config_module._APP_CONFIG_DEFAULTS)

@@ -42,6 +42,24 @@ Run full suite:
 python -m unittest discover -s tests -v
 ```
 
+Photo Map-only checks:
+
+```powershell
+python -m tests.run photo-map -v
+npm run test:js:photo-map
+```
+
+The client-render Playwright suite also covers the Photo Map pane lifecycle:
+it verifies that Photo Map requests do not start while Music/Video is selected,
+that switching away destroys the active map, and that returning to Photo Map
+reuses completed local cache records without re-reading the remote media.
+
+Run that focused browser check with:
+
+```powershell
+npx playwright test tests/e2e/client-render.photo-map.spec.js --project=client-render
+```
+
 Use the full suite before checkin/commit, before handoff of broad cross-module
 changes, or when a shared helper used by multiple groups changes.
 
