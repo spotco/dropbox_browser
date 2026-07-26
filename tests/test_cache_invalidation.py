@@ -929,6 +929,45 @@ class CacheInvalidationTests(AppTestCase):
         self.assertIsNone(text_row["thumbnail_href"])
         self.assertEqual(text_row["icon_href"], "/assets/icons/material-icon-theme/document.svg")
 
+    def test_browse_listing_endpoint_exposes_video_thumbnail_fields_for_mov(self) -> None:
+        local_root = self.create_local_root({"clip.mov": b"local-movie-bytes"})
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[
+                {
+                    "Name": "clip.mov",
+                    "Path": "clip.mov",
+                    "IsDir": False,
+                    "Size": 5,
+                    "ModTime": "2024-01-02T12:00:00Z",
+                },
+                {
+                    "Name": "remote-only.mov",
+                    "Path": "remote-only.mov",
+                    "IsDir": False,
+                    "Size": 7,
+                    "ModTime": "2024-01-02T12:01:00Z",
+                },
+            ])],
+        })
+        app = self._build_app(rclone, local_root=local_root, workers=1)
+
+        with TestServer(app) as server:
+            payload = server.get_json("/browse/endpoints/listing")
+
+        row = next(row for row in payload["rows"] if row["display_name"] == "clip.mov")
+        self.assertTrue(row["video_thumbnailable"])
+        self.assertEqual(row["media_kind"], "video")
+        self.assertEqual(row["video_thumbnail_source"], "local")
+        self.assertEqual(row["video_thumbnail_href"], "/video/endpoints/thumbnail?path=clip.mov&source=local")
+        self.assertEqual(row["preview_href"], "/preview?path=clip.mov&source=remote")
+        self.assertEqual(row["original_file_href"], "/file?path=clip.mov&source=remote")
+        self.assertFalse(row["thumbnailable"])
+        self.assertIsNone(row["thumbnail_href"])
+
+        remote_row = next(row for row in payload["rows"] if row["display_name"] == "remote-only.mov")
+        self.assertEqual(remote_row["preview_href"], "/preview?path=remote-only.mov&source=remote")
+        self.assertEqual(remote_row["original_file_href"], "/file?path=remote-only.mov&source=remote")
+
     def test_browse_search_endpoint_exposes_thumbnail_fields_for_image_results_only(self) -> None:
         class SearchFolderCache:
             def __init__(self, records: dict[str, dict]) -> None:

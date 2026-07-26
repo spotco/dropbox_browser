@@ -323,8 +323,7 @@ test("Photo Map grouped popup renders member grid and updates shared thumbnail s
   assert.match(popup, /data-photo-map-group-member-path="one.jpg"/);
   assert.match(popup, /data-photo-map-group-member-path="two.jpg"/);
   assert.match(popup, /photo-map-group-grid-loading/);
-  assert.match(popup, /photo-map-group-grid-video-placeholder/);
-  assert.match(popup, /Video thumbnail unavailable/);
+  assert.match(popup, /photo-map-group-grid-loading/);
   assert.match(popup, /Select a thumbnail to view its details/);
   assert.doesNotMatch(popup, /photo-map-group:group/);
 
@@ -429,10 +428,10 @@ test("Photo Map grouped popup selects video member details and keeps a safe grid
 
   assert.match(selection.innerHTML, /one &amp; two\.mov/);
   assert.match(selection.innerHTML, /Latitude/);
-  assert.match(selection.innerHTML, /Video thumbnail unavailable/);
-  assert.match(selection.innerHTML, /Open video preview/);
-  assert.match(selection.innerHTML, /href="\/file\?path=Camera\+Uploads%2Fone\+%26\+two\.mov/);
-  assert.match(selection.innerHTML, /Back to group overview/);
+  assert.match(selection.innerHTML, /Loading thumbnail/);
+  assert.match(selection.innerHTML, /Open full preview for one &amp; two\.mov/);
+  assert.match(selection.innerHTML, /href="\/preview\?path=Camera\+Uploads%2Fone\+%26\+two\.mov&amp;source=remote&amp;kind=video/);
+  assert.match(selection.innerHTML, /Close preview/);
 
   const back = {
     parentNode: root,
@@ -624,7 +623,7 @@ test("Photo Map popup exposes metadata and a safe full-preview link", async () =
   assert.match(popup, />-74</);
   assert.match(popup, /2024:01:01 12:00:00/);
   assert.match(popup, /2024-01-02T00:00:00\.000Z/);
-  assert.match(popup, /href="\/file\?path=Camera\+Uploads%2Fphoto\+%26\+one\.jpg&amp;source=remote"/);
+  assert.match(popup, /href="\/preview\?path=Camera\+Uploads%2Fphoto\+%26\+one\.jpg&amp;source=remote&amp;kind=photo/);
   assert.match(popup, /target="_blank"/);
   assert.match(popup, /rel="noopener noreferrer"/);
   assert.match(popup, /<img[^>]+alt="Thumbnail for photo &amp; one\.jpg"/);
@@ -653,9 +652,9 @@ test("Photo Map video popup keeps GPS details and shows the neutral thumbnail fa
     listingDateMs: Date.UTC(2024, 0, 3),
   }]);
 
-  assert.match(popup, /Video thumbnail unavailable/);
-  assert.match(popup, /photo-map-preview-video-icon/);
-  assert.match(popup, /Open video preview/);
+  assert.match(popup, /Loading thumbnail/);
+  assert.match(popup, /photo-map-preview-thumbnail-placeholder/);
+  assert.match(popup, /Open full preview for video\.mov/);
   assert.doesNotMatch(popup, /<img/);
 });
 

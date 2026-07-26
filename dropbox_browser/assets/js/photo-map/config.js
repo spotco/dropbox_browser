@@ -40,6 +40,7 @@ export const PHOTO_MAP_QUICKTIME_TAIL_RANGE_BYTES = 1024 * 1024;
 export const PHOTO_MAP_METADATA_CONCURRENCY = 3;
 export const PHOTO_MAP_THUMBNAIL_CONCURRENCY = 2;
 export const PHOTO_MAP_CACHE_BATCH_LIMIT = 200;
+export const PHOTO_MAP_QUICKTIME_PARSER_VERSION = 'quicktime-iso6709-v3';
 
 export const PHOTO_MAP_PARSE_STATES = Object.freeze({
   located: 'located',

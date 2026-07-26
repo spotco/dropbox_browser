@@ -1,0 +1,104 @@
+.photo-map-preview-page-shell {
+  box-sizing: border-box;
+  margin: 0 auto;
+  max-width: 960px;
+  padding: 28px 22px 48px;
+}
+.photo-map-preview-page-header {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+.photo-map-preview-page-header h1 {
+  overflow-wrap: anywhere;
+}
+.photo-map-preview-download {
+  flex: 0 0 auto;
+}
+.photo-map-preview-status {
+  color: #526273;
+  margin: 8px 0 14px;
+}
+.photo-map-preview-surface {
+  align-items: center;
+  background: #101820;
+  border-radius: 8px;
+  display: flex;
+  justify-content: center;
+  min-height: min(72vh, 720px);
+  overflow: hidden;
+  position: relative;
+}
+.photo-map-preview-page-poster,
+.photo-map-preview-page-video {
+  display: block;
+  max-height: min(72vh, 720px);
+  max-width: 100%;
+  object-fit: contain;
+}
+
+.photo-map-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+}
+
+.photo-map-preview-overlay[hidden] { display: none; }
+.photo-map-preview-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, .72); }
+.photo-map-preview-dialog {
+  position: relative;
+  z-index: 1;
+  width: min(960px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  padding: 1rem;
+  border-radius: .6rem;
+  background: var(--surface, #fff);
+  color: var(--text, #111);
+  box-shadow: 0 1rem 3rem rgba(0, 0, 0, .35);
+}
+.photo-map-preview-close { font-size: 1.5rem; border: 0; background: transparent; cursor: pointer; }
+body.photo-map-preview-open { overflow: hidden; }
+.photo-map-preview-page-video {
+  height: min(72vh, 720px);
+  width: 100%;
+}
+.photo-map-preview-page-video[hidden],
+.photo-map-preview-page-poster[hidden] {
+  display: none;
+}
+.photo-map-preview-page-poster {
+  position: absolute;
+  z-index: 1;
+}
+.photo-map-preview-play-button,
+.photo-map-preview-mute-button {
+  background: rgb(12 25 38 / 84%);
+  border: 2px solid #fff;
+  border-radius: 999px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 18px;
+  padding: 10px 18px;
+  position: absolute;
+  z-index: 3;
+}
+.photo-map-preview-play-button {
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+.photo-map-preview-mute-button {
+  bottom: 14px;
+  right: 14px;
+  padding: 8px 12px;
+}
+.photo-map-preview-page-shell a:focus-visible,
+.photo-map-preview-surface button:focus-visible {
+  outline: 3px solid #65b6ff;
+  outline-offset: 3px;
+}

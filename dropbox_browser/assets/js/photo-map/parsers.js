@@ -271,12 +271,32 @@ function collectAtomText(bytes, start, limit, output, depth) {
 function parseIso6709(text) {
   var pattern = /([+-])(\d{1,3}(?:\.\d+)?)([+-])(\d{1,3}(?:\.\d+)?)(?:[+-](\d{1,3}(?:\.\d+)?))?(?:\/|(?=\0|\s|$))/g;
   var match;
+  var best = null;
+  var bestScore = -1;
   while ((match = pattern.exec(String(text || ''))) !== null) {
     var latitude = (match[1] === '-' ? -1 : 1) * Number(match[2]);
     var longitude = (match[3] === '-' ? -1 : 1) * Number(match[4]);
-    if (validCoordinate(latitude, longitude)) return {latitude: latitude, longitude: longitude};
+    if (!validCoordinate(latitude, longitude)) continue;
+    // QuickTime's ISO-6709 location uses two integer latitude digits and
+    // three integer longitude digits. Binary payloads can contain shorter
+    // accidental matches such as "-5-5+.../" before the real location.
+    // Prefer the structurally complete candidate while retaining support for
+    // valid single-digit coordinates when no stronger candidate exists.
+    var latitudeDigits = String(match[2]).split('.')[0].length;
+    var longitudeDigits = String(match[4]).split('.')[0].length;
+    var score = (latitudeDigits === 2 ? 2 : 0) + (longitudeDigits === 3 ? 2 : 0);
+    if (score > bestScore) {
+      best = {latitude: latitude, longitude: longitude};
+      bestScore = score;
+      if (score === 4) return best;
+    }
   }
-  return null;
+  // A short match is not sufficient evidence in a binary MP4 payload. In
+  // particular, compressed video data can contain accidental strings such as
+  // `+0-9.../`, which previously created pins in Africa. QuickTime's location
+  // atom uses two latitude degree digits and three longitude degree digits.
+  if (bestScore < 4) return null;
+  return best;
 }
 
 function quickTimeCaptureDate(text) {
@@ -305,6 +325,11 @@ export function parseQuickTimeLocation(input) {
   var combined = textParts.join('\n');
   var location = parseIso6709(combined);
   if (!location) return noLocationResult('no-quicktime-location');
+  // Downloaded videos commonly use +00.0000+000.0000/ as a sentinel rather
+  // than a real GPS fix. Do not turn that placeholder into a map pin.
+  if (location.latitude === 0 && location.longitude === 0) {
+    return noLocationResult('no-quicktime-location');
+  }
   var captureDate = quickTimeCaptureDate(combined);
   return locatedResult(location.latitude, location.longitude, captureDate.value, captureDate.timestamp);
 }

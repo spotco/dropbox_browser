@@ -75,6 +75,10 @@ _APP_CONFIG_DEFAULTS: dict = {
     "ThumbnailSize": 64,
     "ThumbnailMaxInputBytes": 64 * 1024 * 1024,
     "ThumbnailTimeoutSeconds": 15,
+    "VideoThumbnailEnabled": True,
+    "VideoThumbnailSize": 256,
+    "VideoThumbnailMaxInputBytes": 2 * 1024 * 1024 * 1024,
+    "VideoThumbnailTimeoutSeconds": 30,
 }
 
 _VIDEO_FFMPEG_READ_RATE_MAX = 16.0
@@ -112,6 +116,10 @@ class VideoToolsConfig:
     backpressure_medium_water_seconds: float = 120.0
     backpressure_high_water_seconds: float = 300.0
     backpressure_max_water_seconds: float = 600.0
+    video_thumbnail_enabled: bool = True
+    video_thumbnail_size: int = 256
+    video_thumbnail_max_input_bytes: int = 2 * 1024 * 1024 * 1024
+    video_thumbnail_timeout_seconds: float = 30.0
 
     @property
     def ffmpeg_available(self) -> bool:
@@ -382,6 +390,28 @@ def load_video_tools_config(app_config: dict | None = None) -> VideoToolsConfig:
         backpressure_medium_water_seconds=backpressure_medium_water_seconds,
         backpressure_high_water_seconds=backpressure_high_water_seconds,
         backpressure_max_water_seconds=backpressure_max_water_seconds,
+        video_thumbnail_enabled=bool(config.get("VideoThumbnailEnabled", _APP_CONFIG_DEFAULTS["VideoThumbnailEnabled"])),
+        video_thumbnail_size=max(
+            16,
+            _clamp_non_negative_int(
+                config.get("VideoThumbnailSize", _APP_CONFIG_DEFAULTS["VideoThumbnailSize"]),
+                default=int(_APP_CONFIG_DEFAULTS["VideoThumbnailSize"]),
+                maximum=1024,
+            ),
+        ),
+        video_thumbnail_max_input_bytes=_clamp_non_negative_int(
+            config.get("VideoThumbnailMaxInputBytes", _APP_CONFIG_DEFAULTS["VideoThumbnailMaxInputBytes"]),
+            default=int(_APP_CONFIG_DEFAULTS["VideoThumbnailMaxInputBytes"]),
+            maximum=16 * 1024 * 1024 * 1024,
+        ),
+        video_thumbnail_timeout_seconds=max(
+            1.0,
+            _clamp_non_negative_float(
+                config.get("VideoThumbnailTimeoutSeconds", _APP_CONFIG_DEFAULTS["VideoThumbnailTimeoutSeconds"]),
+                default=float(_APP_CONFIG_DEFAULTS["VideoThumbnailTimeoutSeconds"]),
+                maximum=300.0,
+            ),
+        ),
     )
 
 

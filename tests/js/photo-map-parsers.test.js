@@ -136,6 +136,33 @@ test("QuickTime parser reads bounded location atom text and capture date", async
   assert.equal(parsed.captureDateMs, Date.parse("2024-07-22T12:34:56Z"));
 });
 
+test("QuickTime parser prefers a structurally complete location over binary false matches", async () => {
+  const parsers = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/parsers.js");
+  const noisy = Buffer.from("-5-5+0/\0\0+38.8763-077.1918+110.587/2022-03-13T13:57:03-04:00", "ascii");
+  const parsed = parsers.parseQuickTimeLocation({ranges: [{bytes: noisy, offset: 0}]});
+
+  assert.equal(parsed.status, "located");
+  assert.equal(parsed.latitude, 38.8763);
+  assert.equal(parsed.longitude, -77.1918);
+});
+
+test("QuickTime parser ignores short binary matches and zero-coordinate placeholders", async () => {
+  const parsers = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/parsers.js");
+
+  assert.deepEqual(parsers.parseQuickTimeLocation({
+    ranges: [{bytes: Buffer.from("+0-9+0/\\0random", "ascii")}],
+  }), {
+    status: "no-location",
+    reason: "no-quicktime-location",
+  });
+  assert.deepEqual(parsers.parseQuickTimeLocation({
+    ranges: [{bytes: Buffer.from("+00.0000+000.0000/", "ascii")}],
+  }), {
+    status: "no-location",
+    reason: "no-quicktime-location",
+  });
+});
+
 test("readPhotoMapItemMetadata uses bounded ranges and preserves item identity", async () => {
   const parsers = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/parsers.js");
   const config = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/config.js");

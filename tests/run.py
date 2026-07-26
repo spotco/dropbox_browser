@@ -41,6 +41,7 @@ GROUPS: dict[str, list[str]] = {
     "windows-names": ["tests.test_listing_merge_names", "tests.test_windows_names"],
     "rclone": ["tests.test_rclone"],
     "thumbnails": ["tests.test_thumbnails"],
+    "video-thumbnails": ["tests.test_video_thumbnails"],
     "video": ["tests.test_video_endpoints", "tests.test_video_benchmark"],
     "video-endpoints": ["tests.test_video_endpoints"],
 }

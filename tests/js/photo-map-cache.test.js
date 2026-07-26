@@ -115,6 +115,30 @@ test("Photo Map cache merge reuses only matching listing identities", async () =
   assert.equal(merged.cached[0].result.cached, true);
 });
 
+test("Photo Map cache does not reuse video metadata from an older QuickTime parser", async () => {
+  const cache = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/cache.js");
+  const config = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/config.js");
+  const candidates = [{
+    path: "Camera Uploads/video.mov",
+    photoMapSourcePath: "Camera Uploads/video.mov",
+    photoMapListingSize: 10,
+    photoMapListingModifiedTime: 20,
+    photoMapMediaKind: "video",
+  }];
+  const old = cache.mergePhotoMapCacheCandidates(candidates, [{
+    path: "Camera Uploads/video.mov", size: 10, modified_time: 20,
+    media_kind: "video", status: "located", latitude: -5, longitude: -5,
+  }]);
+  assert.equal(old.cached.length, 0);
+  assert.equal(old.pending.length, 1);
+
+  const current = cache.photoMapCacheRecordForResult(candidates[0], {
+    sourcePath: candidates[0].path, mediaKind: "video", status: "located",
+    latitude: 38.8763, longitude: -77.1918, listingSize: 10, listingModifiedTime: 20,
+  });
+  assert.equal(current.quicktime_parser_version, config.PHOTO_MAP_QUICKTIME_PARSER_VERSION);
+});
+
 test("Photo Map cache client rejects oversized writes and bad responses", async () => {
   const cache = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/cache.js");
   const config = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/config.js");

@@ -726,6 +726,51 @@ export function initPhotoMap(options) {
     requestThumbnails([item], {selectedPath: path});
   }
 
+  function capturePreviewContext() {
+    var map = mapController && mapController.map;
+    var center = map && typeof map.getCenter === 'function' ? map.getCenter() : null;
+    var popupGrid = doc.querySelector('.photo-map-group-grid');
+    return {
+      center: center && Number.isFinite(Number(center.lat)) && Number.isFinite(Number(center.lng))
+        ? {lat: Number(center.lat), lng: Number(center.lng)} : null,
+      zoom: map && typeof map.getZoom === 'function' ? map.getZoom() : null,
+      popupPath: mapController && typeof mapController.getActivePopupPath === 'function'
+        ? mapController.getActivePopupPath() : null,
+      selectedThumbnailPath: selectedThumbnailPath,
+      selectedGroupedMemberPath: selectedGroupedMemberPath,
+      groupScrollTop: popupGrid ? popupGrid.scrollTop : null,
+    };
+  }
+
+  function restorePreviewContext(context) {
+    if (!context) return;
+    var map = mapController && mapController.map;
+    if (map && context.center && typeof map.setView === 'function') {
+      var restoreZoom = Number.isFinite(Number(context.zoom)) ? Number(context.zoom) : map.getZoom();
+      map.setView([context.center.lat, context.center.lng], restoreZoom, {animate: false});
+    }
+    selectedThumbnailPath = String(context.selectedThumbnailPath || '');
+    selectedGroupedMemberPath = String(context.selectedGroupedMemberPath || '');
+    if (context.popupPath && mapController && typeof mapController.openPopupForPath === 'function') {
+      mapController.openPopupForPath(context.popupPath);
+      var restorePopupState = function () {
+        if (context.selectedGroupedMemberPath && activeGroupedPopup &&
+            Array.isArray(activeGroupedPopup.group.photoMapGroupMembers)) {
+          var selectedMember = activeGroupedPopup.group.photoMapGroupMembers.find(function (member) {
+            return itemSourcePath(member) === context.selectedGroupedMemberPath;
+          });
+          if (selectedMember) selectGroupedMember(activeGroupedPopup.group, selectedMember);
+        }
+        var popupGrid = doc.querySelector('.photo-map-group-grid');
+        if (popupGrid && Number.isFinite(Number(context.groupScrollTop))) {
+          popupGrid.scrollTop = Number(context.groupScrollTop);
+        }
+      };
+      if (typeof win.requestAnimationFrame === 'function') win.requestAnimationFrame(restorePopupState);
+      else win.setTimeout(restorePopupState, 0);
+    }
+  }
+
   function requestThumbnails(items, options) {
     var config = options || {};
     if (!active) return Promise.resolve({results: [], aborted: true, queued: false});
@@ -797,6 +842,8 @@ export function initPhotoMap(options) {
   win.DropboxBrowserPhotoMap.setDebugEnabled = setDebugEnabled;
   win.DropboxBrowserPhotoMap.isDebugEnabled = function () { return debugEnabled; };
   win.DropboxBrowserPhotoMap.getMap = function () { return mapController ? mapController.map : null; };
+  win.DropboxBrowserPhotoMap.capturePreviewContext = capturePreviewContext;
+  win.DropboxBrowserPhotoMap.restorePreviewContext = restorePreviewContext;
   win.DropboxBrowserPhotoMap.invalidateSize = invalidateMapSize;
   win.DropboxBrowserPhotoMap.destroyMap = destroyMap;
   win.DropboxBrowserPhotoMap.activate = activate;

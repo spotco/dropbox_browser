@@ -34,6 +34,7 @@ from .streaming import (
 )
 from .syncjobs import SyncJobManager
 from .thumbnails import ThumbnailResult, is_thumbnailable_image, thumbnail_source_for_row
+from .video_thumbnails import VideoThumbnailResult, is_video_thumbnailable, video_thumbnail_source_for_row
 from .video import (
     HLS_INIT_SEGMENT_NAME,
     VIDEO_ENDPOINT_PREFIX,
@@ -60,6 +61,7 @@ from .views import (
     folder_page_title,
     icon_for_entry,
     page_html,
+    preview_html,
 )
 
 
@@ -156,6 +158,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             parsed = urlparse(self.path)
             if parsed.path == "/":
                 self.render_index(parsed.query)
+            elif parsed.path == "/preview":
+                self.render_preview(parsed.query)
             elif parsed.path == "/browse/endpoints/listing":
                 self.serve_browse_listing_endpoint(parsed.query)
             elif parsed.path == "/browse/endpoints/search":
@@ -193,12 +197,16 @@ class RequestHandler(BaseHTTPRequestHandler):
             parsed = urlparse(self.path)
             if parsed.path == "/":
                 self.render_index(parsed.query, head_only=True)
+            elif parsed.path == "/preview":
+                self.render_preview(parsed.query, head_only=True)
             elif parsed.path == "/file":
                 self.serve_file(parsed.query, inline=True, head_only=True)
             elif parsed.path == "/download":
                 self.serve_file(parsed.query, inline=False, head_only=True)
             elif parsed.path == "/thumbnail":
                 self.serve_thumbnail(parsed.query, head_only=True)
+            elif parsed.path == VIDEO_ENDPOINT_PREFIX + "thumbnail":
+                self.serve_video_thumbnail(parsed.query, head_only=True)
             elif parsed.path.startswith(ASSET_ROUTE_PREFIX):
                 self.serve_asset(parsed.path, head_only=True)
             else:
@@ -307,6 +315,23 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_html(
             HTTPStatus.OK,
             body,
+            head_only=head_only,
+        )
+
+    def render_preview(self, query: str, head_only: bool = False) -> None:
+        params = parse_qs(query, keep_blank_values=True)
+        rel_path = clean_rel_path(params.get("path", [""])[0])
+        source = params.get("source", ["remote"])[0]
+        if source != "remote":
+            raise BrowserError(HTTPStatus.BAD_REQUEST, "Only remote video previews are supported.")
+        if not rel_path:
+            raise BrowserError(HTTPStatus.NOT_FOUND, "Media preview is not available for this file type.")
+        media_kind = "video" if is_video_thumbnailable(rel_path, False) else "photo" if is_thumbnailable_image(rel_path, False) else None
+        if media_kind is None:
+            raise BrowserError(HTTPStatus.NOT_FOUND, "Media preview is not available for this file type.")
+        self.send_html(
+            HTTPStatus.OK,
+            preview_html(rel_path=rel_path, source=source, media_kind=media_kind),
             head_only=head_only,
         )
 
@@ -613,6 +638,40 @@ class RequestHandler(BaseHTTPRequestHandler):
             raise BrowserError(HTTPStatus.NOT_FOUND, result.error_message or "Thumbnail is unavailable.")
         raise BrowserError(HTTPStatus.NOT_FOUND, "Thumbnail was not found.")
 
+    def serve_video_thumbnail(self, query: str, head_only: bool = False) -> None:
+        params = parse_qs(query, keep_blank_values=True)
+        rel_path = clean_rel_path(params.get("path", [""])[0])
+        source = params.get("source", ["remote"])[0]
+        service = self.app.video_thumbnail_service
+        if service is None:
+            raise BrowserError(HTTPStatus.NOT_FOUND, "Video thumbnail service is unavailable.")
+        descriptor = service.descriptor_for_path(rel_path, source)
+        input_url = None
+        if source == "remote":
+            port = int(self.server.server_address[1])  # type: ignore[attr-defined]
+            input_url = f"http://127.0.0.1:{port}/file?" + urlencode({
+                "path": rel_path,
+                "source": "remote",
+            })
+        result = service.ensure_thumbnail(descriptor, remote_input_url=input_url)
+        self._send_video_thumbnail_result(result, head_only=head_only)
+
+    def _send_video_thumbnail_result(self, result: VideoThumbnailResult, *, head_only: bool = False) -> None:
+        if result.ok:
+            assert result.path is not None
+            body_size = result.path.stat().st_size
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "image/jpeg")
+            self._send_no_store_headers()
+            self.send_header("Content-Length", str(body_size))
+            self.end_headers()
+            if not head_only:
+                self.wfile.write(result.path.read_bytes())
+            return
+        if result.status == "unsupported":
+            raise BrowserError(HTTPStatus.NOT_FOUND, "Video thumbnail is not available for this file type.")
+        raise BrowserError(HTTPStatus.NOT_FOUND, result.error_message or "Video thumbnail is unavailable.")
+
     def serve_logs(self, query: str) -> None:
         params = parse_qs(query)
         since = int(params.get("since", ["0"])[0])
@@ -656,10 +715,16 @@ class RequestHandler(BaseHTTPRequestHandler):
         current_file_statuses = ((current_folder_cache or {}).get("file_statuses") or {}) if self.app.local_root else {}
         source = "remote" if row["remote"] else "local"
         preview_query = urlencode({"path": child_path, "source": source})
-        preview_href = None if is_dir else "/file?" + preview_query
+        original_file_href = None if is_dir else "/file?" + preview_query
         download_href = None if is_dir else "/download?" + preview_query
         folder_href = "/?" + urlencode({"path": child_path}) if is_dir else None
         thumbnailable = is_thumbnailable_image(name, is_dir)
+        video_thumbnailable = is_video_thumbnailable(name, is_dir)
+        preview_href = (
+            "/preview?" + preview_query
+            if not is_dir and video_thumbnailable and source == "remote"
+            else original_file_href
+        )
         local_copy_path = None
         if self.app.local_root and row.get("local"):
             local_copy_path = row.get("local_path") or str(self.app.local_display_path(child_path) or safe_join_local(self.app.local_root, child_path))
@@ -708,6 +773,13 @@ class RequestHandler(BaseHTTPRequestHandler):
         thumbnail_href = None
         if thumbnail_source is not None:
             thumbnail_href = "/thumbnail?" + urlencode({"path": child_path, "source": thumbnail_source})
+        video_thumbnail_source = video_thumbnail_source_for_row(row, status_label=status) if video_thumbnailable else None
+        video_thumbnail_href = None
+        if video_thumbnail_source is not None:
+            video_thumbnail_href = "/video/endpoints/thumbnail?" + urlencode({
+                "path": child_path,
+                "source": video_thumbnail_source,
+            })
 
         sort_date_value = (
             row.get("cached_mtime")
@@ -732,6 +804,10 @@ class RequestHandler(BaseHTTPRequestHandler):
             "thumbnailable": thumbnailable,
             "thumbnail_source": thumbnail_source,
             "thumbnail_href": thumbnail_href,
+            "video_thumbnailable": video_thumbnailable,
+            "video_thumbnail_source": video_thumbnail_source,
+            "video_thumbnail_href": video_thumbnail_href,
+            "media_kind": "video" if video_thumbnailable else "photo" if thumbnailable else None,
             "status_label": status,
             "status_class": status_class(status),
             "remote": bool(row["remote"]),
@@ -748,6 +824,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             "sort_date": float(sort_date_value),
             "local_copy_path": local_copy_path,
             "preview_href": preview_href,
+            "original_file_href": original_file_href,
             "download_href": download_href,
             "folder_href": folder_href,
             "sync": {
@@ -1298,6 +1375,9 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def serve_video_endpoint(self, path: str, query: str) -> None:
         endpoint = path.removeprefix(VIDEO_ENDPOINT_PREFIX)
+        if endpoint == "thumbnail":
+            self.serve_video_thumbnail(query)
+            return
         if endpoint == "probe":
             params = parse_qs(query, keep_blank_values=True)
             source = params.get("source", ["remote"])[0]

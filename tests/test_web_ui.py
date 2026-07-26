@@ -992,7 +992,7 @@ class WebUiTests(AppTestCase):
         self.assertIn('value="all">All time</option>', html)
         self.assertIn('id="photo-map-custom-range"', html)
         self.assertIn('id="photo-map-refresh"', html)
-        self.assertIn('id="photo-map-status" class="photo-map-status" role="status" aria-live="polite"', html)
+        self.assertIn('id="photo-map-status" class="photo-map-status" data-state="idle" aria-busy="false" role="status" aria-live="polite"', html)
         self.assertIn('id="photo-map-map" class="photo-map-map" role="application"', html)
         self.assertIn('id="video-player-pane" class="bottom-pane-view hidden" data-pane-mode="video-player" hidden', html)
         self.assertIn('class="video-player-shell music-player-shell"', html)

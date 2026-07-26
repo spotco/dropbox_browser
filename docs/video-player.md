@@ -15,8 +15,9 @@ in `assets/js/log.js` and `assets/app.css`. **Video-only playback** (HLS,
 tracks, subtitles, focused playback layout, controls, diagnostics) stays under
 `dropbox_browser/assets/js/video/`.
 
-Server logic: `dropbox_browser/video.py`, `dropbox_browser/media_library.py`
-(recursive library listing), and `dropbox_browser/handlers.py`. Client entry:
+Server logic: `dropbox_browser/video.py`, `dropbox_browser/video_thumbnails.py`,
+`dropbox_browser/media_library.py` (recursive library listing), and
+`dropbox_browser/handlers.py`. Client entry:
 `dropbox_browser/assets/js/video.js`.
 
 ## Request Flow
@@ -53,10 +54,12 @@ loads `media-library.css` from the page shell.
 | Endpoint routing, JSON/VTT/HLS asset responses | `handlers.py` (`serve_video_endpoint`, `serve_video_endpoint_post`) |
 | Recursive library listing (folder-cache walk, video extensions) | `media_library.py` via `video_library_payload` in `video.py` |
 | Probe, subtitle extraction, HLS session lifecycle | `video.py` |
+| On-demand video poster generation | `video_thumbnails.py` (ffmpeg, dedicated video cache) |
 | Disk caches for probe, subtitles, header bytes | `videocache.py` (`DiskCacheStore`) |
 | Remote file byte streaming used as ffmpeg input | `/file` route + `streaming.py` |
 | ffmpeg/ffprobe discovery | `config.py` (`video_tools_config`) |
-| HTML shell and asset delivery | `views.py` |
+| HTML shell, durable `/preview` page, and asset delivery | `views.py` + `preview.html` |
+| Photo Map click-to-play overlay | `assets/js/photo-map-preview.js` + `photo-map-preview.css` |
 
 Generated state under `Temp/` (not source artifacts):
 
@@ -65,6 +68,10 @@ Generated state under `Temp/` (not source artifacts):
 - `Temp/probe_cache/` — ffprobe JSON cache
 - `Temp/video_header_cache/` — header byte cache for probe acceleration
 - `Temp/video_debug.jsonl` — server diagnostics when `LogVideoDebug` is enabled
+
+Video poster JPEGs are cached under `ThumbnailCache/video/<prefix>/<prefix>/`.
+This cache is separate from Photo Map metadata/cache state and thumbnail
+generation never clears or rewrites the Photo Map cache.
 
 Video-related config in `config.json` / `config_local.json`:
 
@@ -88,6 +95,12 @@ Video-related config in `config.json` / `config_local.json`:
 - `VideoBackpressureHighWaterSeconds` — high watermark for heavy throttling.
 - `VideoBackpressureMaxWaterSeconds` — max watermark where future server-side
   input pausing can stop background encode-ahead work.
+- `VideoThumbnailEnabled` — enable ffmpeg-generated poster frames for supported
+  video rows.
+- `VideoThumbnailSize` — square poster edge in pixels (bounded to 16–1024).
+- `VideoThumbnailMaxInputBytes` — independent source-size limit for poster
+  generation; it is not the image-thumbnail 64 MB guard.
+- `VideoThumbnailTimeoutSeconds` — per-poster ffmpeg timeout.
 
 Current shipped defaults are tuned from playback and CPU benchmark checks:
 `readrate=1.1`, `initial_burst=18`, `catchup=1.3`, automatic ffmpeg thread
@@ -122,11 +135,20 @@ events observed during the run.
 
 All routes are under `/video/endpoints/`.
 
+The durable browser-compatible viewer is `GET/HEAD /preview?path=&source=remote`.
+It never places an HLS session id in the URL. The standalone page and the Photo
+Map overlay use `assets/js/photo-map-preview.js` as one common media surface:
+images display their poster directly, while videos create a fresh HLS session
+only after the user clicks Play. A fatal first HLS attempt gets one bounded
+forced-transcode retry before the viewer reports failure. The original remains available through
+`/download` (and the raw `/file` link in `original_file_href`).
+
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `library?path=` | Recursive video library from folder-cache (shared builder; poll until complete) |
 | GET | `status` | Report ffmpeg/ffprobe availability plus session summaries and aggregate limits |
 | GET | `probe?path=` | Return ffprobe metadata (streams, duration, codecs) |
+| GET/HEAD | `thumbnail?path=&source=` | Generate/serve a cached JPEG poster for a supported video |
 | GET | `subtitles?path=&track=` | Extract one subtitle stream to WebVTT |
 | GET | `subtitles/all?path=` | Batch-extract all WebVTT-compatible subtitle tracks |
 | GET | `session/file?id=&name=` | Serve HLS playlist, init segment, or media segment |

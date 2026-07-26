@@ -106,6 +106,17 @@ class PhotoMapCacheTests(AppTestCase):
         self.assertEqual(payload["entries"][0]["path"], record["path"])
         self.assertEqual(payload["entries"][0]["latitude"], 40.5)
 
+    def test_cache_preserves_video_parser_version_for_non_destructive_migration(self) -> None:
+        cache = PhotoMapCache()
+        record = cache_record(path="Camera Uploads/video.mov")
+        record["media_kind"] = "video"
+        record["quicktime_parser_version"] = "quicktime-iso6709-v3"
+
+        cache.write_batch("Camera Uploads", [record])
+        stored = cache.read("Camera Uploads")
+
+        self.assertEqual(stored[0]["quicktime_parser_version"], "quicktime-iso6709-v3")
+
     def test_cache_endpoint_rejects_traversal_and_oversized_batches(self) -> None:
         app = self._build_app(SimulatedRclone(), local_root=None, workers=1)
         with TestServer(app) as server:

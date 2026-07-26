@@ -47,6 +47,7 @@ export function readLoadedThumbnailSrc(link) {
   if (!link || typeof link.querySelector !== "function") return "";
   const icon = link.querySelector(".file-icon[data-thumbnail-href]");
   if (!icon || typeof icon.getAttribute !== "function") return "";
+  if (icon.getAttribute("data-thumbnail-kind") === "video") return "";
   const thumbnailHref = icon.getAttribute("data-thumbnail-href") || "";
   if (!thumbnailHref) return "";
   if (icon.getAttribute("data-thumbnail-state") !== "loaded") return "";

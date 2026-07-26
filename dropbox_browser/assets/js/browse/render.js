@@ -27,11 +27,17 @@ function renderNameCell(row) {
   var href = row.kind === 'folder' ? row.folder_href : row.preview_href;
   var iconClasses = 'file-icon';
   var thumbnailAttrs = '';
-  if (row.thumbnailable && row.thumbnail_href) {
+  var thumbnailHref = row.video_thumbnailable && row.video_thumbnail_href
+    ? row.video_thumbnail_href
+    : row.thumbnailable && row.thumbnail_href ? row.thumbnail_href : '';
+  var thumbnailKind = row.video_thumbnailable && row.video_thumbnail_href ? 'video' : 'photo';
+  if (thumbnailHref) {
     iconClasses += ' file-icon-thumbnail';
+    if (thumbnailKind === 'video') iconClasses += ' file-icon-video-thumbnail';
     thumbnailAttrs =
-      ' data-thumbnail-href="' + esc(row.thumbnail_href) + '"' +
-      ' data-thumbnail-source="' + esc(row.thumbnail_source || '') + '"' +
+      ' data-thumbnail-href="' + esc(thumbnailHref) + '"' +
+      ' data-thumbnail-kind="' + esc(thumbnailKind) + '"' +
+      ' data-thumbnail-source="' + esc(thumbnailKind === 'video' ? (row.video_thumbnail_source || '') : (row.thumbnail_source || '')) + '"' +
       ' data-thumbnail-state="idle"';
   }
   return '<a class="name" href="' + esc(href) + '" title="' + esc(row.display_name) + '">' +

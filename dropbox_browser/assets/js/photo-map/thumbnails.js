@@ -1,10 +1,13 @@
 import {PHOTO_MAP_THUMBNAIL_CONCURRENCY} from './config.js';
 import {runPhotoMapMetadataQueue} from './queue.js';
 
-export function buildPhotoMapThumbnailUrl(sourcePath) {
+export function buildPhotoMapThumbnailUrl(sourcePath, mediaKind) {
   var params = new URLSearchParams();
   params.set('path', String(sourcePath || ''));
   params.set('source', 'remote');
+  if (String(mediaKind || 'photo') === 'video') {
+    return '/video/endpoints/thumbnail?' + params.toString();
+  }
   return '/thumbnail?' + params.toString();
 }
 
@@ -32,18 +35,20 @@ export function selectPhotoMapThumbnailItems(items, options) {
     var metadata = metadataForItem(item, config.metadataResults);
     var visible = visiblePaths.has(path) || selectedPath === path || item.photoMapVisible === true || item.photoMapSelected === true;
     if (!path || seen.has(path) || !visible || !metadata || metadata.status !== 'located') return;
-    if ((metadata.mediaKind || item.photoMapMediaKind) !== 'photo') return;
+    var mediaKind = String((metadata.mediaKind || item.photoMapMediaKind) || 'photo');
+    if (mediaKind !== 'photo' && mediaKind !== 'video') return;
     seen.add(path);
     results.push(Object.assign({}, item, {
-      photoMapThumbnailUrl: buildPhotoMapThumbnailUrl(path),
+      photoMapThumbnailUrl: buildPhotoMapThumbnailUrl(path, mediaKind),
+      photoMapThumbnailKind: mediaKind,
     }));
   });
   return results;
 }
 
-export function loadPhotoMapThumbnail(imageFactory, sourcePath, signal) {
+export function loadPhotoMapThumbnail(imageFactory, sourcePath, signal, mediaKind) {
   var image = imageFactory();
-  var url = buildPhotoMapThumbnailUrl(sourcePath);
+  var url = buildPhotoMapThumbnailUrl(sourcePath, mediaKind);
   return new Promise(function (resolve, reject) {
     var settled = false;
     function finish(callback, value) {
@@ -73,7 +78,12 @@ export function runPhotoMapThumbnailQueue(items, options) {
   var loader = config.loader;
   if (typeof loader !== 'function') {
     loader = function (item, signal) {
-      return loadPhotoMapThumbnail(config.imageFactory, item.photoMapSourcePath || item.path, signal);
+      return loadPhotoMapThumbnail(
+        config.imageFactory,
+        item.photoMapSourcePath || item.path,
+        signal,
+        item.mediaKind || item.photoMapMediaKind,
+      );
     };
   }
   return runPhotoMapMetadataQueue(items, async function (item, signal) {
@@ -101,7 +111,12 @@ export function createPhotoMapThumbnailScheduler(options) {
   var loader = typeof config.loader === 'function'
     ? config.loader
     : function (item, signal) {
-      return loadPhotoMapThumbnail(config.imageFactory, item.photoMapSourcePath || item.path, signal);
+      return loadPhotoMapThumbnail(
+        config.imageFactory,
+        item.photoMapSourcePath || item.path,
+        signal,
+        item.mediaKind || item.photoMapMediaKind,
+      );
     };
   var onState = typeof config.onState === 'function' ? config.onState : function () {};
   var onResult = typeof config.onResult === 'function' ? config.onResult : function () {};
@@ -119,8 +134,9 @@ export function createPhotoMapThumbnailScheduler(options) {
     return String((item && (item.photoMapSourcePath || item.path)) || '');
   }
 
-  function isPhoto(item) {
-    return String((item && (item.mediaKind || item.photoMapMediaKind)) || 'photo') === 'photo';
+  function isThumbnailable(item) {
+    var kind = String((item && (item.mediaKind || item.photoMapMediaKind)) || 'photo');
+    return kind === 'photo' || kind === 'video';
   }
 
   function isAbort(error, signal) {
@@ -248,10 +264,13 @@ export function createPhotoMapThumbnailScheduler(options) {
     var next = new Map();
     (Array.isArray(items) ? items : []).forEach(function (item, index) {
       var path = itemPath(item);
-      if (!path || !isPhoto(item)) return;
+      if (!path || !isThumbnailable(item)) return;
       var candidate = {
         path: path,
-        item: Object.assign({}, item, {photoMapThumbnailUrl: buildPhotoMapThumbnailUrl(path)}),
+        item: Object.assign({}, item, {
+          photoMapThumbnailUrl: buildPhotoMapThumbnailUrl(path, item.mediaKind || item.photoMapMediaKind),
+          photoMapThumbnailKind: item.mediaKind || item.photoMapMediaKind || 'photo',
+        }),
         priority: priorityFor(item, selectedPath, index),
         sequence: sequence++,
       };

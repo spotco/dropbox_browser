@@ -10,23 +10,18 @@ function isGroupableMedia(item) {
   return kind === 'photo' || kind === 'video';
 }
 
-function isPhoto(item) {
-  return String((item && (item.mediaKind || item.photoMapMediaKind)) || 'photo') === 'photo';
-}
-
-function newestPhotoTimestamp(item) {
+function newestMediaTimestamp(item) {
   var listingDate = Number(item && (item.listingDateMs || item.photoMapListingDateMs));
   if (Number.isFinite(listingDate)) return listingDate;
   var captureDate = Number(item && item.captureDateMs);
   return Number.isFinite(captureDate) ? captureDate : -Infinity;
 }
 
-function newestPhotoMember(members) {
+function newestThumbnailMember(members) {
   var newest = null;
   var newestTimestamp = -Infinity;
   members.forEach(function (item) {
-    if (!isPhoto(item)) return;
-    var timestamp = newestPhotoTimestamp(item);
+    var timestamp = newestMediaTimestamp(item);
     // Keep the source ordering as a stable tiebreaker. Candidates are already
     // newest-first by listing date before they reach the grouping helper.
     if (!newest || timestamp > newestTimestamp) {
@@ -75,7 +70,7 @@ function groupedRecord(group) {
   var members = group.members.slice();
   var center = averageCenter(members);
   var firstPath = pathForItem(members[0]);
-  var thumbnailMember = newestPhotoMember(members);
+  var thumbnailMember = newestThumbnailMember(members);
   var videoCount = members.filter(function (item) {
     return String((item && (item.mediaKind || item.photoMapMediaKind)) || 'photo') === 'video';
   }).length;
@@ -90,7 +85,7 @@ function groupedRecord(group) {
     photoMapGroupVideoCount: videoCount,
     photoMapGroupPhotoCount: members.length - videoCount,
     photoMapGroupMembers: members,
-    // The group itself is represented by one ordinary photo thumbnail.  Keep
+    // The group itself is represented by one newest-media thumbnail. Keep
     // its source member explicit so the shared browser scheduler can request
     // and update only that thumbnail while the pin is visible.
     photoMapGroupThumbnailPath: thumbnailMember ? pathForItem(thumbnailMember) : '',
