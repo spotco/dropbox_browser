@@ -80,7 +80,7 @@ test("Photo Map grouping preserves order, metadata, and large group counts", asy
   assert.equal(result[0].photoMapGroupId, "photo-map-group:00.jpg");
 });
 
-test("Photo Map grouping chooses the newest photo as its pin-thumbnail member", async () => {
+test("Photo Map grouping chooses the newest media as its pin-thumbnail member", async () => {
   const grouping = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/grouping.js");
   const items = [
     Object.assign(photo("older.jpg", 39, -77), {photoMapListingDateMs: 100}),
@@ -93,7 +93,7 @@ test("Photo Map grouping chooses the newest photo as its pin-thumbnail member", 
   ];
 
   const [group] = grouping.groupPhotoMapItems(items, 20);
-  assert.equal(group.photoMapGroupThumbnailPath, "newest.jpg");
+  assert.equal(group.photoMapGroupThumbnailPath, "video-newest.mov");
   assert.equal(group.photoMapThumbnailUrl, "");
   assert.equal(group.photoMapThumbnailState, "");
 });

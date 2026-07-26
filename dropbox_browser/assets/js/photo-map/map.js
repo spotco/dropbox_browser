@@ -986,6 +986,18 @@ export function createPhotoMap(L, element, options) {
     map: map,
     markerLayer: markerLayer,
     getActivePopupPath: function () { return activePopupPath; },
+    refreshPopupListenersForPath: function (path) {
+      var entry = markerEntries.get(String(path || ''));
+      if (!entry || !isGroupedPhoto(entry.item)) return false;
+      // Preview overlays can temporarily take the browser history through a
+      // different URL without closing Leaflet's popup. In that case Leaflet
+      // does not emit another popupopen event, so explicitly rebind the
+      // delegated group handlers to the currently mounted popup DOM.
+      var root = popupElementFor(entry.marker);
+      if (!root) return false;
+      attachGroupedPopupListeners(entry);
+      return !!entry.groupGrid;
+    },
     openPopupForPath: function (path) {
       var entry = markerEntries.get(String(path || ''));
       if (!entry || !entry.marker || typeof entry.marker.openPopup !== 'function') return false;
