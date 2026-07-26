@@ -760,7 +760,12 @@ export function initPhotoMap(options) {
         if (typeof mapController.refreshPopupListenersForPath === 'function') {
           mapController.refreshPopupListenersForPath(context.popupPath);
         }
-        if (context.selectedGroupedMemberPath && activeGroupedPopup &&
+        // The popup can be clicked before this animation-frame callback runs.
+        // In that case the user's newer selection has already updated the
+        // host path and must win over the stale preview context.
+        if (context.selectedGroupedMemberPath &&
+            selectedGroupedMemberPath === String(context.selectedGroupedMemberPath) &&
+            activeGroupedPopup &&
             Array.isArray(activeGroupedPopup.group.photoMapGroupMembers)) {
           var selectedMember = activeGroupedPopup.group.photoMapGroupMembers.find(function (member) {
             return itemSourcePath(member) === context.selectedGroupedMemberPath;
