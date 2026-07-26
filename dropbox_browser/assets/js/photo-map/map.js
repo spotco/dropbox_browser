@@ -644,8 +644,9 @@ export function createPhotoMap(L, element, options) {
     entry.groupPopupClick = null;
   }
 
-  function attachGroupedPopupListeners(entry, event) {
+  function attachGroupedPopupListeners(entry, event, options) {
     if (!isGroupedPhoto(entry.item)) return;
+    var notifyOpen = !options || options.notifyOpen !== false;
     detachGroupedPopupListeners(entry);
     entry.groupPopupElement = popupElementFor(entry.marker, event);
     var grid = groupGridFor(entry);
@@ -676,7 +677,7 @@ export function createPhotoMap(L, element, options) {
       grid.addEventListener('click', entry.groupGridClick);
       grid.addEventListener('scroll', entry.groupGridScroll);
     }
-    if (typeof config.onGroupedPopupOpen === 'function') {
+    if (notifyOpen && typeof config.onGroupedPopupOpen === 'function') {
       config.onGroupedPopupOpen(entry.item, visibleGroupedMembers(entry));
     }
   }
@@ -995,7 +996,7 @@ export function createPhotoMap(L, element, options) {
       // delegated group handlers to the currently mounted popup DOM.
       var root = popupElementFor(entry.marker);
       if (!root) return false;
-      attachGroupedPopupListeners(entry);
+      attachGroupedPopupListeners(entry, null, {notifyOpen: false});
       return !!entry.groupGrid;
     },
     openPopupForPath: function (path) {
