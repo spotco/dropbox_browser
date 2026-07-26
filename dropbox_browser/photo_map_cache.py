@@ -137,6 +137,11 @@ def _validate_record(record: object, folder: str) -> dict[str, Any]:
     reason = record.get("reason")
     if reason is not None and (not isinstance(reason, str) or len(reason) > 128):
         raise _bad("Photo Map reason must be a short string or null.")
+    quicktime_parser_version = record.get("quicktime_parser_version")
+    if quicktime_parser_version is not None and (
+        not isinstance(quicktime_parser_version, str) or len(quicktime_parser_version) > 128
+    ):
+        raise _bad("Photo Map QuickTime parser version must be a short string or null.")
 
     normalized = {
         "path": path,
@@ -152,6 +157,8 @@ def _validate_record(record: object, folder: str) -> dict[str, Any]:
         "listing_date_ms": listing_date_ms,
         "reason": reason,
     }
+    if quicktime_parser_version is not None:
+        normalized["quicktime_parser_version"] = quicktime_parser_version
     normalized["cache_key"] = photo_map_cache_key(path, size, modified_time)
     return normalized
 

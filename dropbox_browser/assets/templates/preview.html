@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/assets/app.css">
+  <link rel="stylesheet" href="/assets/css/photo-map-preview.css">
+  <title>Video Preview: ${title}</title>
+</head>
+<body class="photo-map-preview-page" data-preview-path="${path_attr}" data-preview-source="${source_attr}" data-preview-kind="${kind_attr}">
+  <main class="photo-map-preview-page-shell" aria-labelledby="photo-map-preview-title">
+    <div class="photo-map-preview-page-header">
+      <h1 id="photo-map-preview-title">${title}</h1>
+      <a class="photo-map-preview-download" href="${download_href}">Download Original</a>
+    </div>
+    <div id="photo-map-preview-status" class="photo-map-preview-status" role="status" aria-live="polite">Click Play to prepare compatible playback.</div>
+    <section id="photo-map-preview-surface" class="photo-map-preview-surface" aria-label="Video preview">
+      <img id="photo-map-preview-poster" class="photo-map-preview-page-poster" src="${poster_href}" alt="Video poster" loading="eager">
+      <video id="photo-map-preview-video" class="photo-map-preview-page-video" controls playsinline preload="metadata" muted></video>
+      <button type="button" id="photo-map-preview-play" class="photo-map-preview-play-button" aria-label="Play video">&#9654; <span>Play</span></button>
+      <button type="button" id="photo-map-preview-mute" class="photo-map-preview-mute-button" aria-label="Unmute video" title="Unmute video">&#128263;</button>
+    </section>
+    <p><a href="/">Return to browser</a></p>
+  </main>
+  <script type="module" src="/assets/js/photo-map-preview.js"></script>
+</body>
+</html>

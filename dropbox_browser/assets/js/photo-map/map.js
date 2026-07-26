@@ -1,4 +1,3 @@
-import {buildPhotoMapFileUrl} from './parsers.js';
 
 export const PHOTO_MAP_TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 export const PHOTO_MAP_TILE_ATTRIBUTION = '&copy; OpenStreetMap contributors';
@@ -78,12 +77,13 @@ function markerAccessibleLabel(item) {
 }
 
 function markerIconHtml(item, state) {
-  if (mediaKind(item) === 'video') return '';
   var label = escapeHtml(markerLabel(item));
   var url = item && item.photoMapThumbnailUrl;
+  var video = mediaKind(item) === 'video';
   var thumbnail = url
-    ? '<img class="photo-map-marker-thumbnail-image" src="' + escapeHtml(url) +
-      '" alt="Thumbnail for ' + label + '">'
+    ? '<span class="photo-map-marker-poster"><img class="photo-map-marker-thumbnail-image" src="' + escapeHtml(url) +
+      '" alt="Thumbnail for ' + label + '">' +
+      (video ? '<span class="photo-map-video-play" aria-hidden="true">&#9654;</span>' : '') + '</span>'
     : '<span class="photo-map-marker-thumbnail-loading" role="status" aria-label="Loading thumbnail">' +
       '<span aria-hidden="true">&hellip;</span></span>';
   var stateName = state || (url ? 'ready' : 'loading');
@@ -123,11 +123,14 @@ function groupedMarkerIconHtml(item, state) {
   var label = escapeHtml(markerAccessibleLabel(item));
   var thumbnailPath = String(item && item.photoMapGroupThumbnailPath || '');
   var url = item && item.photoMapThumbnailUrl;
+  var thumbnailMember = groupThumbnailMember(item);
+  var thumbnailIsVideo = mediaKind(thumbnailMember) === 'video';
   var stateName = state || (url ? 'ready' : 'loading');
   var cardContents = thumbnailPath
     ? (url
-      ? '<img class="photo-map-group-marker-thumbnail" src="' + escapeHtml(url) +
-        '" alt="Thumbnail for newest photo in group: ' + label + '">'
+      ? '<span class="photo-map-group-marker-poster"><img class="photo-map-group-marker-thumbnail" src="' + escapeHtml(url) +
+        '" alt="Thumbnail for newest media in group: ' + label + '">' +
+        (thumbnailIsVideo ? '<span class="photo-map-video-play" aria-hidden="true">&#9654;</span>' : '') + '</span>'
       : '<span class="photo-map-group-marker-thumbnail-loading" role="status" aria-label="Loading newest group thumbnail">' +
         '<span aria-hidden="true">&hellip;</span></span>')
     : '<span class="photo-map-group-marker-symbol" aria-hidden="true">&#9638;</span>';
@@ -142,7 +145,7 @@ function groupedMarkerIconHtml(item, state) {
 }
 
 function markerIcon(L, item, state) {
-  if (typeof L.divIcon !== 'function' || mediaKind(item) === 'video') return null;
+  if (typeof L.divIcon !== 'function') return null;
   if (isGroupedPhoto(item)) {
     var tier = groupedPhotoTier(item);
     var dimensions = tier === 'large' ? {size: 104, height: 116} :
@@ -180,8 +183,13 @@ function groupedMemberLoadingMarkup(item) {
 function groupedMemberMediaMarkup(item) {
   var label = escapeHtml(markerLabel(item));
   if (mediaKind(item) === 'video') {
-    return '<span class="photo-map-group-grid-media photo-map-group-grid-video-placeholder" role="img" ' +
-      'aria-label="Video thumbnail unavailable"><span aria-hidden="true">&#9654;</span></span>';
+    var videoUrl = item && item.photoMapThumbnailUrl;
+    if (!videoUrl) return '<span class="photo-map-group-grid-media">' + groupedMemberLoadingMarkup(item) + '</span>';
+    var videoPoster = videoUrl
+      ? '<span class="photo-map-media-poster"><img class="photo-map-group-grid-thumbnail" src="' + escapeHtml(videoUrl) +
+        '" alt="Thumbnail for ' + label + '"><span class="photo-map-video-play" aria-hidden="true">&#9654;</span></span>'
+      : '<span class="photo-map-group-grid-video-placeholder" role="img" aria-label="Loading video thumbnail"><span aria-hidden="true">&#9654;</span></span>';
+    return '<span class="photo-map-group-grid-media">' + videoPoster + '</span>';
   }
   var url = item && item.photoMapThumbnailUrl;
   var media = url
@@ -193,8 +201,13 @@ function groupedMemberMediaMarkup(item) {
 function groupedMemberGridItem(item) {
   var path = escapeHtml(groupMemberPath(item));
   var label = escapeHtml(markerLabel(item));
+  var failedVideoPoster = mediaKind(item) === 'video' && !item.photoMapThumbnailUrl;
+  var actionLabel = failedVideoPoster ? 'Open video preview for ' + label : 'Show details for ' + label;
+  var previewAttrs = failedVideoPoster
+    ? ' data-photo-map-preview-path="' + path + '" data-photo-map-preview-source="remote" data-photo-map-preview-kind="video"'
+    : '';
   return '<button type="button" class="photo-map-group-grid-item" data-photo-map-group-member-path="' + path +
-    '" aria-label="Show details for ' + label + '">' +
+    '" aria-label="' + escapeHtml(actionLabel) + '"' + previewAttrs + '>' +
     groupedMemberGridContents(item) +
     '</button>';
 }
@@ -217,10 +230,12 @@ function groupedMemberDetails(item) {
   var thumbnailUrl = item && item.photoMapThumbnailUrl;
   var mediaPreview;
   if (mediaKind(item) === 'video') {
-    mediaPreview = '<div class="photo-map-preview-video" role="img" aria-label="Video thumbnail unavailable">' +
-      '<span class="photo-map-preview-video-icon" aria-hidden="true">&#9654;</span>' +
-      '<span>Video thumbnail unavailable</span></div>' +
-      previewLink(item, 'Open video preview', 'Open full preview for ' + filename);
+    mediaPreview = thumbnailUrl
+      ? previewLink(item, '<span class="photo-map-media-poster photo-map-preview-poster"><img class="photo-map-preview-thumbnail" src="' +
+        escapeHtml(thumbnailUrl) + '" alt="Thumbnail for ' + label + '"><span class="photo-map-video-play" aria-hidden="true">&#9654;</span></span>',
+        'Open full preview for ' + filename)
+      : previewLink(item, previewThumbnailFallback(item),
+        'Open full preview for ' + filename);
   } else if (thumbnailUrl) {
     mediaPreview = previewLink(item, '<img class="photo-map-preview-thumbnail" src="' + escapeHtml(thumbnailUrl) +
       '" alt="Thumbnail for ' + label + '">', 'Open full preview for ' + filename);
@@ -237,8 +252,16 @@ function groupedMemberDetails(item) {
       '<dt>Capture date</dt><dd>' + escapeHtml(detailValue(captureDate)) + '</dd>' +
       '<dt>Listing date</dt><dd>' + escapeHtml(listingDateLabel(item)) + '</dd>' +
     '</dl>' +
-    '<button type="button" class="photo-map-group-selection-back" data-photo-map-group-back="true">Back to group overview</button>' +
+    '<button type="button" class="photo-map-group-selection-back" data-photo-map-group-back="true">Close preview</button>' +
     '</div>';
+}
+
+function previewThumbnailFallback(item) {
+  if (String((item && item.photoMapThumbnailState) || '') === 'error') {
+    return '<span class="photo-map-preview-loading">Thumbnail unavailable</span>';
+  }
+  return '<span class="photo-map-preview-loading photo-map-preview-thumbnail-placeholder" role="status" aria-label="Loading thumbnail">' +
+    '<span aria-hidden="true">Loading thumbnail&hellip;</span></span>';
 }
 
 function groupedPopupMarkup(item) {
@@ -276,8 +299,14 @@ function mediaKind(item) {
 }
 
 function previewLink(item, content, label) {
+  var path = item && (item.photoMapSourcePath || item.path);
+  var params = new URLSearchParams();
+  params.set('path', path || '');
+  params.set('source', 'remote');
+  params.set('kind', mediaKind(item));
+  var href = '/preview?' + params.toString();
   return '<a class="photo-map-preview-link" href="' +
-    escapeHtml(buildPhotoMapFileUrl(item && (item.photoMapSourcePath || item.path))) +
+    escapeHtml(href) +
     '" target="_blank" rel="noopener noreferrer" aria-label="' + escapeHtml(label) +
     '">' + content + '</a>';
 }
@@ -319,17 +348,20 @@ function markerPopup(item) {
     return groupedPopupMarkup(item);
   }
   var mediaPreview;
-  if (thumbnailUrl) {
+  if (thumbnailUrl && mediaKind(item) === 'video') {
+    mediaPreview = previewLink(item,
+      '<span class="photo-map-media-poster photo-map-preview-poster"><img class="photo-map-preview-thumbnail" src="' +
+        escapeHtml(thumbnailUrl) + '" alt="Thumbnail for ' + label + '"><span class="photo-map-video-play" aria-hidden="true">&#9654;</span></span>',
+      'Open full preview for ' + filename);
+  } else if (thumbnailUrl) {
     mediaPreview = previewLink(item,
       '<img class="photo-map-preview-thumbnail" src="' + escapeHtml(thumbnailUrl) +
         '" alt="Thumbnail for ' + label + '">',
       'Open full preview for ' + filename,
     );
   } else if (mediaKind(item) === 'video') {
-    mediaPreview = '<div class="photo-map-preview-video" role="img" aria-label="Video thumbnail unavailable">' +
-      '<span class="photo-map-preview-video-icon" aria-hidden="true">&#9654;</span>' +
-      '<span>Video thumbnail unavailable</span></div>' +
-      previewLink(item, 'Open video preview', 'Open full preview for ' + filename);
+    mediaPreview = previewLink(item, previewThumbnailFallback(item),
+      'Open full preview for ' + filename);
   } else {
     mediaPreview = previewLink(item, '<span class="photo-map-preview-loading">Thumbnail loading&hellip;</span>',
       'Open full preview for ' + filename);
@@ -923,13 +955,14 @@ export function createPhotoMap(L, element, options) {
   }
   function setMarkerThumbnailState(path, state) {
     var entry = markerEntries.get(String(path || ''));
-    if (!entry || mediaKind(entry.item) === 'video' || isGroupedPhoto(entry.item)) return false;
+    if (!entry || isGroupedPhoto(entry.item)) return false;
     var nextState = String(state || 'loading');
     entry.item = Object.assign({}, entry.item, {photoMapThumbnailState: nextState});
     if (typeof entry.marker.setIcon === 'function') {
       var nextIcon = markerIcon(L, entry.item, nextState);
       if (nextIcon) entry.marker.setIcon(nextIcon);
     }
+    updatePopupContent(entry);
     return true;
   }
   function setGroupedMemberThumbnailState(path, state) {
@@ -952,6 +985,13 @@ export function createPhotoMap(L, element, options) {
   return {
     map: map,
     markerLayer: markerLayer,
+    getActivePopupPath: function () { return activePopupPath; },
+    openPopupForPath: function (path) {
+      var entry = markerEntries.get(String(path || ''));
+      if (!entry || !entry.marker || typeof entry.marker.openPopup !== 'function') return false;
+      entry.marker.openPopup();
+      return true;
+    },
     invalidateSize: function () { map.invalidateSize({debounceMoveend: true}); },
     setMarkerItems: setMarkerItems,
     setMarkerThumbnail: setMarkerThumbnail,

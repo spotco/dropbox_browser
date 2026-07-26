@@ -256,6 +256,7 @@ def browse_script_tags(client_render: bool) -> str:
         '<script type="module" src="/assets/js/music.js"></script>',
         '<script type="module" src="/assets/js/video.js"></script>',
         '<script type="module" src="/assets/js/photo-map.js"></script>',
+        '<script type="module" src="/assets/js/photo-map-preview.js"></script>',
         '<script src="/assets/js/refresh.js"></script>',
         '<script src="/assets/js/sync.js"></script>',
     ]
@@ -412,6 +413,22 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         client_log_enabled_attr="1" if bool(getattr(app, "client_log_enabled", True)) else "0",
         client_log_subsystems_attr=html.escape(json.dumps(client_log_subsystems, sort_keys=True), quote=True),
         browse_script_tags=browse_script_tags(client_render),
+    )
+
+
+def preview_html(*, rel_path: str, source: str, media_kind: str = "video") -> str:
+    title = posixpath.basename(rel_path) or "Media Preview"
+    query = urlencode({"path": rel_path, "source": source})
+    poster_query = urlencode({"path": rel_path, "source": source})
+    poster_endpoint = "/thumbnail?" if media_kind == "photo" else "/video/endpoints/thumbnail?"
+    return _render_template(
+        "preview.html",
+        title=html.escape(title),
+        path_attr=html.escape(rel_path, quote=True),
+        source_attr=html.escape(source, quote=True),
+        kind_attr=html.escape(media_kind, quote=True),
+        download_href=html.escape("/download?" + query, quote=True),
+        poster_href=html.escape(poster_endpoint + poster_query, quote=True),
     )
 
 

@@ -16,7 +16,7 @@ from typing import Any
 from contextlib import nullcontext
 
 from . import syncstate, workertrace
-from .config import ThumbnailConfig, VideoToolsConfig
+from .config import THUMBNAIL_CACHE_DIR, ThumbnailConfig, VideoToolsConfig
 from .errors import BrowserError
 from .formatting import file_type, parse_rclone_time
 from .foldercache_compute import parse_direct_listing
@@ -27,6 +27,7 @@ from .photo_map_cache import PhotoMapCache
 from .paths import remote_target, safe_join_local
 from .rclone import RcloneClient
 from .thumbnails import ThumbnailService
+from .video_thumbnails import VideoThumbnailService
 from .windows_names import (
     decode_rclone_literal_escapes,
     decode_rclone_literal_escapes_path,
@@ -425,6 +426,7 @@ class DropboxBrowser:
             "music-metadata": False,
         }
         self._thumbnail_service: ThumbnailService | None = None
+        self._video_thumbnail_service: VideoThumbnailService | None = None
         self._video_session_manager: Any | None = None
         self.sync_jobs: Any | None = None
         self._search_session_manager = CachedSearchSessionManager(self)
@@ -444,6 +446,20 @@ class DropboxBrowser:
                 self.thumbnail_config,
             )
         return self._thumbnail_service
+
+    @property
+    def video_thumbnail_service(self) -> VideoThumbnailService | None:
+        if self.video_tools_config is None:
+            return None
+        if self._video_thumbnail_service is None:
+            self._video_thumbnail_service = VideoThumbnailService(
+                self.rclone,
+                self.remote,
+                self.local_root,
+                self.video_tools_config,
+                cache_dir=self.thumbnail_config.cache_dir if self.thumbnail_config is not None else THUMBNAIL_CACHE_DIR,
+            )
+        return self._video_thumbnail_service
 
     def shutdown(self) -> None:
         for manager in (

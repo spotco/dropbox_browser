@@ -1,5 +1,6 @@
 import {
   PHOTO_MAP_CACHE_BATCH_LIMIT,
+  PHOTO_MAP_QUICKTIME_PARSER_VERSION,
 } from './config.js';
 
 export function buildPhotoMapCacheEndpoint(folderPath) {
@@ -38,7 +39,8 @@ export async function writePhotoMapCache(fetchImpl, folderPath, entries, signal)
 
 export function photoMapCacheRecordForResult(item, result) {
   var sourcePath = String((result && (result.sourcePath || result.path)) || (item && item.path) || '');
-  return {
+  var mediaKind = (result && result.mediaKind) || (item && item.photoMapMediaKind) || null;
+  var record = {
     path: sourcePath,
     source_path: sourcePath,
     size: result && Number.isFinite(result.listingSize)
@@ -48,7 +50,7 @@ export function photoMapCacheRecordForResult(item, result) {
       ? result.listingModifiedTime
       : (item && Number.isFinite(item.photoMapListingModifiedTime) ? item.photoMapListingModifiedTime : null),
     status: String((result && result.status) || 'error'),
-    media_kind: (result && result.mediaKind) || (item && item.photoMapMediaKind) || null,
+    media_kind: mediaKind,
     latitude: result && Number.isFinite(result.latitude) ? result.latitude : null,
     longitude: result && Number.isFinite(result.longitude) ? result.longitude : null,
     capture_date: (result && result.captureDate) || null,
@@ -58,6 +60,8 @@ export function photoMapCacheRecordForResult(item, result) {
       : (item && Number.isFinite(item.photoMapListingDateMs) ? item.photoMapListingDateMs : null),
     reason: (result && result.reason) || null,
   };
+  if (mediaKind === 'video') record.quicktime_parser_version = PHOTO_MAP_QUICKTIME_PARSER_VERSION;
+  return record;
 }
 
 function sameIdentity(item, record) {
@@ -68,6 +72,9 @@ function sameIdentity(item, record) {
   var recordSize = Number.isFinite(record.size) ? record.size : null;
   var itemModified = Number.isFinite(item.photoMapListingModifiedTime) ? item.photoMapListingModifiedTime : null;
   var recordModified = Number.isFinite(record.modified_time) ? record.modified_time : null;
+  if (item.photoMapMediaKind === 'video' && record.quicktime_parser_version !== PHOTO_MAP_QUICKTIME_PARSER_VERSION) {
+    return false;
+  }
   return itemSize === recordSize && itemModified === recordModified;
 }
 

@@ -142,6 +142,10 @@ the smallest fix, rerun that test, then run the relevant group. See
 
 ## Debugging
 
+- For interactive browser inspection and local UI verification, use the **Brave
+  DevTools MCP** (`mcp__brave_devtools__*`) and select the existing app tab with
+  `list_pages` / `select_page`. Do not use the unavailable in-app Browser
+  binding for this repository's Brave session.
 - Client-side browser logs can be reported to `POST /client-log` and written to
   `Temp/client_logs.jsonl`.
 - Client logging is controlled by `ClientLogEnabled` and
