@@ -411,6 +411,11 @@ test("Photo Map grouped popup selects video member details and keeps a safe grid
     photoMapGroupMembers: [member],
   }]);
   marker.trigger("popupopen", {popup: {getElement() { return root; }}});
+  // A preview overlay can restore the URL while Leaflet keeps this popup
+  // mounted and therefore skips a second popupopen event. The public refresh
+  // hook must restore delegated grid handling in that case.
+  listeners["grid-click"] = null;
+  assert.equal(controller.refreshPopupListenersForPath("group"), true);
   grid.scrollTop = 180;
   // Progressive marker reconciliation replaces Leaflet popup content. The
   // grouped grid must reattach its delegated listeners to the replacement.

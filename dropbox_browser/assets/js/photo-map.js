@@ -753,7 +753,13 @@ export function initPhotoMap(options) {
     selectedGroupedMemberPath = String(context.selectedGroupedMemberPath || '');
     if (context.popupPath && mapController && typeof mapController.openPopupForPath === 'function') {
       mapController.openPopupForPath(context.popupPath);
+      if (typeof mapController.refreshPopupListenersForPath === 'function') {
+        mapController.refreshPopupListenersForPath(context.popupPath);
+      }
       var restorePopupState = function () {
+        if (typeof mapController.refreshPopupListenersForPath === 'function') {
+          mapController.refreshPopupListenersForPath(context.popupPath);
+        }
         if (context.selectedGroupedMemberPath && activeGroupedPopup &&
             Array.isArray(activeGroupedPopup.group.photoMapGroupMembers)) {
           var selectedMember = activeGroupedPopup.group.photoMapGroupMembers.find(function (member) {
