@@ -208,6 +208,7 @@ function groupedMemberGridItem(item) {
     ? ' data-photo-map-preview-path="' + path + '" data-photo-map-preview-source="remote" data-photo-map-preview-kind="video"'
     : '';
   return '<button type="button" class="photo-map-group-grid-item" data-photo-map-group-member-path="' + path +
+    '" data-photo-map-thumbnail-state="' + escapeHtml(String(item.photoMapThumbnailState || 'loading')) +
     '" aria-label="' + escapeHtml(actionLabel) + '"' + previewAttrs + '>' +
     groupedMemberGridContents(item) +
     '</button>';
@@ -387,6 +388,13 @@ function markerPopup(item) {
   '</article>';
 }
 
+function popupContentElement(documentImpl, item) {
+  if (!documentImpl || typeof documentImpl.createElement !== 'function') return null;
+  var content = documentImpl.createElement('div');
+  content.innerHTML = markerPopup(item);
+  return content.firstElementChild || content.firstChild || content;
+}
+
 export function createPhotoMap(L, element, options) {
   var config = options || {};
   var debug = createPhotoMapDebugLogger(config);
@@ -452,6 +460,50 @@ export function createPhotoMap(L, element, options) {
   var layerEntries = new Map();
   var layerSyncDeferred = false;
   var activePopupPath = null;
+  var popupDiagnostics = {
+    rootMounts: 0,
+    listenerAttaches: 0,
+    listenerDetaches: 0,
+    viewportFitRequests: 0,
+    viewportFitPasses: 0,
+    viewportFitPans: 0,
+    viewportFitNoops: 0,
+    viewportFitCoalesced: 0,
+  };
+  var popupFitFrame = null;
+  var popupFitEntry = null;
+  var popupFitVersion = 0;
+  function thumbnailForPath(path) {
+    var wanted = String(path || '');
+    if (!wanted) return null;
+    return typeof config.getThumbnailForPath === 'function'
+      ? config.getThumbnailForPath(wanted) || null : null;
+  }
+
+  function presentMember(member) {
+    if (!member) return member;
+    var thumbnail = thumbnailForPath(groupMemberPath(member));
+    if (!thumbnail) return member;
+    return Object.assign({}, member, {
+      photoMapThumbnailUrl: thumbnail.url || '',
+      photoMapThumbnailState: thumbnail.state || 'ready',
+    });
+  }
+
+  function presentItem(item) {
+    if (!item) return item;
+    if (isGroupedPhoto(item)) {
+      var members = (Array.isArray(item.photoMapGroupMembers) ? item.photoMapGroupMembers : [])
+        .map(presentMember);
+      var presented = Object.assign({}, item, {photoMapGroupMembers: members});
+      return withGroupThumbnailPresentation(presented);
+    }
+    var thumbnail = thumbnailForPath(itemPath(item));
+    return thumbnail ? Object.assign({}, item, {
+      photoMapThumbnailUrl: thumbnail.url || '',
+      photoMapThumbnailState: thumbnail.state || 'ready',
+    }) : item;
+  }
 
   function visibleMarkerItems() {
     var bounds = typeof map.getBounds === 'function' ? map.getBounds() : null;
@@ -481,7 +533,10 @@ export function createPhotoMap(L, element, options) {
   }
 
   function updatePopupContent(entry) {
-    var popup = markerPopup(entry.item);
+    if (isGroupedPhoto(entry && entry.item) && entry.groupPopupElement) {
+      syncPopupContentRoot(entry);
+    }
+    var popup = markerPopup(presentItem(entry.item));
     // Progressive metadata reconciliation visits every marker.  A grouped
     // popup's grid is a native scroll target, so replacing equivalent markup
     // after each unrelated result destroys an in-progress scrollbar drag.
@@ -491,7 +546,6 @@ export function createPhotoMap(L, element, options) {
     var groupedPopupWasOpen = isGroupedPhoto(entry && entry.item) && !!entry.groupPopupElement;
     var groupedPopupScrollTop = null;
     var groupedPopupSelectedPath = '';
-    var existingGroupedPopupElement = groupedPopupWasOpen ? entry.groupPopupElement : null;
     if (groupedPopupWasOpen) {
       if (entry.groupGrid) {
         var currentScrollTop = Number(entry.groupGrid.scrollTop);
@@ -504,28 +558,19 @@ export function createPhotoMap(L, element, options) {
       // arriving.
       detachGroupedPopupListeners(entry);
     }
-    if (groupedPopupWasOpen && existingGroupedPopupElement &&
-        typeof existingGroupedPopupElement.querySelector === 'function') {
-      var contentElement = existingGroupedPopupElement.querySelector('.leaflet-popup-content');
-      if (contentElement) {
-        contentElement.innerHTML = popup;
-        entry.popupMarkup = popup;
-        entry.groupPopupElement = existingGroupedPopupElement;
-        attachGroupedPopupListeners(entry);
-        if (groupedPopupScrollTop !== null && entry.groupGrid) {
-          entry.groupGrid.scrollTop = groupedPopupScrollTop;
-        }
-        if (groupedPopupSelectedPath) showGroupedMember(entry, groupedPopupSelectedPath);
-        return;
+    if (entry.popupContent && typeof entry.marker.setPopupContent === 'function') {
+      entry.popupContent.innerHTML = popup;
+      entry.marker.setPopupContent(entry.popupContent);
+      entry.popupMarkup = popup;
+      if (groupedPopupWasOpen) attachGroupedPopupListeners(entry);
+      if (groupedPopupWasOpen && groupedPopupScrollTop !== null && entry.groupGrid) {
+        entry.groupGrid.scrollTop = groupedPopupScrollTop;
       }
-      entry.groupPopupElement = null;
+      if (groupedPopupWasOpen && groupedPopupSelectedPath) showGroupedMember(entry, groupedPopupSelectedPath);
+      return true;
     }
-    if (typeof entry.marker.setPopupContent === 'function') {
+    if (entry.popupContent && typeof entry.marker.setPopupContent === 'function') {
       entry.marker.setPopupContent(popup);
-    } else if (typeof entry.marker.bindPopup === 'function') {
-      // This fallback is only for older/test doubles. Leaflet's normal path
-      // updates the existing popup without replacing the marker binding.
-      entry.marker.bindPopup(popup);
     }
     entry.popupMarkup = popup;
     if (groupedPopupWasOpen) {
@@ -535,6 +580,23 @@ export function createPhotoMap(L, element, options) {
       }
       if (groupedPopupSelectedPath) showGroupedMember(entry, groupedPopupSelectedPath);
     }
+  }
+
+  function updatePopupWithoutAutoPan(popup, update) {
+    if (!popup || typeof update !== 'function') return false;
+    var options = popup.options;
+    if (!options || options.autoPan === false) {
+      update();
+      return true;
+    }
+    var autoPan = options.autoPan;
+    options.autoPan = false;
+    try {
+      update();
+    } finally {
+      options.autoPan = autoPan;
+    }
+    return true;
   }
 
   function popupElementFor(marker, event) {
@@ -549,53 +611,54 @@ export function createPhotoMap(L, element, options) {
   // instance's layout, then pan the map using the resulting DOM bounds.
   function updateOpenPopupViewport(entry) {
     if (!entry || !entry.groupPopupElement) return false;
+    syncPopupContentRoot(entry);
+    popupDiagnostics.viewportFitRequests += 1;
     var popup = entry.groupPopup;
     if (!popup && entry.marker && typeof entry.marker.getPopup === 'function') {
       popup = entry.marker.getPopup();
     }
-    if (!popup || (typeof popup.update !== 'function' &&
-        typeof popup._updateLayout !== 'function')) return false;
+    if (!popup || typeof popup.update !== 'function') return false;
+    entry.groupLayoutVersion = Number(entry.groupLayoutVersion || 0) + 1;
+    popupFitEntry = entry;
+    popupFitVersion = entry.groupLayoutVersion;
+    if (popupFitFrame !== null) {
+      popupDiagnostics.viewportFitCoalesced += 1;
+      return true;
+    }
+    var windowImpl = config.window || (typeof window !== 'undefined' ? window : null);
     var refresh = function () {
-      if (!entry.groupPopupElement) return;
-      // Leaflet's public update() always calls _updateContent(), replacing
-      // the mounted grid with popup._content. Group selection and thumbnail
-      // cells are intentionally updated in place, so use Leaflet 1.9's
-      // layout/position steps directly. This keeps the current popup DOM
-      // while still sizing and anchoring it before the manual viewport pan.
-      var layoutUpdated = false;
-      if (typeof popup._updateLayout === 'function') {
-        popup._updateLayout();
-        layoutUpdated = true;
+      popupFitFrame = null;
+      var fitEntry = popupFitEntry;
+      var fitVersion = popupFitVersion;
+      popupFitEntry = null;
+      if (!fitEntry || !fitEntry.groupPopupElement || fitEntry.groupLayoutVersion !== fitVersion) return;
+      var fitPopup = fitEntry.groupPopup;
+      if (!fitPopup && fitEntry.marker && typeof fitEntry.marker.getPopup === 'function') {
+        fitPopup = fitEntry.marker.getPopup();
       }
-      if (typeof popup._updatePosition === 'function') {
-        popup._updatePosition();
-        layoutUpdated = true;
-      }
-      if (!layoutUpdated) {
-        // Keep compatibility with a future Leaflet version that exposes only
-        // the public API. Synchronize its source content from the live DOM so
-        // its update cannot restore stale markup.
-        var contentElement = entry.groupPopupElement.querySelector &&
-          entry.groupPopupElement.querySelector('.leaflet-popup-content');
-        if (contentElement && typeof popup.setContent === 'function') {
-          popup.setContent(contentElement.innerHTML);
-        } else {
-          popup.update();
-        }
+      if (!fitPopup) return;
+      var currentEntry = fitEntry;
+      var preservedScrollTop = currentEntry.groupGrid && Number.isFinite(Number(currentEntry.groupGrid.scrollTop))
+        ? Number(currentEntry.groupGrid.scrollTop) : null;
+      popupDiagnostics.viewportFitPasses += 1;
+      updatePopupWithoutAutoPan(fitPopup, function () { fitPopup.update(); });
+      if (preservedScrollTop !== null) {
+        var refreshedGrid = groupGridFor(currentEntry);
+        if (refreshedGrid) refreshedGrid.scrollTop = preservedScrollTop;
       }
       debug.log('group-popup-viewport-layout', {
-        path: itemPath(entry.item),
-        selectedMemberPath: entry.groupSelectedPath || '',
-        method: layoutUpdated ? 'layout-position' : 'content-synchronized-update',
+        path: itemPath(currentEntry.item),
+        selectedMemberPath: currentEntry.groupSelectedPath || '',
+        method: 'public-element-update',
       });
       if (typeof map.getContainer !== 'function' ||
-          typeof entry.groupPopupElement.getBoundingClientRect !== 'function') return;
+          typeof currentEntry.groupPopupElement.getBoundingClientRect !== 'function') return;
       var mapContainer = map.getContainer();
       if (!mapContainer || typeof mapContainer.getBoundingClientRect !== 'function' ||
           typeof map.panBy !== 'function') return;
       var panIntoView = function (attempt) {
         var mapRect = mapContainer.getBoundingClientRect();
-        var popupRect = entry.groupPopupElement.getBoundingClientRect();
+        var popupRect = currentEntry.groupPopupElement.getBoundingClientRect();
         var mapWidth = mapRect.right - mapRect.left;
         var mapHeight = mapRect.bottom - mapRect.top;
         // A popup taller/wider than its containing map cannot be fully placed
@@ -610,27 +673,30 @@ export function createPhotoMap(L, element, options) {
         if (popupRect.top < mapRect.top + padding) offsetY = popupRect.top - mapRect.top - padding;
         else if (popupRect.bottom > mapRect.bottom - padding) offsetY = popupRect.bottom - mapRect.bottom + padding;
         debug.log('group-popup-viewport-pan', {
-          path: itemPath(entry.item),
-          selectedMemberPath: entry.groupSelectedPath || '',
+          path: itemPath(currentEntry.item),
+          selectedMemberPath: currentEntry.groupSelectedPath || '',
           attempt: attempt,
           offsetX: offsetX,
           offsetY: offsetY,
         });
-        if (!offsetX && !offsetY) return;
+        if (!offsetX && !offsetY) {
+          popupDiagnostics.viewportFitNoops += 1;
+          return;
+        }
+        popupDiagnostics.viewportFitPans += 1;
         map.panBy([offsetX, offsetY], {animate: false});
         // Leaflet completes a non-animated pan synchronously, but its popup
         // transform is reconciled on the following frame. Recheck once so the
         // final visual popup bounds, rather than its pre-transform bounds,
         // determine the fit.
-        if (attempt === 0 && typeof window !== 'undefined' &&
-            typeof window.requestAnimationFrame === 'function') {
-          window.requestAnimationFrame(function () { panIntoView(1); });
+        if (attempt === 0 && windowImpl && typeof windowImpl.requestAnimationFrame === 'function') {
+          windowImpl.requestAnimationFrame(function () { panIntoView(1); });
         }
       };
       panIntoView(0);
     };
-    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-      window.requestAnimationFrame(refresh);
+    if (windowImpl && typeof windowImpl.requestAnimationFrame === 'function') {
+      popupFitFrame = windowImpl.requestAnimationFrame(refresh);
     } else {
       refresh();
     }
@@ -653,7 +719,8 @@ export function createPhotoMap(L, element, options) {
     var members = entry && Array.isArray(entry.item.photoMapGroupMembers)
       ? entry.item.photoMapGroupMembers : [];
     var wanted = String(path || '');
-    return members.find(function (member) { return groupMemberPath(member) === wanted; }) || null;
+    var member = members.find(function (candidate) { return groupMemberPath(candidate) === wanted; }) || null;
+    return presentMember(member);
   }
 
   function groupCellFor(entry, path) {
@@ -667,15 +734,18 @@ export function createPhotoMap(L, element, options) {
     return null;
   }
 
-  function renderGroupCell(cell, member) {
-    if (!cell) return false;
+function renderGroupCell(cell, member) {
+  if (!cell) return false;
     // The cell itself is the member button.  Updating it with the complete
     // item wrapper would create nested buttons and break click semantics.
-    cell.innerHTML = groupedMemberGridContents(member);
-    return true;
+  cell.innerHTML = groupedMemberGridContents(member);
+  if (typeof cell.setAttribute === 'function') {
+    cell.setAttribute('data-photo-map-thumbnail-state', String(member.photoMapThumbnailState || 'loading'));
   }
+  return true;
+}
 
-  function showGroupedMember(entry, path) {
+  function renderGroupedMemberSelection(entry, path) {
     var wanted = String(path || '');
     var member = wanted ? groupMemberFor(entry, wanted) : null;
     entry.groupSelectedPath = member ? wanted : '';
@@ -691,6 +761,30 @@ export function createPhotoMap(L, element, options) {
         }
       }
     }
+    return !!member;
+  }
+
+  function syncPopupContentRoot(entry) {
+    if (!entry || !entry.groupPopupElement || typeof entry.groupPopupElement.querySelector !== 'function') return false;
+    var contentNode = entry.groupPopupElement.querySelector('.leaflet-popup-content');
+    var currentRoot = contentNode && (contentNode.firstElementChild || contentNode.firstChild);
+    if (!currentRoot || currentRoot === entry.popupContent) return false;
+    entry.popupContent = currentRoot;
+    var popup = entry.groupPopup;
+    if (!popup && entry.marker && typeof entry.marker.getPopup === 'function') popup = entry.marker.getPopup();
+    if (popup && typeof popup.setContent === 'function') {
+      updatePopupWithoutAutoPan(popup, function () { popup.setContent(currentRoot); });
+    }
+    attachGroupedPopupListeners(entry, null, {notifyOpen: false});
+    if (entry.groupSelectedPath) renderGroupedMemberSelection(entry, entry.groupSelectedPath);
+    return true;
+  }
+
+  function showGroupedMember(entry, path) {
+    syncPopupContentRoot(entry);
+    var wanted = String(path || '');
+    var member = wanted ? groupMemberFor(entry, wanted) : null;
+    renderGroupedMemberSelection(entry, wanted);
     if (typeof config.onGroupedMemberSelect === 'function') {
       config.onGroupedMemberSelect(entry.item, member);
     }
@@ -731,16 +825,21 @@ export function createPhotoMap(L, element, options) {
 
   function detachGroupedPopupListeners(entry) {
     if (!entry) return;
+    var detached = false;
     if (entry.groupGridClick && typeof entry.groupGrid.removeEventListener === 'function') {
       entry.groupGrid.removeEventListener('click', entry.groupGridClick);
+      detached = true;
     }
     if (entry.groupGridScroll && typeof entry.groupGrid.removeEventListener === 'function') {
       entry.groupGrid.removeEventListener('scroll', entry.groupGridScroll);
+      detached = true;
     }
     if (entry.groupPopupClick && entry.groupPopupElement &&
         typeof entry.groupPopupElement.removeEventListener === 'function') {
       entry.groupPopupElement.removeEventListener('click', entry.groupPopupClick);
+      detached = true;
     }
+    if (detached) popupDiagnostics.listenerDetaches += 1;
     entry.groupGrid = null;
     entry.groupPopup = null;
     entry.groupGridClick = null;
@@ -762,15 +861,27 @@ export function createPhotoMap(L, element, options) {
   function attachGroupedPopupListeners(entry, event, options) {
     if (!isGroupedPhoto(entry.item)) return;
     var notifyOpen = !options || options.notifyOpen !== false;
-    detachGroupedPopupListeners(entry);
-    entry.groupPopup = event && event.popup;
-    if (!entry.groupPopup && entry.marker && typeof entry.marker.getPopup === 'function') {
-      entry.groupPopup = entry.marker.getPopup();
+    var popup = event && event.popup;
+    if (!popup && entry.marker && typeof entry.marker.getPopup === 'function') popup = entry.marker.getPopup();
+    var root = popupElementFor(entry.marker, {popup: popup});
+    var grid = root && typeof root.querySelector === 'function'
+      ? (root.querySelector('[data-photo-map-group-grid]') || root.querySelector('.photo-map-group-grid')) : null;
+    if (root && root === entry.groupPopupElement && grid === entry.groupGrid &&
+        entry.groupPopupClick && entry.groupGridScroll) {
+      entry.groupPopup = popup;
+      if (notifyOpen && typeof config.onGroupedPopupOpen === 'function') {
+        config.onGroupedPopupOpen(entry.item, visibleGroupedMembers(entry));
+      }
+      return;
     }
-    entry.groupPopupElement = popupElementFor(entry.marker, {popup: entry.groupPopup});
-    var grid = groupGridFor(entry);
+    detachGroupedPopupListeners(entry);
+    entry.groupPopup = popup;
+    entry.groupPopupElement = root;
+    if (entry.groupPopupElement && entry.groupPopupElement !== entry.groupPopupElementBeforeAttach) {
+      popupDiagnostics.rootMounts += 1;
+    }
+    entry.groupPopupElementBeforeAttach = entry.groupPopupElement;
     entry.groupGrid = grid;
-    var root = entry.groupPopupElement;
     if (root && typeof root.addEventListener === 'function') {
       entry.groupPopupClick = function (clickEvent) {
         handleGroupedPopupClick(entry, root, clickEvent);
@@ -781,6 +892,7 @@ export function createPhotoMap(L, element, options) {
       entry.groupGridScroll = function () { notifyGroupedPopupViewport(entry); };
       grid.addEventListener('scroll', entry.groupGridScroll);
     }
+    if (entry.groupPopupClick || entry.groupGridScroll) popupDiagnostics.listenerAttaches += 1;
     if (notifyOpen && typeof config.onGroupedPopupOpen === 'function') {
       config.onGroupedPopupOpen(entry.item, visibleGroupedMembers(entry));
     }
@@ -789,29 +901,23 @@ export function createPhotoMap(L, element, options) {
   function updateGroupedMember(entry, path, patch) {
     if (!entry || !isGroupedPhoto(entry.item)) return false;
     var wanted = String(path || '');
-    var found = false;
-    var changed = false;
-    var update = patch || {};
-    var members = (entry.item.photoMapGroupMembers || []).map(function (member) {
-      if (groupMemberPath(member) !== wanted) return member;
-      found = true;
-      changed = Object.keys(update).some(function (key) { return member[key] !== update[key]; });
-      return changed ? Object.assign({}, member, update) : member;
-    });
-    // The thumbnail scheduler re-emits cached "ready" state whenever map
-    // movement refreshes visible demand. Re-rendering an unchanged selected
-    // member would re-fit its popup, pan the map, and start that cycle again.
-    if (!found || !changed) return false;
-    var previousItem = entry.item;
-    entry.item = withGroupThumbnailPresentation(Object.assign({}, entry.item, {photoMapGroupMembers: members}));
-    // Leaflet may replace the mounted popup element while thumbnail state is
-    // reconciled. Rebind against its current root before updating a cell so
-    // member/back clicks keep working after progressive popup updates.
-    if (entry.groupPopupElement) {
-      attachGroupedPopupListeners(entry, null, {notifyOpen: false});
-    }
     var member = groupMemberFor(entry, wanted);
+    if (!member) return false;
+    if (typeof config.getThumbnailForPath !== 'function') return false;
+    var previousMember = member;
+    var previousPresentedItem = presentItem(entry.item);
+    var nextMember = groupMemberFor(entry, wanted);
+    var memberChanged = previousMember.photoMapThumbnailUrl !== nextMember.photoMapThumbnailUrl ||
+      previousMember.photoMapThumbnailState !== nextMember.photoMapThumbnailState;
+    var nextPresentedItem = presentItem(entry.item);
     var cell = groupCellFor(entry, wanted);
+    var requestedState = patch && patch.photoMapThumbnailState;
+    var renderedState = cell && typeof cell.getAttribute === 'function'
+      ? cell.getAttribute('data-photo-map-thumbnail-state') : null;
+    var cellStateChanged = requestedState !== undefined && renderedState !== String(requestedState);
+    if (!memberChanged && !cellStateChanged &&
+        !groupThumbnailPresentationChanged(previousPresentedItem, nextPresentedItem) &&
+        !(patch && patch.photoMapThumbnailUrl)) return false;
     if (cell) renderGroupCell(cell, member);
     var selected = entry.groupSelectedPath === wanted;
     if (selected) {
@@ -819,15 +925,18 @@ export function createPhotoMap(L, element, options) {
       if (selection) selection.innerHTML = groupedMemberDetails(member);
       updateOpenPopupViewport(entry);
     }
-    if (groupThumbnailPresentationChanged(previousItem, entry.item) &&
+    var presentedItem = nextPresentedItem;
+    var isGroupThumbnailPatch = String(entry.item.photoMapGroupThumbnailPath || '') === wanted &&
+      !!(patch && (patch.photoMapThumbnailUrl || patch.photoMapThumbnailState));
+    if ((groupThumbnailPresentationChanged(previousPresentedItem, presentedItem) || isGroupThumbnailPatch) &&
         typeof entry.marker.setIcon === 'function') {
-      var groupIcon = markerIcon(L, entry.item, entry.item.photoMapThumbnailState);
+      var groupIcon = markerIcon(L, presentedItem, presentedItem.photoMapThumbnailState);
       if (groupIcon) entry.marker.setIcon(groupIcon);
     }
     if (cell) {
       // This is intentionally a cell-only DOM update so loading a thumbnail
       // never replaces the scroll container that the user may be dragging.
-      entry.popupMarkup = markerPopup(entry.item);
+      entry.popupMarkup = markerPopup(presentedItem);
     } else if (!entry.groupPopupElement) {
       updatePopupContent(entry);
     }
@@ -835,7 +944,7 @@ export function createPhotoMap(L, element, options) {
   }
 
   function createMarker(path, item) {
-    var icon = markerIcon(L, item, item.photoMapThumbnailState);
+    var icon = markerIcon(L, presentItem(item), item.photoMapThumbnailState);
     var markerOptions = {
       title: markerAccessibleLabel(item),
       alt: markerAccessibleLabel(item),
@@ -843,10 +952,12 @@ export function createPhotoMap(L, element, options) {
     };
     if (icon) markerOptions.icon = icon;
     var marker = L.marker([item.latitude, item.longitude], markerOptions);
-    var popupMarkup = markerPopup(item);
+    var popupContent = popupContentElement(config.document, presentItem(item));
+    var popupMarkup = markerPopup(presentItem(item));
     var entry = {
       item: item,
       marker: marker,
+      popupContent: popupContent,
       popupMarkup: popupMarkup,
       // MarkerClusterGroup temporarily changes marker.getLatLng() while a
       // cluster is spiderfied. Keep the source coordinates separately so
@@ -865,8 +976,8 @@ export function createPhotoMap(L, element, options) {
         popupWasOpenForClick = activePopupPath === path;
       });
     }
-    if (typeof marker.bindPopup === 'function') {
-      marker.bindPopup(popupMarkup);
+    if (popupContent && typeof marker.bindPopup === 'function') {
+      marker.bindPopup(popupContent);
       debug.log('popup-bound', {path: path, hasThumbnail: !!item.photoMapThumbnailUrl});
     }
     if (typeof marker.on === 'function') {
@@ -945,21 +1056,14 @@ export function createPhotoMap(L, element, options) {
     });
     var canReconcile = typeof markerLayer.addLayer === 'function' &&
       typeof markerLayer.removeLayer === 'function';
-    if (canReconcile) {
-      removedEntries.forEach(function (entry) { markerLayer.removeLayer(entry.marker); });
-      addedEntries.forEach(function (entry) { markerLayer.addLayer(entry.marker); });
-    } else {
-      // Compatibility fallback for minimal Leaflet doubles; real
-      // MarkerClusterGroup supports incremental addLayer/removeLayer.
-      var markers = Array.from(markerEntries.values()).map(function (entry) { return entry.marker; });
-      if (typeof markerLayer.clearLayers === 'function') markerLayer.clearLayers();
-      if (typeof markerLayer.addLayers === 'function') markerLayer.addLayers(markers);
-      else markers.forEach(function (marker) { markerLayer.addLayer(marker); });
-      markerEntries.forEach(function (entry) {
-        entry.layerLatitude = entry.latitude;
-        entry.layerLongitude = entry.longitude;
-      });
-    }
+    // MarkerClusterGroup's incremental API is part of the map adapter
+    // contract. Rebuilding the whole layer is not equivalent: it can close a
+    // grouped popup, discard spiderfy state, and cause unrelated marker work
+    // to look like a viewport change. Test doubles use the same small
+    // incremental fixture as the real adapter.
+    if (!canReconcile) return false;
+    removedEntries.forEach(function (entry) { markerLayer.removeLayer(entry.marker); });
+    addedEntries.forEach(function (entry) { markerLayer.addLayer(entry.marker); });
     layerEntries = new Map(markerEntries);
     layerSyncDeferred = false;
     debug.log('marker-layer-synced', {
@@ -984,12 +1088,10 @@ export function createPhotoMap(L, element, options) {
     nextItems.forEach(function (item) {
       var path = itemPath(item);
       var previous = previousEntries.get(path);
-      var markerItem = previous && previous.item.photoMapThumbnailUrl && !item.photoMapThumbnailUrl
-        ? Object.assign({}, item, {photoMapThumbnailUrl: previous.item.photoMapThumbnailUrl})
-        : item;
-      if (previous && previous.item.photoMapThumbnailState && !item.photoMapThumbnailState) {
-        markerItem = Object.assign({}, markerItem, {photoMapThumbnailState: previous.item.photoMapThumbnailState});
-      }
+      // Thumbnail readiness is supplied by the host-owned ThumbnailStore via
+      // presentItem(). Do not copy a previous marker's thumbnail fields into
+      // the immutable catalogue item during reconciliation.
+      var markerItem = item;
       var entry = previous || createMarker(path, markerItem);
       if (previous) {
         var previousItem = entry.item;
@@ -1004,7 +1106,7 @@ export function createPhotoMap(L, element, options) {
           (!isGroupedPhoto(previousItem) || groupedPhotoCount(previousItem) !== groupedPhotoCount(markerItem) ||
             groupThumbnailPresentationChanged(previousItem, markerItem));
         if (groupedPresentationChanged && typeof entry.marker.setIcon === 'function') {
-          var groupedIcon = markerIcon(L, markerItem, markerItem.photoMapThumbnailState);
+        var groupedIcon = markerIcon(L, presentItem(markerItem), markerItem.photoMapThumbnailState);
           if (groupedIcon) entry.marker.setIcon(groupedIcon);
         }
         var coordinatesChangedForEntry = itemCoordinatesChanged(entry, markerItem);
@@ -1121,6 +1223,10 @@ export function createPhotoMap(L, element, options) {
     map: map,
     markerLayer: markerLayer,
     getActivePopupPath: function () { return activePopupPath; },
+    getMarkerItem: function (path) {
+      var entry = markerEntries.get(String(path || ''));
+      return entry ? entry.item : null;
+    },
     getDebugState: function () {
       var entry = activePopupPath ? markerEntries.get(activePopupPath) : null;
       var popup = entry && (entry.groupPopup || (entry.marker && typeof entry.marker.getPopup === 'function'
@@ -1141,20 +1247,10 @@ export function createPhotoMap(L, element, options) {
           selection.querySelector('.photo-map-group-selection-details')),
         gridMemberCount: grid && typeof grid.querySelectorAll === 'function'
           ? grid.querySelectorAll('[data-photo-map-group-member-path]').length : 0,
+        gridScrollTop: grid && Number.isFinite(Number(grid.scrollTop)) ? Number(grid.scrollTop) : null,
+        popupDiagnostics: Object.assign({}, popupDiagnostics),
         recentEvents: debug.events(),
       };
-    },
-    refreshPopupListenersForPath: function (path) {
-      var entry = markerEntries.get(String(path || ''));
-      if (!entry || !isGroupedPhoto(entry.item)) return false;
-      // Preview overlays can temporarily take the browser history through a
-      // different URL without closing Leaflet's popup. In that case Leaflet
-      // does not emit another popupopen event, so explicitly rebind the
-      // delegated group handlers to the currently mounted popup DOM.
-      var root = popupElementFor(entry.marker);
-      if (!root) return false;
-      attachGroupedPopupListeners(entry, null, {notifyOpen: false});
-      return !!entry.groupGrid;
     },
     showGroupedMemberForPath: function (path, memberPath) {
       var entry = markerEntries.get(String(path || ''));

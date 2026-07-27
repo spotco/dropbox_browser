@@ -182,12 +182,29 @@ Add E2E diagnostic helpers that expose store entries, demand updates (with
 reasons), active/pending paths, popup-root identity, selected path, scrollTop,
 and fit-pass count. Keep transport logs summary-only and feature-gated.
 
+Phase 0 finding from the current synthetic preview-close flow: the mounted group
+grid, selected member, and scroll position can survive while the scheduler's
+`desiredPaths` becomes empty. This is evidence of the state split, not an
+acceptable steady state. Phase 1 must make an active grouped popup an explicit
+demand source and keep its selected/visible members represented until the popup
+actually closes; the E2E should then strengthen from checking diagnostic shape
+to requiring the selected/open-group paths to remain desired.
+
 ### Phase 1 — Extract store and make scheduler monotonic
 
 Introduce `ThumbnailStore` behind the current API, migrate map pin and group
 updates to read it, and add demand-delta comparison/cancellation reasons. This
 phase should not redesign popup HTML. It provides the invariant that a ready
 group tile cannot regress to loading during a preview close.
+
+Phase 1 implementation finding: map-bounds visibility is not authoritative while
+a grouped Leaflet popup is mounted. During preview restoration, marker/cluster
+bounds can lag behind the popup DOM for a frame, so the active popup must remain
+an explicit demand source until the popup-close lifecycle event. The follow-up
+E2E now asserts both the active group identity and the selected member's demand;
+future refactors must preserve that distinction between a transient viewport
+refresh and a real popup close. The store also deliberately retains only
+path/status/URL data, never the loader's DOM `Image` object.
 
 ### Phase 2 — Make grouped popup state path-based and rendering stable
 
@@ -196,11 +213,48 @@ with the path-based popup record. Consolidate listener setup and tile patching.
 Remove `updateGroupedMember`'s responsibility for replacing member objects and
 rebinding popup listeners once the new renderer owns it.
 
+Phase 2 implementation finding: the map adapter can resolve the current group
+and member catalogue from paths while reading thumbnail presentation through a
+host-owned `getThumbnailForPath` callback. This keeps scheduler state out of
+`markerEntries`; the adapter only retains a small fallback presentation map for
+standalone map test doubles that do not provide the shared store. Thumbnail
+completion must still explicitly patch the live cell even when the store is
+already ready, because the store update happens before the adapter callback and
+the mounted DOM may still contain the loading markup. Repeated state-only
+updates remain no-ops. The stable-root test now verifies one listener attach and
+zero detachments across popup reconciliation and thumbnail completion.
+
+The remaining compatibility boundary is popup content replacement when the
+current catalogue itself changes, plus the private Leaflet layout calls used by
+viewport fitting. Phase 3 should remove unconditional popup reinitialization
+from preview restore and characterize/coalesce the public popup update path
+before removing those private calls.
+
 ### Phase 3 — Make preview restore and popup fitting idempotent
 
 Route every overlay exit through one restore operation. Remove unconditional
 `setView`, popup reopening, and demand refreshes. Introduce coalesced,
 measurement-based fitting and programmatic-fit suppression.
+
+Phase 3 implementation finding: the vendored Leaflet 1.9.4 public popup path
+preserves an application-owned HTMLElement root, but `setContent`/`update`
+also run Leaflet's automatic pan logic. The Photo Map adapter now keeps the
+grouped preview root mounted, synchronizes Leaflet to a root if an external
+reconciliation replaced the content child, and snapshots/restores the grid
+scroll position around public updates. It temporarily disables popup
+`autoPan` during programmatic content/layout updates, then performs one
+coalesced measurement-based fit with at most one corrective animation-frame
+pass. This prevents a member click or preview close from producing a chain of
+automatic and corrective `moveend` events.
+
+The E2E characterization now covers both ordinary preview close and an
+explicit content-child replacement: the selected member/details must survive,
+the mixed-media grid and scroll position must remain intact, and the outer
+grouped popup root must remain the same DOM object during preview restore.
+The remaining Phase 4 follow-up is to remove or isolate the private Leaflet
+layout fallback used only when standalone map test doubles do not supply the
+public HTMLElement path, and to keep the real-browser characterization as the
+vendor-upgrade boundary.
 
 ### Phase 4 — Remove compatibility paths and prove boundaries
 
@@ -208,6 +262,38 @@ Delete obsolete duplicate thumbnail fields, stale-popup fallbacks, and private
 Leaflet method calls. Keep only concise diagnostic counters and the documented
 test hooks. Run the focused suites followed by the Photo Map E2Es and the full
 JS test suite before merging the refactor.
+
+Phase 4 implementation finding: the real Photo Map path now fits grouped
+popups exclusively through the public Leaflet `Popup.update()` contract. The
+private layout branch and the unused explicit popup-listener refresh hook were
+removed, and marker reconciliation no longer copies a previous marker's
+thumbnail URL/state into the current catalogue item. A source-level test now
+guards the absence of `_updateLayout` and `_updatePosition` from the map
+adapter, while the browser E2Es continue to verify the public behavior.
+
+The remaining compatibility surface is intentionally limited to standalone
+map test doubles. The adapter no longer
+keeps a `thumbnailOverrides` map; unit fixtures now provide the same
+path-keyed thumbnail callback used by the host. Because the store update can
+precede the adapter callback, grouped cells carry a presentation-only state
+attribute so a real state transition still patches the live cell while an
+identical ready/error notification remains a no-op. A follow-up Phase 4
+cleanup replaces the remaining popup-string doubles with a shared
+DOM-backed fixture; do not reintroduce private Leaflet coupling to support
+test doubles.
+
+Phase 4 cleanup finding: the cluster-layer rebuild fallback has now been
+removed. `MarkerClusterGroup.addLayer()` and `removeLayer()` are the adapter
+contract because rebuilding the complete layer can close a grouped popup,
+discard spiderfy state, and make unrelated markers look like a viewport
+change. The JS fixtures now expose the same incremental methods, and a source
+boundary test prevents `clearLayers()`/`addLayers()` from returning through the
+map adapter. Popup binding is now HTMLElement-only: the real host and all map
+unit fixtures provide a document, and the map adapter no longer binds or
+updates a string popup. The shared fixture intentionally serializes
+`innerHTML` for assertions while keeping the application contract DOM-shaped;
+future work should extend that fixture only when a missing DOM behavior is
+needed, not add another map rendering fallback.
 
 ## E2E and unit-test contract
 

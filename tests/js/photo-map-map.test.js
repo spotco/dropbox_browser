@@ -1,12 +1,56 @@
 const path = require("node:path");
+const fs = require("node:fs");
 const {pathToFileURL} = require("node:url");
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const {createPhotoMapDocument, popupText} = require("./photo-map-test-fixtures");
 
 async function importModuleFromWorkspace(relativePath) {
   const absolutePath = path.resolve(__dirname, "..", "..", relativePath);
   return import(pathToFileURL(absolutePath).href);
 }
+
+function createPhotoMap(mapModule, fakeLeaflet, options) {
+  return mapModule.createPhotoMap(fakeLeaflet, "map-element", Object.assign({
+    document: createPhotoMapDocument(),
+  }, options || {}));
+}
+
+function thumbnailPresentationFixture() {
+  const values = new Map();
+  return {
+    getThumbnailForPath(path) {
+      return values.get(String(path || "")) || null;
+    },
+    set(path, patch) {
+      const wanted = String(path || "");
+      const previous = values.get(wanted) || {};
+      values.set(wanted, Object.assign({}, previous, patch));
+    },
+  };
+}
+
+function applyThumbnail(fixture, controller, path, patch) {
+  fixture.set(path, {url: patch.url || "", state: patch.state || "ready"});
+  return controller.setGroupedMemberThumbnail(path, patch);
+}
+
+function applyThumbnailState(fixture, controller, path, state) {
+  fixture.set(path, {state: state});
+  return controller.setGroupedMemberThumbnailState(path, state);
+}
+
+test("Photo Map popup fitting uses only Leaflet public popup methods", () => {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, "..", "..", "dropbox_browser/assets/js/photo-map/map.js"),
+    "utf8",
+  );
+  assert.doesNotMatch(source, /_updateLayout|_updatePosition/);
+  assert.doesNotMatch(source, /thumbnailOverrides|refreshPopupListenersForPath/);
+  assert.doesNotMatch(source, /clearLayers\(\)|addLayers\(/);
+  assert.doesNotMatch(source, /popupContent \|\| popupMarkup/);
+  assert.doesNotMatch(source, /bindPopup\(popup\)/);
+});
 
 test("Photo Map creates a Leaflet map with direct tiles and cluster layer", async () => {
   const mapModule = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/map.js");
@@ -28,7 +72,7 @@ test("Photo Map creates a Leaflet map with direct tiles and cluster layer", asyn
     },
   };
 
-  const controller = mapModule.createPhotoMap(fakeLeaflet, "map-element");
+  const controller = createPhotoMap(mapModule, fakeLeaflet);
   controller.invalidateSize();
   controller.destroy();
 
@@ -55,7 +99,7 @@ test("Photo Map cluster badges sum represented grouped media", async () => {
     divIcon(options) { return options; },
   };
 
-  mapModule.createPhotoMap(fakeLeaflet, "map-element");
+  createPhotoMap(mapModule, fakeLeaflet);
   const icon = clusterOptions.iconCreateFunction({
     getAllChildMarkers() {
       return [
@@ -119,8 +163,8 @@ test("Photo Map renders located media into markers and fits once to useful bound
   };
   const markerLayer = {
     addTo() {},
-    clearLayers() { calls.push(["clearLayers"]); },
-    addLayers(markers) { calls.push(["addLayers", markers]); },
+    addLayer(marker) { calls.push(["addLayer", marker]); },
+    removeLayer(marker) { calls.push(["removeLayer", marker]); },
   };
   const fakeLeaflet = {
     map() { return fakeMap; },
@@ -133,7 +177,7 @@ test("Photo Map renders located media into markers and fits once to useful bound
     latLngBounds(points) { return {points}; },
   };
 
-  const controller = mapModule.createPhotoMap(fakeLeaflet, "map-element");
+  const controller = createPhotoMap(mapModule, fakeLeaflet);
   const count = controller.setMarkerItems([{
     path: "Camera Uploads/photo.jpg",
     display_name: "photo.jpg",
@@ -151,11 +195,10 @@ test("Photo Map renders located media into markers and fits once to useful bound
   assert.deepEqual(calls[0][0], "marker");
   assert.deepEqual(calls[0][1], [40.5, -74]);
   assert.equal(calls[1][0], "bindPopup");
-  assert.equal(calls[2][0], "clearLayers");
-  assert.equal(calls[3][0], "addLayers");
-  assert.equal(calls[4][0], "fitBounds");
-  assert.deepEqual(calls[4][1], {points: [[40.5, -74]]});
-  assert.deepEqual(calls[4][2], {padding: [24, 24], maxZoom: 15});
+  assert.equal(calls[2][0], "addLayer");
+  assert.equal(calls[3][0], "fitBounds");
+  assert.deepEqual(calls[3][1], {points: [[40.5, -74]]});
+  assert.deepEqual(calls[3][2], {padding: [24, 24], maxZoom: 15});
 });
 
 test("Photo Map renders grouped pins with count tiers and accessible labels", async () => {
@@ -183,7 +226,7 @@ test("Photo Map renders grouped pins with count tiers and accessible labels", as
     },
   };
 
-  const controller = mapModule.createPhotoMap(fakeLeaflet, "map-element");
+  const controller = createPhotoMap(mapModule, fakeLeaflet);
   controller.setMarkerItems([
     {path: "group-small", display_name: "3 photos", photoMapGrouped: true, photoMapGroupCount: 3, latitude: 1, longitude: 2},
     {path: "group-medium", display_name: "12 photos", photoMapGrouped: true, photoMapGroupCount: 12, latitude: 2, longitude: 3},
@@ -203,10 +246,10 @@ test("Photo Map renders grouped pins with count tiers and accessible labels", as
   assert.ok(iconCalls[1].iconSize[0] < iconCalls[2].iconSize[0]);
   assert.equal(markerOptions[0].title, "Grouped media pin containing 3 media items");
   assert.equal(markerOptions[2].alt, "Grouped media pin containing 50 media items");
-  assert.match(popups[2], /photo-map-group-grid/);
-  assert.match(popups[2], /Select a thumbnail to view its details/);
-  assert.match(popups[2], /50 media items/);
-  assert.doesNotMatch(popups[2], /photo-map-group:group-large/);
+  assert.match(popupText(popups[2]), /photo-map-group-grid/);
+  assert.match(popupText(popups[2]), /Select a thumbnail to view its details/);
+  assert.match(popupText(popups[2]), /50 media items/);
+  assert.doesNotMatch(popupText(popups[2]), /photo-map-group:group-large/);
 });
 
 test("Photo Map reuses a grouped marker while updating its count tier", async () => {
@@ -231,7 +274,7 @@ test("Photo Map reuses a grouped marker while updating its count tier", async ()
     },
   };
 
-  const controller = mapModule.createPhotoMap(fakeLeaflet, "map-element");
+  const controller = createPhotoMap(mapModule, fakeLeaflet);
   const group = {path: "group", display_name: "3 photos", photoMapGrouped: true, photoMapGroupCount: 3, latitude: 1, longitude: 2};
   controller.setMarkerItems([group]);
   controller.setMarkerItems([Object.assign({}, group, {display_name: "12 photos", photoMapGroupCount: 12})]);
@@ -245,6 +288,7 @@ test("Photo Map reuses a grouped marker while updating its count tier", async ()
 test("Photo Map grouped pin renders and refreshes its newest-photo thumbnail", async () => {
   const mapModule = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/map.js");
   const icons = [];
+  const thumbnails = thumbnailPresentationFixture();
   let marker;
   const fakeLeaflet = {
     map() { return {setView() {}, invalidateSize() {}, remove() {}}; },
@@ -262,7 +306,7 @@ test("Photo Map grouped pin renders and refreshes its newest-photo thumbnail", a
       return marker;
     },
   };
-  const controller = mapModule.createPhotoMap(fakeLeaflet, "map-element");
+  const controller = createPhotoMap(mapModule, fakeLeaflet, thumbnails);
   controller.setMarkerItems([{
     path: "group",
     display_name: "2 media items",
@@ -278,9 +322,9 @@ test("Photo Map grouped pin renders and refreshes its newest-photo thumbnail", a
   }]);
 
   assert.match(icons[0].html, /Loading newest group thumbnail/);
-  assert.equal(controller.setGroupedMemberThumbnail("older.jpg", {url: "/thumbnail?older"}), true);
+  assert.equal(applyThumbnail(thumbnails, controller, "older.jpg", {url: "/thumbnail?older"}), true);
   assert.equal(marker.icons.length, 1);
-  assert.equal(controller.setGroupedMemberThumbnail("newest.jpg", {url: "/thumbnail?newest"}), true);
+  assert.equal(applyThumbnail(thumbnails, controller, "newest.jpg", {url: "/thumbnail?newest"}), true);
   assert.equal(marker.icons.length, 2);
   assert.match(marker.icons[1].html, /photo-map-group-marker-thumbnail/);
   assert.match(marker.icons[1].html, /thumbnail\?newest/);
@@ -289,6 +333,7 @@ test("Photo Map grouped pin renders and refreshes its newest-photo thumbnail", a
 
 test("Photo Map grouped popup renders member grid and updates shared thumbnail state", async () => {
   const mapModule = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/map.js");
+  const thumbnails = thumbnailPresentationFixture();
   let popup = "";
   const markerLayer = {addTo() {}, addLayer() {}, removeLayer() {}};
   const fakeLeaflet = {
@@ -304,7 +349,7 @@ test("Photo Map grouped popup renders member grid and updates shared thumbnail s
       };
     },
   };
-  const controller = mapModule.createPhotoMap(fakeLeaflet, "map-element");
+  const controller = createPhotoMap(mapModule, fakeLeaflet, thumbnails);
   controller.setMarkerItems([{
     path: "group",
     display_name: "3 media items",
@@ -319,24 +364,26 @@ test("Photo Map grouped popup renders member grid and updates shared thumbnail s
     ],
   }]);
 
-  assert.match(popup, /photo-map-group-grid/);
-  assert.match(popup, /data-photo-map-group-member-path="one.jpg"/);
-  assert.match(popup, /data-photo-map-group-member-path="two.jpg"/);
-  assert.match(popup, /photo-map-group-grid-loading/);
-  assert.match(popup, /photo-map-group-grid-loading/);
-  assert.match(popup, /Select a thumbnail to view its details/);
-  assert.doesNotMatch(popup, /photo-map-group:group/);
+  assert.match(popupText(popup), /photo-map-group-grid/);
+  assert.match(popupText(popup), /data-photo-map-group-member-path="one.jpg"/);
+  assert.match(popupText(popup), /data-photo-map-group-member-path="two.jpg"/);
+  assert.match(popupText(popup), /photo-map-group-grid-loading/);
+  assert.match(popupText(popup), /photo-map-group-grid-loading/);
+  assert.match(popupText(popup), /Select a thumbnail to view its details/);
+  assert.doesNotMatch(popupText(popup), /photo-map-group:group/);
 
-  assert.equal(controller.setGroupedMemberThumbnail("one.jpg", {url: "/thumbnail?one"}), true);
-  assert.match(popup, /photo-map-group-grid-thumbnail/);
-  assert.match(popup, /thumbnail\?one/);
-  assert.doesNotMatch(popup, /<button[^>]*>\s*<button/);
-  assert.equal(controller.setGroupedMemberThumbnailState("two.jpg", "error"), true);
-  assert.match(popup, /photo-map-group-grid-error/);
+  assert.equal(applyThumbnail(thumbnails, controller, "one.jpg", {url: "/thumbnail?one"}), true);
+  assert.match(popupText(popup), /photo-map-group-grid-thumbnail/);
+  assert.match(popupText(popup), /thumbnail\?one/);
+  assert.doesNotMatch(popupText(popup), /<button[^>]*>\s*<button/);
+  assert.equal(applyThumbnailState(thumbnails, controller, "two.jpg", "error"), true);
+  assert.match(popupText(popup), /photo-map-group-grid-error/);
+  assert.equal(controller.getMarkerItem("group").photoMapGroupMembers[0].photoMapThumbnailUrl, undefined);
 });
 
 test("Photo Map grouped popup selects video member details and keeps a safe grid return", async () => {
   const mapModule = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/map.js");
+  const thumbnails = thumbnailPresentationFixture();
   const listeners = {};
   const cells = [];
   const selection = {innerHTML: ""};
@@ -406,7 +453,8 @@ test("Photo Map grouped popup selects video member details and keeps a safe grid
     },
   };
   let groupedPopupOpenCount = 0;
-  const controller = mapModule.createPhotoMap(fakeLeaflet, "map-element", {
+  const controller = createPhotoMap(mapModule, fakeLeaflet, {
+    getThumbnailForPath: thumbnails.getThumbnailForPath,
     onGroupedPopupOpen() { groupedPopupOpenCount += 1; },
   });
   controller.setMarkerItems([{
@@ -419,12 +467,6 @@ test("Photo Map grouped popup selects video member details and keeps a safe grid
     photoMapGroupMembers: [member],
   }]);
   marker.trigger("popupopen", {popup: popupInstance});
-  assert.equal(groupedPopupOpenCount, 1);
-  // A preview overlay can restore the URL while Leaflet keeps this popup
-  // mounted and therefore skips a second popupopen event. The public refresh
-  // hook must restore delegated grid handling in that case.
-  listeners["grid-click"] = null;
-  assert.equal(controller.refreshPopupListenersForPath("group"), true);
   assert.equal(groupedPopupOpenCount, 1);
   grid.scrollTop = 180;
   // Progressive marker reconciliation replaces Leaflet popup content. The
@@ -441,11 +483,11 @@ test("Photo Map grouped popup selects video member details and keeps a safe grid
   assert.equal(grid.scrollTop, 180);
   listeners["root-click"]({target: cell});
   assert.equal(popupUpdates, 1);
-  assert.equal(controller.setGroupedMemberThumbnailState(member.path, "ready"), true);
+  assert.equal(applyThumbnailState(thumbnails, controller, member.path, "ready"), true);
   assert.equal(popupUpdates, 2);
   // Cached scheduler demand emits ready repeatedly after a map move. The
   // duplicate state must not re-render or pan the selected popup again.
-  assert.equal(controller.setGroupedMemberThumbnailState(member.path, "ready"), false);
+  assert.equal(applyThumbnailState(thumbnails, controller, member.path, "ready"), false);
   assert.equal(popupUpdates, 2);
 
   assert.match(selection.innerHTML, /one &amp; two\.mov/);
@@ -461,11 +503,12 @@ test("Photo Map grouped popup selects video member details and keeps a safe grid
   };
   listeners["root-click"]({target: back});
   assert.match(selection.innerHTML, /Select a thumbnail to view its details/);
-  assert.match(popup, /photo-map-group-grid/);
+  assert.match(popupText(popup), /photo-map-group-grid/);
 });
 
 test("Photo Map keeps an open grouped grid mounted while thumbnail state reconciles", async () => {
   const mapModule = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/map.js");
+  const thumbnails = thumbnailPresentationFixture();
   const listeners = {};
   let popupContentUpdates = 0;
   const contentRoot = {};
@@ -528,19 +571,23 @@ test("Photo Map keeps an open grouped grid mounted while thumbnail state reconci
     longitude: -74,
     photoMapGroupMembers: [member],
   };
-  const controller = mapModule.createPhotoMap(fakeLeaflet, "map-element");
+  const controller = createPhotoMap(mapModule, fakeLeaflet, thumbnails);
   controller.setMarkerItems([group]);
   marker.trigger("popupopen", {popup: {getElement() { return root; }}});
+  assert.equal(controller.getDebugState().popupDiagnostics.rootMounts, 1);
 
-  assert.equal(controller.setGroupedMemberThumbnail(member.path, {url: "/thumbnail?member"}), true);
+  assert.equal(applyThumbnail(thumbnails, controller, member.path, {url: "/thumbnail?member"}), true);
   assert.equal(popupContentUpdates, 0);
   assert.equal(grid.scrollTop, 90);
+  assert.equal(controller.getDebugState().popupDiagnostics.rootMounts, 1);
+  assert.equal(controller.getDebugState().popupDiagnostics.listenerAttaches, 1);
+  assert.equal(controller.getDebugState().popupDiagnostics.listenerDetaches, 0);
 
-  controller.setMarkerItems([Object.assign({}, group, {
-    photoMapGroupMembers: [Object.assign({}, member, {photoMapThumbnailUrl: "/thumbnail?member"})],
-  })]);
+  controller.setMarkerItems([group]);
   assert.equal(popupContentUpdates, 0);
   assert.equal(grid.scrollTop, 90);
+  assert.equal(controller.getDebugState().popupDiagnostics.listenerAttaches, 1);
+  assert.equal(controller.getDebugState().popupDiagnostics.listenerDetaches, 0);
 });
 
 test("Photo Map attaches loading/ready thumbnail cards and reports individually visible pins", async () => {
@@ -587,7 +634,7 @@ test("Photo Map attaches loading/ready thumbnail cards and reports individually 
     },
   };
 
-  const controller = mapModule.createPhotoMap(fakeLeaflet, "map-element", {
+  const controller = createPhotoMap(mapModule, fakeLeaflet, {
     onVisibleMarkers(items) { visibleItems = items; },
   });
   controller.setMarkerItems([
@@ -627,7 +674,7 @@ test("Photo Map popup exposes metadata and a safe full-preview link", async () =
     },
   };
 
-  const controller = mapModule.createPhotoMap(fakeLeaflet, "map-element");
+  const controller = createPhotoMap(mapModule, fakeLeaflet);
   controller.setMarkerItems([{
     path: "Camera Uploads/photo & one.jpg",
     photoMapSourcePath: "Camera Uploads/photo & one.jpg",
@@ -639,16 +686,16 @@ test("Photo Map popup exposes metadata and a safe full-preview link", async () =
     photoMapThumbnailUrl: "/thumbnail?path=Camera+Uploads%2Fphoto.jpg&source=remote",
   }]);
 
-  assert.match(popup, /photo &amp; one\.jpg/);
-  assert.match(popup, /Latitude/);
-  assert.match(popup, />40\.5</);
-  assert.match(popup, />-74</);
-  assert.match(popup, /2024:01:01 12:00:00/);
-  assert.match(popup, /2024-01-02T00:00:00\.000Z/);
-  assert.match(popup, /href="\/preview\?path=Camera\+Uploads%2Fphoto\+%26\+one\.jpg&amp;source=remote&amp;kind=photo/);
-  assert.match(popup, /target="_blank"/);
-  assert.match(popup, /rel="noopener noreferrer"/);
-  assert.match(popup, /<img[^>]+alt="Thumbnail for photo &amp; one\.jpg"/);
+  assert.match(popupText(popup), /photo &amp; one\.jpg/);
+  assert.match(popupText(popup), /Latitude/);
+  assert.match(popupText(popup), />40\.5</);
+  assert.match(popupText(popup), />-74</);
+  assert.match(popupText(popup), /2024:01:01 12:00:00/);
+  assert.match(popupText(popup), /2024-01-02T00:00:00\.000Z/);
+  assert.match(popupText(popup), /href="\/preview\?path=Camera\+Uploads%2Fphoto\+%26\+one\.jpg&amp;source=remote&amp;kind=photo/);
+  assert.match(popupText(popup), /target="_blank"/);
+  assert.match(popupText(popup), /rel="noopener noreferrer"/);
+  assert.match(popupText(popup), /<img[^>]+alt="Thumbnail for photo &amp; one\.jpg"/);
 });
 
 test("Photo Map video popup keeps GPS details and shows the neutral thumbnail fallback", async () => {
@@ -664,7 +711,7 @@ test("Photo Map video popup keeps GPS details and shows the neutral thumbnail fa
     },
   };
 
-  const controller = mapModule.createPhotoMap(fakeLeaflet, "map-element");
+  const controller = createPhotoMap(mapModule, fakeLeaflet);
   controller.setMarkerItems([{
     path: "Camera Uploads/video.mov",
     display_name: "video.mov",
@@ -674,10 +721,10 @@ test("Photo Map video popup keeps GPS details and shows the neutral thumbnail fa
     listingDateMs: Date.UTC(2024, 0, 3),
   }]);
 
-  assert.match(popup, /Loading thumbnail/);
-  assert.match(popup, /photo-map-preview-thumbnail-placeholder/);
-  assert.match(popup, /Open full preview for video\.mov/);
-  assert.doesNotMatch(popup, /<img/);
+  assert.match(popupText(popup), /Loading thumbnail/);
+  assert.match(popupText(popup), /photo-map-preview-thumbnail-placeholder/);
+  assert.match(popupText(popup), /Open full preview for video\.mov/);
+  assert.doesNotMatch(popupText(popup), /<img/);
 });
 
 test("Photo Map lifecycle debug logs are toggleable", async () => {
@@ -715,7 +762,7 @@ test("Photo Map lifecycle debug logs are toggleable", async () => {
       return marker;
     },
   };
-  const controller = mapModule.createPhotoMap(fakeLeaflet, "map-element", {
+  const controller = createPhotoMap(mapModule, fakeLeaflet, {
     console: {debug(...args) { calls.push(args); }},
     debug: true,
   });
@@ -759,7 +806,7 @@ test("Photo Map debug events do not post one client log per map event", async ()
     markerClusterGroup() { return {addTo() {}, clearLayers() {}, addLayers() {}, on() {}}; },
   };
 
-  mapModule.createPhotoMap(fakeLeaflet, "map-element", {
+  createPhotoMap(mapModule, fakeLeaflet, {
     console: {debug() {}},
     clientLogger: {debug(...args) { clientLogCalls.push(args); }},
     debug: true,
@@ -808,7 +855,7 @@ test("Photo Map reconciles marker metadata without replacing the marker or popup
     },
   };
 
-  const controller = mapModule.createPhotoMap(fakeLeaflet, "map-element");
+  const controller = createPhotoMap(mapModule, fakeLeaflet);
   const item = {path: "photo.jpg", display_name: "photo.jpg", latitude: 1, longitude: 2};
   controller.setMarkerItems([item]);
   const marker = createdMarkers[0];
@@ -819,7 +866,7 @@ test("Photo Map reconciles marker metadata without replacing the marker or popup
   assert.equal(marker.setPopupContentCount, 1);
   assert.equal(layerCalls.filter((call) => call[0] === "removeLayer").length, 0);
   assert.equal(layerCalls.filter((call) => call[0] === "refreshClusters").length, 1);
-  assert.match(marker.popup, /2024:01:01 12:00:00/);
+  assert.match(popupText(marker.popup), /2024:01:01 12:00:00/);
 });
 
 test("Photo Map keeps the same pin popup open when the pin is clicked again", async () => {
@@ -863,7 +910,7 @@ test("Photo Map keeps the same pin popup open when the pin is clicked again", as
     },
   };
 
-  const controller = mapModule.createPhotoMap(fakeLeaflet, "map-element");
+  const controller = createPhotoMap(mapModule, fakeLeaflet);
   controller.setMarkerItems([{path: "photo.jpg", latitude: 1, longitude: 2}]);
   // The fake layer records the marker just as the real layer retains it.
   markerLayer.addLayer = function (added) { this._lastMarker = added; };
@@ -940,7 +987,7 @@ test("Photo Map defers membership changes until a spiderfied cluster closes", as
     },
   };
 
-  const controller = mapModule.createPhotoMap(fakeLeaflet, "map-element");
+  const controller = createPhotoMap(mapModule, fakeLeaflet);
   controller.setMarkerItems([
     {path: "one.jpg", latitude: 1, longitude: 2},
     {path: "two.jpg", latitude: 1, longitude: 2},

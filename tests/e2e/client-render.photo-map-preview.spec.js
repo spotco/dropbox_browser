@@ -101,6 +101,10 @@ async function openSyntheticGroupedPopup(page, groupCount = 8) {
   await expect(page.locator(".photo-map-group-grid")).toBeVisible();
 }
 
+async function photoMapDebugState(page) {
+  return page.evaluate(() => window.DropboxBrowserPhotoMap.getDebugState());
+}
+
 test.beforeAll(async () => {
   server = await startServer({fixtureName: "photo-map-preview.json"});
 });
@@ -163,14 +167,19 @@ test("grouped Photo Map keeps loaded photo and video thumbnails plus grid scroll
   await mockMixedGroupCache(page);
   await openSyntheticGroupedPopup(page, 10);
   const grid = page.locator(".photo-map-group-grid");
+  const popupRoot = await page.locator(".leaflet-popup-content > .photo-map-grouped-preview").elementHandle();
+  expect(popupRoot).not.toBeNull();
   const videoMember = page.locator('[data-photo-map-group-member-path="Camera Uploads/group-video-a.mov"]');
   await expect(videoMember).toBeVisible();
   await expect(grid.locator("img")).toHaveCount(10);
+  const debugBeforePreview = await photoMapDebugState(page);
+  expect(debugBeforePreview.activeGroupedPopupPath).not.toBe("");
   const scrollTop = await grid.evaluate((element) => {
     element.scrollTop = element.scrollHeight;
     return element.scrollTop;
   });
   expect(scrollTop).toBeGreaterThan(0);
+  await grid.evaluate((element) => { window.__photoMapGridForCoverage = element; });
 
   await videoMember.click();
   await expect(page.locator("#photo-map-preview-overlay")).toBeVisible();
@@ -182,6 +191,16 @@ test("grouped Photo Map keeps loaded photo and video thumbnails plus grid scroll
   await expect(grid.locator("img")).toHaveCount(10);
   await expect(videoMember).toHaveAttribute("aria-pressed", "true");
   expect(await grid.evaluate((element) => element.scrollTop)).toBeGreaterThanOrEqual(scrollTopBeforeClose - 1);
+  expect(await page.evaluate(() => document.querySelector(".photo-map-group-grid") === window.__photoMapGridForCoverage)).toBe(true);
+  expect(await page.evaluate((root) => document.querySelector(".leaflet-popup-content > .photo-map-grouped-preview") === root, popupRoot)).toBe(true);
+  const debugState = await photoMapDebugState(page);
+  expect(debugState.selectedGroupedMemberPath).toBe("Camera Uploads/group-video-a.mov");
+  expect(debugState.map.popupMounted).toBe(true);
+  expect(debugState.map.gridScrollTop).toBeGreaterThanOrEqual(scrollTopBeforeClose - 1);
+  expect(debugState.thumbnailScheduler).not.toBeNull();
+  expect(debugState.activeGroupedPopupPath).toBe(debugBeforePreview.activeGroupedPopupPath);
+  expect(debugState.thumbnailScheduler.desiredPaths).toContain("Camera Uploads/group-video-a.mov");
+  expect(debugState.thumbnailScheduler.cachedPaths).toEqual(expect.any(Array));
 });
 
 test("grouped Photo Map preview hides the previous poster until the next member loads", async ({page}) => {

@@ -228,6 +228,62 @@ test("Photo Map thumbnail scheduler promotes an active group-pin representative 
   scheduler.cancel();
 });
 
+test("Photo Map thumbnail scheduler refreshes identical demand without restarting active work", async () => {
+  const thumbnails = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/thumbnails.js");
+  const gate = deferred();
+  const started = [];
+  const scheduler = thumbnails.createPhotoMapThumbnailScheduler({
+    concurrency: 1,
+    loader: async (candidate) => {
+      started.push(candidate.path);
+      await gate.promise;
+      return {url: `/thumbnail?path=${candidate.path}&source=remote`};
+    },
+  });
+  const candidate = {path: "group-member.jpg", photoMapThumbnailPriority: -1000000};
+
+  scheduler.update([candidate], {selectedPath: candidate.path});
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const beforeRefresh = scheduler.getDebugState();
+  scheduler.update([{...candidate}], {selectedPath: candidate.path});
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(started, ["group-member.jpg"]);
+  assert.deepEqual(scheduler.getDebugState().activePaths, beforeRefresh.activePaths);
+  assert.deepEqual(scheduler.getDebugState().pendingPaths, beforeRefresh.pendingPaths);
+  assert.deepEqual(scheduler.getDebugState().desiredPaths, ["group-member.jpg"]);
+
+  gate.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(scheduler.getDebugState().cachedPaths, ["group-member.jpg"]);
+  scheduler.cancel();
+});
+
+test("Photo Map thumbnail scheduler reports semantic cancellation reasons", async () => {
+  const thumbnails = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/thumbnails.js");
+  const states = [];
+  const scheduler = thumbnails.createPhotoMapThumbnailScheduler({
+    concurrency: 1,
+    loader: async (_candidate, signal) => {
+      await new Promise((resolve) => signal.addEventListener("abort", resolve, {once: true}));
+      const error = new Error("aborted");
+      error.name = "AbortError";
+      throw error;
+    },
+    onState: (item, state, details) => states.push([item.path, state, details && details.reason]),
+  });
+
+  scheduler.update([{path: "group-close.jpg"}], {reason: "group-popup-open"});
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  scheduler.update([], {reason: "popup-closed"});
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(states, [
+    ["group-close.jpg", "loading", "request-started"],
+    ["group-close.jpg", "idle", "popup-closed"],
+  ]);
+});
+
 test("Photo Map thumbnail scheduler preempts lower-priority active map pins for a grouped popup", async () => {
   const thumbnails = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/thumbnails.js");
   const started = [];
