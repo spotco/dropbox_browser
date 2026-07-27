@@ -62,6 +62,15 @@ export function createPhotoMapDiagnostics(win) {
     return win.ClientLogger.info('photo-map', message, snapshot(extra));
   }
 
+  function logEvent(message, extra) {
+    // Per-item thumbnail transitions can number in the thousands.  Keep their
+    // counters in the in-page diagnostic snapshot, but reserve client-log
+    // traffic for the bounded generation summaries above.
+    void message;
+    void extra;
+    return false;
+  }
+
   return {
     enabled: enabled,
     beginGeneration: function (value) {
@@ -85,5 +94,6 @@ export function createPhotoMapDiagnostics(win) {
     increment: increment,
     snapshot: function (extra) { return snapshot(extra); },
     logSummary: logSummary,
+    logEvent: logEvent,
   };
 }

@@ -1,0 +1,30 @@
+{
+  "entries": [
+    {
+      "path": "Camera Uploads",
+      "type": "dir",
+      "mod_time": "2024-03-01T12:00:00Z"
+    },
+    {
+      "path": "Camera Uploads/group-newer.jpg",
+      "type": "file",
+      "base64": "/9j/4AAQSkZJRgABAQAAAQABAAD/4QCoRXhpZgAATU0AKgAAAAgAAgEyAAIAAAAUAAAAJoglAAQAAAABAAAAOgAAAAAyMDI0OjAzOjAyIDEyOjAwOjAwAAAEAAEAAgAAAAJOAAAAAAIABQAAAAMAAABwAAMAAgAAAAJXAAAAAAQABQAAAAMAAACIAAAAAAAAACgAAAABAAAAAAAAAAEAAAAAAAAAAQAAAEoAAAABAAAAAAAAAAEAAAAAAAAAAf/bAEMACAYGBwYFCAcHBwkJCAoMFA0MCwsMGRITDxQdGh8eHRocHCAkLicgIiwjHBwoNyksMDE0NDQfJzk9ODI8LjM0Mv/bAEMBCQkJDAsMGA0NGDIhHCEyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMv/AABEIACgAKAMBIgACEQEDEQH/xAAfAAABBQEBAQEBAQAAAAAAAAAAAQIDBAUGBwgJCgv/xAC1EAACAQMDAgQDBQUEBAAAAX0BAgMABBEFEiExQQYTUWEHInEUMoGRoQgjQrHBFVLR8CQzYnKCCQoWFxgZGiUmJygpKjQ1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4eLj5OXm5+jp6vHy8/T19vf4+fr/xAAfAQADAQEBAQEBAQEBAAAAAAAAAQIDBAUGBwgJCgv/xAC1EQACAQIEBAMEBwUEBAABAncAAQIDEQQFITEGEkFRB2FxEyIygQgUQpGhscEJIzNS8BVictEKFiQ04SXxFxgZGiYnKCkqNTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqCg4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2dri4+Tl5ufo6ery8/T19vf4+fr/2gAMAwEAAhEDEQA/AOEooor9MPGCiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooA//2Q==",
+      "mod_time": "2024-03-02T12:00:00Z"
+    },
+    {
+      "path": "Camera Uploads/group-older.jpg",
+      "type": "file",
+      "base64": "/9j/4AAQSkZJRgABAQAAAQABAAD/4QCoRXhpZgAATU0AKgAAAAgAAgEyAAIAAAAUAAAAJoglAAQAAAABAAAAOgAAAAAyMDI0OjAzOjAxIDEyOjAwOjAwAAAEAAEAAgAAAAJOAAAAAAIABQAAAAMAAABwAAMAAgAAAAJXAAAAAAQABQAAAAMAAACIAAAAAAAAACgAAAABAAAAAAAAAAEAAAAAAAAAAQAAAEoAAAABAAAAAAAAAAEAAAAAAAAAAf/bAEMACAYGBwYFCAcHBwkJCAoMFA0MCwsMGRITDxQdGh8eHRocHCAkLicgIiwjHBwoNyksMDE0NDQfJzk9ODI8LjM0Mv/bAEMBCQkJDAsMGA0NGDIhHCEyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMv/AABEIACgAKAMBIgACEQEDEQH/xAAfAAABBQEBAQEBAQAAAAAAAAAAAQIDBAUGBwgJCgv/xAC1EAACAQMDAgQDBQUEBAAAAX0BAgMABBEFEiExQQYTUWEHInEUMoGRoQgjQrHBFVLR8CQzYnKCCQoWFxgZGiUmJygpKjQ1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4eLj5OXm5+jp6vHy8/T19vf4+fr/xAAfAQADAQEBAQEBAQEBAAAAAAAAAQIDBAUGBwgJCgv/xAC1EQACAQIEBAMEBwUEBAABAncAAQIDEQQFITEGEkFRB2FxEyIygQgUQpGhscEJIzNS8BVictEKFiQ04SXxFxgZGiYnKCkqNTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqCg4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2dri4+Tl5ufo6ery8/T19vf4+fr/2gAMAwEAAhEDEQA/AOWooorwz9UCiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooA//2Q==",
+      "mod_time": "2024-03-01T12:00:00Z"
+    },
+    {"path": "Camera Uploads/group-extra-01.jpg", "type": "file", "content": "synthetic", "mod_time": "2024-03-01T11:55:00Z"},
+    {"path": "Camera Uploads/group-extra-02.jpg", "type": "file", "content": "synthetic", "mod_time": "2024-03-01T11:50:00Z"},
+    {"path": "Camera Uploads/group-extra-03.jpg", "type": "file", "content": "synthetic", "mod_time": "2024-03-01T11:45:00Z"},
+    {"path": "Camera Uploads/group-extra-04.jpg", "type": "file", "content": "synthetic", "mod_time": "2024-03-01T11:40:00Z"},
+    {"path": "Camera Uploads/group-extra-05.jpg", "type": "file", "content": "synthetic", "mod_time": "2024-03-01T11:35:00Z"},
+    {"path": "Camera Uploads/group-extra-06.jpg", "type": "file", "content": "synthetic", "mod_time": "2024-03-01T11:30:00Z"},
+    {"path": "Camera Uploads/group-video-a.mov", "type": "file", "content": "synthetic", "mod_time": "2024-03-01T11:25:00Z"},
+    {"path": "Camera Uploads/group-video-b.mov", "type": "file", "content": "synthetic", "mod_time": "2024-03-01T11:20:00Z"}
+  ],
+  "local_files": []
+}

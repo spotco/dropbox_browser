@@ -37,9 +37,36 @@ function createPhotoMapPreviewController(options) {
   var overlay = config.overlay || null;
   var standalone = Boolean(config.standalone);
   var els = {};
-  var state = {active: false, path: '', source: 'remote', mediaKind: 'video', sessionId: '', hls: null, pushed: false, generation: 0, progressTimer: null, previewContext: null, fallbackAttempted: false};
+  var state = {active: false, path: '', source: 'remote', mediaKind: 'video', sessionId: '', hls: null, pushed: false, generation: 0, previewOpenToken: 0, progressTimer: null, previewContext: null, fallbackAttempted: false};
   var clientId = createClientId(win);
   var lastFocus = null;
+
+  function log(event, details) {
+    var logger = win && win.ClientLogger;
+    if (!logger || typeof logger.enabledFor !== 'function' || !logger.enabledFor('photo-map') ||
+        typeof logger.debug !== 'function') return false;
+    return logger.debug('photo-map', event, Object.assign({
+      path: state.path,
+      mediaKind: state.mediaKind,
+      generation: state.generation,
+      active: state.active,
+      standalone: standalone,
+    }, details || {}));
+  }
+
+  function posterSnapshot(requestedPath, token) {
+    return {
+      requestedPath: String(requestedPath || ''),
+      previewOpenToken: token == null ? state.previewOpenToken : token,
+      priorSrc: els.poster && els.poster.src || '',
+      currentSrc: els.poster && els.poster.currentSrc || '',
+      statePath: state.path,
+      stateGeneration: state.generation,
+      hidden: !!(els.poster && els.poster.hidden),
+      complete: !!(els.poster && els.poster.complete),
+      naturalWidth: els.poster && Number(els.poster.naturalWidth) || 0,
+    };
+  }
 
   function setStatus(message, isError) {
     if (!els.status) return;
@@ -95,6 +122,7 @@ function createPhotoMapPreviewController(options) {
       els.hls = null;
     }
     if (els.video) {
+      log('preview-media-reset', {sessionId: state.sessionId || ''});
       els.video.pause();
       els.video.removeAttribute('src');
       try { els.video.load(); } catch (_error) {}
@@ -120,6 +148,7 @@ function createPhotoMapPreviewController(options) {
   async function stopSession(id, unloadSafe) {
     var sessionId = String(id || '');
     if (!sessionId) return;
+    log('preview-video-session-stop', {sessionId: sessionId, unloadSafe: !!unloadSafe});
     var body = encodedForm({id: sessionId, client_id: clientId});
     try {
       await fetchImpl('/video/endpoints/session/stop', {
@@ -139,6 +168,7 @@ function createPhotoMapPreviewController(options) {
     var startOptions = options || {};
     if (!state.active || state.mediaKind !== 'video' || !els.video || !state.path) return;
     var generation = ++state.generation;
+    log('preview-video-start', {startOptions: startOptions, startGeneration: generation});
     setStatus('Preparing compatible video…');
     els.play.hidden = true;
     els.video.muted = true;
@@ -159,22 +189,34 @@ function createPhotoMapPreviewController(options) {
       state.sessionId = String(payload.session_id || payload.id || '');
       var playlistUrl = String(payload.playlist_url || '');
       if (!playlistUrl) throw new Error('The video session did not return a playlist.');
+      log('preview-video-session-ready', {
+        sessionId: state.sessionId,
+        hasPlaylist: !!playlistUrl,
+        fallbackAttempted: state.fallbackAttempted,
+      });
       state.progressTimer = (win && typeof win.setInterval === 'function' ? win.setInterval : setInterval)(function () { reportProgress(); }, 2000);
-      els.video.addEventListener('playing', function () { reportProgress('playing'); });
-      els.video.addEventListener('pause', function () { reportProgress('paused'); });
-      els.video.addEventListener('loadeddata', function () { if (state.active && generation === state.generation) { els.poster.hidden = true; setStatus(''); } }, {once: true});
-      els.video.addEventListener('canplay', function () { if (state.active && generation === state.generation) els.poster.hidden = true; }, {once: true});
-      els.video.addEventListener('ended', function () { if (state.active && generation === state.generation) { setStatus('Playback ended.'); reportProgress('paused'); } });
+      els.video.addEventListener('playing', function () { log('preview-video-playing', {eventGeneration: generation}); reportProgress('playing'); });
+      els.video.addEventListener('pause', function () { log('preview-video-paused', {eventGeneration: generation}); reportProgress('paused'); });
+      els.video.addEventListener('loadeddata', function () { log('preview-video-loadeddata', {eventGeneration: generation}); if (state.active && generation === state.generation) { els.poster.hidden = true; setStatus(''); } }, {once: true});
+      els.video.addEventListener('canplay', function () { log('preview-video-canplay', {eventGeneration: generation}); if (state.active && generation === state.generation) els.poster.hidden = true; }, {once: true});
+      els.video.addEventListener('ended', function () { log('preview-video-ended', {eventGeneration: generation}); if (state.active && generation === state.generation) { setStatus('Playback ended.'); reportProgress('paused'); } });
       if (Hls && typeof Hls.isSupported === 'function' && Hls.isSupported()) {
         els.hls = new Hls({enableWorker: true, lowLatencyMode: false});
         els.hls.on(Hls.Events.MANIFEST_PARSED, function () {
           if (!state.active || generation !== state.generation) return;
+          log('preview-video-manifest-parsed', {eventGeneration: generation});
           els.poster.hidden = true;
           setStatus('');
           var playPromise = els.video.play();
           if (playPromise && typeof playPromise.catch === 'function') playPromise.catch(function () {});
         });
         els.hls.on(Hls.Events.ERROR, function (_event, data) {
+          log('preview-video-hls-error', {
+            eventGeneration: generation,
+            fatal: !!(data && data.fatal),
+            type: data && data.type || '',
+            details: data && data.details || '',
+          });
           if (data && data.fatal && state.active && generation === state.generation) {
             if (!state.fallbackAttempted) {
               state.fallbackAttempted = true;
@@ -196,6 +238,11 @@ function createPhotoMapPreviewController(options) {
         throw new Error('This browser cannot play the compatible preview stream.');
       }
     } catch (error) {
+      log('preview-video-start-error', {
+        eventGeneration: generation,
+        message: error && error.message ? error.message : String(error || ''),
+        fallbackAttempted: state.fallbackAttempted,
+      });
       if (generation !== state.generation || !state.active) return;
       if (!state.fallbackAttempted) {
         state.fallbackAttempted = true;
@@ -239,8 +286,15 @@ function createPhotoMapPreviewController(options) {
   async function close(options) {
     var shouldRestoreHistory = !options || options.restoreHistory !== false;
     if (!state.active) return;
+    var hadPreviewContext = !!state.previewContext;
+    log('preview-close-start', {
+      sessionId: state.sessionId || '',
+      shouldRestoreHistory: shouldRestoreHistory,
+      hasPreviewContext: !!state.previewContext,
+    });
     state.active = false;
     state.generation += 1;
+    state.previewOpenToken += 1;
     var oldSession = state.sessionId;
     state.sessionId = '';
     resetMedia();
@@ -257,25 +311,40 @@ function createPhotoMapPreviewController(options) {
     if (lastFocus && typeof lastFocus.focus === 'function') {
       try { lastFocus.focus(); } catch (_error) {}
     }
+    log('preview-close-complete', {restoredContext: !standalone && hadPreviewContext});
   }
 
   function open(item) {
     item = item || {};
     var path = String(item.photoMapSourcePath || item.path || '');
-    if (!path) return false;
+    if (!path) {
+      log('preview-open-rejected', {reason: 'missing-path'});
+      return false;
+    }
     var source = String(item.source || 'remote');
-    if (source !== 'remote') return false;
+    if (source !== 'remote') {
+      log('preview-open-rejected', {reason: 'unsupported-source', requestedSource: source});
+      return false;
+    }
     var mediaKind = String(item.mediaKind || item.kind || '').toLowerCase();
     if (mediaKind !== 'photo' && mediaKind !== 'video') {
       mediaKind = /\.(?:avi|m2ts|m4v|mkv|mov|mp4|ts|webm|wmv)$/i.test(path) ? 'video' : 'photo';
     }
     if (!standalone) ensureOverlay();
     bindElements(overlay || doc.body);
-    state.path = path; state.source = source; state.mediaKind = mediaKind; state.active = true; state.generation += 1; state.fallbackAttempted = false;
+    state.path = path; state.source = source; state.mediaKind = mediaKind; state.active = true; state.generation += 1; state.previewOpenToken += 1; state.fallbackAttempted = false;
+    var previewOpenToken = state.previewOpenToken;
     if (!standalone && win.DropboxBrowserPhotoMap &&
         typeof win.DropboxBrowserPhotoMap.capturePreviewContext === 'function') {
       state.previewContext = win.DropboxBrowserPhotoMap.capturePreviewContext();
     }
+    log('preview-open', {
+      requestedMediaKind: item.mediaKind || item.kind || '',
+      posterProvided: !!(item.photoMapThumbnailUrl || item.posterUrl),
+      hasPreviewContext: !!state.previewContext,
+      selectedGroupedMemberPath: state.previewContext && state.previewContext.selectedGroupedMemberPath || '',
+      previewOpenToken: previewOpenToken,
+    });
     lastFocus = doc.activeElement;
     if (els.root) els.root.hidden = false;
     if (doc.body) doc.body.classList.add('photo-map-preview-open');
@@ -287,11 +356,44 @@ function createPhotoMapPreviewController(options) {
     if (els.surface) els.surface.setAttribute('aria-label', isVideo ? 'Video preview' : 'Photo preview');
     if (els.poster) {
       var mediaQuery = new URLSearchParams({path: path, source: source}).toString();
-      els.poster.src = mediaKind === 'photo'
+      var requestedPosterUrl = mediaKind === 'photo'
         ? '/file?' + mediaQuery
         : String(item.photoMapThumbnailUrl || item.posterUrl || posterUrl(path, source));
+      log('preview-poster-before-assign', Object.assign(posterSnapshot(path, previewOpenToken), {
+        posterKind: mediaKind,
+        requestedPosterUrl: requestedPosterUrl,
+      }));
+      els.poster.hidden = true;
+      els.poster.onload = function () {
+        log('preview-poster-loaded', Object.assign(posterSnapshot(path, previewOpenToken), {
+          posterKind: mediaKind,
+          activeToken: state.previewOpenToken === previewOpenToken,
+          activePath: state.path === path,
+        }));
+        if (!state.active || state.previewOpenToken !== previewOpenToken || state.path !== path) return;
+        els.poster.hidden = false;
+        log('preview-poster-revealed', posterSnapshot(path, previewOpenToken));
+      };
+      els.poster.onerror = function () {
+        log('preview-poster-error', Object.assign(posterSnapshot(path, previewOpenToken), {
+          posterKind: mediaKind,
+          activeToken: state.previewOpenToken === previewOpenToken,
+          activePath: state.path === path,
+        }));
+        if (!state.active || state.previewOpenToken !== previewOpenToken || state.path !== path) return;
+        els.poster.hidden = true;
+      };
+      els.poster.removeAttribute('src');
+      log('preview-poster-load-start', Object.assign(posterSnapshot(path, previewOpenToken), {
+        posterKind: mediaKind,
+        requestedPosterUrl: requestedPosterUrl,
+      }));
+      els.poster.src = requestedPosterUrl;
+      log('preview-poster-assigned', Object.assign(posterSnapshot(path, previewOpenToken), {
+        posterKind: mediaKind,
+        requestedPosterUrl: requestedPosterUrl,
+      }));
       els.poster.alt = isVideo ? 'Video poster' : 'Photo preview';
-      els.poster.hidden = false;
     }
     if (els.video) { els.video.muted = true; els.video.hidden = mediaKind !== 'video'; }
     if (els.play) els.play.hidden = mediaKind !== 'video';
@@ -317,14 +419,14 @@ function createPhotoMapPreviewController(options) {
     if (standalone) {
       bindElements(doc.body);
       els.play && els.play.addEventListener('click', start);
-      els.mute && els.mute.addEventListener('click', function () { els.video.muted = !els.video.muted; updateMute(); });
+      els.mute && els.mute.addEventListener('click', function () { els.video.muted = !els.video.muted; updateMute(); log('preview-video-mute-toggle', {muted: !!els.video.muted}); });
       els.video && els.video.addEventListener('volumechange', updateMute);
       var body = doc.body;
       if (body && body.dataset.previewPath) open({path: body.dataset.previewPath, source: body.dataset.previewSource || 'remote', mediaKind: body.dataset.previewKind || 'video', display_name: body.dataset.previewPath.split('/').pop()});
     } else {
       ensureOverlay(); bindElements(overlay);
       els.play.addEventListener('click', start);
-      els.mute.addEventListener('click', function () { els.video.muted = !els.video.muted; updateMute(); });
+      els.mute.addEventListener('click', function () { els.video.muted = !els.video.muted; updateMute(); log('preview-video-mute-toggle', {muted: !!els.video.muted}); });
       els.video.addEventListener('volumechange', updateMute);
       els.close.addEventListener('click', function () { void close(); });
       doc.addEventListener('keydown', handleOverlayKeydown);
@@ -335,6 +437,10 @@ function createPhotoMapPreviewController(options) {
         if (!link && !trigger) return;
         event.preventDefault();
         if (trigger) {
+          log('preview-trigger-click', {
+            triggerPath: trigger.getAttribute('data-photo-map-preview-path') || '',
+            triggerKind: trigger.getAttribute('data-photo-map-preview-kind') || '',
+          });
           open({
             path: trigger.getAttribute('data-photo-map-preview-path') || '',
             source: trigger.getAttribute('data-photo-map-preview-source') || 'remote',
@@ -345,6 +451,7 @@ function createPhotoMapPreviewController(options) {
         var parsed = new URL(link.href, win.location.origin);
         var mediaPath = parsed.searchParams.get('path') || '';
         var mediaKind = /\.(?:avi|m2ts|m4v|mkv|mov|mp4|ts|webm|wmv)$/i.test(mediaPath) ? 'video' : 'photo';
+        log('preview-link-click', {linkPath: mediaPath, linkKind: mediaKind});
         open({path: mediaPath, source: parsed.searchParams.get('source') || 'remote', mediaKind: mediaKind, posterUrl: link.querySelector('img') && link.querySelector('img').src});
       });
       win.addEventListener('popstate', function () { if (state.active && (!win.history.state || !win.history.state.photoMapPreview)) void close({restoreHistory: false}); });

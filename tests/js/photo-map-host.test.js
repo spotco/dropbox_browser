@@ -403,10 +403,12 @@ test("Photo Map destroys the Leaflet instance on page teardown", async () => {
   await api.activate();
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(typeof listeners.beforeunload, "function");
-  assert.equal(win.DropboxBrowserPhotoMap.isDebugEnabled(), true);
+  assert.equal(win.DropboxBrowserPhotoMap.isDebugEnabled(), false);
   assert.equal(win.DropboxBrowserPhotoMap.setDebugEnabled(false), false);
   assert.equal(win.DropboxBrowserPhotoMap.isDebugEnabled(), false);
   assert.equal(win.DropboxBrowserPhotoMap.setDebugEnabled(true), true);
+  assert.equal(typeof win.DropboxBrowserPhotoMap.getDebugState, "function");
+  assert.equal(win.DropboxBrowserPhotoMap.getDebugState().active, true);
 
   listeners.beforeunload();
 
