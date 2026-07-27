@@ -295,6 +295,16 @@ updates a string popup. The shared fixture intentionally serializes
 future work should extend that fixture only when a missing DOM behavior is
 needed, not add another map rendering fallback.
 
+Photo Map interaction finding: group-grid buttons must remain selection-only for
+every media kind and thumbnail state. A video tile that initially lacked a
+thumbnail previously received `data-photo-map-preview-path`; progressive
+thumbnail updates patched only its inner contents, so that preview trigger
+survived after the poster loaded and the global preview handler opened the video
+directly from the grid. Group tiles now always use the same `Show details for …`
+selection contract as photo tiles. Full-screen preview remains available only
+through the selected detail area's `a.photo-map-preview-link`, and the E2E
+covers both direct video-tile selection and subsequent detail-link preview.
+
 ## E2E and unit-test contract
 
 The follow-up coverage plan should be implemented against these observable

@@ -371,6 +371,8 @@ test("Photo Map grouped popup renders member grid and updates shared thumbnail s
   assert.match(popupText(popup), /photo-map-group-grid-loading/);
   assert.match(popupText(popup), /Select a thumbnail to view its details/);
   assert.doesNotMatch(popupText(popup), /photo-map-group:group/);
+  assert.doesNotMatch(popupText(popup), /data-photo-map-preview-path/);
+  assert.match(popupText(popup), /aria-label="Show details for clip\.mov"/);
 
   assert.equal(applyThumbnail(thumbnails, controller, "one.jpg", {url: "/thumbnail?one"}), true);
   assert.match(popupText(popup), /photo-map-group-grid-thumbnail/);

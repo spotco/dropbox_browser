@@ -182,9 +182,14 @@ test("grouped Photo Map keeps loaded photo and video thumbnails plus grid scroll
   await grid.evaluate((element) => { window.__photoMapGridForCoverage = element; });
 
   await videoMember.click();
-  await expect(page.locator("#photo-map-preview-overlay")).toBeVisible();
+  await expect(page.locator("#photo-map-preview-overlay")).toBeHidden();
+  await expect(page.locator(".photo-map-group-selection-details")).toBeVisible();
+  await expect(videoMember).toHaveAttribute("aria-label", /Show details/);
+  await expect(videoMember).toHaveAttribute("aria-pressed", "true");
   const scrollTopBeforeClose = await grid.evaluate((element) => element.scrollTop);
   expect(scrollTopBeforeClose).toBeGreaterThan(0);
+  await page.locator(".photo-map-group-selection a.photo-map-preview-link").click();
+  await expect(page.locator("#photo-map-preview-overlay")).toBeVisible();
   await page.locator("[data-photo-map-preview-close]").click({position: {x: 1, y: 1}});
 
   await expect(page.locator("#photo-map-preview-overlay")).toBeHidden();
