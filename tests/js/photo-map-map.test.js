@@ -383,6 +383,11 @@ test("Photo Map grouped popup selects video member details and keeps a safe grid
   cells.push(cell);
   let popup = "";
   let marker;
+  let popupUpdates = 0;
+  const popupInstance = {
+    getElement() { return root; },
+    update() { popupUpdates += 1; },
+  };
   const markerLayer = {addTo() {}, addLayer() {}, removeLayer() {}};
   const fakeLeaflet = {
     map() { return {setView() {}, invalidateSize() {}, remove() {}}; },
@@ -393,7 +398,7 @@ test("Photo Map grouped popup selects video member details and keeps a safe grid
       marker = {
         bindPopup(content) { popup = content; },
         setPopupContent(content) { popup = content; },
-        getPopup() { return {getElement() { return root; }}; },
+        getPopup() { return popupInstance; },
         on(name, callback) { listeners["marker-" + name] = callback; },
         trigger(name, event) { if (listeners["marker-" + name]) listeners["marker-" + name](event); },
       };
@@ -413,7 +418,7 @@ test("Photo Map grouped popup selects video member details and keeps a safe grid
     longitude: -74,
     photoMapGroupMembers: [member],
   }]);
-  marker.trigger("popupopen", {popup: {getElement() { return root; }}});
+  marker.trigger("popupopen", {popup: popupInstance});
   assert.equal(groupedPopupOpenCount, 1);
   // A preview overlay can restore the URL while Leaflet keeps this popup
   // mounted and therefore skips a second popupopen event. The public refresh
@@ -434,7 +439,14 @@ test("Photo Map grouped popup selects video member details and keeps a safe grid
     photoMapGroupMembers: [member],
   }]);
   assert.equal(grid.scrollTop, 180);
-  listeners["grid-click"]({target: cell});
+  listeners["root-click"]({target: cell});
+  assert.equal(popupUpdates, 1);
+  assert.equal(controller.setGroupedMemberThumbnailState(member.path, "ready"), true);
+  assert.equal(popupUpdates, 2);
+  // Cached scheduler demand emits ready repeatedly after a map move. The
+  // duplicate state must not re-render or pan the selected popup again.
+  assert.equal(controller.setGroupedMemberThumbnailState(member.path, "ready"), false);
+  assert.equal(popupUpdates, 2);
 
   assert.match(selection.innerHTML, /one &amp; two\.mov/);
   assert.match(selection.innerHTML, /Latitude/);
@@ -668,7 +680,7 @@ test("Photo Map video popup keeps GPS details and shows the neutral thumbnail fa
   assert.doesNotMatch(popup, /<img/);
 });
 
-test("Photo Map lifecycle debug logs are enabled by default and toggleable", async () => {
+test("Photo Map lifecycle debug logs are toggleable", async () => {
   const mapModule = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/map.js");
   const calls = [];
   const mapListeners = {};
@@ -705,7 +717,10 @@ test("Photo Map lifecycle debug logs are enabled by default and toggleable", asy
   };
   const controller = mapModule.createPhotoMap(fakeLeaflet, "map-element", {
     console: {debug(...args) { calls.push(args); }},
+    debug: true,
   });
+
+  assert.equal(controller.isDebugEnabled(), true);
 
   controller.setMarkerItems([{path: "photo.jpg", display_name: "photo.jpg", latitude: 1, longitude: 2}]);
   markers[0].trigger("popupopen", {layer: markers[0]});
@@ -718,6 +733,10 @@ test("Photo Map lifecycle debug logs are enabled by default and toggleable", asy
   assert.ok(calls.some((call) => call[1] === "marker-popupopen"));
   assert.ok(calls.some((call) => call[1] === "marker-popupclose"));
   assert.ok(calls.some((call) => call[1] === "cluster-spiderfied" && call[2].childCount === 3));
+  const debugState = controller.getDebugState();
+  assert.equal(debugState.activePopupPath, "");
+  assert.ok(debugState.recentEvents.some((event) => event.event === "marker-popupopen"));
+  assert.ok(debugState.recentEvents.length <= mapModule.PHOTO_MAP_DEBUG_EVENT_LIMIT);
 
   const countBeforeDisable = calls.length;
   controller.setDebugEnabled(false);
@@ -728,6 +747,25 @@ test("Photo Map lifecycle debug logs are enabled by default and toggleable", asy
   controller.setDebugEnabled(true);
   mapListeners.popupclose({popup: {}});
   assert.equal(calls[calls.length - 1][1], "map-popupclose");
+});
+
+test("Photo Map debug events do not post one client log per map event", async () => {
+  const mapModule = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/map.js");
+  const clientLogCalls = [];
+  const fakeMap = {setView() {}, invalidateSize() {}, remove() {}, on() {}};
+  const fakeLeaflet = {
+    map() { return fakeMap; },
+    tileLayer() { return {addTo() {}}; },
+    markerClusterGroup() { return {addTo() {}, clearLayers() {}, addLayers() {}, on() {}}; },
+  };
+
+  mapModule.createPhotoMap(fakeLeaflet, "map-element", {
+    console: {debug() {}},
+    clientLogger: {debug(...args) { clientLogCalls.push(args); }},
+    debug: true,
+  });
+
+  assert.deepEqual(clientLogCalls, []);
 });
 
 test("Photo Map reconciles marker metadata without replacing the marker or popup binding", async () => {

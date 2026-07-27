@@ -105,3 +105,19 @@ test("Photo Map diagnostics emit concise generation counters when enabled", asyn
     completed: 5,
   });
 });
+
+test("Photo Map diagnostics do not post each detailed event", async () => {
+  const diagnosticsModule = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/diagnostics.js");
+  const calls = [];
+  const diagnostics = diagnosticsModule.createPhotoMapDiagnostics({
+    ClientLogger: {
+      enabledFor: (subsystem) => subsystem === "photo-map",
+      debug: (...args) => { calls.push(args); return true; },
+    },
+  });
+
+  diagnostics.beginGeneration(3);
+  diagnostics.logEvent("group-member-select", {selectedMemberPath: "Camera/A.mov"});
+
+  assert.deepEqual(calls, []);
+});

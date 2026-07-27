@@ -424,6 +424,7 @@ class DropboxBrowser:
             "browse-reveal": False,
             "file-search": False,
             "music-metadata": False,
+            "photo-map": False,
         }
         self._thumbnail_service: ThumbnailService | None = None
         self._video_thumbnail_service: VideoThumbnailService | None = None

@@ -22,6 +22,8 @@ Useful `config.json` settings in the repository root:
   "RCloneConfig": "%APPDATA%\\rclone\\rclone.conf",
   "LogRcloneCommands": true,
   "LogHttpRequests": true,
+  "ClientLogEnabled": true,
+  "ClientLogSubsystems": {"photo-map": false},
   "FolderCacheWorkers": 4,
   "SyncJobWorkers": 4,
   "FolderCacheTTLSeconds": 86400,
@@ -36,6 +38,10 @@ Useful `config.json` settings in the repository root:
 - `FolderCacheWorkers` controls the background folder metadata/diff worker pool.
 - `SyncJobWorkers` controls the browser-triggered sync worker pool.
 - `FolderCacheTTLSeconds` and `ListingCacheTTLSeconds` tune cache freshness.
+- Photo Map debug logging is disabled by default. Set
+  `ClientLogSubsystems.photo-map` to `true` in `config_local.json` while
+  debugging; events appear in the browser console and in
+  `Temp/client_logs.jsonl`.
 
 ## Run
 
