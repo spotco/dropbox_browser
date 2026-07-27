@@ -21,6 +21,7 @@ import {
   createPhotoMapThumbnailScheduler,
   selectPhotoMapThumbnailItems,
 } from './photo-map/thumbnails.js';
+import {createPhotoMapThumbnailStore} from './photo-map/thumbnail-store.js';
 import {ensurePhotoMapLeaflet} from './photo-map/leaflet.js';
 import {createPhotoMap} from './photo-map/map.js';
 import {createPhotoMapDiagnostics} from './photo-map/diagnostics.js';
@@ -52,7 +53,7 @@ export function initPhotoMap(options) {
   var runId = 0;
   var candidates = [];
   var metadataResults = new Map();
-  var thumbnailResults = new Map();
+  var thumbnailStore = createPhotoMapThumbnailStore();
   var abortController = null;
   var thumbnailScheduler = null;
   var mapController = null;
@@ -70,7 +71,6 @@ export function initPhotoMap(options) {
   var mapInteractionHandler = null;
   var thumbnailGenerationId = 0;
   var selectedThumbnailPath = '';
-  var selectedGroupedMemberPath = '';
   var activeGroupedPopup = null;
   var groupedDemandPaths = new Set();
   var dateInputDefaultsInitialized = false;
@@ -162,9 +162,8 @@ export function initPhotoMap(options) {
     if (abortController) abortController.abort();
     abortController = null;
     metadataResults.clear();
-    thumbnailResults.clear();
+    thumbnailStore.clear();
     activeGroupedPopup = null;
-    selectedGroupedMemberPath = '';
     if (thumbnailScheduler) {
       var groupedInFlight = new Set(
         thumbnailScheduler.getActivePaths().concat(thumbnailScheduler.getPendingPaths()),
@@ -189,13 +188,21 @@ export function initPhotoMap(options) {
       isCurrent: function () {
         return active && thumbnailGenerationId === runId;
       },
-      onState: function (item, state) {
+      onState: function (item, state, details) {
+        var path = itemSourcePath(item);
+        var previous = thumbnailStore.get(path);
+        var stored = thumbnailStore.setState(item, state, {
+          reason: details && details.reason || 'scheduler-state-update',
+          generation: runId,
+        });
+        if (!stored || (previous && previous.state === stored.state && previous.url === stored.url)) return;
         diagnostics.logEvent('thumbnail-state', {
-          path: itemSourcePath(item),
+          path: path,
           mediaKind: item && (item.mediaKind || item.photoMapMediaKind) || 'photo',
           state: state,
+          reason: details && details.reason || '',
           grouped: isActiveGroupedMemberPath(item),
-          selectedPath: selectedGroupedMemberPath || selectedThumbnailPath,
+          selectedPath: selectedGroupedPath() || selectedThumbnailPath,
         });
         if (!mapController) return;
         var path = item.path || item.photoMapSourcePath;
@@ -230,10 +237,32 @@ export function initPhotoMap(options) {
     return String((item && (item.photoMapSourcePath || item.path)) || '');
   }
 
+  function activeGroupedPopupPath() {
+    return activeGroupedPopup ? String(activeGroupedPopup.groupPath || '') : '';
+  }
+
+  function activeGroupedPopupGroup() {
+    if (!activeGroupedPopup || !mapController || typeof mapController.getMarkerItem !== 'function') return null;
+    return mapController.getMarkerItem(activeGroupedPopupPath());
+  }
+
+  function activeGroupedPopupMembers() {
+    var group = activeGroupedPopupGroup();
+    return group && Array.isArray(group.photoMapGroupMembers) ? group.photoMapGroupMembers : [];
+  }
+
+  function selectedGroupedPath() {
+    return activeGroupedPopup ? String(activeGroupedPopup.selectedMemberPath || '') : '';
+  }
+
+  function setSelectedGroupedPath(path) {
+    if (activeGroupedPopup) activeGroupedPopup.selectedMemberPath = String(path || '');
+  }
+
   function isActiveGroupedMemberPath(item) {
     if (!activeGroupedPopup || !item) return false;
     var path = itemSourcePath(item);
-    return (activeGroupedPopup.group.photoMapGroupMembers || []).some(function (member) {
+    return activeGroupedPopupMembers().some(function (member) {
       return itemSourcePath(member) === path;
     });
   }
@@ -242,13 +271,28 @@ export function initPhotoMap(options) {
     if (!activeGroupedPopup || !mapController || typeof mapController.getVisibleMarkerItems !== 'function') return false;
     var visibleItems = mapController.getVisibleMarkerItems();
     return visibleItems.some(function (item) {
-      return itemSourcePath(item) === itemSourcePath(activeGroupedPopup.group);
+      return itemSourcePath(item) === activeGroupedPopupPath();
     });
+  }
+
+  function groupedPopupIsDemandSource() {
+    if (!activeGroupedPopup || !mapController) return false;
+    // A mounted Leaflet popup is authoritative while its marker is being
+    // restored. Map bounds/cluster visibility can lag behind the popup DOM for
+    // one or more move frames; dropping the group demand in that interval is
+    // what previously left the selected grid rendered with an empty scheduler.
+    if (typeof mapController.getActivePopupPath === 'function' &&
+        activeGroupedPopupPath() === mapController.getActivePopupPath()) {
+      return true;
+    }
+    return groupedPopupIsVisible();
   }
 
   function groupedPopupItems(group, visibleMembers) {
     var members = Array.isArray(group && group.photoMapGroupMembers) ? group.photoMapGroupMembers : [];
-    var paths = new Set((Array.isArray(visibleMembers) ? visibleMembers : []).map(itemSourcePath));
+    var paths = new Set((Array.isArray(visibleMembers) ? visibleMembers : []).map(function (member) {
+      return typeof member === 'string' ? member : itemSourcePath(member);
+    }));
     return members.filter(function (member) { return paths.has(itemSourcePath(member)); });
   }
 
@@ -262,7 +306,7 @@ export function initPhotoMap(options) {
 
   function prioritizeGroupedPopupThumbnails(items) {
     return (Array.isArray(items) ? items : []).map(function (item, index) {
-      var selected = itemSourcePath(item) === selectedGroupedMemberPath;
+      var selected = itemSourcePath(item) === selectedGroupedPath();
       // Group-grid cells are what the user is actively reading. Give them a
       // dedicated priority band ahead of ordinary map pins, with the selected
       // cell first, while continuing to use the one shared browser scheduler.
@@ -272,7 +316,7 @@ export function initPhotoMap(options) {
     });
   }
 
-  function refreshThumbnailDemand(visibleMarkerItemsOverride) {
+  function refreshThumbnailDemand(visibleMarkerItemsOverride, reason) {
     if (!active) return;
     var scheduler = ensureThumbnailScheduler();
     var visibleMarkerItems = Array.isArray(visibleMarkerItemsOverride)
@@ -291,15 +335,15 @@ export function initPhotoMap(options) {
       selectedPath: selectedThumbnailPath,
     });
     var groupedItems = [];
-    if (activeGroupedPopup && groupedPopupIsVisible()) {
+    if (activeGroupedPopup && groupedPopupIsDemandSource()) {
       groupedItems = selectPhotoMapThumbnailItems(
         prioritizeGroupedPopupThumbnails(
-          groupedPopupItems(activeGroupedPopup.group, activeGroupedPopup.visibleMembers),
+          groupedPopupItems(activeGroupedPopupGroup(), activeGroupedPopup.visibleMemberPaths),
         ),
         {
           metadataResults: metadataResults,
-          visiblePaths: activeGroupedPopup.visibleMembers.map(itemSourcePath),
-          selectedPath: selectedGroupedMemberPath,
+          visiblePaths: activeGroupedPopup.visibleMemberPaths,
+          selectedPath: selectedGroupedPath(),
         },
       );
       visibleItems = visibleItems.concat(groupedItems);
@@ -317,7 +361,8 @@ export function initPhotoMap(options) {
     diagnostics.increment('thumbnailQueued', visibleItems.length);
     diagnostics.increment('groupedThumbnailQueued', groupedItems.length);
     scheduler.update(visibleItems, {
-      selectedPath: selectedGroupedMemberPath || selectedThumbnailPath,
+      selectedPath: selectedGroupedPath() || selectedThumbnailPath,
+      reason: reason || 'viewport-refresh',
     });
   }
 
@@ -328,7 +373,7 @@ export function initPhotoMap(options) {
     // because their aggregate pin is visible.
     // The current map visibility is authoritative for an open grouped popup;
     // refreshThumbnailDemand re-evaluates it before combining the two queues.
-    refreshThumbnailDemand(items);
+    refreshThumbnailDemand(items, 'map-visibility-refresh');
   }
 
   function invalidateMapSize() {
@@ -349,7 +394,7 @@ export function initPhotoMap(options) {
     var summary = mapResultsSummary();
     if (mapController && typeof mapController.setMarkerItems === 'function') {
       var locatedItems = summary.locatedItems.map(function (item) {
-        var thumbnail = thumbnailResults.get(item.path);
+        var thumbnail = thumbnailStore.getResult(item.path);
         return thumbnail && thumbnail.url
           ? Object.assign({}, item, {photoMapThumbnailUrl: thumbnail.url})
           : item;
@@ -365,21 +410,24 @@ export function initPhotoMap(options) {
       });
       mapController.setMarkerItems(markerItems);
       if (activeGroupedPopup) {
-        var activePath = itemSourcePath(activeGroupedPopup.group);
+        var activePath = activeGroupedPopupPath();
         var currentGroup = markerItems.find(function (item) {
           return item.photoMapGrouped && itemSourcePath(item) === activePath;
         });
         if (!currentGroup) {
           activeGroupedPopup = null;
-          selectedGroupedMemberPath = '';
+          groupedDemandPaths.clear();
         } else {
           var currentMembers = new Set((currentGroup.photoMapGroupMembers || []).map(itemSourcePath));
-          activeGroupedPopup.group = currentGroup;
-          activeGroupedPopup.visibleMembers = activeGroupedPopup.visibleMembers.filter(function (member) {
-            return currentMembers.has(itemSourcePath(member));
+          activeGroupedPopup.memberPaths = activeGroupedPopup.memberPaths.filter(function (path) {
+            return currentMembers.has(path);
           });
+          activeGroupedPopup.visibleMemberPaths = activeGroupedPopup.visibleMemberPaths.filter(function (path) {
+            return currentMembers.has(path);
+          });
+          if (!currentMembers.has(selectedGroupedPath())) setSelectedGroupedPath('');
         }
-        refreshThumbnailDemand();
+        refreshThumbnailDemand(undefined, 'data-generation-changed');
       }
       if (markerItems.length > 0 && !mapFittedToResults && !mapUserInteracted &&
           typeof mapController.fitToItems === 'function') {
@@ -430,6 +478,14 @@ export function initPhotoMap(options) {
     return ensurePhotoMapLeaflet(doc, win).then(function (leaflet) {
       if (!active || expectedRunId !== runId) return null;
       mapController = createPhotoMap(leaflet, doc.getElementById('photo-map-map'), {
+        document: doc,
+        window: win,
+        getThumbnailForPath: function (path) {
+          var result = thumbnailStore.getResult(path);
+          var state = thumbnailStore.get(path);
+          if (!result && !state) return null;
+          return {url: result && result.url || '', state: state && state.state || 'idle'};
+        },
         onMarkerSelect: handleMarkerSelection,
         onVisibleMarkers: syncVisiblePinThumbnails,
         onGroupedPopupOpen: openGroupedPopup,
@@ -684,7 +740,8 @@ export function initPhotoMap(options) {
   function applyThumbnailResult(item, result) {
     if (!item || !result || result.status !== 'loaded' || !result.url) return;
     var path = String(item.path || item.photoMapSourcePath || '');
-    thumbnailResults.set(path, result);
+    var storedResult = thumbnailStore.setResult(item, result);
+    if (!storedResult) return;
     diagnostics.logEvent('thumbnail-applied', {
       path: path,
       url: result.url,
@@ -692,66 +749,75 @@ export function initPhotoMap(options) {
     });
     if (mapController) {
       var grouped = typeof mapController.setGroupedMemberThumbnail === 'function' &&
-        mapController.setGroupedMemberThumbnail(path, result);
+        mapController.setGroupedMemberThumbnail(path, storedResult);
       if (!grouped && typeof mapController.setMarkerThumbnail === 'function') {
-        mapController.setMarkerThumbnail(path, result);
+        mapController.setMarkerThumbnail(path, storedResult);
       }
     }
   }
 
   function openGroupedPopup(group, visibleMembers) {
     if (!active || !group || !group.photoMapGrouped) return;
+    var groupPath = itemSourcePath(group);
+    var memberPaths = (Array.isArray(group.photoMapGroupMembers) ? group.photoMapGroupMembers : [])
+      .map(itemSourcePath);
+    var visibleMemberPaths = Array.isArray(visibleMembers) && visibleMembers.length
+      ? visibleMembers.map(itemSourcePath) : memberPaths.slice(0, 16);
     activeGroupedPopup = {
-      group: group,
-      visibleMembers: Array.isArray(visibleMembers) && visibleMembers.length
-        ? visibleMembers.slice() : (group.photoMapGroupMembers || []).slice(0, 16),
+      groupPath: groupPath,
+      memberPaths: memberPaths,
+      visibleMemberPaths: visibleMemberPaths,
+      selectedMemberPath: '',
+      scrollTop: null,
+      popupLayoutVersion: 0,
     };
-    selectedGroupedMemberPath = '';
     diagnostics.logEvent('group-popup-open', {
-      path: itemSourcePath(group),
-      memberCount: Array.isArray(group.photoMapGroupMembers) ? group.photoMapGroupMembers.length : 0,
-      visibleMemberCount: activeGroupedPopup.visibleMembers.length,
-      selectedMemberPath: selectedGroupedMemberPath,
+      path: groupPath,
+      memberCount: memberPaths.length,
+      visibleMemberCount: visibleMemberPaths.length,
+      selectedMemberPath: selectedGroupedPath(),
     });
-    refreshThumbnailDemand();
+    refreshThumbnailDemand(undefined, 'group-popup-open');
   }
 
   function updateGroupedPopupViewport(group, visibleMembers) {
-    if (!activeGroupedPopup || itemSourcePath(activeGroupedPopup.group) !== itemSourcePath(group)) return;
-    activeGroupedPopup.visibleMembers = Array.isArray(visibleMembers) ? visibleMembers.slice() : [];
+    if (!activeGroupedPopup || activeGroupedPopupPath() !== itemSourcePath(group)) return;
+    activeGroupedPopup.visibleMemberPaths = Array.isArray(visibleMembers)
+      ? visibleMembers.map(itemSourcePath) : [];
+    activeGroupedPopup.scrollTop = mapController && typeof mapController.getDebugState === 'function'
+      ? mapController.getDebugState().gridScrollTop : activeGroupedPopup.scrollTop;
     diagnostics.logEvent('group-popup-viewport', {
       path: itemSourcePath(group),
-      visibleMemberCount: activeGroupedPopup.visibleMembers.length,
-      selectedMemberPath: selectedGroupedMemberPath,
+      visibleMemberCount: activeGroupedPopup.visibleMemberPaths.length,
+      selectedMemberPath: selectedGroupedPath(),
     });
-    refreshThumbnailDemand();
+    refreshThumbnailDemand(undefined, 'group-popup-scroll');
   }
 
   function closeGroupedPopup(group) {
-    if (!activeGroupedPopup || !group || itemSourcePath(activeGroupedPopup.group) !== itemSourcePath(group)) return;
+    if (!activeGroupedPopup || !group || activeGroupedPopupPath() !== itemSourcePath(group)) return;
     diagnostics.logEvent('group-popup-close', {
       path: itemSourcePath(group),
-      selectedMemberPath: selectedGroupedMemberPath,
-      visibleMemberCount: activeGroupedPopup.visibleMembers.length,
+      selectedMemberPath: selectedGroupedPath(),
+      visibleMemberCount: activeGroupedPopup.visibleMemberPaths.length,
     });
     activeGroupedPopup = null;
-    selectedGroupedMemberPath = '';
-    refreshThumbnailDemand();
+    refreshThumbnailDemand(undefined, 'popup-closed');
   }
 
   function selectGroupedMember(group, member) {
-    if (!activeGroupedPopup || itemSourcePath(activeGroupedPopup.group) !== itemSourcePath(group)) {
+    if (!activeGroupedPopup || activeGroupedPopupPath() !== itemSourcePath(group)) {
       openGroupedPopup(group, [member].filter(Boolean));
     }
-    var previousPath = selectedGroupedMemberPath;
-    selectedGroupedMemberPath = member ? itemSourcePath(member) : '';
+    var previousPath = selectedGroupedPath();
+    setSelectedGroupedPath(member ? itemSourcePath(member) : '');
     diagnostics.logEvent('group-member-select', {
       groupPath: itemSourcePath(group),
       previousMemberPath: previousPath,
-      selectedMemberPath: selectedGroupedMemberPath,
+      selectedMemberPath: selectedGroupedPath(),
       mediaKind: member && (member.mediaKind || member.photoMapMediaKind) || '',
     });
-    refreshThumbnailDemand();
+    refreshThumbnailDemand(undefined, 'group-member-selection');
   }
 
   function handleMarkerSelection(item) {
@@ -761,7 +827,7 @@ export function initPhotoMap(options) {
       grouped: !!item.photoMapGrouped,
       mediaKind: item.mediaKind || item.photoMapMediaKind || '',
       selectedThumbnailPath: selectedThumbnailPath,
-      selectedGroupedMemberPath: selectedGroupedMemberPath,
+      selectedGroupedMemberPath: selectedGroupedPath(),
     });
     if (item.photoMapGrouped) {
       openGroupedPopup(item);
@@ -769,7 +835,7 @@ export function initPhotoMap(options) {
     }
     var path = String(item.path || item.photoMapSourcePath || '');
     selectedThumbnailPath = path;
-    var cachedThumbnail = thumbnailResults.get(path);
+    var cachedThumbnail = thumbnailStore.getResult(path);
     if (cachedThumbnail) {
       if (mapController && typeof mapController.setMarkerThumbnail === 'function') {
         mapController.setMarkerThumbnail(path, cachedThumbnail);
@@ -790,7 +856,7 @@ export function initPhotoMap(options) {
       popupPath: mapController && typeof mapController.getActivePopupPath === 'function'
         ? mapController.getActivePopupPath() : null,
       selectedThumbnailPath: selectedThumbnailPath,
-      selectedGroupedMemberPath: selectedGroupedMemberPath,
+      selectedGroupedMemberPath: selectedGroupedPath(),
       groupScrollTop: popupGrid ? popupGrid.scrollTop : null,
     };
     diagnostics.logEvent('preview-context-capture', context);
@@ -802,21 +868,29 @@ export function initPhotoMap(options) {
     diagnostics.logEvent('preview-context-restore-start', {
       popupPath: context.popupPath,
       contextSelectedMemberPath: context.selectedGroupedMemberPath,
-      currentSelectedMemberPath: selectedGroupedMemberPath,
+      currentSelectedMemberPath: selectedGroupedPath(),
       selectedThumbnailPath: context.selectedThumbnailPath,
     });
     var map = mapController && mapController.map;
-    if (map && context.center && typeof map.setView === 'function') {
-      var restoreZoom = Number.isFinite(Number(context.zoom)) ? Number(context.zoom) : map.getZoom();
-      map.setView([context.center.lat, context.center.lng], restoreZoom, {animate: false});
+    var currentCenter = map && typeof map.getCenter === 'function' ? map.getCenter() : null;
+    var restoreZoom = map && typeof map.getZoom === 'function' ? map.getZoom() : null;
+    var centerMatches = !!(currentCenter && context.center &&
+      Math.abs(Number(currentCenter.lat) - Number(context.center.lat)) < 1e-7 &&
+      Math.abs(Number(currentCenter.lng) - Number(context.center.lng)) < 1e-7);
+    var zoomMatches = context.zoom == null || restoreZoom == null ||
+      Number(context.zoom) === Number(restoreZoom);
+    if (map && context.center && typeof map.setView === 'function' && (!centerMatches || !zoomMatches)) {
+      var targetZoom = Number.isFinite(Number(context.zoom)) ? Number(context.zoom) : restoreZoom;
+      map.setView([context.center.lat, context.center.lng], targetZoom, {animate: false});
     }
     var contextGroupedMemberPath = String(context.selectedGroupedMemberPath || '');
     // Closing the overlay is asynchronous. A user can select another group
     // member while that close is waiting, before this restore function runs.
     // Preserve that newer selection instead of replacing it with the stale
     // preview context (including an intentional return to the group grid).
-    var groupedMemberPathBeforeRestore = selectedGroupedMemberPath;
-    var hasNewerGroupedSelection = groupedMemberPathBeforeRestore !== contextGroupedMemberPath;
+    var groupedMemberPathBeforeRestore = selectedGroupedPath();
+    var hasNewerGroupedSelection = !!activeGroupedPopup &&
+      groupedMemberPathBeforeRestore !== contextGroupedMemberPath;
     diagnostics.logEvent('preview-context-restore-selection-check', {
       popupPath: context.popupPath,
       contextSelectedMemberPath: contextGroupedMemberPath,
@@ -824,8 +898,14 @@ export function initPhotoMap(options) {
       preservedNewerSelection: hasNewerGroupedSelection,
     });
     selectedThumbnailPath = String(context.selectedThumbnailPath || '');
-    if (!hasNewerGroupedSelection) selectedGroupedMemberPath = contextGroupedMemberPath;
+    if (!hasNewerGroupedSelection) setSelectedGroupedPath(contextGroupedMemberPath);
     if (context.popupPath && mapController && typeof mapController.openPopupForPath === 'function') {
+      var popupIsMounted = false;
+      if (typeof mapController.getActivePopupPath === 'function' &&
+          mapController.getActivePopupPath() === context.popupPath &&
+          typeof mapController.getDebugState === 'function') {
+        popupIsMounted = !!mapController.getDebugState().popupMounted;
+      }
       var restoreGroupedMember = function (path) {
         if (!path) return false;
         // The map owns the mounted popup DOM and its selected-cell state.
@@ -833,29 +913,24 @@ export function initPhotoMap(options) {
         // its initial state after a full-screen preview is dismissed.
         if (typeof mapController.showGroupedMemberForPath === 'function' &&
             mapController.showGroupedMemberForPath(context.popupPath, path)) return true;
-        if (!activeGroupedPopup || !Array.isArray(activeGroupedPopup.group.photoMapGroupMembers)) return false;
-        var selectedMember = activeGroupedPopup.group.photoMapGroupMembers.find(function (member) {
+        var currentGroup = activeGroupedPopupGroup();
+        if (!currentGroup || !Array.isArray(currentGroup.photoMapGroupMembers)) return false;
+        var selectedMember = currentGroup.photoMapGroupMembers.find(function (member) {
           return itemSourcePath(member) === path;
         });
         if (!selectedMember) return false;
-        selectGroupedMember(activeGroupedPopup.group, selectedMember);
+        selectGroupedMember(currentGroup, selectedMember);
         return true;
       };
       var restorePopupState = function () {
-        if (typeof mapController.refreshPopupListenersForPath === 'function') {
-          mapController.refreshPopupListenersForPath(context.popupPath);
-        }
+        var restorePath = hasNewerGroupedSelection
+          ? groupedMemberPathBeforeRestore : contextGroupedMemberPath;
+        if (restorePath && activeGroupedPopup) setSelectedGroupedPath(restorePath);
         // The popup can be clicked before this animation-frame callback runs.
         // In that case the user's newer selection has already updated the
         // host path and must win over the stale preview context.
-        if (!hasNewerGroupedSelection && contextGroupedMemberPath &&
-            selectedGroupedMemberPath === contextGroupedMemberPath &&
-            activeGroupedPopup &&
-            Array.isArray(activeGroupedPopup.group.photoMapGroupMembers)) {
-          restoreGroupedMember(contextGroupedMemberPath);
-        } else if (hasNewerGroupedSelection &&
-            selectedGroupedMemberPath === groupedMemberPathBeforeRestore) {
-          restoreGroupedMember(groupedMemberPathBeforeRestore);
+        if (restorePath && activeGroupedPopup && activeGroupedPopup.memberPaths.indexOf(restorePath) !== -1) {
+          restoreGroupedMember(restorePath);
         }
         var popupGrid = doc.querySelector('.photo-map-group-grid');
         if (popupGrid && Number.isFinite(Number(context.groupScrollTop))) {
@@ -866,14 +941,11 @@ export function initPhotoMap(options) {
         }
         diagnostics.logEvent('preview-context-restore-applied', {
           popupPath: context.popupPath,
-          selectedMemberPath: selectedGroupedMemberPath,
+          selectedMemberPath: selectedGroupedPath(),
           preservedNewerSelection: hasNewerGroupedSelection,
         });
       };
-      mapController.openPopupForPath(context.popupPath);
-      if (typeof mapController.refreshPopupListenersForPath === 'function') {
-        mapController.refreshPopupListenersForPath(context.popupPath);
-      }
+      if (!popupIsMounted) mapController.openPopupForPath(context.popupPath);
       if (typeof win.requestAnimationFrame === 'function') win.requestAnimationFrame(restorePopupState);
       else win.setTimeout(restorePopupState, 0);
     }
@@ -893,7 +965,7 @@ export function initPhotoMap(options) {
       // click queue. Results from the persistent scheduler still flow through
       // the shared host callback above.
       requestItems.forEach(function (item) {
-        if (thumbnailResults.has(item.path)) config.onResult(item, thumbnailResults.get(item.path));
+        if (thumbnailStore.hasReady(item.path)) config.onResult(item, thumbnailStore.getResult(item.path));
       });
     }
     return Promise.resolve({results: [], aborted: false, queued: requestItems.length > 0});
@@ -951,8 +1023,13 @@ export function initPhotoMap(options) {
     return {
       active: active,
       selectedThumbnailPath: selectedThumbnailPath,
-      selectedGroupedMemberPath: selectedGroupedMemberPath,
-      activeGroupedPopupPath: activeGroupedPopup ? itemSourcePath(activeGroupedPopup.group) : '',
+      selectedGroupedMemberPath: selectedGroupedPath(),
+      activeGroupedPopupPath: activeGroupedPopupPath(),
+      groupedDemandPaths: Array.from(groupedDemandPaths),
+      thumbnailResultPaths: thumbnailStore.readyPaths(),
+      thumbnailStore: thumbnailStore.snapshot(),
+      thumbnailScheduler: thumbnailScheduler && typeof thumbnailScheduler.getDebugState === 'function'
+        ? thumbnailScheduler.getDebugState() : null,
       diagnostics: diagnostics.snapshot(),
       map: mapController && typeof mapController.getDebugState === 'function'
         ? mapController.getDebugState() : null,

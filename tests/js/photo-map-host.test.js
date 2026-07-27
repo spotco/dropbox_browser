@@ -2,6 +2,7 @@ const path = require("node:path");
 const {pathToFileURL} = require("node:url");
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const {createPhotoMapDocument, popupText} = require("./photo-map-test-fixtures");
 
 async function importModuleFromWorkspace(relativePath) {
   const absolutePath = path.resolve(__dirname, "..", "..", relativePath);
@@ -20,8 +21,9 @@ function element(initial = {}) {
   }, initial);
 }
 
-function photoMapHostFixture(folderPath = "Camera Uploads") {
+function photoMapHostFixture(folderPath = "Camera Uploads", mapOverrides = {}) {
   const pane = element();
+  const popupDocument = createPhotoMapDocument();
   const markers = [];
   const elements = {
     "photo-map-pane": pane,
@@ -34,29 +36,32 @@ function photoMapHostFixture(folderPath = "Camera Uploads") {
     "photo-map-status": element(),
     "photo-map-map": element(),
   };
-  const fakeMap = {
+  const fakeMap = Object.assign({
     setView() {},
     invalidateSize() {},
     remove() {},
     on() {},
     off() {},
-  };
+  }, mapOverrides);
   const fakeLeaflet = {
     map() { return fakeMap; },
     tileLayer() { return {addTo() {}}; },
     markerClusterGroup() {
       return {
         addTo() {},
-        clearLayers() { markers.length = 0; },
-        addLayers(nextMarkers) { markers.push(...nextMarkers); },
+        addLayer(marker) { markers.push(marker); },
+        removeLayer(marker) {
+          const index = markers.indexOf(marker);
+          if (index >= 0) markers.splice(index, 1);
+        },
       };
     },
     marker() {
       const listeners = {};
       return {
         popup: "",
-        bindPopup(content) { this.popup = content; },
-        setPopupContent(content) { this.popup = content; },
+        bindPopup(content) { this.popup = popupText(content); },
+        setPopupContent(content) { this.popup = popupText(content); },
         on(name, callback) { listeners[name] = callback; },
         trigger(name) { if (listeners[name]) listeners[name](this); },
       };
@@ -82,6 +87,8 @@ function photoMapHostFixture(folderPath = "Camera Uploads") {
   const doc = {
     body: {dataset: {currentFolderPath: folderPath}},
     getElementById(id) { return elements[id] || null; },
+    createElement: popupDocument.createElement,
+    querySelector() { return null; },
     addEventListener() {},
   };
   return {doc, win, elements, markers};
@@ -138,6 +145,30 @@ test("Photo Map date inputs stay hidden outside from/to modes and default to an 
   assert.equal(customFixture.elements["photo-map-custom-range"].hidden, false);
   assert.equal(customFixture.elements["photo-map-date-from"].max, todayValue);
   assert.equal(customFixture.elements["photo-map-date-to"].max, todayValue);
+});
+
+test("Photo Map preview context captures and restores the current map view", async () => {
+  const host = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map.js");
+  const setViewCalls = [];
+  const fixture = photoMapHostFixture("Camera Uploads", {
+    getCenter() { return {lat: 40.5, lng: -74}; },
+    getZoom() { return 9; },
+    setView(...args) { setViewCalls.push(args); },
+  });
+  const fetchImpl = () => Promise.resolve(jsonResponse({page: {path: "Camera Uploads"}, rows: []}));
+  const api = host.initPhotoMap({document: fixture.doc, window: fixture.win, fetchImpl});
+  await api.activate();
+
+  const context = fixture.win.DropboxBrowserPhotoMap.capturePreviewContext();
+  assert.deepEqual(context.center, {lat: 40.5, lng: -74});
+  assert.equal(context.zoom, 9);
+  assert.equal(context.popupPath, null);
+
+  fixture.win.DropboxBrowserPhotoMap.restorePreviewContext(context);
+  // The captured map view is already current. Preview restore must be
+  // idempotent and avoid producing a synthetic map move.
+  assert.equal(setViewCalls.length, 1);
+  assert.deepEqual(setViewCalls[0], [[20, 0], 2]);
 });
 
 test("Photo Map regrouping changes markers without rereading metadata", async () => {
@@ -322,7 +353,7 @@ test("Photo Map activation initializes Leaflet after starting its generation", a
   const fakeLeaflet = {
     map() { mapCalls.push("map"); return fakeMap; },
     tileLayer() { return {addTo() {}}; },
-    markerClusterGroup() { return {addTo() {}, clearLayers() {}, addLayers() {}}; },
+    markerClusterGroup() { return {addTo() {}, addLayer() {}, removeLayer() {}}; },
   };
   const win = {
     L: fakeLeaflet,
@@ -379,7 +410,7 @@ test("Photo Map destroys the Leaflet instance on page teardown", async () => {
     L: undefined,
     map() { return fakeMap; },
     tileLayer() { return {addTo() {}}; },
-    markerClusterGroup() { return {addTo() {}, clearLayers() {}, addLayers() {}}; },
+    markerClusterGroup() { return {addTo() {}, addLayer() {}, removeLayer() {}}; },
   };
   const win = {
     L: fakeLeaflet,

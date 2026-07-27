@@ -126,9 +126,13 @@ export function createPhotoMapThumbnailScheduler(options) {
   var active = new Map();
   var cache = new Map();
   var failed = new Set();
+  var emittedStates = new Map();
   var sequence = 0;
   var running = 0;
   var destroyed = false;
+  var demandUpdates = 0;
+  var demandNoOpUpdates = 0;
+  var lastDemandReason = '';
 
   function itemPath(item) {
     return String((item && (item.photoMapSourcePath || item.path)) || '');
@@ -160,9 +164,17 @@ export function createPhotoMapThumbnailScheduler(options) {
     pending = new Map(entries.map(function (entry) { return [entry.path, entry]; }));
   }
 
-  function emitState(item, state) {
-    if (destroyed || !isCurrent() || !item) return;
-    onState(item, state);
+  function emitState(item, state, details) {
+    var path = itemPath(item);
+    if (destroyed || !isCurrent() || !item || !path) return false;
+    var previous = emittedStates.get(path);
+    // A successful thumbnail remains ready even if its demand temporarily
+    // disappears. Do not emit a visual regression during scheduler churn.
+    if (previous === 'ready' && (state === 'idle' || state === 'loading')) return false;
+    if (previous === state) return false;
+    emittedStates.set(path, state);
+    onState(item, state, details || null);
+    return true;
   }
 
   function pump() {
@@ -192,21 +204,21 @@ export function createPhotoMapThumbnailScheduler(options) {
     };
     active.set(entry.path, record);
     running += 1;
-    emitState(entry.item, 'loading');
+    emitState(entry.item, 'loading', {reason: 'request-started'});
     Promise.resolve().then(function () { return loader(entry.item, controller.signal); }).then(function (loaded) {
       var current = active.get(entry.path) === record;
       if (!current || destroyed || !isCurrent() || !desired.has(entry.path) ||
           (controller.signal && controller.signal.aborted)) return;
       var result = Object.assign({}, loaded, {path: entry.path, status: 'loaded'});
       cache.set(entry.path, result);
-      emitState(entry.item, 'ready');
+      emitState(entry.item, 'ready', {reason: 'request-completed'});
       onResult(entry.item, result);
     }).catch(function (error) {
       var current = active.get(entry.path) === record;
       if (!current || destroyed || !isCurrent() || !desired.has(entry.path)) return;
       if (isAbort(error, controller.signal)) return;
       failed.add(entry.path);
-      emitState(entry.item, 'error');
+      emitState(entry.item, 'error', {reason: 'thumbnail-load-failure'});
       onResult(entry.item, {
         path: entry.path,
         status: 'error',
@@ -227,7 +239,7 @@ export function createPhotoMapThumbnailScheduler(options) {
     });
   }
 
-  function preemptLowerPriorityActive() {
+  function preemptLowerPriorityActive(reason) {
     if (!pending.size || !active.size) return;
     sortPending();
     var firstPending = pending.values().next();
@@ -236,30 +248,47 @@ export function createPhotoMapThumbnailScheduler(options) {
     active.forEach(function (record) {
       if (record.preempted || record.priority <= highestPendingPriority) return;
       record.preempted = true;
-      emitState(record.item, 'idle');
+      emitState(record.item, 'idle', {reason: reason || 'priority-preemption'});
       record.controller.abort();
     });
   }
 
-  function removeUndesired() {
+  function removeUndesired(reason) {
     pending.forEach(function (entry, path) {
       if (!desired.has(path)) {
         pending.delete(path);
-        emitState(entry.item, 'idle');
+        emitState(entry.item, 'idle', {reason: reason || 'demand-removed'});
       }
     });
     active.forEach(function (record, path) {
       if (!desired.has(path)) {
         record.controller.abort();
         active.delete(path);
-        emitState(record.item, 'idle');
+        emitState(record.item, 'idle', {reason: reason || 'demand-removed'});
       }
     });
+  }
+
+  function demandEquivalent(left, right) {
+    if (!left || !right) return false;
+    return left.path === right.path && left.priority === right.priority &&
+      itemPath(left.item) === itemPath(right.item) &&
+      String(left.item && (left.item.mediaKind || left.item.photoMapMediaKind) || 'photo') ===
+        String(right.item && (right.item.mediaKind || right.item.photoMapMediaKind) || 'photo');
+  }
+
+  function sameDemand(next) {
+    if (next.size !== desired.size) return false;
+    for (var pair of next) {
+      if (!demandEquivalent(pair[1], desired.get(pair[0]))) return false;
+    }
+    return true;
   }
 
   function update(items, options) {
     if (destroyed || !isCurrent()) return {queued: 0, active: active.size, cached: cache.size};
     var updateOptions = options || {};
+    var reason = String(updateOptions.reason || 'viewport-refresh');
     var selectedPath = updateOptions.selectedPath ? String(updateOptions.selectedPath) : '';
     var next = new Map();
     (Array.isArray(items) ? items : []).forEach(function (item, index) {
@@ -279,8 +308,20 @@ export function createPhotoMapThumbnailScheduler(options) {
       // Preserve the more urgent of the two demands in the one shared queue.
       if (!existing || candidate.priority < existing.priority) next.set(path, candidate);
     });
+    demandUpdates += 1;
+    lastDemandReason = reason;
+    if (sameDemand(next)) {
+      demandNoOpUpdates += 1;
+      return {
+        queued: pending.size,
+        active: active.size,
+        cached: cache.size,
+        changed: false,
+        reason: reason,
+      };
+    }
     desired = next;
-    removeUndesired();
+    removeUndesired(reason);
     desired.forEach(function (entry, path) {
       if (cache.has(path) || failed.has(path)) return;
       var activeRecord = active.get(path);
@@ -305,12 +346,14 @@ export function createPhotoMapThumbnailScheduler(options) {
     // occupying every slot, abort those lower-priority client-side image
     // requests. Once their aborts settle, pump() immediately starts the
     // currently visible grouped cells and later requeues the displaced pins.
-    preemptLowerPriorityActive();
+    preemptLowerPriorityActive('priority-preemption');
     pump();
     return {
       queued: pending.size,
       active: active.size,
       cached: cache.size,
+      changed: true,
+      reason: reason,
     };
   }
 
@@ -321,15 +364,15 @@ export function createPhotoMapThumbnailScheduler(options) {
     return update(items, {selectedPath: path});
   }
 
-  function cancel() {
+  function cancel(reason) {
     desired = new Map();
-    removeUndesired();
+    removeUndesired(reason || 'scheduler-cancel');
     pending.clear();
   }
 
   function reset(options) {
     var resetOptions = options || {};
-    cancel();
+    cancel('scheduler-reset');
     failed.clear();
     if (resetOptions.clearCache !== false) cache.clear();
   }
@@ -341,6 +384,20 @@ export function createPhotoMapThumbnailScheduler(options) {
     reset: reset,
     getCached: function (path) { return cache.get(String(path || '')) || null; },
     hasPending: function (path) { return pending.has(String(path || '')); },
+    getDebugState: function () {
+      return {
+        desiredPaths: Array.from(desired.keys()),
+        pendingPaths: Array.from(pending.keys()),
+        activePaths: Array.from(active.keys()),
+        cachedPaths: Array.from(cache.keys()),
+        failedPaths: Array.from(failed.values()),
+        running: running,
+        concurrency: concurrency,
+        demandUpdates: demandUpdates,
+        demandNoOpUpdates: demandNoOpUpdates,
+        lastDemandReason: lastDemandReason,
+      };
+    },
     getActivePaths: function () { return Array.from(active.keys()); },
     getPendingPaths: function () { return Array.from(pending.keys()); },
     destroy: function () {
