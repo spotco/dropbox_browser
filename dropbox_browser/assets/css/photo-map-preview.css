@@ -61,7 +61,13 @@
   color: var(--text, #111);
   box-shadow: 0 1rem 3rem rgba(0, 0, 0, .35);
 }
-.photo-map-preview-close { font-size: 1.5rem; border: 0; background: transparent; cursor: pointer; }
+.photo-map-preview-close {
+  color: #1f2933;
+  font-size: 1.5rem;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
 body.photo-map-preview-open { overflow: hidden; }
 .photo-map-preview-page-video {
   height: min(72vh, 720px);
