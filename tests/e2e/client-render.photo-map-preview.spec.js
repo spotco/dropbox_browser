@@ -70,8 +70,12 @@ async function mockGroupMedia(page) {
     await route.fulfill({status: 200, contentType: "image/jpeg", body: media});
   });
   await page.route("**/thumbnail?*", async (route) => {
-    const path = new URL(route.request().url()).searchParams.get("path") || "";
-    if (!path.startsWith("Camera Uploads/group-")) {
+    const url = new URL(route.request().url());
+    const path = url.searchParams.get("path") || "";
+    // Let the real video-thumbnail endpoint handle synthetic MOV data. The
+    // short-video regression must exercise FFmpeg's end-of-file fallback;
+    // only image thumbnails are mocked in this helper.
+    if (url.pathname !== "/thumbnail" || !path.startsWith("Camera Uploads/group-")) {
       await route.continue();
       return;
     }
@@ -162,7 +166,7 @@ test("grouped Photo Map returns to the grid and accepts another real member clic
   await expect(newerMember).toHaveAttribute("aria-pressed", "true");
 });
 
-test("grouped Photo Map keeps loaded photo and video thumbnails plus grid scroll after preview close", async ({page}) => {
+test("grouped Photo Map keeps loaded photo and short-video thumbnails plus grid scroll after preview close", async ({page}) => {
   await mockGroupMedia(page);
   await mockMixedGroupCache(page);
   await openSyntheticGroupedPopup(page, 10);
@@ -172,6 +176,8 @@ test("grouped Photo Map keeps loaded photo and video thumbnails plus grid scroll
   const videoMember = page.locator('[data-photo-map-group-member-path="Camera Uploads/group-video-a.mov"]');
   await expect(videoMember).toBeVisible();
   await expect(grid.locator("img")).toHaveCount(10);
+  await expect(videoMember.locator("img")).toHaveAttribute("src", /video\/endpoints\/thumbnail/);
+  await expect.poll(() => videoMember.locator("img").evaluate((image) => image.naturalWidth)).toBeGreaterThan(0);
   const debugBeforePreview = await photoMapDebugState(page);
   expect(debugBeforePreview.activeGroupedPopupPath).not.toBe("");
   const scrollTop = await grid.evaluate((element) => {

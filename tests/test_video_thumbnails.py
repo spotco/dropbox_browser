@@ -96,6 +96,34 @@ class VideoThumbnailServiceTests(IsolatedPathsTestCase):
         self.assertIn(str(local_root / "Camera Uploads" / "clip.mov"), calls[0])
         self.assertEqual(result.path.read_bytes(), b"jpeg-thumb")
 
+    def test_short_video_retries_near_end_when_one_second_seek_has_no_frame(self) -> None:
+        local_root = self.create_local_root({"Camera Uploads/short.mov": b"movie"})
+        service = VideoThumbnailService(
+            SimulatedRclone(),
+            "dropbox:",
+            local_root,
+            self._config(),
+            cache_dir=self.root / "ThumbnailCache",
+        )
+        descriptor = service.descriptor_for_path("Camera Uploads/short.mov", "local")
+        self.assertIsNotNone(descriptor)
+        calls = []
+
+        def fake_run(command, **_kwargs):
+            calls.append(command)
+            if "-sseof" in command:
+                Path(command[-1]).write_bytes(b"jpeg-thumb")
+            return subprocess.CompletedProcess(command, 0, b"", b"")
+
+        with patch("dropbox_browser.video_thumbnails.subprocess.run", side_effect=fake_run):
+            result = service.ensure_thumbnail(descriptor)
+
+        self.assertEqual(result.status, "generated")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][calls[0].index("-ss") + 1], "1.0")
+        self.assertEqual(calls[1][calls[1].index("-sseof") + 1], "-0.05")
+        self.assertEqual(result.path.read_bytes(), b"jpeg-thumb")
+
     def test_remote_thumbnail_uses_range_stream_input_url(self) -> None:
         remote = SimulatedRclone({
             "dropbox:Camera Uploads/clip.mov": [SimulatedLsjsonResponse(items=[{
