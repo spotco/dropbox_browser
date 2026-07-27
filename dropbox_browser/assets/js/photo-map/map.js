@@ -202,14 +202,9 @@ function groupedMemberMediaMarkup(item) {
 function groupedMemberGridItem(item) {
   var path = escapeHtml(groupMemberPath(item));
   var label = escapeHtml(markerLabel(item));
-  var failedVideoPoster = mediaKind(item) === 'video' && !item.photoMapThumbnailUrl;
-  var actionLabel = failedVideoPoster ? 'Open video preview for ' + label : 'Show details for ' + label;
-  var previewAttrs = failedVideoPoster
-    ? ' data-photo-map-preview-path="' + path + '" data-photo-map-preview-source="remote" data-photo-map-preview-kind="video"'
-    : '';
   return '<button type="button" class="photo-map-group-grid-item" data-photo-map-group-member-path="' + path +
     '" data-photo-map-thumbnail-state="' + escapeHtml(String(item.photoMapThumbnailState || 'loading')) +
-    '" aria-label="' + escapeHtml(actionLabel) + '"' + previewAttrs + '>' +
+    '" aria-label="Show details for ' + label + '">' +
     groupedMemberGridContents(item) +
     '</button>';
 }
