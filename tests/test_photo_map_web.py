@@ -67,7 +67,7 @@ class PhotoMapWebTests(AppTestCase):
         self.assertIn("photo-map-video-play", assets["/assets/js/photo-map/map.js"])
         self.assertIn("Show details for", assets["/assets/js/photo-map/map.js"])
         self.assertIn("/preview?", assets["/assets/js/photo-map/map.js"])
-        self.assertIn("data-photo-map-preview-path", assets["/assets/js/photo-map/map.js"])
+        self.assertIn("photo-map-preview-link", assets["/assets/js/photo-map/map.js"])
         self.assertNotIn("Video thumbnail unavailable", assets["/assets/js/photo-map/map.js"])
         self.assertIn(".photo-map-media-poster", assets["/assets/css/photo-map.css"])
         self.assertIn("margin-inline: auto", assets["/assets/css/photo-map.css"])
