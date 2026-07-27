@@ -128,6 +128,7 @@ test("grouped Photo Map restores the selected member after dismissing its full p
 
   await page.locator(".photo-map-group-selection a.photo-map-preview-link").click();
   await expect(page.locator("#photo-map-preview-overlay")).toBeVisible();
+  await expect(page.locator("#photo-map-preview-close")).toHaveCSS("color", "rgb(31, 41, 51)");
   await page.locator("[data-photo-map-preview-close]").click({position: {x: 1, y: 1}});
 
   await expect(page.locator("#photo-map-preview-overlay")).toBeHidden();
