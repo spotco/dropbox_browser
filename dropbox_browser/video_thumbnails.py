@@ -24,8 +24,11 @@ VIDEO_THUMBNAIL_EXTENSIONS = frozenset({
     ".avi", ".m2ts", ".m4v", ".mkv", ".mov", ".mp4", ".ts", ".webm", ".wmv",
 })
 VIDEO_THUMBNAIL_OUTPUT_FORMAT = "jpeg"
-VIDEO_THUMBNAILER_VERSION = "ffmpeg-v2-jpeg-pixfmt"
+VIDEO_THUMBNAILER_VERSION = "ffmpeg-v3-jpeg-pixfmt-end-fallback"
 VIDEO_THUMBNAIL_FRAME_SECONDS = 1.0
+# A frame a small distance before EOF is available even for sub-second media.
+# This is used only after the ordinary one-second seek produces no frame.
+VIDEO_THUMBNAIL_END_SEEK_SECONDS = 0.05
 
 
 @dataclass(frozen=True)
@@ -243,25 +246,57 @@ class VideoThumbnailService:
                 output_path = Path(handle.name)
             scale = int(descriptor.thumbnail_size)
             vf = f"scale={scale}:{scale}:force_original_aspect_ratio=decrease,pad={scale}:{scale}:(ow-iw)/2:(oh-ih)/2:color=black"
-            command = [
-                str(self.video_tools_config.ffmpeg_exe),
-                "-hide_banner", "-loglevel", "error", "-y",
-                "-ss", str(VIDEO_THUMBNAIL_FRAME_SECONDS),
-                "-i", input_path,
-                "-map", "0:v:0",
-                "-frames:v", "1",
-                "-vf", vf,
-                "-an", "-c:v", "mjpeg", "-pix_fmt", "yuvj420p", "-q:v", "4",
-                str(output_path),
-            ]
+            def build_command(seek_args: list[str]) -> list[str]:
+                return [
+                    str(self.video_tools_config.ffmpeg_exe),
+                    "-hide_banner", "-loglevel", "error", "-y",
+                    *seek_args,
+                    "-i", input_path,
+                    "-map", "0:v:0",
+                    "-frames:v", "1",
+                    "-vf", vf,
+                    "-an", "-c:v", "mjpeg", "-pix_fmt", "yuvj420p", "-q:v", "4",
+                    str(output_path),
+                ]
+
+            def has_output(process: subprocess.CompletedProcess[bytes]) -> bool:
+                return process.returncode == 0 and output_path is not None and output_path.exists() and output_path.stat().st_size > 0
+
+            timeout = float(self.video_tools_config.video_thumbnail_timeout_seconds)
+            command = build_command(["-ss", str(VIDEO_THUMBNAIL_FRAME_SECONDS)])
             proc = subprocess.run(
                 command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 check=False,
-                timeout=float(self.video_tools_config.video_thumbnail_timeout_seconds),
+                timeout=timeout,
             )
-            if proc.returncode != 0 or not output_path.exists() or output_path.stat().st_size <= 0:
+            if not has_output(proc):
+                initial_error = proc.stderr.decode("utf-8", "replace").strip()
+                fallback_command = build_command(["-sseof", f"-{VIDEO_THUMBNAIL_END_SEEK_SECONDS:g}"])
+                fallback_proc = subprocess.run(
+                    fallback_command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                    timeout=timeout,
+                )
+                if has_output(fallback_proc):
+                    self._trace(
+                        "video_thumbnail_end_fallback",
+                        descriptor,
+                        seek_seconds=VIDEO_THUMBNAIL_END_SEEK_SECONDS,
+                    )
+                    proc = fallback_proc
+                else:
+                    error = (
+                        fallback_proc.stderr.decode("utf-8", "replace").strip()
+                        or initial_error
+                        or "FFmpeg did not produce a video thumbnail."
+                    )
+                    self._trace("video_thumbnail_generation_failure", descriptor, error_message=error)
+                    return VideoThumbnailResult("failed", descriptor, None, False, error)
+            if not has_output(proc):
                 error = proc.stderr.decode("utf-8", "replace").strip() or "FFmpeg did not produce a video thumbnail."
                 self._trace("video_thumbnail_generation_failure", descriptor, error_message=error)
                 return VideoThumbnailResult("failed", descriptor, None, False, error)

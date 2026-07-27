@@ -183,7 +183,7 @@ def _save_state(state: FakeRemoteState) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("command")
-    parser.add_argument("rest", nargs="*")
+    parser.add_argument("rest", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     command = args.command
     rest = list(args.rest)
@@ -192,15 +192,33 @@ def main(argv: list[str] | None = None) -> int:
 
     if command == "lsjson":
         target = rest[-1]
+        if "--stat" in rest:
+            rel_path = state._clean_rel_path(target.split(":", 1)[1] if ":" in target else target)
+            entry = state.entries.get(rel_path)
+            if entry is None:
+                raise FileNotFoundError(target)
+            sys.stdout.write(json.dumps({
+                "Name": rel_path.rsplit("/", 1)[-1],
+                "Path": rel_path,
+                "IsDir": entry["type"] == "dir",
+                "Size": 0 if entry["type"] == "dir" else len(entry["content"]),
+                "ModTime": entry.get("mod_time", DEFAULT_MOD_TIME),
+            }))
+            return 0
         sys.stdout.write(json.dumps(state.list_dir(target)))
         return 0
 
     if command == "cat":
         offset = None
         count = None
+        files_from = None
         target = ""
         index = 0
         while index < len(rest):
+            if rest[index] == "--files-from":
+                files_from = rest[index + 1]
+                index += 2
+                continue
             part = rest[index]
             if part == "--offset":
                 offset = int(rest[index + 1])
@@ -214,6 +232,11 @@ def main(argv: list[str] | None = None) -> int:
                 target = rest[index + 1]
                 break
             index += 1
+        if files_from:
+            file_paths = Path(files_from).read_text(encoding="utf-8").splitlines()
+            if not file_paths:
+                raise FileNotFoundError(files_from)
+            target = target + file_paths[0] if target.endswith(":") else file_paths[0]
         data = state.cat(target)
         if offset is not None:
             data = data[offset:]
