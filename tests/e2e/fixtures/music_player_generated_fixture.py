@@ -19,21 +19,25 @@ TRACK_SPECS: list[dict[str, Any]] = [
     {
         "path": "music/TrackA.wav",
         "frequency": "440",
+        "volume": "0.35",
         "mod_time": "2024-03-01T10:00:00Z",
     },
     {
         "path": "music/TrackB.wav",
         "frequency": "523",
+        "volume": "0.55",
         "mod_time": "2024-01-01T10:00:00Z",
     },
     {
         "path": "music/TrackC.wav",
         "frequency": "659",
+        "volume": "0.75",
         "mod_time": "2024-02-01T10:00:00Z",
     },
     {
         "path": "music/Side/TrackD.wav",
         "frequency": "784",
+        "volume": "0.95",
         "mod_time": "2024-04-01T10:00:00Z",
     },
 ]
@@ -57,7 +61,7 @@ def run_ffmpeg(args: list[str]) -> None:
         raise SystemExit(stderr or f"ffmpeg failed: {' '.join(args)}")
 
 
-def generate_wav(output_path: Path, *, frequency: str) -> None:
+def generate_wav(output_path: Path, *, frequency: str, volume: str) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     run_ffmpeg(
         [
@@ -67,6 +71,8 @@ def generate_wav(output_path: Path, *, frequency: str) -> None:
             "lavfi",
             "-i",
             f"sine=frequency={frequency}:duration={DURATION_SECONDS}",
+            "-af",
+            f"volume={volume}",
             "-c:a",
             "pcm_s16le",
             "-t",
@@ -97,7 +103,7 @@ def main() -> int:
     for spec in TRACK_SPECS:
         rel_path = str(spec["path"])
         out_path = output_dir.joinpath(*rel_path.split("/"))
-        generate_wav(out_path, frequency=str(spec["frequency"]))
+        generate_wav(out_path, frequency=str(spec["frequency"]), volume=str(spec["volume"]))
         entries.append(
             {
                 "path": rel_path,

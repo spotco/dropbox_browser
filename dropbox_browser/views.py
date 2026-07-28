@@ -401,7 +401,12 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         browse_filter_html=browse_filter_html,
         browse_table_html=table_html,
         file_search_html=_render_static_template("file_search.html"),
-        music_player_html=_render_static_template("music_player.html"),
+        music_player_html=_render_template(
+            "music_player.html",
+            music_waveform_cache_entry_limit_attr=html.escape(
+                str(getattr(app, "music_waveform_cache_entry_limit", 20)), quote=True
+            ),
+        ),
         video_player_html=_render_static_template("video_player.html"),
         photo_map_html=_render_static_template("photo_map.html"),
         current_folder_attr=html.escape(rel_path, quote=True),

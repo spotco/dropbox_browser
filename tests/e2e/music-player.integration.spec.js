@@ -150,6 +150,59 @@ async function audioSnapshot(page) {
   });
 }
 
+async function waveformCanvasSnapshot(page) {
+  return page.evaluate(() => {
+    const canvas = document.getElementById("music-waveform-canvas");
+    if (!canvas || !canvas.width || !canvas.height) return null;
+    const context = canvas.getContext("2d");
+    if (!context) return null;
+    const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    let hash = 0;
+    let nonBackgroundPixels = 0;
+    for (let index = 0; index < data.length; index += 4) {
+      const red = data[index];
+      const green = data[index + 1];
+      const blue = data[index + 2];
+      if (red !== 11 || green !== 18 || blue !== 32) nonBackgroundPixels += 1;
+      hash = ((hash * 31) + red + green * 3 + blue * 7) >>> 0;
+    }
+    return { width: canvas.width, height: canvas.height, hash, nonBackgroundPixels };
+  });
+}
+
+async function resetAudioPosition(page) {
+  await page.evaluate(() => {
+    const audio = document.getElementById("music-audio");
+    if (!audio) return;
+    audio.pause();
+    audio.currentTime = 0;
+    audio.dispatchEvent(new Event("timeupdate"));
+  });
+  await page.waitForTimeout(100);
+}
+
+async function startWaveformStatusHistory(page) {
+  await page.evaluate(() => {
+    const status = document.getElementById("music-waveform-status");
+    window.__musicWaveformStatusHistory = [];
+    if (!status || typeof MutationObserver !== "function") return;
+    const observer = new MutationObserver(() => {
+      window.__musicWaveformStatusHistory.push(status.textContent || "");
+    });
+    observer.observe(status, { childList: true, characterData: true, subtree: true });
+    window.__musicWaveformStatusObserver = observer;
+  });
+}
+
+function waveformFetchRequests(requests) {
+  return requests.filter((request) => {
+    const headers = request.headers();
+    return request.resourceType() === "fetch" &&
+      new URL(request.url()).pathname === "/file" &&
+      !headers.range;
+  });
+}
+
 async function clearMusicSettings(page) {
   await page.evaluate(() => {
     const keys = [];
@@ -632,6 +685,78 @@ test("library selection, playlist context play, and shuffle next is non-sequenti
     .first()
     .innerText();
   expect(["TrackA.wav", "TrackB.wav", "TrackC.wav", "TrackD.wav"]).toContain(shuffledNext.trim());
+});
+
+test("waveform visualization survives multiple playlist next and previous songs", async ({ page }) => {
+  await openMusicPlayer(page);
+  await clearMusicSettings(page);
+  await page.reload();
+  await openMusicPlayer(page);
+  await loadCompleteLibrary(page);
+
+  const requests = [];
+  page.on("request", (request) => requests.push(request));
+
+  await songRow(page, "TrackA.wav").dblclick();
+  await waitForCurrentPlaylistSong(page, "TrackA.wav");
+  await waitForPlaying(page);
+  await songRow(page, "TrackB.wav").click();
+  await addSelectedSongsViaContextMenu(page);
+  await expect.poll(async () => playlistEntryNames(page), { timeout: 3000 })
+    .toEqual(["TrackA.wav", "TrackB.wav"]);
+
+  const panel = page.locator("#music-waveform-panel");
+  await expect.poll(() => panel.evaluate((element) => element.open)).toBe(false);
+  const requestsBeforeVisualization = waveformFetchRequests(requests).length;
+  expect(requestsBeforeVisualization).toBe(0);
+
+  await startWaveformStatusHistory(page);
+  await panel.locator("summary").click();
+  await expect.poll(async () => page.locator("#music-waveform-status").innerText(), { timeout: 10000 })
+    .toMatch(/Audio visualization ready at \d+ samples\./);
+  await expect.poll(() => waveformCanvasSnapshot(page), { timeout: 5000 })
+    .toMatchObject({ width: expect.any(Number), height: expect.any(Number) });
+  const firstSongCanvas = await waveformCanvasSnapshot(page);
+  expect(firstSongCanvas.nonBackgroundPixels).toBeGreaterThan(20);
+  const statusHistory = await page.evaluate(() => window.__musicWaveformStatusHistory || []);
+  expect(statusHistory.some((text) => /Pulling audio data for visualization\./.test(text))).toBe(true);
+  expect(statusHistory.some((text) => /sample round \d+\/\d+: \d+ of \d+ samples completed\./.test(text))).toBe(true);
+  expect(waveformFetchRequests(requests)).toHaveLength(1);
+  await resetAudioPosition(page);
+  const firstSongAtStart = await waveformCanvasSnapshot(page);
+
+  await page.locator("#music-next").click();
+  await waitForCurrentPlaylistSong(page, "TrackB.wav");
+  await waitForPlaying(page);
+  await expect.poll(() => waveformFetchRequests(requests).length, { timeout: 10000 }).toBe(2);
+  await expect.poll(async () => page.locator("#music-waveform-status").innerText(), { timeout: 10000 })
+    .toMatch(/Audio visualization ready at \d+ samples\./);
+  await resetAudioPosition(page);
+  const secondSongCanvas = await waveformCanvasSnapshot(page);
+  expect(secondSongCanvas.nonBackgroundPixels).toBeGreaterThan(20);
+  expect(secondSongCanvas.hash).not.toBe(firstSongAtStart.hash);
+  expect(waveformFetchRequests(requests)).toHaveLength(2);
+
+  await page.locator("#music-prev").click();
+  await waitForCurrentPlaylistSong(page, "TrackA.wav");
+  await waitForPlaying(page);
+  await expect.poll(async () => page.locator("#music-waveform-status").innerText(), { timeout: 10000 })
+    .toMatch(/Audio visualization loaded from cache at \d+ samples\./);
+  await resetAudioPosition(page);
+  const firstSongAfterPrevious = await waveformCanvasSnapshot(page);
+  expect(firstSongAfterPrevious.nonBackgroundPixels).toBeGreaterThan(20);
+  expect(firstSongAfterPrevious.hash).toBe(firstSongAtStart.hash);
+  expect(waveformFetchRequests(requests)).toHaveLength(2);
+
+  await page.locator("#music-play").click();
+  await waitForPlaying(page);
+  await page.locator("#music-waveform-reload").click();
+  await expect.poll(() => waveformFetchRequests(requests).length, { timeout: 10000 }).toBe(3);
+  await expect.poll(async () => page.locator("#music-waveform-status").innerText(), { timeout: 10000 })
+    .toMatch(/Audio visualization ready at \d+ samples\./);
+  const finalStatusHistory = await page.evaluate(() => window.__musicWaveformStatusHistory || []);
+  expect(finalStatusHistory.some((text) => /Waiting for audio data to load for visualization\./.test(text))).toBe(true);
+  await expect(page.locator("#music-waveform-reload")).toBeVisible();
 });
 
 test("overwrite and discard cancel keep prior playlist state", async ({ page }) => {

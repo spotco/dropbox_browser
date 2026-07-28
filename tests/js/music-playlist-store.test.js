@@ -65,6 +65,26 @@ test("PlaylistModel keeps duplicate absolute paths disallowed", async () => {
   );
 });
 
+test("PlaylistModel preserves live library size and modification identity", async () => {
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist-store.js");
+  const playlist = new playlistModule.PlaylistModel({
+    name: "Identity",
+    songs: [song("/Music/alpha.mp3")],
+  });
+
+  playlist.replaceSongs([{
+    ...song("/Music/alpha.mp3"),
+    size: 1234,
+    mtime: 1710000000,
+  }]);
+
+  assert.equal(playlist.songs[0].size, 1234);
+  assert.equal(playlist.songs[0].mtime, 1710000000);
+  const cloned = playlist.clone();
+  assert.equal(cloned.songs[0].size, 1234);
+  assert.equal(cloned.songs[0].mtime, 1710000000);
+});
+
 test("PlaylistModel treats dropbox-prefixed and bare paths as the same absolute path", async () => {
   const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist-store.js");
   const playlist = new playlistModule.PlaylistModel({

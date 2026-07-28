@@ -15,6 +15,11 @@
   "VideoSubtitleFontFamily": "Arial, Helvetica, sans-serif",
   "VideoSubtitleFontSizePx": 28,
   "VideoSubtitleBold": true,
+  "MusicWaveformCacheEntryLimit": 20,
+  "ClientLogEnabled": true,
+  "ClientLogSubsystems": {
+    "music-waveform": true
+  },
   "LogRcloneCommands": true,
   "LogHttpRequests": true,
   "LocalhostOnlyAccess": true,
