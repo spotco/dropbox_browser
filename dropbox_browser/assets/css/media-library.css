@@ -115,9 +115,10 @@
 }
 
 .music-subpane-header {
-  align-items: center;
+  align-items: flex-start;
   border-bottom: 1px solid #2a3b50;
   display: flex;
+  flex-wrap: wrap;
   flex: 0 0 auto;
   gap: 8px;
   justify-content: space-between;
@@ -129,13 +130,24 @@
 .music-library-sort-controls {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
+  max-width: 100%;
   min-width: 0;
 }
 
 .music-library-toolbar {
+  flex: 1 1 140px;
   justify-content: flex-end;
   margin-left: auto;
+}
+
+.music-library-toolbar button,
+.music-library-sort-controls button {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .music-player-status {
@@ -325,8 +337,10 @@
   border-bottom: 1px solid #26374b;
   display: flex;
   flex: 0 0 auto;
+  flex-wrap: wrap;
   gap: 8px;
   justify-content: space-between;
+  max-width: 100%;
   min-height: 38px;
   min-width: 0;
   padding: 6px 8px;
@@ -343,11 +357,14 @@
 .music-playlist-toolbar-group {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
+  max-width: 100%;
   min-width: 0;
 }
 
 .music-playlist-toolbar-title {
+  flex: 1 1 120px;
   color: #d7e4ef;
   flex-wrap: wrap;
   gap: 4px;
@@ -369,7 +386,15 @@
 
 .music-playlist-toolbar-actions,
 .music-playlist-toolbar-save {
+  flex: 0 1 auto;
   margin-left: auto;
+}
+
+.music-playlist-toolbar button {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .music-playlist-save-toast {

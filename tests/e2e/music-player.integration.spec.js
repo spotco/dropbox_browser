@@ -214,6 +214,59 @@ async function clearMusicSettings(page) {
   });
 }
 
+async function mediaToolbarLayoutSnapshot(page, panePrefix) {
+  return page.evaluate((prefix) => {
+    const selectors = [
+      `#${prefix}-library-pane .music-library-header`,
+      `#${prefix}-playlist-pane .music-playlist-toolbar-primary`,
+      `#${prefix}-playlist-controls`,
+    ];
+    function rectFor(element) {
+      const rect = element.getBoundingClientRect();
+      return {left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom};
+    }
+    function intersects(left, right) {
+      return left.left < right.right - 0.5 && right.left < left.right - 0.5 &&
+        left.top < right.bottom - 0.5 && right.top < left.bottom - 0.5;
+    }
+    return selectors.map((selector) => {
+      const container = document.querySelector(selector);
+      if (!container) return {selector, missing: true};
+      const containerRect = rectFor(container);
+      const children = Array.from(container.children)
+        .filter((element) => getComputedStyle(element).display !== "none")
+        .map(rectFor);
+      const buttons = Array.from(container.querySelectorAll("button"))
+        .filter((element) => getComputedStyle(element).display !== "none")
+        .map(rectFor);
+      const overlaps = (rects) => rects.some((left, index) =>
+        rects.slice(index + 1).some((right) => intersects(left, right)));
+      return {
+        selector,
+        missing: false,
+        clientWidth: container.clientWidth,
+        scrollWidth: container.scrollWidth,
+        childrenOverlap: overlaps(children),
+        buttonsOverlap: overlaps(buttons),
+        buttonOutside: buttons.some((rect) =>
+          rect.left < containerRect.left - 0.5 || rect.right > containerRect.right + 0.5),
+      };
+    });
+  }, panePrefix);
+}
+
+test("narrow music toolbars wrap without clipping or overlap", async ({ page }) => {
+  await page.setViewportSize({width: 700, height: 700});
+  await openMusicPlayer(page);
+
+  const snapshots = await mediaToolbarLayoutSnapshot(page, "music");
+  expect(snapshots.every((snapshot) => !snapshot.missing)).toBe(true);
+  expect(snapshots.every((snapshot) => snapshot.scrollWidth <= snapshot.clientWidth + 1)).toBe(true);
+  expect(snapshots.every((snapshot) => !snapshot.childrenOverlap)).toBe(true);
+  expect(snapshots.every((snapshot) => !snapshot.buttonsOverlap)).toBe(true);
+  expect(snapshots.every((snapshot) => !snapshot.buttonOutside)).toBe(true);
+});
+
 async function selectedLibrarySongNames(page) {
   return (
     await page
