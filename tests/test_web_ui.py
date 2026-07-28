@@ -600,6 +600,12 @@ class WebUiTests(AppTestCase):
         self.assertIn(".music-library-tree::-webkit-scrollbar", media_library_css)
         self.assertIn(".music-playlist-list::-webkit-scrollbar-thumb", media_library_css)
         self.assertIn(".music-player-controls", music_css)
+        self.assertIn(".music-library-toolbar", media_library_css)
+        self.assertIn(".music-library-sort-controls button", media_library_css)
+        self.assertIn(".music-playlist-toolbar", media_library_css)
+        self.assertIn("flex-wrap: wrap", media_library_css)
+        self.assertIn("max-width: 100%", media_library_css)
+        self.assertIn("text-overflow: ellipsis", media_library_css)
         self.assertIn(".music-playback-pane", music_css)
         self.assertIn("overflow-y: auto", music_css)
         self.assertIn("min-height: 260px", music_css)
@@ -1029,6 +1035,18 @@ class WebUiTests(AppTestCase):
         self.assertIn('class="video-player-shell music-player-shell"', html)
         self.assertIn('id="video-library-pane"', html)
         self.assertIn('id="video-playlist-pane"', html)
+        self.assertIn(
+            '<div class="music-subpane-header music-library-header">\n'
+            '        <h2 id="video-library-title">',
+            html,
+        )
+        self.assertIn(
+            '<div class="music-subpane-header music-playlist-toolbar music-playlist-toolbar-primary">\n'
+            '        <div class="music-playlist-toolbar-group music-playlist-toolbar-title">\n'
+            '          <h2 id="video-playlist-title">',
+            html,
+        )
+        self.assertIn('id="video-playlist-controls" class="music-playlist-toolbar music-playlist-toolbar-secondary"', html)
         self.assertIn('id="video-playback-pane"', html)
         self.assertIn("Video Library", html)
         self.assertIn("Active Playlist:", html)
