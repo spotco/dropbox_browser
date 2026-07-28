@@ -15,6 +15,7 @@ from .config import (
     load_app_config,
     load_thumbnail_config,
     load_video_tools_config,
+    normalize_music_waveform_cache_entry_limit,
 )
 from .clientlog import client_log_config
 from .foldercache import FolderCacheManager
@@ -95,6 +96,9 @@ def main() -> int:
     )
     app.video_debug_logs = bool(app_config.get("LogVideoDebug", False))
     app.client_log_enabled, app.client_log_subsystems = client_log_config(app_config)
+    app.music_waveform_cache_entry_limit = normalize_music_waveform_cache_entry_limit(
+        app_config.get("MusicWaveformCacheEntryLimit")
+    )
     app.video_subtitle_font_family = str(
         app_config.get("VideoSubtitleFontFamily", "Arial, Helvetica, sans-serif")
     ).strip() or "Arial, Helvetica, sans-serif"

@@ -38,7 +38,7 @@ function cloneSong(song) {
   var pathInfo = splitPlaylistRemotePath(song.remote_path);
   var streamPath = normalizePlaylistPath(song.stream_path || '') || pathInfo.stream_path;
   var relPath = normalizePlaylistPath(song.rel_path || '') || streamPath;
-  return {
+  var copiedSong = {
     display_name: song.display_name || song.filename || basename(pathInfo.stream_path || pathInfo.remote_path),
     extension: song.extension || '',
     filename: song.filename || song.display_name || basename(pathInfo.stream_path || pathInfo.remote_path),
@@ -46,6 +46,11 @@ function cloneSong(song) {
     remote_path: pathInfo.remote_path,
     stream_path: streamPath
   };
+  // Keep the source identity attached to live library/playlist entries. Saved
+  // playlist JSON intentionally remains path-only for backwards compatibility.
+  if (song.size !== undefined) copiedSong.size = song.size;
+  if (song.mtime !== undefined) copiedSong.mtime = song.mtime;
+  return copiedSong;
 }
 
 export function playlistAbsolutePathKey(song) {

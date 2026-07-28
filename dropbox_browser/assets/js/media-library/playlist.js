@@ -1033,7 +1033,7 @@ export function initPlaylist(ctx) {
 
   function addSongsToPlaylist(songs) {
     var added = state.activePlaylist.addSongs((songs || []).map(function (song) {
-      return {
+      var entry = {
         display_name: song.display_name,
         filename: song.filename || song.display_name,
         rel_path: song.rel_path,
@@ -1041,6 +1041,9 @@ export function initPlaylist(ctx) {
         stream_path: song.stream_path,
         extension: song.extension || ctx.playbackApi.metadata.metadataExtension(song)
       };
+      if (song.size !== undefined) entry.size = song.size;
+      if (song.mtime !== undefined) entry.mtime = song.mtime;
+      return entry;
     }));
     ctx.syncPlaylistState();
     if (added) resetShuffleBag();

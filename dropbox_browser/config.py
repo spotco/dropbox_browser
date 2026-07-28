@@ -11,6 +11,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEMP_DIR = PROJECT_ROOT / "Temp"
 PHOTO_MAP_CACHE_DIR = PROJECT_ROOT / "Cache" / "PhotoMap"
 PHOTO_MAP_CACHE_BATCH_LIMIT = 200
+MUSIC_WAVEFORM_CACHE_ENTRY_LIMIT_DEFAULT = 20
+MUSIC_WAVEFORM_CACHE_ENTRY_LIMIT_MAX = 100
 THUMBNAIL_CACHE_DIR = PROJECT_ROOT / "ThumbnailCache"
 VENDORED_MAGICK_EXE = PROJECT_ROOT / "ImageMagick" / "magick.exe"
 VENDORED_FFMPEG_EXE = PROJECT_ROOT / "FFmpeg" / "bin" / "ffmpeg.exe"
@@ -43,6 +45,7 @@ _APP_CONFIG_DEFAULTS: dict = {
     "VideoHeaderCacheTTLSeconds": 24 * 60 * 60,
     "VideoHeaderCacheMaxBytes": 500 * 1024 * 1024,
     "VideoHeaderCacheBytes": 8 * 1024 * 1024,
+    "MusicWaveformCacheEntryLimit": MUSIC_WAVEFORM_CACHE_ENTRY_LIMIT_DEFAULT,
     "VideoProbeProbeSizeBytes": 2 * 1024 * 1024,
     "VideoProbeAnalyzeDurationUs": 3_000_000,
     "LocalhostOnlyAccess": True,
@@ -57,6 +60,7 @@ _APP_CONFIG_DEFAULTS: dict = {
         "browse-reveal": False,
         "file-search": False,
         "music-metadata": False,
+        "music-waveform": False,
         "photo-map": False,
     },
     "FolderCacheWorkers": 4,
@@ -87,6 +91,17 @@ _VIDEO_FFMPEG_THREADS_MAX = 64
 _VIDEO_SESSION_IDLE_TTL_SECONDS_MAX = 7 * 24 * 60 * 60.0
 _VIDEO_BACKPRESSURE_SECONDS_MAX = 24 * 60 * 60.0
 _VIDEO_FFMPEG_PROCESS_PRIORITIES = {"idle", "below_normal", "normal"}
+
+
+def normalize_music_waveform_cache_entry_limit(value: object) -> int:
+    """Return a bounded integer count for browser waveform cache entries."""
+    try:
+        if isinstance(value, bool):
+            raise ValueError
+        normalized = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        normalized = MUSIC_WAVEFORM_CACHE_ENTRY_LIMIT_DEFAULT
+    return min(max(normalized, 0), MUSIC_WAVEFORM_CACHE_ENTRY_LIMIT_MAX)
 
 
 @dataclass(frozen=True)

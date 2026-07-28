@@ -16,7 +16,12 @@ from typing import Any
 from contextlib import nullcontext
 
 from . import syncstate, workertrace
-from .config import THUMBNAIL_CACHE_DIR, ThumbnailConfig, VideoToolsConfig
+from .config import (
+    MUSIC_WAVEFORM_CACHE_ENTRY_LIMIT_DEFAULT,
+    THUMBNAIL_CACHE_DIR,
+    ThumbnailConfig,
+    VideoToolsConfig,
+)
 from .errors import BrowserError
 from .formatting import file_type, parse_rclone_time
 from .foldercache_compute import parse_direct_listing
@@ -416,6 +421,7 @@ class DropboxBrowser:
         self.video_tools_config = video_tools_config
         self.photo_map_cache = photo_map_cache or PhotoMapCache()
         self.video_debug_logs = False
+        self.music_waveform_cache_entry_limit = MUSIC_WAVEFORM_CACHE_ENTRY_LIMIT_DEFAULT
         self.client_log_enabled = True
         self.client_log_subsystems = {
             "video": True,
@@ -424,6 +430,7 @@ class DropboxBrowser:
             "browse-reveal": False,
             "file-search": False,
             "music-metadata": False,
+            "music-waveform": False,
             "photo-map": False,
         }
         self._thumbnail_service: ThumbnailService | None = None

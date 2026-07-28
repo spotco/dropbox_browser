@@ -4,6 +4,7 @@ import {initLibrary} from './media-library/library.js';
 import {PlaylistStore} from './media-library/playlist-store.js';
 import {RecentStore} from './media-library/recent-store.js';
 import {initPlayback} from './music/playback.js';
+import {initWaveformController} from './music/waveform/controller.js';
 
 (function () {
   var pane = document.getElementById('music-player-pane');
@@ -93,7 +94,12 @@ import {initPlayback} from './music/playback.js';
       prevButton: document.getElementById('music-prev'),
       shuffleButton: document.getElementById('music-shuffle-toggle'),
       loopButton: document.getElementById('music-loop-toggle'),
-      controls: pane.querySelector('.music-player-controls')
+      controls: pane.querySelector('.music-player-controls'),
+      waveformDetails: document.getElementById('music-waveform-panel'),
+      waveformCanvas: document.getElementById('music-waveform-canvas'),
+      waveformReloadButton: document.getElementById('music-waveform-reload'),
+      waveformStatusEl: document.getElementById('music-waveform-status'),
+      waveformLiveStatusEl: document.getElementById('music-waveform-live-status')
     },
     state: {
       currentFolder: document.body.dataset.currentFolderPath || '',
@@ -183,7 +189,8 @@ import {initPlayback} from './music/playback.js';
       pendingLibraryStatusText: null,
       playlistRenderDirty: false,
       playlistSelectionDirty: false,
-      pendingPlaylistFocusRemotePath: null
+      pendingPlaylistFocusRemotePath: null,
+      waveformCacheEntryLimit: Number.parseInt(pane.dataset.musicWaveformCacheEntryLimit || '20', 10)
     },
     playlistApi: null,
     playbackApi: null,
@@ -224,6 +231,7 @@ import {initPlayback} from './music/playback.js';
   initLayout(ctx);
   initPlaylist(ctx);
   initPlayback(ctx);
+  ctx.waveformApi = initWaveformController(ctx);
   initLibrary(ctx);
 
   document.addEventListener('click', function () {
@@ -255,10 +263,12 @@ import {initPlayback} from './music/playback.js';
       ctx.layoutApi.flushDeferredMusicPaneUpdates();
       ctx.layoutApi.resumeLibraryUpdates();
       ctx.playbackApi.repaintPlaybackDisplay();
+      if (ctx.waveformApi) ctx.waveformApi.activate();
     }
     else {
       ctx.libraryApi.stopPolling();
       ctx.layoutApi.clearPlaybackUiPaintTimer();
+      if (ctx.waveformApi) ctx.waveformApi.deactivate();
     }
     ctx.playbackApi.metadata.scheduleNowPlayingMarqueeRefresh();
   });
@@ -272,11 +282,13 @@ import {initPlayback} from './music/playback.js';
       ctx.playbackApi.repaintPlaybackDisplay();
       ctx.state.windowFocused = document.hasFocus ? document.hasFocus() : true;
       ctx.playbackApi.metadata.resumeDeferredArtworkLoad();
+      if (ctx.waveformApi) ctx.waveformApi.activate();
     }
     else {
       ctx.state.windowFocused = false;
       ctx.libraryApi.stopPolling();
       ctx.layoutApi.clearPlaybackUiPaintTimer();
+      if (ctx.waveformApi) ctx.waveformApi.deactivate();
     }
   });
   window.addEventListener('focus', function () {
@@ -295,6 +307,7 @@ import {initPlayback} from './music/playback.js';
   window.addEventListener('beforeunload', function () {
     ctx.layoutApi.clearPlaybackUiPaintTimer();
     ctx.libraryApi.stopPolling();
+    if (ctx.waveformApi) ctx.waveformApi.destroy();
   });
 
   window.addEventListener('browse-folder-changed', function (ev) {

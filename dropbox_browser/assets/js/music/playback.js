@@ -270,6 +270,7 @@ export function initPlayback(ctx) {
     resetPlaybackLoadRetries(null);
     metadata.clearMetadataRequest();
     metadata.revokeCurrentArtObjectUrl();
+    if (ctx.waveformApi) ctx.waveformApi.setActiveSong(null);
     state.currentPlaylistIndex = -1;
     if (els.audio) {
       els.audio.pause();
@@ -363,6 +364,7 @@ export function initPlayback(ctx) {
       );
     }
     state.currentPlaylistIndex = index;
+    if (ctx.waveformApi) ctx.waveformApi.setActiveSong(song);
     resetPlaybackLoadRetries(song.remote_path || null);
     syncShuffleCursorForIndex(index);
     metadata.resetNowPlayingForSong(song);

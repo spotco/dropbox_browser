@@ -1,4 +1,4 @@
-<div id="music-player-pane" class="bottom-pane-view hidden" data-pane-mode="music-player" hidden>
+<div id="music-player-pane" class="bottom-pane-view hidden" data-pane-mode="music-player" hidden data-music-waveform-cache-entry-limit="$music_waveform_cache_entry_limit_attr">
   <div class="music-player-shell" aria-label="Music player">
     <section id="music-library-pane" class="music-subpane music-library-pane" aria-labelledby="music-library-title">
       <div class="music-subpane-header music-library-header">
@@ -223,6 +223,26 @@
           <input type="range" id="music-volume-slider" class="music-volume-slider" min="0" max="1" value="1" step="0.01" aria-label="Volume">
         </div>
       </div>
+      <details id="music-waveform-panel" class="music-waveform-panel">
+        <summary>Audio Visualization</summary>
+        <div class="music-waveform-content">
+          <canvas
+            id="music-waveform-canvas"
+            class="music-waveform-canvas"
+            role="img"
+            aria-label="Combined audio waveform"
+            aria-describedby="music-waveform-instructions"
+          ></canvas>
+          <div id="music-waveform-instructions" class="music-waveform-instructions">
+            Click or drag across the waveform to seek. The range slider remains available for keyboard control.
+          </div>
+          <div class="music-waveform-status-row">
+            <div id="music-waveform-status" class="music-waveform-status">Open Audio Visualization after playback starts.</div>
+            <button type="button" id="music-waveform-reload" class="music-waveform-reload">Clear and reload data</button>
+          </div>
+          <div id="music-waveform-live-status" class="music-waveform-live-status" role="status" aria-live="polite"></div>
+        </div>
+      </details>
       <audio id="music-audio" preload="metadata"></audio>
     </section>
 
