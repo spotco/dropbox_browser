@@ -707,6 +707,21 @@ test("waveform visualization survives multiple playlist next and previous songs"
 
   const panel = page.locator("#music-waveform-panel");
   await expect.poll(() => panel.evaluate((element) => element.open)).toBe(false);
+  const playbackLayout = await page.evaluate(() => {
+    const pane = document.getElementById("music-playback-pane");
+    const surface = document.querySelector(".music-playback-surface");
+    const volume = document.querySelector(".music-volume-row");
+    const waveform = document.getElementById("music-waveform-panel");
+    return {
+      paneOverflowY: pane ? getComputedStyle(pane).overflowY : "",
+      surfaceMinHeight: surface ? getComputedStyle(surface).minHeight : "",
+      volumeBottom: volume ? volume.getBoundingClientRect().bottom : 0,
+      waveformTop: waveform ? waveform.getBoundingClientRect().top : 0,
+    };
+  });
+  expect(playbackLayout.paneOverflowY).toBe("auto");
+  expect(playbackLayout.surfaceMinHeight).toBe("260px");
+  expect(playbackLayout.waveformTop).toBeGreaterThanOrEqual(playbackLayout.volumeBottom);
   const requestsBeforeVisualization = waveformFetchRequests(requests).length;
   expect(requestsBeforeVisualization).toBe(0);
 
@@ -757,6 +772,22 @@ test("waveform visualization survives multiple playlist next and previous songs"
   const finalStatusHistory = await page.evaluate(() => window.__musicWaveformStatusHistory || []);
   expect(finalStatusHistory.some((text) => /Waiting for audio data to load for visualization\./.test(text))).toBe(true);
   await expect(page.locator("#music-waveform-reload")).toBeVisible();
+
+  await panel.locator("summary").click();
+  await expect.poll(() => panel.evaluate((element) => element.open)).toBe(false);
+  await expect.poll(async () => page.evaluate(() =>
+    window.localStorage.getItem("dropbox-browser.music-waveform-open"))).toBe("false");
+  await page.reload();
+  await openMusicPlayer(page);
+  await expect.poll(() => panel.evaluate((element) => element.open)).toBe(false);
+
+  await panel.locator("summary").click();
+  await expect.poll(() => panel.evaluate((element) => element.open)).toBe(true);
+  await expect.poll(async () => page.evaluate(() =>
+    window.localStorage.getItem("dropbox-browser.music-waveform-open"))).toBe("true");
+  await page.reload();
+  await openMusicPlayer(page);
+  await expect.poll(() => panel.evaluate((element) => element.open)).toBe(true);
 });
 
 test("overwrite and discard cancel keep prior playlist state", async ({ page }) => {

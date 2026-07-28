@@ -114,12 +114,36 @@ export function initWaveformController(ctx, options) {
   var cacheSettingsKey = options && options.cacheSettingsKey
     ? options.cacheSettingsKey
     : WAVEFORM_CACHE_SETTINGS_KEY;
+  var panelOpenSettingKey = options && options.panelOpenSettingKey
+    ? options.panelOpenSettingKey
+    : 'music-waveform-open';
   var audioContextFactory = options && options.audioContextFactory
     ? options.audioContextFactory
     : defaultAudioContextFactory;
   var maximumResolution = options && options.maxResolution
     ? options.maxResolution
     : WAVEFORM_MAX_RESOLUTION;
+  function readPanelOpenPreference() {
+    var stored;
+    if (!settings || typeof settings.get !== 'function') return null;
+    try {
+      stored = settings.get(panelOpenSettingKey, null);
+      if (typeof stored === 'boolean') return stored;
+      if (stored === 'true') return true;
+      if (stored === 'false') return false;
+    } catch (_error) {}
+    return null;
+  }
+
+  function persistPanelOpenPreference(open) {
+    if (!settings || typeof settings.set !== 'function') return;
+    try {
+      settings.set(panelOpenSettingKey, !!open);
+    } catch (_error) {}
+  }
+
+  var savedPanelOpen = readPanelOpenPreference();
+  if (els.waveformDetails && savedPanelOpen !== null) els.waveformDetails.open = savedPanelOpen;
   var state = {
     activeIdentity: null,
     abortController: null,
@@ -936,6 +960,7 @@ export function initWaveformController(ctx, options) {
   function handleDetailsToggle() {
     if (state.destroyed || !els.waveformDetails) return;
     state.panelOpen = !!els.waveformDetails.open;
+    persistPanelOpenPreference(state.panelOpen);
     if (!state.panelOpen) {
       stopPlayheadLoop();
       disconnectResizeObserver();

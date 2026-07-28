@@ -245,6 +245,52 @@ test("waveform controller owns generation and worker cleanup without creating wo
   assert.equal(controller.state.destroyed, true);
 });
 
+test("waveform panel open state persists across controller initialization", async () => {
+  const controllerModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music/waveform/controller.js");
+  const settingsStore = Object.create(null);
+  const settings = {
+    get(key, fallback) {
+      return Object.prototype.hasOwnProperty.call(settingsStore, key) ? settingsStore[key] : fallback;
+    },
+    set(key, value) {
+      settingsStore[key] = value;
+    },
+  };
+  const firstDetails = createEventTarget({open: false});
+  const firstController = controllerModule.initWaveformController({
+    els: {
+      audio: createEventTarget({}),
+      waveformDetails: firstDetails,
+      waveformLiveStatusEl: {textContent: ""},
+      waveformStatusEl: {textContent: ""},
+    },
+    playbackApi: {currentSong() { return null; }},
+  }, {settings});
+
+  firstDetails.open = true;
+  firstDetails.dispatch("toggle");
+  assert.equal(settings.get("music-waveform-open", null), true);
+  firstController.destroy();
+
+  const secondDetails = createEventTarget({open: false});
+  const secondController = controllerModule.initWaveformController({
+    els: {
+      audio: createEventTarget({}),
+      waveformDetails: secondDetails,
+      waveformLiveStatusEl: {textContent: ""},
+      waveformStatusEl: {textContent: ""},
+    },
+    playbackApi: {currentSong() { return null; }},
+  }, {settings});
+  assert.equal(secondDetails.open, true);
+  assert.equal(secondController.isOpen(), true);
+
+  secondDetails.open = false;
+  secondDetails.dispatch("toggle");
+  assert.equal(settings.get("music-waveform-open", null), false);
+  secondController.destroy();
+});
+
 test("waveform fetch waits for both an open panel and confirmed audio playback", async () => {
   const controllerModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music/waveform/controller.js");
   const details = createEventTarget({open: false});
