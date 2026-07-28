@@ -28,8 +28,8 @@ the normal `<audio>` element's `playing` event.
   range.  `0` disables persistent waveform caching.
 - [x] Key cache records by remote path, remote size, and remote modification
   time so a changed file rebuilds automatically.
-- [x] Produce a low-resolution view first, then refine with independent,
-  mathematically spaced sample rounds: 64, 256, and final 1024.
+- [x] Produce a low-resolution 64-point stratified preview first, then refine
+  with one exact 1024-point scan and derived 256/64 summaries.
 - [x] Run peak reduction and progressive refinement in a dedicated Worker,
   with a small per-turn processing-time budget and deliberate yields between
   turns.
@@ -124,24 +124,23 @@ canvas.
 - [x] Send the decoded channel sample data to the worker using the least-copying
   safe transfer approach supported by the target browser.  Keep only data
   necessary for the job; never persist PCM or encoded source audio.
-- [x] Have the worker emit independent combined sample envelopes in ordered
-  rounds of 64, 256, and final 1024 samples. Each round samples
-  the centers of distinct equal-width source intervals so no round reuses a
-  source position from an earlier round.
+- [x] Have the worker emit a fast 64-point stratified summary followed by
+  exact 64, 256, and final 1024 summaries derived from one range scan. Keep
+  worker messages ordered and generation-scoped.
 - [x] Define a worker slice budget (for example 2–4 ms measured with
   `performance.now()`), followed by a short `setTimeout` yield before the next
   slice.  Make budget and yield values named constants with comments describing
   the CPU-responsiveness tradeoff.
-- [x] Compute each bucket as the largest absolute amplitude across all samples
-  and channels in that time range.  Retain enough compact peak data to redraw
-  at resize without decoding again.
+- [x] Compute each bucket as a signed minimum, signed maximum, and RMS across
+  all samples and channels in that time range. Retain enough compact summary
+  data to redraw at resize without decoding again.
 - [x] Make progress messages compact and rate-limited.  The controller should
   repaint at animation-frame cadence at most, never once per worker inner loop.
 - [x] Emit the 64-sample round immediately after decode, then report each
   completed sample round in the visualization status text. These are
   intentionally approximate envelopes optimized for responsiveness rather
   than exact full-track reductions.
-- [ ] Replace the sparse one-sample-per-bucket reduction with an Audacity-style
+- [x] Replace the sparse one-sample-per-bucket reduction with an Audacity-style
   range summary containing signed minimum, signed maximum, and RMS for each
   bucket. Keep the first 64-point preview fast with a small stratified sample
   set, then perform one exact worker scan at 1024 points and derive the 256
@@ -219,9 +218,10 @@ canvas.
   fetch/decode timing, sample rounds, canvas renders, song
   changes, and cancellation/worker cleanup; enable it only in the local
   `config.json` during investigation.
-- [x] Optimize long-track refinement with independent sparse sample rounds
-  instead of repeated full-track scans; the first 64 samples can render
-  immediately and the final visualization is capped at 1024 samples.
+- [x] Optimize long-track refinement with one exact worker scan and summary
+  merging instead of repeated full-track scans; the first stratified 64-point
+  preview can render immediately and the final visualization is capped at
+  1024 points.
 - [x] Extend the music Playwright integration fixture/spec with generated WAV
   tracks: the panel starts closed, normal playback starts before visualization
   work, each song renders a distinct waveform, and next/previous navigation

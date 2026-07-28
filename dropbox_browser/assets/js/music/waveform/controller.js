@@ -10,7 +10,7 @@ import {
   WAVEFORM_CACHE_SETTINGS_KEY,
 } from './cache.js';
 import {sameWaveformIdentity, waveformCacheKey, waveformIdentityForSong} from './cache-key.js';
-import {unpackWaveformPeaks} from './peaks.js';
+import {unpackWaveformSummaries} from './peaks.js';
 import {chooseWaveformResolution, WAVEFORM_MAX_RESOLUTION} from './resolution.js';
 import {pointerPositionToPlaybackTime} from './scrub.js';
 
@@ -46,20 +46,20 @@ function identityLogDetails(identity) {
   };
 }
 
-function peakLogDetails(values) {
-  var length = values && Number.isInteger(values.length) ? values.length : 0;
-  if (!length) return {peakCount: 0};
+function summaryLogDetails(summary) {
+  var length = summary && summary.rms && Number.isInteger(summary.rms.length) ? summary.rms.length : 0;
+  if (!length) return {summaryCount: 0};
   return {
-    peakCount: length,
-    firstPeak: Number(values[0]) || 0,
-    middlePeak: Number(values[Math.floor(length / 2)]) || 0,
-    lastPeak: Number(values[length - 1]) || 0,
+    summaryCount: length,
+    firstRms: Number(summary.rms[0]) || 0,
+    middleRms: Number(summary.rms[Math.floor(length / 2)]) || 0,
+    lastRms: Number(summary.rms[length - 1]) || 0,
   };
 }
 
 // Browser-native decodeAudioData is asynchronous, but portable Web Audio APIs
-// do not expose CPU-slice control for the decoder.  Only post-decode sample
-// scanning and peak reduction can be budgeted in our worker.
+// do not expose CPU-slice control for the decoder. Only post-decode sample
+// scanning and summary reduction can be budgeted in our worker.
 function decodeAudioData(context, bytes) {
   return new Promise(function (resolve, reject) {
     var settled = false;
@@ -134,11 +134,11 @@ export function initWaveformController(ctx, options) {
     sourceDuration: null,
     sourceIdentity: null,
     sourceState: 'idle',
-    latestPeakPayload: null,
-    latestPeakPreview: false,
-    latestPeakResolution: null,
-    latestPeakValues: new Float32Array(0),
-    peakSummaries: Object.create(null),
+    latestSummaryPayload: null,
+    latestSummaryPreview: false,
+    latestSummaryResolution: null,
+    latestSummary: {min: new Float32Array(0), max: new Float32Array(0), rms: new Float32Array(0)},
+    summaryByResolution: Object.create(null),
     playheadFrameId: null,
     renderFrameId: null,
     resizeObserver: null,
@@ -146,8 +146,8 @@ export function initWaveformController(ctx, options) {
     worker: null,
     workerGeneration: null,
     processingStartedAt: null,
-    lastPeakAt: null,
-    lastRenderedPeakKey: null,
+    lastSummaryAt: null,
+    lastRenderedSummaryKey: null,
   };
 
   function setStatus(text) {
@@ -192,9 +192,9 @@ export function initWaveformController(ctx, options) {
   }
 
   function applyCacheRecord(record, identity) {
-    var peaks;
+    var summary;
     try {
-      peaks = unpackWaveformPeaks(record.peaks);
+      summary = unpackWaveformSummaries(record.summary);
     } catch (error) {
       return false;
     }
@@ -203,17 +203,17 @@ export function initWaveformController(ctx, options) {
     state.sourceDuration = Number(record.duration);
     state.sourceState = 'ready';
     state.sourceBytes = null;
-    state.latestPeakPayload = record.peaks;
-    state.latestPeakPreview = false;
-    state.latestPeakResolution = record.resolution;
-    state.latestPeakValues = peaks;
-    state.peakSummaries = Object.create(null);
-    state.peakSummaries[String(record.resolution)] = record.peaks;
+    state.latestSummaryPayload = record.summary;
+    state.latestSummaryPreview = false;
+    state.latestSummaryResolution = record.resolution;
+    state.latestSummary = summary;
+    state.summaryByResolution = Object.create(null);
+    state.summaryByResolution[String(record.resolution)] = record.summary;
     setStatus('Audio visualization loaded from cache at ' + record.resolution + ' samples.');
     waveformLog('cache-hit', Object.assign(identityLogDetails(identity), {
       resolution: record.resolution,
       duration: record.duration,
-      payloadLength: record.peaks.length,
+      payloadLength: record.summary.length,
     }));
     scheduleRender();
     return true;
@@ -243,14 +243,14 @@ export function initWaveformController(ctx, options) {
     key = waveformCacheKey(identity);
     duration = Number(state.sourceDuration || audioDuration());
     if (!key || !Number.isFinite(duration) || duration <= 0 ||
-        !Number.isInteger(state.latestPeakResolution) || !state.latestPeakPayload) return;
+        !Number.isInteger(state.latestSummaryResolution) || !state.latestSummaryPayload) return;
     record = {
       version: WAVEFORM_CACHE_SCHEMA_VERSION,
       key: key,
       lastUsed: Date.now(),
       duration: duration,
-      resolution: state.latestPeakResolution,
-      peaks: state.latestPeakPayload,
+      resolution: state.latestSummaryResolution,
+      summary: state.latestSummaryPayload,
     };
     if (!validateWaveformCacheRecord(record, key)) return;
     entries = readStoredCacheEntries();
@@ -292,14 +292,14 @@ export function initWaveformController(ctx, options) {
     state.sourceIdentity = null;
     state.sourceState = 'idle';
     state.cacheRecord = null;
-    state.latestPeakPayload = null;
-    state.latestPeakPreview = false;
-    state.latestPeakResolution = null;
-    state.latestPeakValues = new Float32Array(0);
-    state.peakSummaries = Object.create(null);
+    state.latestSummaryPayload = null;
+    state.latestSummaryPreview = false;
+    state.latestSummaryResolution = null;
+    state.latestSummary = {min: new Float32Array(0), max: new Float32Array(0), rms: new Float32Array(0)};
+    state.summaryByResolution = Object.create(null);
     state.processingStartedAt = null;
-    state.lastPeakAt = null;
-    state.lastRenderedPeakKey = null;
+    state.lastSummaryAt = null;
+    state.lastRenderedSummaryKey = null;
     if (state.panelOpen) scheduleRender();
   }
 
@@ -364,25 +364,34 @@ export function initWaveformController(ctx, options) {
     else clearTimeout(frameId);
   }
 
-  function drawWaveformShape(context, peaks, width, height) {
+  function drawWaveformSummaryShape(context, summary, width, height, mode) {
     var center = height / 2;
     var amplitudeScale = Math.max(1, height * 0.42);
-    var peakCount = peaks.length;
+    var summaryCount = summary && summary.rms ? summary.rms.length : 0;
     var x;
-    var peak;
-    var amplitude;
-    if (!peakCount) return;
+    var index;
+    var top;
+    var bottom;
+    var rms;
+    var minimum;
+    var maximum;
+    if (!summaryCount) return;
     context.beginPath();
     for (x = 0; x <= width; x += 1) {
-      peak = Number(peaks[Math.min(peakCount - 1, Math.floor(x / width * peakCount))]) || 0;
-      amplitude = Math.max(1, Math.min(amplitudeScale, peak * amplitudeScale));
-      if (x === 0) context.moveTo(x, center - amplitude);
-      else context.lineTo(x, center - amplitude);
+      index = Math.min(summaryCount - 1, Math.floor(x / width * summaryCount));
+      rms = Math.max(0, Math.min(1, Number(summary.rms[index]) || 0));
+      minimum = Math.max(-1, Math.min(1, Number(summary.min[index]) || 0));
+      maximum = Math.max(-1, Math.min(1, Number(summary.max[index]) || 0));
+      top = mode === 'rms' ? center - rms * amplitudeScale : center - maximum * amplitudeScale;
+      if (x === 0) context.moveTo(x, top);
+      else context.lineTo(x, top);
     }
     for (x = width; x >= 0; x -= 1) {
-      peak = Number(peaks[Math.min(peakCount - 1, Math.floor(x / width * peakCount))]) || 0;
-      amplitude = Math.max(1, Math.min(amplitudeScale, peak * amplitudeScale));
-      context.lineTo(x, center + amplitude);
+      index = Math.min(summaryCount - 1, Math.floor(x / width * summaryCount));
+      rms = Math.max(0, Math.min(1, Number(summary.rms[index]) || 0));
+      minimum = Math.max(-1, Math.min(1, Number(summary.min[index]) || 0));
+      bottom = mode === 'rms' ? center + rms * amplitudeScale : center - minimum * amplitudeScale;
+      context.lineTo(x, bottom);
     }
     context.closePath();
     context.fill();
@@ -415,9 +424,11 @@ export function initWaveformController(ctx, options) {
     context.clearRect(0, 0, width, height);
     context.fillStyle = '#0b1220';
     context.fillRect(0, 0, width, height);
-    if (state.latestPeakValues.length) {
-      context.fillStyle = '#4f789c';
-      drawWaveformShape(context, state.latestPeakValues, width, height);
+    if (state.latestSummary.rms.length) {
+      context.fillStyle = '#3a5d79';
+      drawWaveformSummaryShape(context, state.latestSummary, width, height, 'envelope');
+      context.fillStyle = '#6e9cbb';
+      drawWaveformSummaryShape(context, state.latestSummary, width, height, 'rms');
       duration = audioDuration();
       if (duration !== null) {
         playheadFraction = Math.max(0, Math.min(1, audioCurrentTime() / duration));
@@ -425,8 +436,10 @@ export function initWaveformController(ctx, options) {
         context.beginPath();
         context.rect(0, 0, width * playheadFraction, height);
         context.clip();
-        context.fillStyle = '#b6dcf7';
-        drawWaveformShape(context, state.latestPeakValues, width, height);
+        context.fillStyle = '#8abbdc';
+        drawWaveformSummaryShape(context, state.latestSummary, width, height, 'envelope');
+        context.fillStyle = '#d1ecff';
+        drawWaveformSummaryShape(context, state.latestSummary, width, height, 'rms');
         context.restore();
       }
     }
@@ -443,13 +456,13 @@ export function initWaveformController(ctx, options) {
       canvas.setAttribute('aria-label', 'Combined audio waveform. Current position ' +
         audioCurrentTime().toFixed(1) + ' of ' + duration.toFixed(1) + ' seconds.');
     }
-    renderKey = String(state.latestPeakResolution || 0) + ':' +
-      String(state.latestPeakPreview === true) + ':' + String(state.latestPeakPayload || '');
-    if (state.lastRenderedPeakKey !== renderKey && state.latestPeakResolution) {
-      state.lastRenderedPeakKey = renderKey;
-      waveformLog('canvas-render', Object.assign(peakLogDetails(state.latestPeakValues), {
-        resolution: state.latestPeakResolution,
-        preview: state.latestPeakPreview === true,
+    renderKey = String(state.latestSummaryResolution || 0) + ':' +
+      String(state.latestSummaryPreview === true) + ':' + String(state.latestSummaryPayload || '');
+    if (state.lastRenderedSummaryKey !== renderKey && state.latestSummaryResolution) {
+      state.lastRenderedSummaryKey = renderKey;
+      waveformLog('canvas-render', Object.assign(summaryLogDetails(state.latestSummary), {
+        resolution: state.latestSummaryResolution,
+        preview: state.latestSummaryPreview === true,
         canvasWidth: canvas.width,
         canvasHeight: canvas.height,
         devicePixelRatio: dpr,
@@ -560,21 +573,23 @@ export function initWaveformController(ctx, options) {
   function handleWorkerMessage(event, token, identity) {
     var message = event && event.data ? event.data : {};
     if (!isCurrentRequest(token, identity) || message.generation !== state.workerGeneration) return;
-    if (message.type === 'peaks' && Number.isInteger(message.resolution) && typeof message.peaks === 'string') {
-      var peakReceivedAt = waveformClock();
-      var previousPeakAt = state.lastPeakAt;
-      state.peakSummaries[String(message.resolution)] = message.peaks;
-      state.latestPeakPayload = message.peaks;
-      state.latestPeakPreview = message.preview === true;
-      state.latestPeakResolution = message.resolution;
+    if (message.type === 'summary' && Number.isInteger(message.resolution) && typeof message.summary === 'string') {
+      var summaryReceivedAt = waveformClock();
+      var previousSummaryAt = state.lastSummaryAt;
+      var summary;
+      state.summaryByResolution[String(message.resolution)] = message.summary;
+      state.latestSummaryPayload = message.summary;
+      state.latestSummaryPreview = message.preview === true;
+      state.latestSummaryResolution = message.resolution;
       try {
-        state.latestPeakValues = unpackWaveformPeaks(message.peaks);
+        summary = unpackWaveformSummaries(message.summary);
       } catch (error) {
-        state.latestPeakValues = new Float32Array(0);
+        summary = {min: new Float32Array(0), max: new Float32Array(0), rms: new Float32Array(0)};
       }
+      state.latestSummary = summary;
       state.sourceState = 'processing';
-      state.lastPeakAt = peakReceivedAt;
-      waveformLog('worker-stage', Object.assign(identityLogDetails(identity), peakLogDetails(state.latestPeakValues), {
+      state.lastSummaryAt = summaryReceivedAt;
+      waveformLog('worker-stage', Object.assign(identityLogDetails(identity), summaryLogDetails(state.latestSummary), {
         generation: message.generation,
         resolution: message.resolution,
         preview: message.preview === true,
@@ -582,9 +597,9 @@ export function initWaveformController(ctx, options) {
         sampleRounds: message.sampleRounds,
         completedSamples: message.completedSamples,
         totalSamples: message.totalSamples,
-        payloadLength: message.peaks.length,
-        elapsedMs: state.processingStartedAt === null ? null : Math.round(peakReceivedAt - state.processingStartedAt),
-        sincePreviousMs: previousPeakAt === null ? null : Math.round(peakReceivedAt - previousPeakAt),
+        payloadLength: message.summary.length,
+        elapsedMs: state.processingStartedAt === null ? null : Math.round(summaryReceivedAt - state.processingStartedAt),
+        sincePreviousMs: previousSummaryAt === null ? null : Math.round(summaryReceivedAt - previousSummaryAt),
       }));
       if (Number.isInteger(message.sampleRound) && Number.isInteger(message.sampleRounds) &&
           Number.isInteger(message.completedSamples) && Number.isInteger(message.totalSamples)) {
@@ -598,17 +613,25 @@ export function initWaveformController(ctx, options) {
       scheduleRender();
       return;
     }
+    if (message.type === 'progress' && Number.isInteger(message.completedSamples) &&
+        Number.isInteger(message.totalSamples) && message.totalSamples > 0) {
+      var progressPercent = Math.max(0, Math.min(100, Math.round(
+        message.completedSamples * 100 / message.totalSamples)));
+      setStatus('Audio visualization exact scan: ' + message.completedSamples + ' of ' +
+        message.totalSamples + ' source samples completed (' + progressPercent + '%).');
+      return;
+    }
     if (message.type === 'complete') {
       waveformLog('worker-complete', Object.assign(identityLogDetails(identity), {
         generation: message.generation,
         elapsedMs: state.processingStartedAt === null ? null : Math.round(waveformClock() - state.processingStartedAt),
-        resolution: state.latestPeakResolution,
-        preview: state.latestPeakPreview === true,
+        resolution: state.latestSummaryResolution,
+        preview: state.latestSummaryPreview === true,
       }));
       state.sourceState = 'ready';
       saveCompletedCache(identity);
-      setStatus(state.latestPeakResolution
-        ? 'Audio visualization ready at ' + state.latestPeakResolution + ' samples.'
+      setStatus(state.latestSummaryResolution
+        ? 'Audio visualization ready at ' + state.latestSummaryResolution + ' samples.'
         : 'Audio visualization ready.');
       scheduleRender();
       releaseWorker();
@@ -760,13 +783,14 @@ export function initWaveformController(ctx, options) {
       }
       state.audioContext = null;
       worker = createWorker(token, identity);
-      state.peakSummaries = Object.create(null);
-      state.latestPeakPayload = null;
-      state.latestPeakPreview = false;
-      state.latestPeakResolution = null;
+      state.summaryByResolution = Object.create(null);
+      state.latestSummaryPayload = null;
+      state.latestSummaryPreview = false;
+      state.latestSummaryResolution = null;
+      state.latestSummary = {min: new Float32Array(0), max: new Float32Array(0), rms: new Float32Array(0)};
       state.processingStartedAt = waveformClock();
-      state.lastPeakAt = null;
-      state.lastRenderedPeakKey = null;
+      state.lastSummaryAt = null;
+      state.lastRenderedSummaryKey = null;
       state.sourceState = 'processing';
       payload = {
         type: 'start',
