@@ -1,9 +1,10 @@
 // Progressive sampling intentionally favors a useful silhouette quickly over
-// an exact high-resolution reduction. The final round is capped at 1024 points.
+// an exact high-resolution reduction. The default final round is 256 points;
+// configured values may raise it to the 512-point ceiling.
 export const WAVEFORM_MIN_RESOLUTION = 64;
-export const WAVEFORM_MAX_RESOLUTION = 1024;
-export const WAVEFORM_FINAL_RESOLUTION = 1024;
-export const WAVEFORM_SAMPLE_ROUNDS = [64, 256, 1024];
+export const WAVEFORM_MAX_RESOLUTION = 512;
+export const WAVEFORM_FINAL_RESOLUTION = 256;
+export const WAVEFORM_SAMPLE_ROUNDS = [64, 256, 512];
 
 function nextPowerOfTwo(value) {
   var result = 1;

@@ -13,6 +13,9 @@ PHOTO_MAP_CACHE_DIR = PROJECT_ROOT / "Cache" / "PhotoMap"
 PHOTO_MAP_CACHE_BATCH_LIMIT = 200
 MUSIC_WAVEFORM_CACHE_ENTRY_LIMIT_DEFAULT = 20
 MUSIC_WAVEFORM_CACHE_ENTRY_LIMIT_MAX = 100
+MUSIC_WAVEFORM_MAX_RESOLUTION_DEFAULT = 256
+MUSIC_WAVEFORM_MAX_RESOLUTION_MIN = 64
+MUSIC_WAVEFORM_MAX_RESOLUTION_MAX = 512
 THUMBNAIL_CACHE_DIR = PROJECT_ROOT / "ThumbnailCache"
 VENDORED_MAGICK_EXE = PROJECT_ROOT / "ImageMagick" / "magick.exe"
 VENDORED_FFMPEG_EXE = PROJECT_ROOT / "FFmpeg" / "bin" / "ffmpeg.exe"
@@ -46,6 +49,7 @@ _APP_CONFIG_DEFAULTS: dict = {
     "VideoHeaderCacheMaxBytes": 500 * 1024 * 1024,
     "VideoHeaderCacheBytes": 8 * 1024 * 1024,
     "MusicWaveformCacheEntryLimit": MUSIC_WAVEFORM_CACHE_ENTRY_LIMIT_DEFAULT,
+    "MusicWaveformMaxResolution": MUSIC_WAVEFORM_MAX_RESOLUTION_DEFAULT,
     "VideoProbeProbeSizeBytes": 2 * 1024 * 1024,
     "VideoProbeAnalyzeDurationUs": 3_000_000,
     "LocalhostOnlyAccess": True,
@@ -102,6 +106,17 @@ def normalize_music_waveform_cache_entry_limit(value: object) -> int:
     except (TypeError, ValueError, OverflowError):
         normalized = MUSIC_WAVEFORM_CACHE_ENTRY_LIMIT_DEFAULT
     return min(max(normalized, 0), MUSIC_WAVEFORM_CACHE_ENTRY_LIMIT_MAX)
+
+
+def normalize_music_waveform_max_resolution(value: object) -> int:
+    """Return a bounded maximum resolution for browser waveform summaries."""
+    try:
+        if isinstance(value, bool):
+            raise ValueError
+        normalized = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        normalized = MUSIC_WAVEFORM_MAX_RESOLUTION_DEFAULT
+    return min(max(normalized, MUSIC_WAVEFORM_MAX_RESOLUTION_MIN), MUSIC_WAVEFORM_MAX_RESOLUTION_MAX)
 
 
 @dataclass(frozen=True)

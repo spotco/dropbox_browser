@@ -16,6 +16,7 @@
   "VideoSubtitleFontSizePx": 28,
   "VideoSubtitleBold": true,
   "MusicWaveformCacheEntryLimit": 20,
+  "MusicWaveformMaxResolution": 256,
   "ClientLogEnabled": true,
   "ClientLogSubsystems": {
     "music-waveform": true

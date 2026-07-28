@@ -525,6 +525,7 @@ class WebUiTests(AppTestCase):
         self.assertNotIn('<button type="button" id="music-next">Next</button>', html)
         self.assertIn('id="music-audio" preload="metadata"', html)
         self.assertIn('id="music-waveform-panel" class="music-waveform-panel"', html)
+        self.assertIn('data-music-waveform-max-resolution="256"', html)
         self.assertIn('<summary>Audio Visualization</summary>', html)
         self.assertIn('id="music-waveform-canvas"', html)
         self.assertIn('id="music-waveform-status"', html)

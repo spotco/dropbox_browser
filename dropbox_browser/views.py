@@ -406,6 +406,9 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
             music_waveform_cache_entry_limit_attr=html.escape(
                 str(getattr(app, "music_waveform_cache_entry_limit", 20)), quote=True
             ),
+            music_waveform_max_resolution_attr=html.escape(
+                str(getattr(app, "music_waveform_max_resolution", 256)), quote=True
+            ),
         ),
         video_player_html=_render_static_template("video_player.html"),
         photo_map_html=_render_static_template("photo_map.html"),

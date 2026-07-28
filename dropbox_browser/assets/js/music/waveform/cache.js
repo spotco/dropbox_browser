@@ -3,7 +3,7 @@ import {waveformSummaryPayloadLength} from './peaks.js';
 // The cache now stores signed min/max and RMS summaries rather than one peak
 // value per bucket. Do not reuse the older sparse peak-only records.
 export const WAVEFORM_CACHE_SCHEMA_VERSION = 3;
-export const WAVEFORM_CACHE_MAX_RESOLUTION = 1024;
+export const WAVEFORM_CACHE_MAX_RESOLUTION = 512;
 export const WAVEFORM_CACHE_ENTRY_LIMIT_MAX = 100;
 export const WAVEFORM_CACHE_SETTINGS_KEY = 'music-waveform-cache';
 
