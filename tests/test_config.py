@@ -23,10 +23,26 @@ class ConfigDefaultsTests(unittest.TestCase):
         self.assertEqual(config_module.normalize_music_waveform_cache_entry_limit("oops"), 20)
         self.assertEqual(config_module.normalize_music_waveform_cache_entry_limit(True), 20)
 
+    def test_waveform_max_resolution_defaults_are_bounded(self) -> None:
+        config = dict(config_module._APP_CONFIG_DEFAULTS)
+
+        self.assertEqual(config["MusicWaveformMaxResolution"], 256)
+        self.assertEqual(config_module.normalize_music_waveform_max_resolution(64), 64)
+        self.assertEqual(config_module.normalize_music_waveform_max_resolution(256), 256)
+        self.assertEqual(config_module.normalize_music_waveform_max_resolution(-1), 64)
+        self.assertEqual(config_module.normalize_music_waveform_max_resolution(999), 512)
+        self.assertEqual(config_module.normalize_music_waveform_max_resolution("oops"), 256)
+        self.assertEqual(config_module.normalize_music_waveform_max_resolution(True), 256)
+
     def test_packaged_config_waveform_cache_entry_limit_defaults_to_20(self) -> None:
         config = config_module._read_config_file(config_module.PROJECT_ROOT / "config.json")
 
         self.assertEqual(config["MusicWaveformCacheEntryLimit"], 20)
+
+    def test_packaged_config_waveform_max_resolution_is_locally_256(self) -> None:
+        config = config_module._read_config_file(config_module.PROJECT_ROOT / "config.json")
+
+        self.assertEqual(config["MusicWaveformMaxResolution"], 256)
 
     def test_default_folder_cache_ttl_is_two_weeks(self) -> None:
         config = dict(config_module._APP_CONFIG_DEFAULTS)

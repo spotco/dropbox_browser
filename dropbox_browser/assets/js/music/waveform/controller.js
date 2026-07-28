@@ -11,7 +11,7 @@ import {
 } from './cache.js';
 import {sameWaveformIdentity, waveformCacheKey, waveformIdentityForSong} from './cache-key.js';
 import {unpackWaveformSummaries} from './peaks.js';
-import {chooseWaveformResolution, WAVEFORM_MAX_RESOLUTION} from './resolution.js';
+import {chooseWaveformResolution, WAVEFORM_FINAL_RESOLUTION} from './resolution.js';
 import {pointerPositionToPlaybackTime} from './scrub.js';
 
 function defaultWorkerFactory() {
@@ -122,7 +122,9 @@ export function initWaveformController(ctx, options) {
     : defaultAudioContextFactory;
   var maximumResolution = options && options.maxResolution
     ? options.maxResolution
-    : WAVEFORM_MAX_RESOLUTION;
+    : (ctx.state && Number.isFinite(Number(ctx.state.waveformMaxResolution))
+      ? Number(ctx.state.waveformMaxResolution)
+      : WAVEFORM_FINAL_RESOLUTION);
   function readPanelOpenPreference() {
     var stored;
     if (!settings || typeof settings.get !== 'function') return null;
@@ -697,7 +699,7 @@ export function initWaveformController(ctx, options) {
   function lookupCache(entries, song) {
     var key = waveformCacheKey(song || state.activeIdentity);
     state.cacheRecord = findWaveformCacheRecord(entries, key, {
-      maxResolution: WAVEFORM_MAX_RESOLUTION,
+      maxResolution: maximumResolution,
     });
     return state.cacheRecord;
   }

@@ -190,7 +190,8 @@ import {initWaveformController} from './music/waveform/controller.js';
       playlistRenderDirty: false,
       playlistSelectionDirty: false,
       pendingPlaylistFocusRemotePath: null,
-      waveformCacheEntryLimit: Number.parseInt(pane.dataset.musicWaveformCacheEntryLimit || '20', 10)
+      waveformCacheEntryLimit: Number.parseInt(pane.dataset.musicWaveformCacheEntryLimit || '20', 10),
+      waveformMaxResolution: Number.parseInt(pane.dataset.musicWaveformMaxResolution || '256', 10)
     },
     playlistApi: null,
     playbackApi: null,

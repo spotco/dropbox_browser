@@ -18,6 +18,7 @@ from contextlib import nullcontext
 from . import syncstate, workertrace
 from .config import (
     MUSIC_WAVEFORM_CACHE_ENTRY_LIMIT_DEFAULT,
+    MUSIC_WAVEFORM_MAX_RESOLUTION_DEFAULT,
     THUMBNAIL_CACHE_DIR,
     ThumbnailConfig,
     VideoToolsConfig,
@@ -422,6 +423,7 @@ class DropboxBrowser:
         self.photo_map_cache = photo_map_cache or PhotoMapCache()
         self.video_debug_logs = False
         self.music_waveform_cache_entry_limit = MUSIC_WAVEFORM_CACHE_ENTRY_LIMIT_DEFAULT
+        self.music_waveform_max_resolution = MUSIC_WAVEFORM_MAX_RESOLUTION_DEFAULT
         self.client_log_enabled = True
         self.client_log_subsystems = {
             "video": True,
