@@ -39,23 +39,32 @@ test("waveform cache keys include path, size, and modification identity", async 
   assert.equal(cacheKey.waveformCacheKey({remote_path: ""}), null);
 });
 
-test("waveform peaks pack compactly and cache validation rejects malformed records", async () => {
-  const peaks = await importModuleFromWorkspace("dropbox_browser/assets/js/music/waveform/peaks.js");
+test("waveform summaries pack compactly and cache validation rejects malformed records", async () => {
+  const summaries = await importModuleFromWorkspace("dropbox_browser/assets/js/music/waveform/peaks.js");
   const cache = await importModuleFromWorkspace("dropbox_browser/assets/js/music/waveform/cache.js");
-  const packed = peaks.packWaveformPeaks(new Float32Array([0, 0.5, 1]));
+  const packed = summaries.packWaveformSummaries({
+    min: new Float32Array([-1, -0.5, 0]),
+    max: new Float32Array([0.5, 0.75, 1]),
+    rms: new Float32Array([0.25, 0.5, 0.8]),
+  });
   const record = {
     version: cache.WAVEFORM_CACHE_SCHEMA_VERSION,
     key: "music-waveform-v1:[\"Music/track.wav\",\"100\",\"mtime\"]",
     lastUsed: 10,
     duration: 3,
     resolution: 3,
-    peaks: packed,
+    summary: packed,
   };
 
-  assert.equal(peaks.unpackWaveformPeaks(packed).length, 3);
+  const unpacked = summaries.unpackWaveformSummaries(packed);
+  assert.equal(unpacked.rms.length, 3);
+  assert.ok(Math.abs(unpacked.min[0] + 1) < 0.01);
+  assert.ok(Math.abs(unpacked.max[2] - 1) < 0.01);
+  assert.ok(Math.abs(unpacked.rms[1] - 0.5) < 0.01);
   assert.ok(cache.validateWaveformCacheRecord(record, record.key));
   assert.equal(cache.findWaveformCacheRecord([record], record.key), record);
   assert.equal(cache.validateWaveformCacheRecord({...record, resolution: 4}, record.key), null);
+  assert.equal(cache.validateWaveformCacheRecord({...record, summary: packed + "A"}, record.key), null);
   assert.equal(cache.validateWaveformCacheRecord({...record, key: "other"}, record.key), null);
   assert.deepEqual(
     cache.evictWaveformCacheEntries([
@@ -93,40 +102,54 @@ test("waveform resolution and pointer helpers stay ordered and clamp safely", as
   assert.equal(scrub.pointerPositionToPlaybackTime(50, {left: 0, width: 0}, 20), null);
 });
 
-test("worker peak reduction combines channel maxima", async () => {
+test("worker summaries represent sections with min, max, and RMS", async () => {
   const worker = await importModuleFromWorkspace("dropbox_browser/assets/js/music/waveform/worker.js");
-  const peaks = worker.computeCombinedWaveformPeaks([
-    new Float32Array([0, 0.5, 0.2, 0.4]),
-    new Float32Array([0.1, 0.8, 0.3, 1]),
-  ], 2);
+  const silence = worker.computeCombinedWaveformSummary([new Float32Array(8)], 2);
+  assert.deepEqual(Array.from(silence.min), [0, 0]);
+  assert.deepEqual(Array.from(silence.max), [0, 0]);
+  assert.deepEqual(Array.from(silence.rms), [0, 0]);
 
-  assert.ok(Math.abs(peaks[0] - 0.8) < 0.00001);
-  assert.equal(peaks[1], 1);
+  const steady = worker.computeCombinedWaveformSummary([new Float32Array(8).fill(0.5)], 2);
+  assert.ok(steady.min.every((value) => Math.abs(value - 0.5) < 0.00001));
+  assert.ok(steady.max.every((value) => Math.abs(value - 0.5) < 0.00001));
+  assert.ok(steady.rms.every((value) => Math.abs(value - 0.5) < 0.00001));
+
+  const ramp = worker.computeCombinedWaveformSummary([
+    new Float32Array([-1, -0.5, 0, 0.5, 1]),
+  ], 2);
+  assert.equal(ramp.min[0], -1);
+  assert.equal(ramp.max[0], 0);
+  assert.ok(Math.abs(ramp.rms[0] - Math.sqrt(1.25 / 3)) < 0.00001);
+  assert.equal(ramp.min[1], 0.5);
+  assert.equal(ramp.max[1], 1);
+  const mergedRamp = worker.mergeWaveformSummary(ramp, 1);
+  assert.equal(mergedRamp.min[0], -1);
+  assert.equal(mergedRamp.max[0], 1);
+  assert.ok(Math.abs(mergedRamp.rms[0] - Math.sqrt(2.5 / 5)) < 0.00001);
+
+  const tone = worker.computeCombinedWaveformSummary([
+    new Float32Array([0, 1, 0, -1, 0, 1, 0, -1]),
+  ], 2);
+  assert.equal(tone.min[0], -1);
+  assert.equal(tone.max[0], 1);
+  assert.ok(Math.abs(tone.rms[0] - Math.sqrt(0.5)) < 0.00001);
+
+  const impulse = worker.computeCombinedWaveformSummary([
+    new Float32Array([0, 0, 1, 0, 0, 0, 0, 0]),
+  ], 2);
+  assert.equal(impulse.max[0], 1);
+  assert.ok(impulse.rms[0] < impulse.max[0]);
+
   assert.equal(worker.WAVEFORM_WORKER_SLICE_BUDGET_MS, 3);
   assert.equal(worker.WAVEFORM_WORKER_YIELD_DELAY_MS, 8);
-  const sampled = worker.computeCombinedWaveformSampledPeaks([
-    new Float32Array([0.1, 0.2, 0.3, 0.4]),
-    new Float32Array([0.4, 0.3, 0.2, 0.1]),
-  ], 2);
-  assert.ok(Math.abs(sampled[0] - 0.3) < 0.00001);
-  assert.ok(Math.abs(sampled[1] - 0.4) < 0.00001);
 });
 
-test("progressive sample rounds use disjoint mathematically spaced source positions", async () => {
+test("fast preview samples are stratified within each bucket", async () => {
   const worker = await importModuleFromWorkspace("dropbox_browser/assets/js/music/waveform/worker.js");
-  const resolution = await importModuleFromWorkspace("dropbox_browser/assets/js/music/waveform/resolution.js");
-  const sampleCount = 4096;
-  const rounds = resolution.WAVEFORM_SAMPLE_ROUNDS.map((roundResolution) => (
-    worker.sampleIndicesForRound(sampleCount, roundResolution)
-  ));
-  const seen = new Set();
-  rounds.forEach((indices) => {
-    indices.forEach((index) => {
-      assert.equal(seen.has(index), false);
-      seen.add(index);
-    });
-  });
-  assert.equal(seen.size, resolution.WAVEFORM_SAMPLE_ROUNDS.reduce((sum, value) => sum + value, 0));
+  const indices = worker.sampleIndicesForBucket(4096, 64, 10, 8);
+  assert.equal(indices.length, 8);
+  assert.ok(indices.every((value) => value >= 640 && value < 704));
+  assert.ok(indices.every((value, index) => index === 0 || value >= indices[index - 1]));
 });
 
 test("worker protocol emits packed stages and completion through a narrow message surface", async () => {
@@ -160,16 +183,17 @@ test("worker protocol emits packed stages and completion through a narrow messag
 
   assert.equal(messages.at(-1).type, "complete");
   assert.equal(messages.at(-1).generation, 7);
-  const peakMessages = messages.filter((message) => message.type === "peaks");
-  assert.ok(peakMessages.length > 1);
-  assert.ok(peakMessages.every((message) => Number.isInteger(message.resolution) &&
-    message.resolution > 0 && typeof message.peaks === "string" &&
+  const summaryMessages = messages.filter((message) => message.type === "summary");
+  assert.ok(summaryMessages.length > 1);
+  assert.ok(summaryMessages.every((message) => Number.isInteger(message.resolution) &&
+    message.resolution > 0 && typeof message.summary === "string" &&
     Number.isInteger(message.sampleRound) && Number.isInteger(message.sampleRounds) &&
     message.sampleRound >= 1 && message.sampleRound <= message.sampleRounds &&
     message.completedSamples === message.totalSamples));
-  assert.equal(peakMessages[0].preview, true);
-  assert.equal(peakMessages[0].sampleRound, 1);
-  assert.equal(peakMessages.at(-1).sampleRound, peakMessages.at(-1).sampleRounds);
+  assert.equal(summaryMessages[0].preview, true);
+  assert.equal(summaryMessages.find((message) => message.preview === false).sampleRound, 1);
+  assert.equal(summaryMessages.at(-1).sampleRound, summaryMessages.at(-1).sampleRounds);
+  assert.equal(messages.at(-1).type, "complete");
   assert.equal(worker.installWaveformWorker.length, 1);
 });
 
@@ -289,6 +313,7 @@ test("waveform fetch waits for both an open panel and confirmed audio playback",
 
 test("waveform decode copies channels once, transfers them, and retains packed worker stages", async () => {
   const controllerModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music/waveform/controller.js");
+  const summaries = await importModuleFromWorkspace("dropbox_browser/assets/js/music/waveform/peaks.js");
   const details = createEventTarget({open: true});
   const audio = createEventTarget({ended: false, paused: false});
   const song = {remote_path: "Music/track.wav", stream_path: "Music/track.wav", size: 12, mtime: "now"};
@@ -363,17 +388,32 @@ test("waveform decode copies channels once, transfers them, and retains packed w
     assert.equal(controller.state.sourceState, "processing");
 
     const generation = controller.state.workerGeneration;
+    const firstSummary = summaries.packWaveformSummaries({
+      min: new Float32Array([-0.5, -0.2, 0]),
+      max: new Float32Array([0.5, 0.8, 1]),
+      rms: new Float32Array([0.2, 0.4, 0.6]),
+    });
+    const finalSummary = summaries.packWaveformSummaries({
+      min: new Float32Array([-1, -0.5, 0, -0.25, -0.1, 0, -0.4, -0.2, 0]),
+      max: new Float32Array([0.5, 0.8, 1, 0.4, 0.6, 0.7, 0.9, 0.8, 1]),
+      rms: new Float32Array([0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.3, 0.4, 0.5]),
+    });
     worker.onmessage({data: {
-      type: "peaks", generation, resolution: 3, peaks: "packed-first",
+      type: "summary", generation, resolution: 3, summary: firstSummary,
       sampleRound: 1, sampleRounds: 2, completedSamples: 3, totalSamples: 3,
     }});
-    assert.equal(controller.state.peakSummaries["3"], "packed-first");
+    assert.equal(controller.state.summaryByResolution["3"], firstSummary);
     assert.match(ctx.els.waveformStatusEl.textContent, /sample round 1\/\d+: \d+ of \d+ samples completed/);
     worker.onmessage({data: {
-      type: "peaks", generation, resolution: 9, peaks: "packed-final",
+      type: "progress", generation, completedSamples: 3, totalSamples: 10,
+    }});
+    assert.match(ctx.els.waveformStatusEl.textContent,
+      /Audio visualization exact scan: 3 of 10 source samples completed \(30%\)\./);
+    worker.onmessage({data: {
+      type: "summary", generation, resolution: 9, summary: finalSummary,
       sampleRound: 2, sampleRounds: 2, completedSamples: 9, totalSamples: 9,
     }});
-    assert.equal(controller.state.latestPeakResolution, 9);
+    assert.equal(controller.state.latestSummaryResolution, 9);
     worker.onmessage({data: {type: "complete", generation}});
     assert.equal(controller.state.sourceState, "ready");
     assert.match(ctx.els.waveformStatusEl.textContent, /Audio visualization ready at \d+ samples\./);
@@ -388,15 +428,19 @@ test("waveform cache hits render without fetching or decoding and touch recency"
   const controllerModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music/waveform/controller.js");
   const cacheKey = await importModuleFromWorkspace("dropbox_browser/assets/js/music/waveform/cache-key.js");
   const cache = await importModuleFromWorkspace("dropbox_browser/assets/js/music/waveform/cache.js");
-  const peaks = await importModuleFromWorkspace("dropbox_browser/assets/js/music/waveform/peaks.js");
+  const summaries = await importModuleFromWorkspace("dropbox_browser/assets/js/music/waveform/peaks.js");
   const details = createEventTarget({open: true});
   const audio = createEventTarget({ended: false, paused: false, duration: 12, currentTime: 2});
   const song = {remote_path: "Music/cached.wav", size: 24, mtime: "now"};
   const key = cacheKey.waveformCacheKey(song);
-  const packed = peaks.packWaveformPeaks(new Float32Array([0.1, 0.8]));
+  const packed = summaries.packWaveformSummaries({
+    min: new Float32Array([-0.1, -0.8]),
+    max: new Float32Array([0.1, 0.8]),
+    rms: new Float32Array([0.1, 0.8]),
+  });
   const stored = {
     version: cache.WAVEFORM_CACHE_SCHEMA_VERSION,
-    entries: [{version: cache.WAVEFORM_CACHE_SCHEMA_VERSION, key, lastUsed: 1, duration: 12, resolution: 2, peaks: packed}],
+    entries: [{version: cache.WAVEFORM_CACHE_SCHEMA_VERSION, key, lastUsed: 1, duration: 12, resolution: 2, summary: packed}],
   };
   const settingsCalls = {get: 0, set: []};
   const settings = {
@@ -446,7 +490,7 @@ test("waveform cache hits render without fetching or decoding and touch recency"
     });
     assert.equal(await controller.startForCurrentSong(), true);
     assert.equal(controller.state.sourceState, "ready");
-    assert.equal(controller.state.latestPeakResolution, 2);
+    assert.equal(controller.state.latestSummaryResolution, 2);
     assert.equal(fetchCalls, 0);
     assert.equal(decodeCalls, 0);
     assert.ok(settingsCalls.get >= 1);
@@ -462,11 +506,15 @@ test("waveform cache hits render without fetching or decoding and touch recency"
 test("completed waveform stages persist only the validated packed summary", async () => {
   const controllerModule = await importModuleFromWorkspace("dropbox_browser/assets/js/music/waveform/controller.js");
   const cache = await importModuleFromWorkspace("dropbox_browser/assets/js/music/waveform/cache.js");
-  const peaks = await importModuleFromWorkspace("dropbox_browser/assets/js/music/waveform/peaks.js");
+  const summaries = await importModuleFromWorkspace("dropbox_browser/assets/js/music/waveform/peaks.js");
   const details = createEventTarget({open: true});
   const audio = createEventTarget({ended: false, paused: false, duration: 8, currentTime: 1});
   const song = {remote_path: "Music/write-cache.wav", size: 30, mtime: "now"};
-  const packed = peaks.packWaveformPeaks(new Float32Array([0.2, 0.9]));
+  const packed = summaries.packWaveformSummaries({
+    min: new Float32Array([-0.2, -0.9]),
+    max: new Float32Array([0.2, 0.9]),
+    rms: new Float32Array([0.2, 0.9]),
+  });
   const settingsWrites = [];
   const worker = {
     onmessage: null,
@@ -524,14 +572,14 @@ test("completed waveform stages persist only the validated packed summary", asyn
     });
     await controller.startForCurrentSong();
     const generation = controller.state.workerGeneration;
-    worker.onmessage({data: {type: "peaks", generation, resolution: 2, peaks: packed}});
+    worker.onmessage({data: {type: "summary", generation, resolution: 2, summary: packed}});
     worker.onmessage({data: {type: "complete", generation}});
     assert.equal(settingsWrites.length, 1);
     assert.equal(settingsWrites[0].version, cache.WAVEFORM_CACHE_SCHEMA_VERSION);
     assert.equal(settingsWrites[0].entries.length, 1);
     assert.equal(settingsWrites[0].entries[0].duration, 8);
     assert.equal(settingsWrites[0].entries[0].resolution, 2);
-    assert.equal(settingsWrites[0].entries[0].peaks, packed);
+    assert.equal(settingsWrites[0].entries[0].summary, packed);
     controller.destroy();
   } finally {
     global.fetch = originalFetch;
@@ -599,7 +647,13 @@ test("waveform canvas renders packed peaks and pointer scrubbing uses the audio 
     },
   };
   const controller = controllerModule.initWaveformController(ctx);
-  controller.state.latestPeakValues = new Float32Array([0.1, 0.5, 1]);
+  controller.state.latestSummary = {
+    min: new Float32Array([-0.1, -0.5, -1]),
+    max: new Float32Array([0.1, 0.5, 1]),
+    rms: new Float32Array([0.1, 0.5, 0.8]),
+  };
+  controller.state.latestSummaryResolution = 3;
+  controller.state.latestSummaryPayload = "test-summary";
   controller.renderNow();
 
   assert.equal(canvas.width, 200);

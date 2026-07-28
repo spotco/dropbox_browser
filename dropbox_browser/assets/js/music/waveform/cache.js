@@ -1,8 +1,8 @@
-import {unpackWaveformPeaks} from './peaks.js';
+import {waveformSummaryPayloadLength} from './peaks.js';
 
-// The sampling algorithm and final resolution changed with the 64/256/1024
-// rounds, so previously stored 512-point records must not be reused.
-export const WAVEFORM_CACHE_SCHEMA_VERSION = 2;
+// The cache now stores signed min/max and RMS summaries rather than one peak
+// value per bucket. Do not reuse the older sparse peak-only records.
+export const WAVEFORM_CACHE_SCHEMA_VERSION = 3;
 export const WAVEFORM_CACHE_MAX_RESOLUTION = 1024;
 export const WAVEFORM_CACHE_ENTRY_LIMIT_MAX = 100;
 export const WAVEFORM_CACHE_SETTINGS_KEY = 'music-waveform-cache';
@@ -15,7 +15,7 @@ export function validateWaveformCacheRecord(record, expectedKey, options) {
   var maxResolution = options && Number.isInteger(options.maxResolution)
     ? options.maxResolution
     : WAVEFORM_CACHE_MAX_RESOLUTION;
-  var peaks;
+  var summaryLength;
   if (!record || typeof record !== 'object') return null;
   if (record.version !== WAVEFORM_CACHE_SCHEMA_VERSION) return null;
   if (typeof record.key !== 'string' || !record.key) return null;
@@ -23,13 +23,13 @@ export function validateWaveformCacheRecord(record, expectedKey, options) {
   if (!finiteNonnegative(record.lastUsed)) return null;
   if (!Number.isFinite(Number(record.duration)) || Number(record.duration) <= 0) return null;
   if (!Number.isInteger(record.resolution) || record.resolution < 1 || record.resolution > maxResolution) return null;
-  if (typeof record.peaks !== 'string' || !record.peaks) return null;
+  if (typeof record.summary !== 'string' || !record.summary) return null;
   try {
-    peaks = unpackWaveformPeaks(record.peaks);
+    summaryLength = waveformSummaryPayloadLength(record.summary);
   } catch (_error) {
     return null;
   }
-  if (peaks.length !== record.resolution) return null;
+  if (summaryLength !== record.resolution) return null;
   return record;
 }
 
