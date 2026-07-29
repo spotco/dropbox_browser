@@ -9,6 +9,7 @@ export const PHOTO_MAP_CLUSTER_RADIUS = 50;
 export const PHOTO_MAP_FIT_MAX_ZOOM = 15;
 export const PHOTO_MAP_DEBUG_DEFAULT = false;
 export const PHOTO_MAP_DEBUG_EVENT_LIMIT = 120;
+export const PHOTO_MAP_MARKER_BATCH_SIZE = 100;
 
 function escapeHtml(value) {
   return String(value || '').replace(/[&<>"']/g, function (character) {
@@ -392,6 +393,7 @@ function popupContentElement(documentImpl, item) {
 
 export function createPhotoMap(L, element, options) {
   var config = options || {};
+  var windowImpl = config.window || (typeof window !== 'undefined' ? window : null);
   var debug = createPhotoMapDebugLogger(config);
   var map = L.map(element, {
     minZoom: PHOTO_MAP_MIN_ZOOM,
@@ -454,6 +456,8 @@ export function createPhotoMap(L, element, options) {
   var markerEntries = new Map();
   var layerEntries = new Map();
   var layerSyncDeferred = false;
+  var layerSyncGeneration = 0;
+  var layerSyncScheduled = false;
   var activePopupPath = null;
   var popupDiagnostics = {
     rootMounts: 0,
@@ -468,6 +472,28 @@ export function createPhotoMap(L, element, options) {
   var popupFitFrame = null;
   var popupFitEntry = null;
   var popupFitVersion = 0;
+
+  function invalidateLayerSync() {
+    layerSyncGeneration += 1;
+    layerSyncScheduled = false;
+  }
+
+  function scheduleLayerSync(callback) {
+    var generation = layerSyncGeneration;
+    layerSyncScheduled = true;
+    var run = function () {
+      if (generation !== layerSyncGeneration) return;
+      layerSyncScheduled = false;
+      callback();
+    };
+    if (windowImpl && typeof windowImpl.requestAnimationFrame === 'function') {
+      windowImpl.requestAnimationFrame(run);
+    } else {
+      var setTimer = windowImpl && typeof windowImpl.setTimeout === 'function'
+        ? windowImpl.setTimeout.bind(windowImpl) : setTimeout;
+      setTimer(run, 0);
+    }
+  }
   function thumbnailForPath(path) {
     var wanted = String(path || '');
     if (!wanted) return null;
@@ -1027,11 +1053,13 @@ function renderGroupCell(cell, member) {
     return entry;
   }
 
-  function syncMarkerLayer() {
+  function syncMarkerLayer(options) {
     if (markerLayer._spiderfied) {
       layerSyncDeferred = true;
       return false;
     }
+    var settings = options || {};
+    var progressive = settings.progressive === true;
     var removedEntries = [];
     layerEntries.forEach(function (entry, path) {
       if (!markerEntries.has(path)) removedEntries.push(entry);
@@ -1057,14 +1085,48 @@ function renderGroupCell(cell, member) {
     // to look like a viewport change. Test doubles use the same small
     // incremental fixture as the real adapter.
     if (!canReconcile) return false;
+    invalidateLayerSync();
     removedEntries.forEach(function (entry) { markerLayer.removeLayer(entry.marker); });
-    addedEntries.forEach(function (entry) { markerLayer.addLayer(entry.marker); });
+    removedEntries.forEach(function (entry) { layerEntries.delete(itemPath(entry.item)); });
+    if (progressive && addedEntries.length > 0) {
+      var nextIndex = 0;
+      var addBatch = function () {
+        var end = Math.min(nextIndex + PHOTO_MAP_MARKER_BATCH_SIZE, addedEntries.length);
+        for (; nextIndex < end; nextIndex += 1) {
+          var entry = addedEntries[nextIndex];
+          markerLayer.addLayer(entry.marker);
+          layerEntries.set(itemPath(entry.item), entry);
+        }
+        if (nextIndex < addedEntries.length) {
+          scheduleLayerSync(addBatch);
+          return;
+        }
+        layerEntries = new Map(markerEntries);
+        layerSyncDeferred = false;
+        debug.log('marker-layer-synced', {
+          added: addedEntries.length,
+          removed: removedEntries.length,
+          progressive: true,
+        });
+        notifyVisibleMarkers();
+        if (typeof settings.onProgressiveComplete === 'function') settings.onProgressiveComplete();
+      };
+      layerSyncDeferred = false;
+      scheduleLayerSync(addBatch);
+      return true;
+    }
+    addedEntries.forEach(function (entry) {
+      markerLayer.addLayer(entry.marker);
+      layerEntries.set(itemPath(entry.item), entry);
+    });
     layerEntries = new Map(markerEntries);
     layerSyncDeferred = false;
     debug.log('marker-layer-synced', {
       added: addedEntries.length,
       removed: removedEntries.length,
+      progressive: false,
     });
+    if (typeof settings.onProgressiveComplete === 'function') settings.onProgressiveComplete();
     return true;
   }
 
@@ -1073,6 +1135,9 @@ function renderGroupCell(cell, member) {
   }
 
   function setMarkerItems(items) {
+    var settings = arguments.length > 1 && arguments[1] ? arguments[1] : {};
+    var hadPendingLayerSync = layerSyncScheduled;
+    if (hadPendingLayerSync) invalidateLayerSync();
     var previousEntries = markerEntries;
     var nextEntries = new Map();
     var addedEntries = [];
@@ -1125,6 +1190,8 @@ function renderGroupCell(cell, member) {
     markerEntries = nextEntries;
 
     var layerChanges = addedEntries.length || removedEntries.length || coordinatesChanged;
+    var progressivelySyncing = settings.progressive === true &&
+      (addedEntries.length > 0 || hadPendingLayerSync);
     if (layerChanges) {
       if (markerLayer._spiderfied) {
         // MarkerClusterGroup.addLayer/removeLayer always unspiderfies the
@@ -1138,10 +1205,10 @@ function renderGroupCell(cell, member) {
           coordinatesChanged: coordinatesChanged,
         });
       } else {
-        syncMarkerLayer();
+        syncMarkerLayer(settings);
       }
-    } else if (layerSyncDeferred && !markerLayer._spiderfied) {
-      syncMarkerLayer();
+    } else if ((layerSyncDeferred || hadPendingLayerSync) && !markerLayer._spiderfied) {
+      syncMarkerLayer(settings);
     }
     if (typeof markerLayer.refreshClusters === 'function' && changedEntries.length) {
       markerLayer.refreshClusters(changedEntries.filter(function (entry) {
@@ -1158,7 +1225,7 @@ function renderGroupCell(cell, member) {
       updated: changedEntries.length,
       paths: Array.from(nextEntries.keys()),
     });
-    notifyVisibleMarkers();
+    if (!progressivelySyncing) notifyVisibleMarkers();
     return nextEntries.size;
   }
   function setMarkerThumbnail(path, thumbnail) {
@@ -1282,6 +1349,7 @@ function renderGroupCell(cell, member) {
     fitToItems: fitToItems,
     destroy: function () {
       debug.log('map-destroyed', {markerCount: markerEntries.size});
+      invalidateLayerSync();
       markerEntries.clear();
       map.remove();
     },

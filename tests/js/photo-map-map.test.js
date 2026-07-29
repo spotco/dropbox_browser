@@ -201,6 +201,52 @@ test("Photo Map renders located media into markers and fits once to useful bound
   assert.deepEqual(calls[3][2], {padding: [24, 24], maxZoom: 15});
 });
 
+test("Photo Map progressively mounts large marker sets across frames", async () => {
+  const mapModule = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/map.js");
+  const frames = [];
+  const added = [];
+  const markerLayer = {
+    addTo() {},
+    addLayer(marker) { added.push(marker); },
+    removeLayer() {},
+  };
+  const fakeLeaflet = {
+    map() { return {setView() {}, invalidateSize() {}, remove() {}}; },
+    tileLayer() { return {addTo() {}}; },
+    markerClusterGroup() { return markerLayer; },
+    marker(_point, options) {
+      return {options, bindPopup() {}, on() {}};
+    },
+  };
+  let completed = false;
+  const controller = createPhotoMap(mapModule, fakeLeaflet, {
+    window: {requestAnimationFrame(callback) { frames.push(callback); }},
+  });
+  const items = Array.from({length: mapModule.PHOTO_MAP_MARKER_BATCH_SIZE * 2 + 5}, (_value, index) => ({
+    path: `photo-${index}`,
+    display_name: `photo-${index}`,
+    latitude: 1 + index / 10000,
+    longitude: 2 + index / 10000,
+  }));
+
+  controller.setMarkerItems(items, {
+    progressive: true,
+    onProgressiveComplete() { completed = true; },
+  });
+
+  assert.equal(added.length, 0);
+  assert.equal(frames.length, 1);
+  frames.shift()();
+  assert.equal(added.length, mapModule.PHOTO_MAP_MARKER_BATCH_SIZE);
+  assert.equal(completed, false);
+  frames.shift()();
+  assert.equal(added.length, mapModule.PHOTO_MAP_MARKER_BATCH_SIZE * 2);
+  assert.equal(completed, false);
+  frames.shift()();
+  assert.equal(added.length, items.length);
+  assert.equal(completed, true);
+});
+
 test("Photo Map renders grouped pins with count tiers and accessible labels", async () => {
   const mapModule = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/map.js");
   const iconCalls = [];

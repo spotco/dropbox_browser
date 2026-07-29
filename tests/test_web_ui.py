@@ -258,6 +258,7 @@ class WebUiTests(AppTestCase):
         self.assertIn('<script src="/assets/js/refresh.js"></script>', html)
         self.assertIn('<script src="/assets/js/sync.js"></script>', html)
         self.assertIn('<script type="module" src="/assets/js/browse/main.js"></script>', html)
+        self.assertLess(html.index('/assets/js/browse/main.js'), html.index('/assets/js/photo-map.js'))
         self.assertNotIn('/assets/js/folder.js', html)
         self.assertIn("getCurrentListing: function", browse_main_js)
         self.assertNotIn("<style>", html)

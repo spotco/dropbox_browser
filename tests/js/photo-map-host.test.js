@@ -213,6 +213,41 @@ test("Photo Map regrouping changes markers without rereading metadata", async ()
   assert.equal(cacheReads, 1);
 });
 
+test("Photo Map waits for the Browse listing promise instead of issuing a duplicate listing", async () => {
+  const host = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map.js");
+  const fixture = photoMapHostFixture();
+  let ready = false;
+  let releaseListing;
+  const listingPromise = new Promise((resolve) => { releaseListing = resolve; });
+  let listingReads = 0;
+  fixture.win.DropboxBrowseClient = {
+    getCurrentListing() {
+      return {path: "Camera Uploads", rows: [], loading: !ready};
+    },
+    getCurrentListingPromise() { return listingPromise; },
+  };
+  const fetchImpl = (url) => {
+    if (url.startsWith("/browse/endpoints/listing")) {
+      listingReads += 1;
+      return Promise.resolve(jsonResponse({page: {path: "Camera Uploads"}, rows: []}));
+    }
+    if (url.startsWith("/photo-map/endpoints/cache?")) {
+      return Promise.resolve(jsonResponse({status: "ok", entries: []}));
+    }
+    throw new Error(`Unexpected Photo Map request: ${url}`);
+  };
+
+  const api = host.initPhotoMap({document: fixture.doc, window: fixture.win, fetchImpl});
+  const loading = api.activate();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(listingReads, 0);
+
+  ready = true;
+  releaseListing();
+  await loading;
+  assert.equal(listingReads, 0);
+});
+
 test("Photo Map grouped popup queues only its initial visible member window", async () => {
   const host = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map.js");
   const fixture = photoMapHostFixture();

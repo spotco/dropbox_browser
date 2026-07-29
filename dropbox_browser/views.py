@@ -252,6 +252,7 @@ def browse_script_tags(client_render: bool) -> str:
         '<script src="/assets/js/client-log.js"></script>',
         '<script src="/assets/js/bottom-pane.js"></script>',
         '<script src="/assets/js/log.js"></script>',
+        '<script type="module" src="/assets/js/browse/main.js"></script>' if client_render else '',
         '<script type="module" src="/assets/js/file-search.js"></script>',
         '<script type="module" src="/assets/js/music.js"></script>',
         '<script type="module" src="/assets/js/video.js"></script>',
@@ -260,11 +261,9 @@ def browse_script_tags(client_render: bool) -> str:
         '<script src="/assets/js/refresh.js"></script>',
         '<script src="/assets/js/sync.js"></script>',
     ]
-    if client_render:
-        tags.append('<script type="module" src="/assets/js/browse/main.js"></script>')
-    else:
+    if not client_render:
         tags.append('<script type="module" src="/assets/js/folder.js"></script>')
-    return "\n  ".join(tags)
+    return "\n  ".join(tag for tag in tags if tag)
 
 
 def client_browse_filter_html() -> str:
