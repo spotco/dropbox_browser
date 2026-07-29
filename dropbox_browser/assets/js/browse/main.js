@@ -444,6 +444,7 @@ function initBrowse() {
   state.dir = initialSortState.direction;
   var requestVersion = 0;
   var currentController = null;
+  var currentListingPromise = null;
   var stopFolderPolling = function () {};
   var virtualState = createVirtualState();
   var scrollFrameRequested = false;
@@ -805,7 +806,7 @@ function initBrowse() {
     stopActiveWork();
     renderLoading(normalized);
     currentController = typeof AbortController === 'function' ? new AbortController() : null;
-    return fetch(
+    var listingPromise = fetch(
       buildBrowseListingEndpoint(normalized),
       currentController ? {signal: currentController.signal} : undefined,
     )
@@ -855,6 +856,8 @@ function initBrowse() {
         hideScrollPreview();
         return false;
       });
+    currentListingPromise = listingPromise;
+    return listingPromise;
   }
 
   window.DropboxBrowseClient = {
@@ -868,6 +871,9 @@ function initBrowse() {
         loading: !!state.loading,
         error: state.error || null,
       };
+    },
+    getCurrentListingPromise: function () {
+      return currentListingPromise;
     },
     reloadCurrentFolder: function (options) {
       var settings = options || {};
@@ -1044,6 +1050,9 @@ function initBrowse() {
   window.addEventListener('resize', scheduleViewportRender);
 
   loadBrowseState(state, {history: 'replace', scroll: false});
+  if (typeof window.Event === 'function' && typeof window.dispatchEvent === 'function') {
+    window.dispatchEvent(new window.Event('dropbox-browser-browse-client-ready'));
+  }
 }
 
 initBrowse();

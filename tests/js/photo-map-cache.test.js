@@ -115,6 +115,31 @@ test("Photo Map cache merge reuses only matching listing identities", async () =
   assert.equal(merged.cached[0].result.cached, true);
 });
 
+test("Photo Map cache merge remains correct when cache order differs from date order", async () => {
+  const cache = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/cache.js");
+  const candidates = Array.from({length: 240}, (_value, index) => ({
+    path: `Camera Uploads/${String(index).padStart(4, "0")}.jpg`,
+    photoMapSourcePath: `Camera Uploads/${String(index).padStart(4, "0")}.jpg`,
+    photoMapListingSize: index + 1,
+    photoMapListingModifiedTime: 1700000000 + index,
+    photoMapListingDateMs: 1800000000000 - index,
+    photoMapMediaKind: "photo",
+  }));
+  const records = candidates.slice().reverse().map((item) => ({
+    path: item.path,
+    size: item.photoMapListingSize,
+    modified_time: item.photoMapListingModifiedTime,
+    status: "no-location",
+    media_kind: "photo",
+  }));
+
+  const merged = cache.mergePhotoMapCacheCandidates(candidates, records);
+
+  assert.equal(merged.cached.length, candidates.length);
+  assert.equal(merged.pending.length, 0);
+  assert.deepEqual(merged.cached.map((entry) => entry.item.path), candidates.map((item) => item.path));
+});
+
 test("Photo Map cache does not reuse video metadata from an older QuickTime parser", async () => {
   const cache = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/cache.js");
   const config = await importModuleFromWorkspace("dropbox_browser/assets/js/photo-map/config.js");

@@ -23,7 +23,7 @@ import {
 } from './photo-map/thumbnails.js';
 import {createPhotoMapThumbnailStore} from './photo-map/thumbnail-store.js';
 import {ensurePhotoMapLeaflet} from './photo-map/leaflet.js';
-import {createPhotoMap} from './photo-map/map.js';
+import {createPhotoMap, PHOTO_MAP_MARKER_BATCH_SIZE} from './photo-map/map.js';
 import {createPhotoMapDiagnostics} from './photo-map/diagnostics.js';
 import {groupPhotoMapItems} from './photo-map/grouping.js';
 import {
@@ -408,7 +408,15 @@ export function initPhotoMap(options) {
         }, 0),
         groupingDistanceMeters: currentGroupingDistance(),
       });
-      mapController.setMarkerItems(markerItems);
+      var status = photoMapStatusForSummary(summary, phase);
+      var progressiveMarkerRendering = markerItems.length > PHOTO_MAP_MARKER_BATCH_SIZE;
+      if (progressiveMarkerRendering) setStatus(status.message, 'progressive');
+      mapController.setMarkerItems(markerItems, {
+        progressive: progressiveMarkerRendering,
+        onProgressiveComplete: function () {
+          setStatus(status.message, status.state);
+        },
+      });
       if (activeGroupedPopup) {
         var activePath = activeGroupedPopupPath();
         var currentGroup = markerItems.find(function (item) {
@@ -436,8 +444,10 @@ export function initPhotoMap(options) {
         fittingMap = false;
       }
     }
-    var status = photoMapStatusForSummary(summary, phase);
-    setStatus(status.message, status.state);
+    if (!mapController || markerItems.length === 0) {
+      var status = photoMapStatusForSummary(summary, phase);
+      setStatus(status.message, status.state);
+    }
     return summary;
   }
 
@@ -562,13 +572,66 @@ export function initPhotoMap(options) {
     statusEl.setAttribute('aria-busy', state === 'loading' || state === 'progressive' ? 'true' : 'false');
   }
 
-  function readCurrentListing(signal) {
+  function waitForBrowseClient(signal) {
+    return new Promise(function (resolve) {
+      var settled = false;
+      var setTimer = win && typeof win.setTimeout === 'function' ? win.setTimeout.bind(win) : setTimeout;
+      var clearTimer = win && typeof win.clearTimeout === 'function' ? win.clearTimeout.bind(win) : clearTimeout;
+      var timer = null;
+      function finish() {
+        if (settled) return;
+        settled = true;
+        if (timer !== null) clearTimer(timer);
+        if (win && typeof win.removeEventListener === 'function') {
+          win.removeEventListener('dropbox-browser-browse-client-ready', finish);
+        }
+        resolve();
+      }
+      if (win && typeof win.addEventListener === 'function') {
+        win.addEventListener('dropbox-browser-browse-client-ready', finish, {once: true});
+      }
+      timer = setTimer(finish, 250);
+      if (signal && typeof signal.addEventListener === 'function') {
+        signal.addEventListener('abort', finish, {once: true});
+      }
+    });
+  }
+
+  function readCurrentListing(signal, allowBrowseBootstrapWait) {
     var browseClient = win.DropboxBrowseClient;
     var expectedPath = currentFolderPath();
+    if (!browseClient && allowBrowseBootstrapWait !== false && body.dataset.clientRender === '1') {
+      return waitForBrowseClient(signal).then(function () {
+        return readCurrentListing(signal, false);
+      });
+    }
     if (browseClient && typeof browseClient.getCurrentListing === 'function') {
       var snapshot = browseClient.getCurrentListing();
       if (snapshot && snapshot.path === expectedPath && !snapshot.loading && Array.isArray(snapshot.rows)) {
         return Promise.resolve(snapshot);
+      }
+      if (snapshot && snapshot.path === expectedPath && snapshot.loading &&
+          typeof browseClient.getCurrentListingPromise === 'function') {
+        var listingPromise = browseClient.getCurrentListingPromise();
+        if (listingPromise && typeof listingPromise.then === 'function') {
+          return listingPromise.then(function () {
+            var readySnapshot = browseClient.getCurrentListing();
+            if (readySnapshot && readySnapshot.path === expectedPath && !readySnapshot.loading &&
+                Array.isArray(readySnapshot.rows)) return readySnapshot;
+            return fetchImpl(buildPhotoMapListingEndpoint(expectedPath), {signal: signal})
+              .then(function (response) {
+                if (!response.ok) throw new Error('Could not load Photo Map listing.');
+                return response.json();
+              })
+              .then(function (payload) {
+                return {
+                  path: payload && payload.page ? payload.page.path : expectedPath,
+                  rows: payload && Array.isArray(payload.rows) ? payload.rows : [],
+                  loading: false,
+                };
+              });
+          });
+        }
       }
     }
     return fetchImpl(buildPhotoMapListingEndpoint(expectedPath), {signal: signal})

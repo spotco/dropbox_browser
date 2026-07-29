@@ -78,6 +78,26 @@ function sameIdentity(item, record) {
   return itemSize === recordSize && itemModified === recordModified;
 }
 
+function identityKey(path, size, modifiedTime) {
+  return JSON.stringify([
+    String(path || ''),
+    Number.isFinite(size) ? size : null,
+    Number.isFinite(modifiedTime) ? modifiedTime : null,
+  ]);
+}
+
+function identityKeyForItem(item) {
+  return identityKey(
+    item && (item.photoMapSourcePath || item.path),
+    item && item.photoMapListingSize,
+    item && item.photoMapListingModifiedTime,
+  );
+}
+
+function identityKeyForRecord(record) {
+  return identityKey(record && record.path, record && record.size, record && record.modified_time);
+}
+
 function cachedResultForItem(item, record) {
   return {
     path: String(item.photoMapSourcePath || item.path || ''),
@@ -100,10 +120,18 @@ function cachedResultForItem(item, record) {
 
 export function mergePhotoMapCacheCandidates(candidates, entries) {
   var records = Array.isArray(entries) ? entries : [];
+  var recordsByIdentity = new Map();
+  records.forEach(function (record) {
+    var key = identityKeyForRecord(record);
+    var matches = recordsByIdentity.get(key);
+    if (matches) matches.push(record);
+    else recordsByIdentity.set(key, [record]);
+  });
   var cached = [];
   var pending = [];
   (Array.isArray(candidates) ? candidates : []).forEach(function (item) {
-    var record = records.find(function (candidate) { return sameIdentity(item, candidate); });
+    var matches = recordsByIdentity.get(identityKeyForItem(item)) || [];
+    var record = matches.find(function (candidate) { return sameIdentity(item, candidate); });
     if (record) cached.push({item: item, result: cachedResultForItem(item, record)});
     else pending.push(item);
   });
