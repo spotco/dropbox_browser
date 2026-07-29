@@ -129,7 +129,7 @@ class PhotoMapWebTests(AppTestCase):
             self.assertEqual(status, HTTPStatus.OK)
             self.assertEqual(body, b"")
             self.assertEqual(headers["Content-Type"], content_type)
-            self.assertEqual(headers["Cache-Control"], "no-store, no-cache, must-revalidate")
+            self.assertEqual(headers["Cache-Control"], "public, max-age=3600")
             self.assertGreater(int(headers["Content-Length"]), 0)
         self.assertEqual(missing.exception.code, HTTPStatus.NOT_FOUND)
         self.assertEqual(unlisted.exception.code, HTTPStatus.NOT_FOUND)

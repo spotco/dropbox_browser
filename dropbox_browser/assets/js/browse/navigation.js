@@ -6,8 +6,6 @@ export function readBrowseLocation(search) {
     return normalizeBrowseState({
       path: params.get('path') || '',
       reveal: params.get('reveal') || '',
-      sort: params.get('sort') || 'name',
-      dir: params.get('dir') || 'asc',
       refresh: params.get('refresh') === '1',
       q: params.get('q') || '',
       kind: params.get('kind') || 'all',

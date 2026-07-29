@@ -14,6 +14,14 @@ class ConfigDefaultsTests(unittest.TestCase):
 
         self.assertEqual(config["LocalhostOnlyAccess"], True)
 
+    def test_static_asset_caching_defaults_to_enabled(self) -> None:
+        config = dict(config_module._APP_CONFIG_DEFAULTS)
+
+        self.assertTrue(config["CacheStaticAssets"])
+
+        packaged_config = config_module._read_config_file(config_module.PROJECT_ROOT / "config.json")
+        self.assertNotIn("CacheStaticAssets", packaged_config)
+
     def test_waveform_cache_entry_limit_defaults_are_bounded(self) -> None:
         config = dict(config_module._APP_CONFIG_DEFAULTS)
 

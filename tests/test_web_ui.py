@@ -1484,6 +1484,7 @@ class WebUiTests(AppTestCase):
         app = self._build_app(rclone, local_root=None, workers=1)
 
         with TestServer(app) as server:
+            server.server.cache_static_assets = False
             page_request = Request(server.base_url + "/", method="HEAD")
             with urlopen(page_request, timeout=5) as response:
                 page_body = response.read()
@@ -1612,6 +1613,25 @@ class WebUiTests(AppTestCase):
         self.assertEqual(browse_js_headers["Pragma"], "no-cache")
         self.assertEqual(browse_js_headers["Expires"], "0")
         self.assertGreater(int(browse_js_headers["Content-Length"]), 0)
+
+    def test_page_and_assets_cache_by_default(self) -> None:
+        rclone = SimulatedRclone({
+            "dropbox:": [SimulatedLsjsonResponse(items=[])],
+        })
+        app = self._build_app(rclone, local_root=None, workers=1)
+
+        with TestServer(app) as server:
+            page_request = Request(server.base_url + "/", method="HEAD")
+            with urlopen(page_request, timeout=5) as response:
+                page_headers = response.headers
+            asset_request = Request(server.base_url + "/assets/app.css", method="HEAD")
+            with urlopen(asset_request, timeout=5) as response:
+                asset_headers = response.headers
+
+        self.assertEqual(page_headers["Cache-Control"], "public, max-age=3600")
+        self.assertEqual(asset_headers["Cache-Control"], "public, max-age=3600")
+        self.assertIsNone(page_headers.get("Pragma"))
+        self.assertIsNone(asset_headers.get("Expires"))
 
     def test_copy_button_covers_current_folder_path(self) -> None:
         local_root = self.create_local_root({

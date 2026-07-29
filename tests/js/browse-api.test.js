@@ -28,7 +28,7 @@ test("buildBrowseListingEndpoint emits canonical browse query params", async () 
   );
 });
 
-test("buildBrowsePageHref omits default sort and direction params", async () => {
+test("buildBrowsePageHref omits sort and direction params", async () => {
   const browseApi = await importModuleFromWorkspace("dropbox_browser/assets/js/browse/api.js");
 
   assert.equal(
@@ -37,7 +37,7 @@ test("buildBrowsePageHref omits default sort and direction params", async () => 
   );
   assert.equal(
     browseApi.buildBrowsePageHref({ path: "Music", sort: "size", dir: "desc" }),
-    "/?path=Music&sort=size&dir=desc",
+    "/?path=Music",
   );
   assert.equal(
     browseApi.buildBrowsePageHref({
@@ -61,7 +61,7 @@ test("buildFolderInfoQuery appends repeated paths and current folder", async () 
   );
 });
 
-test("readBrowseLocation normalizes path and sort state from URL search", async () => {
+test("readBrowseLocation ignores legacy sort state in URL search", async () => {
   const navigation = await importModuleFromWorkspace("dropbox_browser/assets/js/browse/navigation.js");
 
   assert.deepEqual(
@@ -69,8 +69,8 @@ test("readBrowseLocation normalizes path and sort state from URL search", async 
     {
       path: "Music/Album",
       reveal: "",
-      sort: "date",
-      dir: "desc",
+      sort: "name",
+      dir: "asc",
       refresh: true,
       filters: { query: "mix", kind: "file", status: "Dropbox Only", type: "audio" },
     },

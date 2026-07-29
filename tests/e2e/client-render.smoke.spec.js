@@ -88,22 +88,37 @@ test("client-render filter bar toggles from the top action row and persists", as
   await expect(page.locator("#browse-filter-bar")).toBeHidden();
 });
 
-test("client-render sort updates URL and rows without refetching the listing endpoint", async ({ page }) => {
-  let listingRequestCount = 0;
+test("client-render persists sort per folder without sort or direction URL parameters", async ({ page }) => {
+  const listingUrls = [];
   page.on("request", (request) => {
-    if (request.url().includes("/browse/endpoints/listing")) listingRequestCount += 1;
+    if (request.url().includes("/browse/endpoints/listing")) listingUrls.push(request.url());
   });
 
   await page.goto("/");
   await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
-  await expect.poll(() => listingRequestCount).toBe(1);
+  await expect.poll(() => listingUrls.length).toBe(1);
 
   await page.getByRole("link", { name: "Date" }).click();
 
   await expect(page.locator("body")).toHaveAttribute("data-current-sort-key", "date");
   await expect(page.locator("body")).toHaveAttribute("data-current-sort-direction", "asc");
-  await expect.poll(async () => await page.url()).toMatch(/\/\?sort=date$/);
-  await expect.poll(() => listingRequestCount).toBe(1);
+  await expect(page).not.toHaveURL(/(?:\?|&)(?:sort|dir)=/);
+  await expect.poll(() => listingUrls.length).toBe(1);
+
+  await page.getByRole("link", { name: "folder" }).click();
+  await expect(page).toHaveURL(/\?path=folder/);
+  await expect(page).not.toHaveURL(/(?:\?|&)(?:sort|dir)=/);
+  await expect(page.locator("body")).toHaveAttribute("data-current-sort-key", "name");
+  await expect(page.locator("body")).toHaveAttribute("data-current-sort-direction", "asc");
+  await expect.poll(() => listingUrls.length).toBe(2);
+
+  await page.locator("header .meta a[href='/']").click();
+  await expect(page).toHaveURL(/\/\?$/);
+  await expect(page).not.toHaveURL(/(?:\?|&)(?:sort|dir)=/);
+  await expect(page.locator("body")).toHaveAttribute("data-current-sort-key", "date");
+  await expect(page.locator("body")).toHaveAttribute("data-current-sort-direction", "asc");
+  await expect.poll(() => listingUrls.length).toBe(3);
+  expect(listingUrls[2]).toContain("sort=date");
 });
 
 test("client-render deep link loads the requested folder", async ({ page }) => {
@@ -175,21 +190,12 @@ test("client-render folder navigation uses history without a full page reload", 
   await expect.poll(() => listingRequestCount).toBe(4);
 });
 
-test("client-render history restores sort state from the URL", async ({ page }) => {
-  await page.goto("/");
+test("client-render ignores legacy sort and direction URL parameters", async ({ page }) => {
+  await page.goto("/?sort=date&dir=desc");
   await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
-
-  await page.getByRole("link", { name: "Date" }).click();
-  await expect(page).toHaveURL(/sort=date/);
-  await expect(page.locator("body")).toHaveAttribute("data-current-sort-key", "date");
-
-  await page.goBack();
-  await expect(page).not.toHaveURL(/sort=date/);
   await expect(page.locator("body")).toHaveAttribute("data-current-sort-key", "name");
-
-  await page.goForward();
-  await expect(page).toHaveURL(/sort=date/);
-  await expect(page.locator("body")).toHaveAttribute("data-current-sort-key", "date");
+  await expect(page.locator("body")).toHaveAttribute("data-current-sort-direction", "asc");
+  await expect(page).not.toHaveURL(/(?:\?|&)(?:sort|dir)=/);
 });
 
 test("client-render leaves preview and download links on normal navigation", async ({ page }) => {

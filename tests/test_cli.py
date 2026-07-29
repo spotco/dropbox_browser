@@ -129,6 +129,7 @@ class CliShutdownTests(unittest.TestCase):
         server = created_servers[0]
         self.assertTrue(server.daemon_threads)
         self.assertFalse(server.block_on_close)
+        self.assertTrue(server.cache_static_assets)
         self.assertTrue(server.localhost_only_access)
         server.server_close.assert_called_once_with()
         app.shutdown.assert_called_once_with()

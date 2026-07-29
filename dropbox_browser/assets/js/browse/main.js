@@ -8,6 +8,11 @@ import {emptyRowHtml, errorRowHtml, loadingRowHtml, renderBreadcrumbs, renderBro
 import {collectBrowseTypeOptions, filterBrowseRows, hasActiveBrowseFilters, normalizeBrowseFilters} from './search.js';
 import {applyBrowseSnapshot, createBrowseState, setBrowseError, setBrowseLoading} from './state.js';
 import {nextBrowseSortState, sortBrowseRows} from './sort.js';
+import {
+  BROWSE_SORT_SETTING_KEY,
+  readBrowseSortState,
+  writeBrowseSortState,
+} from './sort-settings.js';
 import {initBrowseThumbnails} from './thumbnails.js';
 import {
   DEFAULT_VIRTUAL_OVERSCAN,
@@ -82,6 +87,18 @@ function readSetting(key, defaultValue) {
 function writeSetting(key, value) {
   if (!window.Settings || typeof window.Settings.set !== 'function') return;
   window.Settings.set(key, value);
+}
+
+function persistedBrowseSortState(path) {
+  return readBrowseSortState(path, readSetting(BROWSE_SORT_SETTING_KEY, {}));
+}
+
+function persistBrowseSortState(path, sortKey, direction) {
+  var entries = readSetting(BROWSE_SORT_SETTING_KEY, {});
+  writeSetting(
+    BROWSE_SORT_SETTING_KEY,
+    writeBrowseSortState(path, sortKey, direction, entries),
+  );
 }
 
 function browseFilterStorageKey(path) {
@@ -422,6 +439,9 @@ function initBrowse() {
 
   var locationState = readBrowseLocation(window.location.search);
   var state = createBrowseState(locationState);
+  var initialSortState = persistedBrowseSortState(state.path);
+  state.sort = initialSortState.key;
+  state.dir = initialSortState.direction;
   var requestVersion = 0;
   var currentController = null;
   var stopFolderPolling = function () {};
@@ -761,11 +781,12 @@ function initBrowse() {
   }
 
   function loadBrowseState(nextState, options) {
+    var nextSortState = persistedBrowseSortState(nextState.path);
     var normalized = {
       path: nextState.path,
       reveal: nextState.reveal || '',
-      sort: nextState.sort,
-      dir: nextState.dir,
+      sort: nextSortState.key,
+      dir: nextSortState.direction,
       refresh: !!nextState.refresh,
       filters: normalizeBrowseFilters(nextState.filters || state.filters),
     };
@@ -983,6 +1004,7 @@ function initBrowse() {
       var nextSortState = nextBrowseSortState(state.sort, state.dir, clickedSort);
       state.sort = nextSortState.sort;
       state.dir = nextSortState.dir;
+      persistBrowseSortState(state.path, state.sort, state.dir);
       renderAndRefresh({force: true});
       window.history.pushState({}, '', currentBrowsePageHref(state));
       return;

@@ -52,6 +52,7 @@ _APP_CONFIG_DEFAULTS: dict = {
     "MusicWaveformMaxResolution": MUSIC_WAVEFORM_MAX_RESOLUTION_DEFAULT,
     "VideoProbeProbeSizeBytes": 2 * 1024 * 1024,
     "VideoProbeAnalyzeDurationUs": 3_000_000,
+    "CacheStaticAssets": True,
     "LocalhostOnlyAccess": True,
     "LogRcloneCommands": True,
     "LogHttpRequests": True,
