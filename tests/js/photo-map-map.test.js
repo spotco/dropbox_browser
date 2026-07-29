@@ -245,6 +245,13 @@ test("Photo Map progressively mounts large marker sets across frames", async () 
   frames.shift()();
   assert.equal(added.length, items.length);
   assert.equal(completed, true);
+
+  let repeatedComplete = false;
+  controller.setMarkerItems(items, {
+    progressive: true,
+    onProgressiveComplete() { repeatedComplete = true; },
+  });
+  assert.equal(repeatedComplete, true);
 });
 
 test("Photo Map renders grouped pins with count tiers and accessible labels", async () => {

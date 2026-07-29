@@ -1209,6 +1209,11 @@ function renderGroupCell(cell, member) {
       }
     } else if ((layerSyncDeferred || hadPendingLayerSync) && !markerLayer._spiderfied) {
       syncMarkerLayer(settings);
+    } else if (typeof settings.onProgressiveComplete === 'function') {
+      // A later metadata render may keep exactly the same marker membership
+      // after an earlier progressive sync completed. It still needs to notify
+      // the host that this render is no longer waiting on layer work.
+      settings.onProgressiveComplete();
     }
     if (typeof markerLayer.refreshClusters === 'function' && changedEntries.length) {
       markerLayer.refreshClusters(changedEntries.filter(function (entry) {
