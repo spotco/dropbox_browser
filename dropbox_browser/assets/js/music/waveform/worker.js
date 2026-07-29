@@ -6,6 +6,11 @@ import {waveformResolutionStages} from './resolution.js';
 export const WAVEFORM_WORKER_SLICE_BUDGET_MS = 3;
 export const WAVEFORM_WORKER_YIELD_DELAY_MS = 8;
 export const WAVEFORM_PREVIEW_SAMPLES_PER_BUCKET = 8;
+// Deadline checks are intentionally amortized. Checking performance.now() for
+// every source sample costs more CPU than the reduction on some browsers, but
+// this bound still keeps a slice overshoot small while retaining the existing
+// 3 ms CPU budget and 8 ms cooldown.
+export const WAVEFORM_WORKER_SAMPLE_CHECK_INTERVAL = 512;
 
 function channelLength(channel) {
   return channel && typeof channel.length === 'number' ? channel.length : 0;
@@ -17,6 +22,10 @@ function sampleCountForChannels(channels) {
     sampleCount = Math.max(sampleCount, channelLength(channel));
   });
   return sampleCount;
+}
+
+function channelLengthsForChannels(channels) {
+  return (Array.isArray(channels) ? channels : []).map(channelLength);
 }
 
 function createSummary(resolution) {
@@ -45,14 +54,14 @@ function finalizeSummary(summary) {
   return summary;
 }
 
-function addSample(summary, bucket, channels, sampleIndex) {
+function addSample(summary, bucket, channels, channelLengths, sampleIndex) {
   var minimum = summary.min[bucket];
   var maximum = summary.max[bucket];
   var sumSquares = summary.sumSquares[bucket];
   var count = summary.counts[bucket];
   for (var channelIndex = 0; channelIndex < channels.length; channelIndex += 1) {
     var channel = channels[channelIndex];
-    var length = channelLength(channel);
+    var length = channelLengths[channelIndex];
     var value;
     if (sampleIndex >= length) continue;
     value = Number(channel[sampleIndex]) || 0;
@@ -98,26 +107,51 @@ export function sampleIndicesForRound(sampleCount, resolution, samplesPerBucket)
 
 export function computeCombinedWaveformSummarySampled(channels, resolution, samplesPerBucket) {
   var sampleCount = sampleCountForChannels(channels);
+  var channelLengths = channelLengthsForChannels(channels);
+  var indices;
   var summary = createSummary(resolution);
   if (!Array.isArray(channels) || !Number.isInteger(resolution) || resolution < 1 || !sampleCount) {
     return finalizeSummary(summary);
   }
-  for (var bucket = 0; bucket < resolution; bucket += 1) {
-    sampleIndicesForBucket(sampleCount, resolution, bucket, samplesPerBucket).forEach(function (sampleIndex) {
-      addSample(summary, bucket, channels, sampleIndex);
-    });
+  indices = sampleIndicesForRound(sampleCount, resolution, samplesPerBucket);
+  for (var index = 0; index < indices.length; index += 1) {
+    addSample(summary, Math.floor(index / (Number.isInteger(samplesPerBucket) && samplesPerBucket > 0
+      ? samplesPerBucket : WAVEFORM_PREVIEW_SAMPLES_PER_BUCKET)), channels, channelLengths, indices[index]);
   }
   return finalizeSummary(summary);
 }
 
 export function computeCombinedWaveformSummary(channels, resolution) {
   var sampleCount = sampleCountForChannels(channels);
+  var channelLengths = channelLengthsForChannels(channels);
   var summary = createSummary(resolution);
   if (!Array.isArray(channels) || !Number.isInteger(resolution) || resolution < 1 || !sampleCount) {
     return finalizeSummary(summary);
   }
-  for (var sampleIndex = 0; sampleIndex < sampleCount; sampleIndex += 1) {
-    addSample(summary, Math.min(resolution - 1, Math.floor(sampleIndex * resolution / sampleCount)), channels, sampleIndex);
+  // The old sample-major loop derived the bucket for every sample. Iterating
+  // the buckets directly preserves the same sample and channel order while
+  // allowing the hot accumulator state to stay in local variables.
+  for (var bucket = 0; bucket < resolution; bucket += 1) {
+    var start = bucket === 0 ? 0 : Math.ceil(bucket * sampleCount / resolution);
+    var end = Math.min(sampleCount, Math.ceil((bucket + 1) * sampleCount / resolution));
+    var minimum = Infinity;
+    var maximum = -Infinity;
+    var sumSquares = 0;
+    var count = 0;
+    for (var sampleIndex = start; sampleIndex < end; sampleIndex += 1) {
+      for (var channelIndex = 0; channelIndex < channels.length; channelIndex += 1) {
+        if (sampleIndex >= channelLengths[channelIndex]) continue;
+        var value = Number(channels[channelIndex][sampleIndex]) || 0;
+        minimum = Math.min(minimum, value);
+        maximum = Math.max(maximum, value);
+        sumSquares += value * value;
+        count += 1;
+      }
+    }
+    summary.min[bucket] = minimum;
+    summary.max[bucket] = maximum;
+    summary.sumSquares[bucket] = sumSquares;
+    summary.counts[bucket] = count;
   }
   return finalizeSummary(summary);
 }
@@ -149,8 +183,10 @@ function createPreviewJob(channels, resolution) {
   var sampleCount = sampleCountForChannels(channels);
   return {
     channels: channels,
+    channelLengths: channelLengthsForChannels(channels),
     nextSample: 0,
     sampleCount: sampleCount,
+    sampleIndices: sampleIndicesForRound(sampleCount, resolution, WAVEFORM_PREVIEW_SAMPLES_PER_BUCKET),
     samplesPerBucket: WAVEFORM_PREVIEW_SAMPLES_PER_BUCKET,
     summary: createSummary(resolution),
     totalSamples: resolution * WAVEFORM_PREVIEW_SAMPLES_PER_BUCKET,
@@ -160,13 +196,9 @@ function createPreviewJob(channels, resolution) {
 
 function processPreviewSlice(job, deadline) {
   while (job.nextSample < job.totalSamples) {
-    var bucket;
-    var subSample;
     if (now() >= deadline) return false;
-    bucket = Math.floor(job.nextSample / job.samplesPerBucket);
-    subSample = job.nextSample % job.samplesPerBucket;
-    var indices = sampleIndicesForBucket(job.sampleCount, job.resolution, bucket, job.samplesPerBucket);
-    addSample(job.summary, bucket, job.channels, indices[subSample]);
+    var bucket = Math.floor(job.nextSample / job.samplesPerBucket);
+    addSample(job.summary, bucket, job.channels, job.channelLengths, job.sampleIndices[job.nextSample]);
     job.nextSample += 1;
   }
   finalizeSummary(job.summary);
@@ -176,20 +208,59 @@ function processPreviewSlice(job, deadline) {
 function createExactJob(channels, resolution) {
   return {
     channels: channels,
+    channelLengths: channelLengthsForChannels(channels),
+    bucketActive: false,
+    bucketIndex: 0,
+    bucketSampleCount: 0,
+    bucketEnd: 0,
+    bucketMinimum: Infinity,
+    bucketMaximum: -Infinity,
+    bucketSumSquares: 0,
     nextSample: 0,
     sampleCount: sampleCountForChannels(channels),
     summary: createSummary(resolution),
     resolution: resolution,
+    samplesSinceDeadlineCheck: 0,
     lastReportedSample: 0,
   };
 }
 
 function processExactSlice(job, deadline) {
-  while (job.nextSample < job.sampleCount) {
+  while (job.bucketIndex < job.resolution) {
+    if (!job.bucketActive) {
+      var bucketStart = job.bucketIndex === 0 ? 0 : Math.ceil(job.bucketIndex * job.sampleCount / job.resolution);
+      job.nextSample = bucketStart;
+      job.bucketEnd = Math.min(job.sampleCount,
+        Math.ceil((job.bucketIndex + 1) * job.sampleCount / job.resolution));
+      job.bucketMinimum = Infinity;
+      job.bucketMaximum = -Infinity;
+      job.bucketSumSquares = 0;
+      job.bucketSampleCount = 0;
+      job.bucketActive = true;
+    }
+    while (job.nextSample < job.bucketEnd) {
+      for (var channelIndex = 0; channelIndex < job.channels.length; channelIndex += 1) {
+        if (job.nextSample >= job.channelLengths[channelIndex]) continue;
+        var value = Number(job.channels[channelIndex][job.nextSample]) || 0;
+        job.bucketMinimum = Math.min(job.bucketMinimum, value);
+        job.bucketMaximum = Math.max(job.bucketMaximum, value);
+        job.bucketSumSquares += value * value;
+        job.bucketSampleCount += 1;
+      }
+      job.nextSample += 1;
+      job.samplesSinceDeadlineCheck += 1;
+      if (job.samplesSinceDeadlineCheck >= WAVEFORM_WORKER_SAMPLE_CHECK_INTERVAL) {
+        job.samplesSinceDeadlineCheck = 0;
+        if (now() >= deadline) return false;
+      }
+    }
+    job.summary.min[job.bucketIndex] = job.bucketMinimum;
+    job.summary.max[job.bucketIndex] = job.bucketMaximum;
+    job.summary.sumSquares[job.bucketIndex] = job.bucketSumSquares;
+    job.summary.counts[job.bucketIndex] = job.bucketSampleCount;
+    job.bucketIndex += 1;
+    job.bucketActive = false;
     if (now() >= deadline) return false;
-    addSample(job.summary, Math.min(job.resolution - 1,
-      Math.floor(job.nextSample * job.resolution / job.sampleCount)), job.channels, job.nextSample);
-    job.nextSample += 1;
   }
   finalizeSummary(job.summary);
   return true;
