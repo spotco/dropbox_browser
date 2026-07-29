@@ -1,10 +1,12 @@
 import {normalizeBrowseFilters} from './search.js';
 
-function appendStateParams(params, state) {
+function appendStateParams(params, state, includeSort) {
   if (state.path) params.set('path', state.path);
   if (state.reveal) params.set('reveal', state.reveal);
-  if (state.sort && state.sort !== 'name') params.set('sort', state.sort);
-  if (state.dir && state.dir !== 'asc') params.set('dir', state.dir);
+  if (includeSort) {
+    if (state.sort && state.sort !== 'name') params.set('sort', state.sort);
+    if (state.dir && state.dir !== 'asc') params.set('dir', state.dir);
+  }
   if (state.refresh) params.set('refresh', '1');
   return params;
 }
@@ -57,14 +59,14 @@ export function normalizeBrowseState(state) {
 
 export function buildBrowseListingEndpoint(state) {
   var normalized = normalizeBrowseState(state);
-  var params = appendStateParams(new URLSearchParams(), normalized);
+  var params = appendStateParams(new URLSearchParams(), normalized, true);
   var query = params.toString();
   return '/browse/endpoints/listing' + (query ? '?' + query : '');
 }
 
 export function buildBrowsePageHref(state) {
   var normalized = normalizeBrowseState(state);
-  var params = appendStateParams(new URLSearchParams(), normalized);
+  var params = appendStateParams(new URLSearchParams(), normalized, false);
   appendFilterParams(params, normalized.filters);
   var query = params.toString();
   return '/?' + query;

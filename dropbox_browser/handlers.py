@@ -70,6 +70,7 @@ ASSET_ROUTE_PREFIX = "/assets/"
 PHOTO_MAP_ENDPOINT_PREFIX = "/photo-map/endpoints/"
 TAGGED_INPUT_COPY_BUFFER_SIZE = 2 * 1024 * 1024
 PHOTO_MAP_MAX_JSON_BODY_BYTES = 2 * 1024 * 1024
+STATIC_ASSET_CACHE_MAX_AGE_SECONDS = 60 * 60
 
 
 class _FirstByteTimingReader:
@@ -98,6 +99,12 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
+
+    def _send_html_asset_cache_headers(self) -> None:
+        if bool(getattr(self.server, "cache_static_assets", True)):
+            self.send_header("Cache-Control", f"public, max-age={STATIC_ASSET_CACHE_MAX_AGE_SECONDS}")
+            return
+        self._send_no_store_headers()
 
     def _send_json_error(self, status: HTTPStatus, message: str, details: dict[str, object] | None = None) -> None:
         payload: dict[str, object] = {
@@ -247,8 +254,8 @@ class RequestHandler(BaseHTTPRequestHandler):
         render_started = time.perf_counter()
         params = parse_qs(query, keep_blank_values=True)
         rel_path = clean_rel_path(params.get("path", [""])[0])
-        sort_key = params.get("sort", ["name"])[0]
-        direction = params.get("dir", ["asc"])[0]
+        sort_key = "name"
+        direction = "asc"
         force_refresh = params.get("refresh", [""])[0] == "1"
         page_time = time.time()
         snapshot = self.app.build_browse_snapshot(
@@ -866,8 +873,6 @@ class RequestHandler(BaseHTTPRequestHandler):
                 local_root_prefix = parent + "\\"
         refresh_href = "/?" + urlencode({
             "path": snapshot.rel_path,
-            "sort": snapshot.sort_key,
-            "dir": snapshot.direction,
             "refresh": "1",
         })
         next_sort_direction = {
@@ -1724,7 +1729,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         body = path.read_bytes()
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
-        self._send_no_store_headers()
+        self._send_html_asset_cache_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         if head_only:
@@ -1875,7 +1880,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         encoded = body.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
-        self._send_no_store_headers()
+        self._send_html_asset_cache_headers()
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
         if head_only:

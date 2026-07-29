@@ -335,7 +335,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
     browse_filter_html = client_browse_filter_html() if client_render else ""
     crumbs = breadcrumbs(rel_path)
     page_title = folder_page_title(app.remote, rel_path)
-    refresh_href = "/?" + urlencode({"path": rel_path, "sort": sort_key, "dir": direction, "refresh": "1"})
+    refresh_href = "/?" + urlencode({"path": rel_path, "refresh": "1"})
     local_note = (
         f"Comparing with {html.escape(str(app.local_root))}"
         if app.local_root
@@ -372,8 +372,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
     client_log_subsystems = getattr(app, "client_log_subsystems", {}) or {}
 
     def sort_link(label: str, key: str) -> str:
-        next_dir = "desc" if sort_key == key and direction == "asc" else "asc"
-        href = "/?" + urlencode({"path": rel_path, "sort": key, "dir": next_dir})
+        href = "/?" + urlencode({"path": rel_path})
         indicator = " ^" if sort_key == key and direction == "asc" else " v" if sort_key == key else ""
         return (
             f'<a data-browse-sort="{key}" data-browse-sort-label="{html.escape(label, quote=True)}" '

@@ -38,6 +38,9 @@ Useful `config.json` settings in the repository root:
 - `FolderCacheWorkers` controls the background folder metadata/diff worker pool.
 - `SyncJobWorkers` controls the browser-triggered sync worker pool.
 - `FolderCacheTTLSeconds` and `ListingCacheTTLSeconds` tune cache freshness.
+- `CacheStaticAssets` defaults to `true` and caches HTML, JavaScript, CSS, and
+  other served web assets for one hour. Set it to `false` in `config_local.json`
+  to restore no-store responses while developing.
 - Photo Map debug logging is disabled by default. Set
   `ClientLogSubsystems.photo-map` to `true` in `config_local.json` while
   debugging; events appear in the browser console and in

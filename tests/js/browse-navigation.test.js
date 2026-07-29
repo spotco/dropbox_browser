@@ -8,7 +8,7 @@ async function importModuleFromWorkspace(relativePath) {
   return import(pathToFileURL(absolutePath).href);
 }
 
-test("readBrowseHref parses only same-origin browse URLs", async () => {
+test("readBrowseHref parses same-origin browse URLs and ignores legacy sort state", async () => {
   global.window = {
     location: {
       href: "http://127.0.0.1:8010/?path=folder",
@@ -21,8 +21,8 @@ test("readBrowseHref parses only same-origin browse URLs", async () => {
   assert.deepEqual(navigation.readBrowseHref("/?path=music&sort=date&dir=desc"), {
     path: "music",
     reveal: "",
-    sort: "date",
-    dir: "desc",
+    sort: "name",
+    dir: "asc",
     refresh: false,
     filters: {
       query: "",
