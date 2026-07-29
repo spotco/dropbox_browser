@@ -142,6 +142,7 @@ test("worker summaries represent sections with min, max, and RMS", async () => {
 
   assert.equal(worker.WAVEFORM_WORKER_SLICE_BUDGET_MS, 3);
   assert.equal(worker.WAVEFORM_WORKER_YIELD_DELAY_MS, 8);
+  assert.equal(worker.WAVEFORM_WORKER_SAMPLE_CHECK_INTERVAL, 512);
 });
 
 test("fast preview samples are stratified within each bucket", async () => {
@@ -195,6 +196,52 @@ test("worker protocol emits packed stages and completion through a narrow messag
   assert.equal(summaryMessages.at(-1).sampleRound, summaryMessages.at(-1).sampleRounds);
   assert.equal(messages.at(-1).type, "complete");
   assert.equal(worker.installWaveformWorker.length, 1);
+});
+
+test("incremental worker reduction matches the direct summary for uneven channels", async () => {
+  const worker = await importModuleFromWorkspace("dropbox_browser/assets/js/music/waveform/worker.js");
+  const summaries = await importModuleFromWorkspace("dropbox_browser/assets/js/music/waveform/peaks.js");
+  const sampleCount = 123457;
+  const first = new Float32Array(sampleCount);
+  const second = new Float32Array(sampleCount - 17);
+  for (let index = 0; index < first.length; index += 1) first[index] = Math.sin(index * 0.017) * 0.9;
+  for (let index = 0; index < second.length; index += 1) second[index] = Math.cos(index * 0.011) * 0.7;
+
+  const expected = summaries.packWaveformSummaries(
+    worker.computeCombinedWaveformSummary([first, second], 256),
+  );
+  const messages = [];
+  const scheduled = [];
+  let messageHandler = null;
+  const scope = {
+    addEventListener(_name, handler) {
+      messageHandler = handler;
+    },
+    postMessage(message) {
+      messages.push(message);
+    },
+    setTimeout(callback) {
+      scheduled.push(callback);
+    },
+  };
+
+  worker.installWaveformWorker(scope);
+  messageHandler({
+    data: {
+      type: "start",
+      generation: 9,
+      channels: [first, second],
+      targetResolution: 256,
+      maxResolution: 256,
+    },
+  });
+  while (scheduled.length) scheduled.shift()();
+
+  const finalSummary = messages.find((message) =>
+    message.type === "summary" && message.preview === false && message.resolution === 256);
+  assert.ok(finalSummary);
+  assert.equal(finalSummary.summary, expected);
+  assert.equal(messages.at(-1).type, "complete");
 });
 
 test("waveform controller owns generation and worker cleanup without creating work on init", async () => {
