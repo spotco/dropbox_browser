@@ -86,7 +86,7 @@ Video-related config in `config.json` / `config_local.json`:
 - `VideoMaxConcurrentSessions` — maximum number of concurrent HLS sessions the
   server will keep alive before it must evict an idle session or reject a new
   session request.
-- `VideoSessionIdleTtlSeconds` — idle lifetime used for session expiry and for
+- `VideoSessionIdleTTLSeconds` — idle lifetime used for session expiry and for
   deciding whether an older session is still active enough to protect from cap
   eviction.
 - `VideoBackpressureLowWaterSeconds` — ahead-buffer point below which future
@@ -120,10 +120,12 @@ transcodes mean two separate ffmpeg processes doing separate decode/encode work,
 and a burned-in subtitle transcode adds filter work on top of that. Session caps
 therefore control real additive CPU, memory, and remote-read pressure rather
 than virtual bookkeeping.
-The backpressure thresholds are config-driven now even though throttle
-enforcement lands in later phases. They are normalized into a nondecreasing
-`low <= medium <= high <= max` sequence so weak-machine tuning does not require
-code changes.
+Backpressure enforcement is active. Tagged remote `/file` copies consult the
+session's playback position and classify input as `unthrottled`,
+`steady_background`, `slow_background`, `heavy_throttle`, or `pause_input`.
+The configured thresholds are normalized into a nondecreasing
+`low <= medium <= high <= max` sequence; paused playback is treated as a
+background consumer so it does not continue to receive unthrottled input.
 
 For CPU/pacing validation, `misc/benchmark_video_startup.py` can be run against a
 running local server. It creates JSONL results under `Temp/video_benchmarks/` by
@@ -149,12 +151,14 @@ forced-transcode retry before the viewer reports failure. The original remains a
 | GET | `status` | Report ffmpeg/ffprobe availability plus session summaries and aggregate limits |
 | GET | `probe?path=` | Return ffprobe metadata (streams, duration, codecs) |
 | GET/HEAD | `thumbnail?path=&source=` | Generate/serve a cached JPEG poster for a supported video |
-| GET | `subtitles?path=&track=` | Extract one subtitle stream to WebVTT |
-| GET | `subtitles/all?path=` | Batch-extract all WebVTT-compatible subtitle tracks |
+| GET | `subtitles?path=&track=&source=remote` | Extract one subtitle stream to WebVTT |
+| GET | `subtitles/window?path=&track=&start=&duration=` | Extract a bounded subtitle window for playback |
+| GET | `subtitles/all?path=&source=remote` | Batch-extract all WebVTT-compatible subtitle tracks |
 | GET | `session/file?id=&name=` | Serve HLS playlist, init segment, or media segment |
 | POST | `session` | Create a new HLS compatibility session |
 | POST | `session/progress` | Update one session's playback position and paused/playing state |
 | POST | `session/stop` | Stop one session and clean up its ffmpeg process |
+| POST | `cache/clear` | Clear disk-backed video probe/subtitle/header caches |
 
 Session creation (`POST /video/endpoints/session`) accepts form fields:
 
@@ -619,6 +623,8 @@ coverage without a shared cross-player suite.
 
 ## Related Docs
 
-- Regression groups: `docs/testing.md` (`video`, `music`, `web` groups)
-- General request/asset routing: `docs/architecture.md`
-- Shared media library plan: `plans/2026-07-12/PLAN_SHARED_MEDIA_LIBRARY.md`
+- Regression groups: [Testing](testing.md) (`video`, `music`, `web` groups)
+- General request/asset routing: [Architecture](architecture.md) and
+  [HTTP/API contracts](http-api.md)
+- Shared player/library behavior: [Music Player](music-player.md) and
+  [Media Caches](media-caches.md)

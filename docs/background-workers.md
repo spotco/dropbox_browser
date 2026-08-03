@@ -2,7 +2,9 @@
 
 Read this when changing `dropbox_browser/foldercache.py`,
 `dropbox_browser/syncjobs.py`, `/folder-info`, recursive batch planning, or
-worker trace/debug behavior.
+worker trace/debug behavior. The public route shapes are summarized in
+[HTTP/API contracts](http-api.md); this page focuses on ownership, scheduling,
+cache records, and observability.
 
 ## Folder Cache
 
@@ -48,6 +50,23 @@ Cache records also persist filtered direct child `lsjson` items. Normal page
 navigation can reuse those direct items for visible rows when the listing cache
 misses, without waiting for recursive size/date/count work to finish.
 
+## Folder-cache consumers
+
+The folder cache is shared by several features:
+
+- Browse uses direct child records for rows and polls `/folder-info` for
+  recursive status, size, date, and count fields.
+- Recursive File Search starts a bounded session from `services.py` and uses
+  cached or partially computed folder data where possible; it reports progress
+  rather than blocking the page request on a whole-tree walk.
+- Music and Video libraries use `media_library.py` to turn folder-cache
+  snapshots into recursive tree/library payloads. Their clients poll while the
+  cache is partial, so a library may grow between responses.
+
+These consumers do not share the Photo Map cache or video probe/subtitle/header
+caches. Those are separate feature caches with their own invalidation and
+limits; see [Media Caches](media-caches.md) and [Photo Map](photo-map.md).
+
 ## Diff Status
 
 Status values:
@@ -81,6 +100,10 @@ Temp/runs/<unix-start-time>/foldercache_threads.jsonl
 `Temp/current-run.txt` contains the current run id. Each run directory also
 contains `server.json` with startup metadata such as PID, remote, local root,
 host, and port.
+
+Other useful generated diagnostics include `Temp/slow_operations.jsonl` for
+slow foreground operations, `Temp/client_logs.jsonl` for accepted browser
+client logs, and `Temp/video_debug.jsonl` when video debug logging is enabled.
 
 Each line is one JSON object. Common fields include:
 
@@ -140,6 +163,11 @@ continue after per-file failures and report errors in `/sync-status`.
 Sync may overwrite the selected destination in the selected direction, but it
 must not delete destination-only files.
 
+`rclone.py` applies the configured retry/timeout policy to write operations and
+records subprocess output according to the logging settings. Browser sync does
+not execute a generated local-only `.bat` command; the batch endpoint queues
+the approved copy plan through the sync workers. See [Sync and rclone](sync-and-rclone.md).
+
 Known performance caveat: `/sync-batch-plan` computes a plan for confirmation,
 then `/sync-batch` recomputes before queuing jobs. On large recursive folders
 this can look like the confirmed batch action is hanging before any `rclone
@@ -154,6 +182,8 @@ python -m tests.run background-file-info -v
 python -m tests.run file-sync -v
 python -m tests.run diff -v
 python -m tests.run cache -v
+python -m tests.run music -v
+python -m tests.run video -v
 ```
 
 Run the full suite before checkin/commit or after broad shared changes:

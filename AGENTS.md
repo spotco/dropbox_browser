@@ -1,7 +1,10 @@
+# AGENTS.md instructions for `F:\dev\dropbox_browser`
+
 ## Overview
 
-This is a dependency-free Python Dropbox browser/downloader. It runs a local
-stdlib HTTP server and shells out to `rclone` for Dropbox access.
+Dropbox Browser is a dependency-free Python application. It runs a local
+stdlib HTTP server, obtains Dropbox listings and file bytes through `rclone`,
+and renders a client-rendered browse shell with optional media panes.
 
 Start locally:
 
@@ -9,214 +12,185 @@ Start locally:
 python dropbox_browser.py --remote dropbox:
 ```
 
-Default URL:
+Default URL: `http://127.0.0.1:8000/`.
 
-```text
-http://127.0.0.1:8000/
-```
+## Read before editing
 
-## Read Before Editing
+Use the document that matches the subsystem being changed:
 
-Load only the doc that matches the work:
+- [Architecture](docs/architecture.md) — request flow and ownership map.
+- [Configuration](docs/configuration.md) — config layers, tool discovery, and
+  generated state.
+- [HTTP API](docs/http-api.md) — route methods, parameters, and payloads.
+- [Browse UI](docs/browse-ui.md) — client-rendered listing, filters, search,
+  navigation, and thumbnails.
+- [Background workers](docs/background-workers.md) — folder metadata, diff
+  cache, worker traces, and `/folder-info`.
+- [Sync and rclone](docs/sync-and-rclone.md) — copy directions, confirmation
+  plans, retry behavior, and delete-command downloads.
+- [Media caches](docs/media-caches.md) — image/video posters and video disk
+  caches.
+- [Music player](docs/music-player.md) — recursive library, playlists,
+  metadata, playback, and waveform processing.
+- [Photo Map](docs/photo-map.md) — GPS parsing, map lifecycle, grouping,
+  thumbnails, preview, and browser-owned cache.
+- [Video player](docs/video-player.md) — HLS sessions, tracks, subtitles, and
+  video client modules.
+- [Windows name matching](docs/windows-name-matching.md) — normalized matching
+  and safe local path resolution.
+- [Testing](docs/testing.md) — Python groups, JavaScript tests, and Playwright.
 
-- Background folder metadata, diff status, worker traces, sync queues:
-  `docs/background-workers.md`.
-- Windows-safe Dropbox/local name matching:
-  `docs/windows-name-matching.md`.
-- Regression workflow and test groups: `docs/testing.md`.
-- High-level behavior and ownership map: `docs/architecture.md`.
-- Video player server endpoints, HLS sessions, and client modules:
-  `docs/video-player.md`.
+Do not read or edit `plans/TODO_NOTES` unless the human explicitly requests it.
+The other files under `plans/` are historical design notes, not runtime
+contracts.
 
-## Repository Map
+## Repository map
 
-- `dropbox_browser.py` - compatibility entry point.
-- `dropbox_browser/cli.py` - args and HTTP server startup.
-- `dropbox_browser/config.py` - config paths, rclone discovery, temp/cache paths.
-- `dropbox_browser/handlers.py` - HTTP routes and response streaming.
-- `dropbox_browser/services.py` - listing merge, sorting, sync planning, status decisions.
-- `dropbox_browser/foldercache.py` - background recursive folder metadata and diff cache.
-- `dropbox_browser/syncjobs.py` - browser-triggered sync/delete worker queue.
-- `dropbox_browser/rclone.py` - rclone subprocess adapter.
-- `dropbox_browser/streaming.py` - byte-range parsing and stream response helpers.
-- `dropbox_browser/windows_names.py` - Windows-safe filename matching and path resolution.
-- `dropbox_browser/namekeys.py` - filename comparison compatibility wrapper.
-- `dropbox_browser/ignored.py` - ignored metadata/system names.
-- `dropbox_browser/clientlog.py` - client-side browser log ingestion and filtering.
-- `dropbox_browser/media_library.py` - shared recursive folder-cache library listing
-  (music + video library endpoints).
-- `dropbox_browser/music.py` - music library endpoint (audio filter + thin wrapper).
-- `dropbox_browser/video.py` - video endpoints, HLS sessions, video library wrapper.
-- `dropbox_browser/views.py` - server-rendered HTML/CSS/JS asset responses.
-- `dropbox_browser/assets/js/media-library/` - shared library tree + active playlist UI.
-- `dropbox_browser/assets/js/music/` - music-only playback/metadata/cover art.
-- `dropbox_browser/assets/js/video/` - video-only playback/HLS/tracks/subtitles.
-- `dropbox_browser/assets/js/music.js` / `video.js` - thin host entries.
-- `tests/` - stdlib `unittest` tests with fake rclone and isolated temp/cache paths.
-- `Cache/`, `Temp/`, `.dropbox-browser-temp/` - generated local state, ignored by git.
-- `plans/TODO_NOTES` - human-owned active plan list and scratch notes; do not
-  read or edit unless explicitly requested.
+- `dropbox_browser.py` — compatibility entry point.
+- `dropbox_browser/cli.py` — CLI parsing, config loading, tool discovery, and
+  server startup/shutdown.
+- `dropbox_browser/config.py` — defaults, config layering, paths, and tool
+  discovery.
+- `dropbox_browser/handlers.py` — HTTP routing, path validation, response
+  streaming, JSON endpoints, and asset delivery.
+- `dropbox_browser/services.py` — browse snapshots, listing merge, cached
+  recursive search, status decisions, sync planning, and sync operations.
+- `dropbox_browser/foldercache.py` plus `foldercache_compute.py`,
+  `foldercache_records.py`, `foldercache_state.py`, and `folderdiff.py` —
+  background recursive metadata, diff propagation, and cache records.
+- `dropbox_browser/listingcache.py` — TTL-based direct `rclone lsjson` cache.
+- `dropbox_browser/rclone.py` — subprocess adapter, streaming, cancellation,
+  and write retry policy.
+- `dropbox_browser/streaming.py` — byte-range parsing and exact-byte copy.
+- `dropbox_browser/paths.py`, `windows_names.py`, `namekeys.py`, and
+  `ignored.py` — path safety, Windows-compatible matching, and ignored names.
+- `dropbox_browser/syncjobs.py` and `syncstate.py` — browser-triggered copy
+  queue, throttling retries, and in-memory operation status.
+- `dropbox_browser/thumbnails.py` and `video_thumbnails.py` — image and video
+  poster generation and cache keys.
+- `dropbox_browser/media_library.py`, `music.py`, and `video.py` — recursive
+  media-library payloads, music endpoints, and video/HLS endpoints.
+- `dropbox_browser/videocache.py` — TTL/LRU-byte-cap disk cache used by video
+  probe, subtitle, and header data.
+- `dropbox_browser/photo_map_cache.py` — validated browser-owned Photo Map
+  metadata cache.
+- `dropbox_browser/clientlog.py`, `logoutput.py`, `logstore.py`, and
+  `workertrace.py` — client diagnostics, server logs, in-memory log polling,
+  and JSONL worker traces.
+- `dropbox_browser/views.py` and `assets/templates/` — page shells, HTML, and
+  server-side asset metadata.
+- `dropbox_browser/assets/js/browse/` — browse navigation, rendering, sorting,
+  filtering, virtual rows, folder-info polling, and thumbnails.
+- `dropbox_browser/assets/js/media-library/` — shared music/video library tree,
+  playlist store/UI, layout, and Recent history.
+- `dropbox_browser/assets/js/music/` — audio playback, metadata, embedded art,
+  shuffle helpers, and waveform worker/controller.
+- `dropbox_browser/assets/js/photo-map/` plus `photo-map.js` — map lifecycle,
+  parsers, grouping, cache, thumbnail scheduling, and diagnostics.
+- `dropbox_browser/assets/js/video/` plus `video.js` — video playback, HLS,
+  tracks, subtitles, controls, and diagnostics.
+- `tests/` — stdlib unit tests, Node tests, Playwright specs, fake rclone, and
+  isolated integration harnesses.
 
-## Hard Safety Rules
+## Hard safety rules
 
-- Do not add delete behavior unless explicitly requested.
-- Do not add overwrite behavior unless explicitly requested.
-- Sync is the explicit overwrite exception: when the user chooses a sync
-  direction in the browser, overwrite the selected destination from the selected
-  source direction. Sync must still never delete destination-only files.
-- Browser uploads are not supported. Do not reintroduce upload UI or `/upload`
-  backend behavior unless explicitly requested.
-- Local paths must stay under `--local-root`; use `safe_join_local`.
-- Remote paths must be normalized through `clean_rel_path`; parent segments are
-  rejected.
-- Do not hotlink icon URLs. Serve vendored icon files only through the
-  constrained `/assets/icons/material-icon-theme/<name>.svg` handler.
+- Do not add delete behavior unless explicitly requested. The existing
+  `/local-only-delete-bat` behavior only downloads a reviewable batch file; the
+  server does not execute it.
+- Do not add overwrite behavior unless explicitly requested. Sync is the
+  explicit exception: the chosen source direction may overwrite the selected
+  destination, but sync must never delete destination-only files.
+- Browser uploads are not supported. Do not reintroduce upload UI or an
+  `/upload` backend route unless explicitly requested.
+- Local paths must stay under `--local-root`/`DropboxFolder` and use
+  `safe_join_local` or Windows name-resolution helpers.
+- Remote paths must pass through `clean_rel_path`; parent segments are rejected.
+- Do not hotlink icon or Leaflet asset URLs. Serve the constrained vendored
+  assets through the existing asset handlers.
 - Do not `git add`, `git commit`, or `git push` without an explicit human
   request.
 
-## Runtime Invariants
+## Runtime invariants
 
-- Dropbox folder listings use `rclone lsjson`.
-- File preview and download stream directly from `rclone cat`; the app does not
-  save previews/downloads to disk.
-- `/file` and `/download` support byte ranges and `HEAD`; keep seekable
-  audio/video behavior intact.
-- Remote range streaming uses `rclone cat --offset N --count M -- remote:path`.
-- Dropbox folder `ModTime` values may be placeholders such as
-  `2000-01-01T00:00:00Z`; folder date sorting stays based on direct listings
-  unless a faster indexed design is added.
-- Local/Dropbox filename matching must follow `filename_compare_key`
-  semantics: Unicode NFKC normalization followed by `casefold()`.
-- When a remote row matches a Windows-renamed local path, use the actual local
-  path captured from the filesystem or resolve path segments through the
-  matcher. Do not reconstruct impossible Windows paths from Dropbox display
-  names.
+- Dropbox folder listings use `rclone lsjson`; direct listings may come from
+  `ListingCacheManager` or completed folder-cache records.
+- `/file` and `/download` stream from `rclone cat` or a safe local file. They
+  support `HEAD`, byte ranges, `Accept-Ranges`, and `206`/`416` semantics.
+- Remote ranged reads use `rclone cat --offset N --count M -- remote:path`.
+- Video HLS sessions read remote bytes through a tagged `/file` request and
+  write temporary HLS output under the active `Temp` run directory.
+- Image and video thumbnails are explicit generated cache artifacts; ordinary
+  preview/download requests are not materialized as downloads.
+- Dropbox folder `ModTime` values can be placeholders such as
+  `2000-01-01T00:00:00Z`; folder date sorting remains based on direct listing
+  data unless an indexed design changes that contract.
+- Local/Dropbox name matching uses Unicode NFKC normalization followed by
+  `casefold()` via `filename_compare_key`.
+- If a remote row matches a Windows-renamed local path, use the actual local
+  path captured from the filesystem or resolve segments through the matcher.
+  Never reconstruct an impossible Windows path from a Dropbox display name.
+- Client-rendered browse is the supported UI mode and is the CLI default.
+  Server-rendered rows are a compatibility path, not a maintained regression
+  surface.
+- Background folder metadata and recursive media-library listing must not turn
+  normal page loads into synchronous Dropbox recursion.
 
-## Browse UI Mode
+## Development workflow
 
-Client-rendered browse is the supported and tested UI mode. `--client-render`
-is the CLI default.
+Run the smallest relevant check first, then the broader group for shared code:
 
-- Do not maintain or add regression coverage for `--no-client-render` /
-  server-rendered browse rows.
-- Tests that need row fields, sort order, status labels, or copy-path data
-  should use `GET /browse/endpoints/listing` (see `browse_listing()` in
-  `tests/app_test_support.py`), not `GET /` HTML row markup.
-- Server-rendered page HTML is still tested only for shell contracts such as
-  scripts, placeholders, and topbar chrome.
+```powershell
+python -m tests.run --list
+python -m tests.run <relevant-group> -v
+npm run test:js
+python -m unittest discover -s tests -v
+```
 
-## Development Workflow
-
-Useful checks:
+Useful smoke checks:
 
 ```powershell
 python -m py_compile dropbox_browser.py
 python -m compileall -q dropbox_browser.py dropbox_browser
 python dropbox_browser.py --help
-python -m tests.run --list
-python -m tests.run <relevant-group> -v
-python -m unittest discover -s tests -v
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/ -TimeoutSec 30
 ```
 
-During feature work, run the smallest relevant test group or specific test case.
-Run the full suite before checkin/commit, before handing off broad cross-module
-changes, or when shared helpers used by multiple groups changed.
+Focused groups include `web`, `streaming`, `file-sync`, `background-file-info`,
+`diff`, `cache`, `names`, `rclone`, `thumbnails`, `photo-map`, `music`,
+`video`, and `client-log`. See [Testing](docs/testing.md) for aliases and
+Playwright projects.
 
-Common groups:
-
-- `client-log` - browser-to-server client log endpoint and filtering.
-- `web` - rendered pages, assets, UI contracts.
-- `streaming` - pure streaming helpers plus `/file` and `/download` HTTP behavior.
-- `video` - video player endpoints, ffmpeg command construction, HLS sessions.
-- `file-sync` - sync routes and sync job queue.
-- `background-file-info` - folder-cache workers and `/folder-info` polling.
-- `diff` - Dropbox/local status semantics.
-- `cache` - listing/folder cache invalidation.
-- `names` - Windows-safe name matching and listing merge.
-- `rclone` - rclone adapter behavior.
-
-When fixing a regression, add a focused failing test first when practical, make
-the smallest fix, rerun that test, then run the relevant group. See
-`docs/testing.md` for details.
+When fixing a regression, add a focused failing test when practical, make the
+smallest fix, rerun it, run the relevant group, and run the full suite before a
+handoff for broad/shared changes. Documentation-only changes must not modify
+Python, JavaScript, CSS, templates, fixtures, or generated runtime state.
 
 ## Debugging
 
-- For interactive browser inspection and local UI verification, use the **Brave
-  DevTools MCP** (`mcp__brave_devtools__*`) and select the existing app tab with
-  `list_pages` / `select_page`. Do not use the unavailable in-app Browser
-  binding for this repository's Brave session.
-- Client-side browser logs can be reported to `POST /client-log` and written to
-  `Temp/client_logs.jsonl`.
-- Client logging is controlled by `ClientLogEnabled` and
-  `ClientLogSubsystems` in config. Keep noisy subsystems disabled by default
-  unless they are actively being debugged.
-- Current client log subsystem names include `video`, `browse-reveal`,
-  `file-search`, and `music-metadata`.
-- Server-side video HLS/session diagnostics are written to
-  `Temp/video_debug.jsonl` when `LogVideoDebug` is enabled.
-- Generated run state, logs, caches, and local reproductions under `Temp/`,
-  `Cache/`, and `.dropbox-browser-temp/` are not source artifacts. Inspect them
-  when useful, but do not commit or depend on their contents in tests.
+- Use the repository's configured Brave DevTools integration for interactive
+  local UI inspection when available; select the existing app tab instead of
+  starting a second browser session.
+- Client logs are posted to `POST /client-log` and written to
+  `Temp/client_logs.jsonl` only when `ClientLogEnabled` and the named subsystem
+  are enabled.
+- Server request/command logs are visible in the in-memory `/logs` stream and
+  normal output. Worker timing and cache events are written to the current run
+  under `Temp/runs/<run-id>/`.
+- Video session diagnostics are written to `Temp/video_debug.jsonl` when
+  `LogVideoDebug` is enabled.
+- Generated state under `Cache/`, `Temp/`, and `ThumbnailCache/` is disposable
+  runtime data. Inspect it when useful, but do not add it to source or tests.
 
-## Implementation Preferences
+## Git notes
 
-- Keep Python web serving dependency-free and stdlib-based.
-- Prefer direct, conservative code that matches existing module ownership.
-- Keep UI interactions server-rendered unless a feature needs client-side state.
-- Avoid expensive Dropbox recursion during normal page loads.
-- Treat `.gitignore`, local config, generated caches, and untracked tooling as
-  user-owned unless asked to modify them.
-- Place new behavior where it belongs:
-  - listing, status comparison, direct file sync, caching decisions:
-    `dropbox_browser/services.py`;
-  - background folder metadata and folder diff cache:
-    `dropbox_browser/foldercache.py`;
-  - browser-triggered sync/delete workers: `dropbox_browser/syncjobs.py`;
-  - rclone command execution and logging: `dropbox_browser/rclone.py`;
-  - byte-range parsing and copy helpers: `dropbox_browser/streaming.py`;
-  - browser-originated client logs: `dropbox_browser/clientlog.py`;
-  - request routing and response status: `dropbox_browser/handlers.py`;
-  - HTML, icons, and browser assets: `dropbox_browser/views.py`;
-  - config evolution and path locations: `dropbox_browser/config.py`;
-  - shared recursive media library listing: `dropbox_browser/media_library.py`;
-  - shared library/playlist browser UI: `dropbox_browser/assets/js/media-library/`;
-  - music-only client playback: `dropbox_browser/assets/js/music/`;
-  - video player endpoints and client modules: `docs/video-player.md`.
-
-## Git Notes
-
-- Remote: `https://github.com/spotco/dropbox_browser`
-- When the human says **dev branch**, interpret that as the repository's
-  currently used development branch; do not create
-  or push a new branch literally named `dev` unless explicitly requested.
-- GitHub publishing uses the local git workflow only: after an explicit human
-  request, commit the intended files and push with `git push origin <branch>`
-  (for example, `git push origin master` or `git push origin dev-ui-fixes`).
-  Do not require GitHub CLI, create a PR, or use another GitHub publishing
-  flow unless the human explicitly asks for it.
-- For an explicit request to commit and push:
-  1. Check the current branch with `git branch --show-current`.
-  2. Inspect `git status --short`.
-  3. Stage only the files that belong to the requested work.
-  4. Include `plans/TODO_NOTES` in the commit when it has local changes and
-     the human is checking work into GitHub. Agents must still never read, edit,
-     or rewrite `plans/TODO_NOTES` unless the human explicitly asks.
-  5. Leave unrelated local edits uncommitted unless the human explicitly asks
-     to include them.
-  6. Commit with a focused message.
-  7. Push the current branch to `origin` unless the human explicitly asks for a
-     different branch or flow.
-- Do not waste time probing `.git/index.lock` unless a git command actually
-  fails with an index-lock error. If that specific error happens, confirm there
-  is no live git process; if no Git process is active and the exact repository
-  lock remains, remove only `<repo>/.git/index.lock` and retry the failed
-  command. Never remove an index lock while another Git process is active, and
-  never delete or recreate the whole `.git` directory.
-- Use the approval-gated push tool call for network pushes.
+- Remote: `https://github.com/spotco/dropbox_browser`.
+- “Dev branch” means the repository's currently used development branch; do
+  not create or push a branch literally named `dev` unless requested.
+- For an explicit commit/push request, inspect the current branch and status,
+  stage only intended files, use a focused commit, and push the current branch
+  to `origin`. Do not use GitHub CLI or create a PR unless explicitly asked.
 - `rclone.exe` is tracked and large. Do not rewrite history or remove it unless
   asked.
-- Git may warn about `C:\Users\mooto/.config/git/ignore`; this has not blocked
-  normal status, commit, or push operations.
-- `plans/TODO_NOTES` is human-edited. Do not read or edit it unless explicitly
-  requested. When checking work into GitHub, stage and commit it if it changed.
+- Do not probe or remove `.git/index.lock` unless a Git command actually fails
+  with that exact error; if so, verify no Git process is live and remove only
+  the repository's lock before retrying.
