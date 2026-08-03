@@ -11,17 +11,29 @@ List groups:
 python -m tests.run --list
 ```
 
-Common groups:
+Common groups and aliases:
 
-- `web` - rendered pages, assets, UI contracts.
-- `streaming` - pure streaming helpers plus `/file` and `/download` HTTP behavior.
-- `file-sync` - sync routes and sync job queue.
-- `background-file-info` - folder-cache workers and `/folder-info` polling.
-- `diff` - Dropbox/local status semantics.
-- `cache` - listing/folder cache invalidation.
-- `names` - Windows-safe name matching and listing merge.
-- `rclone` - rclone adapter behavior.
-- `thumbnails` - thumbnail config, cache, `/thumbnail` route, and listing fields.
+- `web` (also `ui`, `javascript`, `webpage`) - rendered pages, assets, and
+  UI contracts.
+- `streaming` and `streaming-http` - pure range/streaming helpers plus
+  `/file` and `/download` HTTP behavior.
+- `file-sync`, `sync`, `sync-routes`, and `sync-jobs` - sync routes, plans,
+  write workers, and grouped progress.
+- `background-file-info`, `background`, `folder-info`, `foldercache`,
+  `foldercache-compute`, `foldercache-records`, and `foldercache-state` -
+  folder-cache workers, records, computation, and `/folder-info` polling.
+- `diff`, `folderdiff`, and `status` - Dropbox/local status semantics.
+- `cache` - listing/folder cache invalidation and cache behavior.
+- `client-log` - browser-to-server client log ingestion and filtering.
+- `cli` - command-line/config/startup contracts.
+- `names` and `windows-names` - Windows-safe name matching and listing merge.
+- `rclone` - rclone adapter behavior, cancellation, and retry policy.
+- `thumbnails` and `video-thumbnails` - image/video thumbnail config, cache,
+  routes, and listing fields.
+- `photo-map` and `photo-map-cache` - Photo Map metadata/cache behavior.
+- `music` and `music-endpoints` - music library and endpoint contracts.
+- `video` and `video-endpoints` - video probes, HLS sessions, subtitles, and
+  endpoint contracts.
 
 Run one or more groups:
 
@@ -48,6 +60,21 @@ Photo Map-only checks:
 python -m tests.run photo-map -v
 npm run test:js:photo-map
 ```
+
+Other focused client/server commands include:
+
+```powershell
+npm run test:js
+npm run test:e2e:client-render
+npm run test:e2e:music
+npm run test:e2e:video
+npm run test:all
+```
+
+Run `npm install` once before the Node/Playwright commands. The Python suite
+does not require third-party runtime dependencies; the E2E suites require the
+development dependencies declared in `package.json` and a discoverable
+FFmpeg binary for media fixtures.
 
 The client-render Playwright suite also covers the Photo Map pane lifecycle:
 it verifies that Photo Map requests do not start while Music/Video is selected,
@@ -189,6 +216,10 @@ Useful helpers:
 
 `IsolatedPathsTestCase.read_trace_events()` reads the isolated worker JSONL
 trace log for background-worker assertions.
+
+For feature-specific behavior, see [Browse UI](browse-ui.md),
+[Music Player](music-player.md), [Photo Map](photo-map.md),
+[Media Caches](media-caches.md), and [Video Player](video-player.md).
 
 ## Compile/Smoke Checks
 

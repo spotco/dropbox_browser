@@ -69,3 +69,6 @@ If the change affects sync destination resolution, also run:
 ```powershell
 python -m tests.run file-sync -v
 ```
+
+Related contracts: [Sync and rclone](sync-and-rclone.md),
+[HTTP/API paths](http-api.md), and [Architecture](architecture.md).
