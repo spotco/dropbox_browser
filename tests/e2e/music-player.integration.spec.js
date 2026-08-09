@@ -71,7 +71,7 @@ async function playlistEntryNames(page) {
   const count = await rows.count();
   const names = [];
   for (let i = 0; i < count; i += 1) {
-    names.push((await rows.nth(i).locator('[role="cell"]').first().innerText()).trim());
+    names.push((await rows.nth(i).locator(".music-playlist-filename-cell").innerText()).trim());
   }
   return names;
 }
@@ -90,7 +90,7 @@ async function waitForCurrentPlaylistSong(page, filename) {
     .poll(async () => {
       const current = page.locator("#music-playlist-list .music-playlist-entry.current");
       if ((await current.count()) === 0) return "";
-      return (await current.locator('[role="cell"]').first().innerText()).trim();
+      return (await current.locator(".music-playlist-filename-cell").innerText()).trim();
     }, { timeout: 10000 })
     .toBe(filename);
 }
@@ -282,7 +282,7 @@ async function selectedPlaylistEntryNames(page) {
   const count = await rows.count();
   const names = [];
   for (let i = 0; i < count; i += 1) {
-    names.push((await rows.nth(i).locator('[role="cell"]').first().innerText()).trim());
+    names.push((await rows.nth(i).locator(".music-playlist-filename-cell").innerText()).trim());
   }
   return names;
 }
@@ -291,7 +291,7 @@ async function playlistContextAction(page, songName, action) {
   await page.evaluate(({ name, dataAction }) => {
     const rows = Array.from(document.querySelectorAll("#music-playlist-list .music-playlist-entry"));
     const row = rows.find((entry) => {
-      const cell = entry.querySelector('[role="cell"]');
+      const cell = entry.querySelector(".music-playlist-filename-cell");
       return cell && cell.textContent.trim() === name;
     });
     if (!row) throw new Error("playlist row not found: " + name);
@@ -419,7 +419,7 @@ test("library loads complete tree, sort, playlist CRUD, and playback", async ({ 
   await page.evaluate((name) => {
     const rows = Array.from(document.querySelectorAll("#music-playlist-list .music-playlist-entry"));
     const row = rows.find((entry) => {
-      const cell = entry.querySelector('[role="cell"]');
+      const cell = entry.querySelector(".music-playlist-filename-cell");
       return cell && cell.textContent.trim() === name;
     });
     if (!row) throw new Error("playlist row not found: " + name);
@@ -730,12 +730,11 @@ test("library selection, playlist context play, and shuffle next is non-sequenti
     .poll(async () => {
       const current = page.locator("#music-playlist-list .music-playlist-entry.current");
       if ((await current.count()) === 0) return "";
-      return (await current.locator('[role="cell"]').first().innerText()).trim();
+      return (await current.locator(".music-playlist-filename-cell").innerText()).trim();
     }, { timeout: 5000 })
     .not.toBe("TrackB.wav");
   const shuffledNext = await page
-    .locator("#music-playlist-list .music-playlist-entry.current [role='cell']")
-    .first()
+    .locator("#music-playlist-list .music-playlist-entry.current .music-playlist-filename-cell")
     .innerText();
   expect(["TrackA.wav", "TrackB.wav", "TrackC.wav", "TrackD.wav"]).toContain(shuffledNext.trim());
 });
@@ -1008,7 +1007,7 @@ test("json import and music settings survive reload", async ({ page }) => {
     "true",
   );
   await page.evaluate(() => {
-    Settings.set("music-playlist-column-widths", { filename: 180, path: 300, reorder: 56 });
+    Settings.set("music-playlist-column-widths", { index: 52, filename: 180, path: 300, reorder: 56 });
     Settings.set("music-pane-widths", [30, 45, 25]);
     Settings.set("music-playlist-load-filter", "Zeta");
   });
@@ -1052,7 +1051,7 @@ test("json import and music settings survive reload", async ({ page }) => {
     .toMatchObject({ key: "date", direction: "desc" });
   await expect
     .poll(async () => readSettingsKey(page, "music-playlist-column-widths"), { timeout: 3000 })
-    .toMatchObject({ filename: 180, path: 300, reorder: 56 });
+    .toMatchObject({ index: 52, filename: 180, path: 300, reorder: 56 });
   await expect
     .poll(async () => readSettingsKey(page, "music-pane-widths"), { timeout: 3000 })
     .toEqual([30, 45, 25]);
@@ -1066,7 +1065,9 @@ test("json import and music settings survive reload", async ({ page }) => {
     .poll(async () => readSettingsKey(page, "music-loop-playlist"), { timeout: 3000 })
     .toBe(true);
 
-  // Column widths applied to CSS custom property on playlist table
+  // Column widths applied to CSS custom property on playlist table.
+  // Layout fits saved proportions into the live list width, so absolute px values
+  // may scale; still require a four-column grid with index < filename < path.
   await expect
     .poll(async () => {
       return page.evaluate(() => {
@@ -1074,7 +1075,17 @@ test("json import and music settings survive reload", async ({ page }) => {
         return table ? getComputedStyle(table).getPropertyValue("--music-playlist-grid-columns").trim() : "";
       });
     }, { timeout: 5000 })
-    .toMatch(/180px|minmax\(180px/);
+    .toMatch(/^\d+(\.\d+)?px \d+(\.\d+)?px \d+(\.\d+)?px \d+(\.\d+)?px$/);
+  const appliedColumns = await page.evaluate(() => {
+    const table = document.getElementById("music-playlist-table");
+    const value = table ? getComputedStyle(table).getPropertyValue("--music-playlist-grid-columns").trim() : "";
+    return value.split(/\s+/).map((part) => Number.parseFloat(part));
+  });
+  expect(appliedColumns).toHaveLength(4);
+  expect(appliedColumns[0]).toBeGreaterThanOrEqual(48);
+  expect(appliedColumns[1]).toBeGreaterThan(appliedColumns[0]);
+  expect(appliedColumns[2]).toBeGreaterThan(appliedColumns[1]);
+  expect(appliedColumns[3]).toBeGreaterThanOrEqual(56);
 
   // Load-dialog filter restored; sort UI still reflects last clicked last_modified
   await page.locator("#music-playlist-load").click();

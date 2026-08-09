@@ -239,16 +239,17 @@ test("fitColumnWidthsToTotal supports custom column sets and minimum widths", as
   global.window = {};
 
   const columns = await importModuleFromWorkspace("dropbox_browser/assets/js/browse/columns.js");
-  const keys = ["filename", "path", "reorder"];
-  const minWidths = {filename: 120, path: 150, reorder: 56};
+  const keys = ["index", "filename", "path", "reorder"];
+  const minWidths = {index: 48, filename: 120, path: 150, reorder: 56};
   const widths = columns.fitColumnWidthsToTotal(
     keys,
-    {filename: 220, path: 340, reorder: 56},
-    500,
+    {index: 52, filename: 220, path: 340, reorder: 56},
+    568,
     minWidths,
   );
 
-  assert.equal(widths.filename + widths.path + widths.reorder, 500);
+  assert.equal(widths.index + widths.filename + widths.path + widths.reorder, 568);
+  assert.ok(widths.index >= 48);
   assert.ok(widths.filename >= 120);
   assert.ok(widths.path >= 150);
   assert.ok(widths.reorder >= 56);

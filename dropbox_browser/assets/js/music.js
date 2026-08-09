@@ -150,7 +150,7 @@ import {initWaveformController} from './music/waveform/controller.js';
       currentPlaylistIndex: -1,
       musicPaneWidthSettingKey: 'music-pane-widths',
       playlistColumnWidthSettingKey: 'music-playlist-column-widths',
-      defaultPlaylistColumnWidths: {filename: 220, path: 340, reorder: 56},
+      defaultPlaylistColumnWidths: {index: 52, filename: 220, path: 340, reorder: 56},
       musicPaneResizerWidth: 8,
       defaultMusicPanePercents: [35, 38.333333, 26.666667],
       minMusicPaneWidthsPx: [190, 210, 220],

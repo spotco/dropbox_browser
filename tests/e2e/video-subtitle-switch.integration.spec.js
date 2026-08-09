@@ -188,7 +188,7 @@ const TRACK_REMOVAL_INSTRUMENTATION = () => {
   function recordTrackRemoved(video) {
     if (!video || video.id !== "video-player-media") return;
     const haystack = collectNativeSubtitleHaystack(video);
-    const activeTitle = document.querySelector("#video-playlist-list .music-playlist-entry.current [role='cell']");
+    const activeTitle = document.querySelector("#video-playlist-list .music-playlist-entry.current .music-playlist-filename-cell");
     window.__subtitleTeardownEvents.push({
       type: "track-removed",
       videoHidden: Boolean(video.hidden),
@@ -925,7 +925,7 @@ const SUBTITLE_STALE_MONITOR = () => {
     if (!window.__subtitleSwitchArmed) return;
     const needles = Array.isArray(window.__subtitleStaleNeedles) ? window.__subtitleStaleNeedles : [];
     if (!needles.length) return;
-    const activeTitle = document.querySelector("#video-playlist-list .music-playlist-entry.current [role='cell']");
+    const activeTitle = document.querySelector("#video-playlist-list .music-playlist-entry.current .music-playlist-filename-cell");
     const activeFilename = activeTitle ? String(activeTitle.textContent || "").trim() : "";
     if (!activeFilename || activeFilename === "alpha.mkv") return;
     const haystack = collectNativeSubtitleHaystack();

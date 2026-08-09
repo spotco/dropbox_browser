@@ -442,8 +442,8 @@
 }
 
 .music-playlist-table {
-  --music-playlist-grid-columns: minmax(120px, 0.9fr) minmax(150px, 1.1fr) 56px;
-  --music-playlist-grid-min-width: 342px;
+  --music-playlist-grid-columns: 52px minmax(120px, 0.9fr) minmax(150px, 1.1fr) 56px;
+  --music-playlist-grid-min-width: 394px;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
@@ -785,7 +785,7 @@
   opacity: 1;
 }
 
-.music-playlist-entry.current > div:first-child::before {
+.music-playlist-entry.current .music-playlist-filename-cell::before {
   content: "Playing: ";
   color: #9fc6e4;
   font-weight: 700;
@@ -796,6 +796,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.music-playlist-index-cell {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .music-playlist-column-heading {
@@ -812,6 +817,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.music-playlist-index-heading {
+  justify-content: flex-end;
+  text-align: right;
 }
 
 .music-playlist-reorder-heading {

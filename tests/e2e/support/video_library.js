@@ -27,7 +27,7 @@ async function libraryRow(page, filename) {
 async function expectActivePlaylistTitle(page, filename) {
   const activeRow = page.locator("#video-playlist-list .music-playlist-entry.current").first();
   await expect(activeRow).toBeVisible({ timeout: 15000 });
-  await expect(activeRow.locator('[role="cell"]').first()).toHaveText(filename);
+  await expect(activeRow.locator(".music-playlist-filename-cell")).toHaveText(filename);
 }
 
 /** @deprecated Use expectActivePlaylistTitle */

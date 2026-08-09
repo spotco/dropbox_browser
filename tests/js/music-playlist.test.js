@@ -211,3 +211,209 @@ test("reorderPlaylistBlock is a no-op when the drop target keeps the block in pl
   );
   assert.equal(result.currentPlaylistIndex, 1);
 });
+
+function createPlaylistDomNode(tagName) {
+  const node = {
+    tagName: String(tagName || "div").toUpperCase(),
+    children: [],
+    parentNode: null,
+    title: "",
+    type: "",
+    dataset: Object.create(null),
+    attributes: Object.create(null),
+    _className: "",
+    _textContent: "",
+    classList: {
+      _set: new Set(),
+      add(name) {
+        this._set.add(name);
+        node._className = Array.from(this._set).join(" ");
+      },
+      remove(name) {
+        this._set.delete(name);
+        node._className = Array.from(this._set).join(" ");
+      },
+      toggle(name, force) {
+        if (force === true) this.add(name);
+        else if (force === false) this.remove(name);
+        else if (this._set.has(name)) this.remove(name);
+        else this.add(name);
+      },
+      contains(name) {
+        return this._set.has(name);
+      },
+    },
+    setAttribute(name, value) {
+      this.attributes[name] = String(value);
+    },
+    getAttribute(name) {
+      return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null;
+    },
+    appendChild(child) {
+      this.children.push(child);
+      child.parentNode = this;
+      return child;
+    },
+    addEventListener() {},
+    querySelector(selector) {
+      return this.querySelectorAll(selector)[0] || null;
+    },
+    querySelectorAll(selector) {
+      const matches = [];
+      const wantedClass = selector.startsWith(".") ? selector.slice(1) : null;
+      const walk = (current) => {
+        current.children.forEach((child) => {
+          if (wantedClass && child.classList.contains(wantedClass)) matches.push(child);
+          walk(child);
+        });
+      };
+      walk(this);
+      return matches;
+    },
+  };
+  Object.defineProperty(node, "className", {
+    get() {
+      return this._className;
+    },
+    set(value) {
+      this._className = String(value || "");
+      this.classList._set = new Set(this._className.split(/\s+/).filter(Boolean));
+    },
+  });
+  Object.defineProperty(node, "textContent", {
+    get() {
+      if (this.children.length) {
+        return this.children.map((child) => child.textContent).join("");
+      }
+      return this._textContent;
+    },
+    set(value) {
+      this._textContent = String(value == null ? "" : value);
+      if (this._textContent === "") this.children = [];
+    },
+  });
+  return node;
+}
+
+function playlistIndexLabels(listEl) {
+  return listEl.querySelectorAll(".music-playlist-entry").map((row) => {
+    const indexCell = row.children.find((child) => child.classList.contains("music-playlist-index-cell"));
+    return indexCell ? indexCell.textContent : null;
+  });
+}
+
+function playlistFilenameLabels(listEl) {
+  return listEl.querySelectorAll(".music-playlist-entry").map((row) => {
+    const nameCell = row.children.find((child) => child.classList.contains("music-playlist-filename-cell"));
+    return nameCell ? nameCell.textContent : null;
+  });
+}
+
+test("paintPlaylist renders 1-based index cells and refreshes after reorder/remove", async () => {
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist.js");
+  const playlistListEl = createPlaylistDomNode("div");
+  const activePlaylistNameEl = createPlaylistDomNode("span");
+  const settingsStore = Object.create(null);
+  global.Settings = {
+    get(key, fallback) {
+      return Object.prototype.hasOwnProperty.call(settingsStore, key) ? settingsStore[key] : fallback;
+    },
+    set(key, value) {
+      settingsStore[key] = value;
+    },
+  };
+  global.document = {
+    activeElement: null,
+    createElement(tagName) {
+      return createPlaylistDomNode(tagName);
+    },
+  };
+  global.window = global.window || {};
+
+  const state = {
+    playlist: [
+      song("music/alpha.mp3"),
+      song("music/bravo.mp3"),
+      song("music/charlie.mp3"),
+    ],
+    activePlaylist: {name: "Test Playlist"},
+    selectedPlaylistRemotePaths: Object.create(null),
+    playlistSelectionAnchor: null,
+    playlistContextRemotePath: null,
+    activePlaylistSavedName: null,
+    activePlaylistSavedSignature: "",
+    activePlaylistDirty: false,
+    playlistRenameMode: "rename",
+    playlistLoadSortKey: "last_modified",
+    playlistLoadSortDirection: "desc",
+    playlistLoadSortSettingKey: "music-playlist-load-sort",
+    playlistLoadFilterText: "",
+    playlistLoadFilterSettingKey: "music-playlist-load-filter",
+    selectedPersistedPlaylistName: null,
+    playlistLoadContextName: null,
+    recentSortKey: "played_at",
+    recentSortDirection: "desc",
+    recentSortSettingKey: "music-recent-sort",
+    selectedRecentId: null,
+    pendingPlaylistConfirmAction: null,
+    playlistSaveToastTimer: null,
+    currentPlaylistIndex: 0,
+    playlistRenderDirty: false,
+    playlistSelectionDirty: false,
+    pendingPlaylistFocusRemotePath: null,
+    shuffleBag: [],
+    shuffleSequence: [],
+    shuffleCursor: -1,
+  };
+  const ctx = {
+    els: {
+      playlistListEl,
+      activePlaylistNameEl,
+      playlistLoadConfirmButton: null,
+    },
+    state,
+    pane: {dataset: Object.create(null)},
+    mediaLibraryConfig: {mediaKind: "music"},
+    layoutApi: {
+      playbackUiMayPaint() {
+        return true;
+      },
+    },
+    playbackApi: {
+      playPlaylistRemotePath() {},
+      playPlaylistIndex() {},
+      clearCurrentSong() {},
+    },
+    setStatus() {},
+  };
+
+  playlistModule.initPlaylist(ctx);
+  ctx.playlistApi.paintPlaylist();
+  assert.deepEqual(playlistIndexLabels(playlistListEl), ["1", "2", "3"]);
+  assert.deepEqual(playlistFilenameLabels(playlistListEl), ["alpha.mp3", "bravo.mp3", "charlie.mp3"]);
+
+  // Reorder moves bravo to the end; indices must renumber to current order.
+  state.playlist = [
+    song("music/alpha.mp3"),
+    song("music/charlie.mp3"),
+    song("music/bravo.mp3"),
+  ];
+  ctx.playlistApi.paintPlaylist();
+  assert.deepEqual(playlistIndexLabels(playlistListEl), ["1", "2", "3"]);
+  assert.deepEqual(playlistFilenameLabels(playlistListEl), ["alpha.mp3", "charlie.mp3", "bravo.mp3"]);
+
+  // Remove middle entry; remaining indices stay contiguous from 1.
+  state.playlist = [
+    song("music/alpha.mp3"),
+    song("music/bravo.mp3"),
+  ];
+  ctx.playlistApi.paintPlaylist();
+  assert.deepEqual(playlistIndexLabels(playlistListEl), ["1", "2"]);
+  assert.deepEqual(playlistFilenameLabels(playlistListEl), ["alpha.mp3", "bravo.mp3"]);
+
+  // Add inserts at the end with the next index.
+  state.playlist.push(song("music/delta.mp3"));
+  ctx.playlistApi.paintPlaylist();
+  assert.deepEqual(playlistIndexLabels(playlistListEl), ["1", "2", "3"]);
+  assert.deepEqual(playlistFilenameLabels(playlistListEl), ["alpha.mp3", "bravo.mp3", "delta.mp3"]);
+});
