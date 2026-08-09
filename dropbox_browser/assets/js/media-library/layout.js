@@ -3,19 +3,41 @@ import {fitColumnWidthsToTotal, normalizeStoredColumnWidths, resizeColumnPair} f
 export function initLayout(ctx) {
   var els = ctx.els;
   var state = ctx.state;
-  var PLAYLIST_COLUMN_KEYS = ['filename', 'path', 'reorder'];
+  var PLAYLIST_COLUMN_KEYS = ['index', 'filename', 'path', 'reorder'];
   var PLAYLIST_COLUMN_MIN_WIDTHS = {
+    index: 48,
     filename: 120,
     path: 150,
     reorder: 56
   };
   var PLAYLIST_COLUMN_GAP_PX = 16;
   var PLAYLIST_COLUMN_HORIZONTAL_PADDING_PX = 16;
-  var playlistColumnWidths = normalizeStoredColumnWidths(
-    state.defaultPlaylistColumnWidths,
-    PLAYLIST_COLUMN_KEYS,
-    PLAYLIST_COLUMN_MIN_WIDTHS
-  );
+  var playlistColumnWidths = completePlaylistColumnWidths(state.defaultPlaylistColumnWidths);
+
+  function completePlaylistColumnWidths(widths) {
+    // Merge saved widths with defaults so upgrades (e.g. new "index" column) keep
+    // prior custom sizes and only fill missing keys with a reasonable default.
+    var normalized = normalizeStoredColumnWidths(
+      widths,
+      PLAYLIST_COLUMN_KEYS,
+      PLAYLIST_COLUMN_MIN_WIDTHS
+    );
+    var defaults = state.defaultPlaylistColumnWidths || {};
+    var completed = {};
+    PLAYLIST_COLUMN_KEYS.forEach(function (key) {
+      if (typeof normalized[key] === 'number') {
+        completed[key] = normalized[key];
+        return;
+      }
+      var fallback = Number(defaults[key]);
+      if (Number.isFinite(fallback) && fallback > 0) {
+        completed[key] = Math.max(PLAYLIST_COLUMN_MIN_WIDTHS[key] || 0, Math.round(fallback));
+        return;
+      }
+      completed[key] = PLAYLIST_COLUMN_MIN_WIDTHS[key] || 48;
+    });
+    return completed;
+  }
   var activePlaylistColumnDrag = null;
   var musicPaneRestoreFrame = null;
   var musicPaneRestorePending = false;
@@ -177,9 +199,12 @@ export function initLayout(ctx) {
   }
 
   function applyPlaylistColumnWidths(widths, persist) {
+    var completed = completePlaylistColumnWidths(
+      Object.assign({}, playlistColumnWidths, widths || {})
+    );
     var normalized = fitColumnWidthsToTotal(
       PLAYLIST_COLUMN_KEYS,
-      widths,
+      completed,
       playlistColumnAvailableWidth(),
       PLAYLIST_COLUMN_MIN_WIDTHS
     );
@@ -190,7 +215,10 @@ export function initLayout(ctx) {
     if (els.playlistTableEl) {
       els.playlistTableEl.style.setProperty(
         '--music-playlist-grid-columns',
-        normalized.filename + 'px ' + normalized.path + 'px ' + normalized.reorder + 'px'
+        normalized.index + 'px ' +
+          normalized.filename + 'px ' +
+          normalized.path + 'px ' +
+          normalized.reorder + 'px'
       );
       els.playlistTableEl.style.setProperty(
         '--music-playlist-grid-min-width',
@@ -380,10 +408,8 @@ export function initLayout(ctx) {
       });
     }
   );
-  playlistColumnWidths = normalizeStoredColumnWidths(
-    Settings.get(state.playlistColumnWidthSettingKey, state.defaultPlaylistColumnWidths),
-    PLAYLIST_COLUMN_KEYS,
-    PLAYLIST_COLUMN_MIN_WIDTHS
+  playlistColumnWidths = completePlaylistColumnWidths(
+    Settings.get(state.playlistColumnWidthSettingKey, state.defaultPlaylistColumnWidths)
   );
   applyPlaylistColumnWidths(playlistColumnWidths, false);
   window.addEventListener('resize', function () {

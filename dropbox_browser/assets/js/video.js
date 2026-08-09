@@ -220,7 +220,7 @@ import {initPane} from './video/pane.js';
       currentPlaylistIndex: -1,
       musicPaneWidthSettingKey: 'video-media-library-pane-widths',
       playlistColumnWidthSettingKey: 'video-playlist-column-widths',
-      defaultPlaylistColumnWidths: {filename: 220, path: 340, reorder: 56},
+      defaultPlaylistColumnWidths: {index: 52, filename: 220, path: 340, reorder: 56},
       musicPaneResizerWidth: 8,
       defaultMusicPanePercents: [28, 28, 44],
       minMusicPaneWidthsPx: [160, 180, 280],

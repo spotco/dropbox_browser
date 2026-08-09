@@ -1546,12 +1546,20 @@ export function initPlaylist(ctx) {
       if (state.selectedPlaylistRemotePaths[song.remote_path]) row.classList.add('selected');
       if (index === state.currentPlaylistIndex) row.classList.add('current');
 
+      var indexCell = document.createElement('div');
+      indexCell.className = 'music-playlist-index-cell';
+      indexCell.setAttribute('role', 'cell');
+      indexCell.textContent = String(index + 1);
+      row.appendChild(indexCell);
+
       var nameCell = document.createElement('div');
+      nameCell.className = 'music-playlist-filename-cell';
       nameCell.setAttribute('role', 'cell');
       nameCell.textContent = song.display_name || '';
       row.appendChild(nameCell);
 
       var pathCell = document.createElement('div');
+      pathCell.className = 'music-playlist-path-cell';
       pathCell.setAttribute('role', 'cell');
       pathCell.textContent = absolutePlaylistPath(song);
       row.appendChild(pathCell);
