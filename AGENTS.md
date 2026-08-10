@@ -9,11 +9,12 @@ and renders a client-rendered browse shell with optional media panes.
 Start locally:
 
 ```powershell
-setup_windows.bat
-python dropbox_browser.py --remote dropbox:
+run\win\setup_exe.bat
+run\win\run.bat
 ```
 
-`setup_windows.bat` / `setup_osx_intel.sh` download only this machine's platform
+Platform scripts live under `run/win` and `run/osx_intel` (see
+[`run/README.md`](run/README.md)). `setup_exe` downloads only this machine's
 tool pack from the GitHub `tools-v1` release into `.tools/`. Default URL:
 `http://127.0.0.1:8000/`.
 

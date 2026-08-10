@@ -52,11 +52,16 @@ Native tools (rclone, FFmpeg/FFprobe, ImageMagick) can come from a
 machine only with:
 
 ```text
-python tools/bootstrap_tools.py
+run\win\setup_exe.bat
 ```
 
-That downloads one zip from the project's GitHub `tools-v1` release (see
-[`tools/README.md`](../tools/README.md) and
+```text
+run/osx_intel/setup_exe.sh
+```
+
+Or: `python tools/bootstrap_tools.py`. That downloads one zip from the
+project's GitHub `tools-v1` release (see [`tools/README.md`](../tools/README.md),
+[`run/README.md`](../run/README.md), and
 [`tools/runtime_manifest.json`](../tools/runtime_manifest.json)). Linux packs
 are not published yet.
 

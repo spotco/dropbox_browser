@@ -35,16 +35,19 @@ Useful upstream references:
 ## Start the server
 
 ```powershell
-setup_windows.bat
-python dropbox_browser.py --remote dropbox:
+run\win\setup_exe.bat
+run\win\run.bat
 ```
 
 On Intel macOS:
 
 ```sh
-./setup_osx_intel.sh
-python3 dropbox_browser.py --remote dropbox:
+run/osx_intel/setup_exe.sh
+run/osx_intel/run.sh
 ```
+
+Platform helpers live under [`run/`](run/README.md) (`run/win`, `run/osx_intel`) and
+resolve the repo root from their own path, so they work from any cwd.
 
 The default address is `http://127.0.0.1:8000/`. The equivalent module entry
 point is `python -m dropbox_browser.cli`.
@@ -65,11 +68,14 @@ Useful options:
 default; the legacy `--no-client-render` mode remains available for manual
 compatibility checks but is not the maintained or regression-tested browse UI.
 
-The bundled Windows helpers are also available:
+The bundled Windows helpers under `run\win\` are also available:
 
 - `run.bat` starts the server using the configured local folder.
 - `run_select_folder.bat` chooses a local folder, writes it to
   `config_local.json`, and starts the server.
+- `update.bat` pulls `origin/master`.
+- `rclone_setup.bat` creates the Dropbox rclone remote.
+- `setup_exe.bat` installs platform tool binaries into `.tools\`.
 
 ## Configuration
 

@@ -8,13 +8,13 @@ GitHub Release assets so a machine only downloads **its** pack.
 From a clone:
 
 ```bat
-setup_windows.bat
-python dropbox_browser.py --remote dropbox:
+run\win\setup_exe.bat
+run\win\run.bat
 ```
 
 ```sh
-./setup_osx_intel.sh
-python3 dropbox_browser.py --remote dropbox:
+run/osx_intel/setup_exe.sh
+run/osx_intel/run.sh
 ```
 
 Or call the shared bootstrap directly:
