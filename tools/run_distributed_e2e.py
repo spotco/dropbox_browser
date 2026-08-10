@@ -1,0 +1,610 @@
+#!/usr/bin/env python3
+"""Run Dropbox Browser E2E specs locally and, when configured, on remotes.
+
+Normal operation is automatic: reachable compatible Windows and macOS Intel
+workers receive scheduled specs, while the current Windows machine remains a
+local lane.  If the optional shared worker SDK, local notes, credentials, or
+remote checkouts are absent, the runner reports the reason and runs locally.
+Use ``--require-remote`` when a distributed run must fail instead of falling
+back.  Linux workers are intentionally excluded until browser compatibility is
+implemented.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Iterable
+
+try:
+    from network_workers_bootstrap import BootstrapError, load_shared, remote_notes
+except ModuleNotFoundError:  # package import from the repository test suite
+    from tools.network_workers_bootstrap import BootstrapError, load_shared, remote_notes
+
+
+REPO = Path(__file__).resolve().parents[1]
+E2E_DIR = REPO / "tests" / "e2e"
+TIMING_PATH = REPO / "Temp" / "remote-e2e" / "spec-timing.json"
+DEFAULT_LOCAL_WEIGHT = 10.0
+DEFAULT_POLL_SECONDS = 2.0
+SUPPORTED_PLATFORMS = frozenset({"windows", "macos-intel"})
+
+
+class RunnerError(RuntimeError):
+    """Actionable distributed-runner failure."""
+
+
+@dataclass(frozen=True)
+class RemoteWorker:
+    id: str
+    nickname: str
+    label: str
+    host: str
+    user: str
+    repo: str
+    git: str
+    path_prefix: str
+    platform: str
+    remote_os: str
+    branch: str | None
+    schedule_weight: float
+
+    def target(self, ssh_module: Any) -> Any:
+        return ssh_module.SshTarget(
+            host=self.host,
+            user=self.user,
+            nickname=self.nickname,
+            label=self.label,
+            remote_os=self.remote_os,
+        )
+
+
+@dataclass(frozen=True)
+class Assignment:
+    lane_id: str
+    specs: tuple[Path, ...]
+    execution: str
+
+
+def fail(message: str) -> None:
+    raise RunnerError(message)
+
+
+def _parse_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(1, parsed)
+
+
+def infer_platform(host_entry: Any) -> str:
+    hardware = getattr(host_entry, "hardware", None)
+    os_name = str(getattr(hardware, "os", "") or "").casefold()
+    description = " ".join(
+        str(getattr(hardware, key, "") or "")
+        for key in ("model", "cpu", "notes")
+    ).casefold()
+    if os_name.startswith("windows"):
+        return "windows"
+    if os_name.startswith("macos") or os_name.startswith("mac os"):
+        if any(token in description for token in ("intel", "xeon", "core i3", "core i5", "core i7", "core i9")):
+            return "macos-intel"
+    return "unsupported"
+
+
+def is_supported_platform(platform: str) -> bool:
+    return str(platform or "").strip().casefold() in SUPPORTED_PLATFORMS
+
+
+def _host_by_nickname(hosts: Any, nickname: str) -> Any:
+    try:
+        return hosts.get(nickname)
+    except Exception as exc:  # noqa: BLE001 - normalize SDK errors
+        raise RunnerError(f"worker {nickname!r} is missing from the shared host inventory: {exc}") from exc
+
+
+def load_workers(shared: Any, settings: dict[str, Any]) -> tuple[list[RemoteWorker], list[str]]:
+    """Resolve configured workers and exclude unsupported platforms."""
+
+    workers_raw = settings.get("workers")
+    if not isinstance(workers_raw, list):
+        return [], ["no local Remote E2E workers are configured"]
+    hosts = shared.package.load_hosts(root=shared.root)
+    workers: list[RemoteWorker] = []
+    skipped: list[str] = []
+    for index, raw in enumerate(workers_raw):
+        if not isinstance(raw, dict):
+            skipped.append(f"worker entry {index} is not an object")
+            continue
+        nickname = str(raw.get("nickname") or "").strip()
+        if not nickname:
+            skipped.append(f"worker entry {index} has no nickname")
+            continue
+        try:
+            host_entry = _host_by_nickname(hosts, nickname)
+        except RunnerError as exc:
+            skipped.append(str(exc))
+            continue
+        if bool(getattr(host_entry, "never_remote", False)):
+            skipped.append(f"{nickname}: inventory marks this host local-only")
+            continue
+        platform = str(raw.get("platform") or infer_platform(host_entry)).strip().casefold()
+        if not is_supported_platform(platform):
+            skipped.append(f"{nickname}: unsupported remote platform {platform or 'unknown'}")
+            continue
+        repo = str(raw.get("repo") or "").strip()
+        if not repo:
+            skipped.append(f"{nickname}: no remote checkout path configured")
+            continue
+        hardware = getattr(host_entry, "hardware", None)
+        schedule_weight = raw.get("schedule_weight", getattr(getattr(host_entry, "defaults", None), "schedule_weight", None))
+        try:
+            schedule_weight = float(schedule_weight or 1.0)
+        except (TypeError, ValueError):
+            schedule_weight = 1.0
+        workers.append(
+            RemoteWorker(
+                id=str(raw.get("id") or nickname.casefold()),
+                nickname=nickname,
+                label=str(raw.get("label") or getattr(host_entry, "label", None) or nickname),
+                host=str(getattr(host_entry, "host", "")),
+                user=str(getattr(host_entry, "user", "")),
+                repo=repo,
+                git=str(raw.get("git") or "git"),
+                path_prefix=str(raw.get("path_prefix") or ""),
+                platform=platform,
+                remote_os=str(getattr(hardware, "os", "") or ""),
+                branch=str(raw["branch"]) if raw.get("branch") else None,
+                schedule_weight=max(0.01, schedule_weight),
+            )
+        )
+    return workers, skipped
+
+
+def collect_specs(values: Iterable[str]) -> list[Path]:
+    if values:
+        specs: list[Path] = []
+        for value in values:
+            path = (REPO / value).resolve()
+            if not path.is_file() or path.suffix != ".js" or E2E_DIR not in path.parents:
+                fail(f"E2E spec must be a .js file under tests/e2e: {value}")
+            specs.append(path)
+    else:
+        specs = sorted(E2E_DIR.glob("*.spec.js"))
+    if not specs:
+        fail("no E2E specs were found")
+    return list(dict.fromkeys(specs))
+
+
+def relative_spec(path: Path) -> str:
+    return path.relative_to(REPO).as_posix()
+
+
+def load_timings() -> dict[str, float]:
+    if not TIMING_PATH.is_file():
+        return {}
+    try:
+        payload = json.loads(TIMING_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return {
+        str(key): float(value)
+        for key, value in payload.items()
+        if isinstance(value, (int, float)) and value > 0
+    } if isinstance(payload, dict) else {}
+
+
+def save_timings(values: dict[str, float]) -> None:
+    TIMING_PATH.parent.mkdir(parents=True, exist_ok=True)
+    TIMING_PATH.write_text(json.dumps(dict(sorted(values.items())), indent=2) + "\n", encoding="utf-8")
+
+
+def choose_assignments(shared: Any, specs: list[Path], workers: list[RemoteWorker], *, local_enabled: bool) -> list[Assignment]:
+    if not workers and local_enabled:
+        return [Assignment("local", tuple(specs), "local")]
+    if not workers and not local_enabled:
+        fail("remote mode has no compatible workers")
+
+    bins: list[Any] = []
+    if local_enabled:
+        bins.append(shared.schedule.LaneBin("local", weight=DEFAULT_LOCAL_WEIGHT, execution="local", label="local"))
+    for worker in workers:
+        bins.append(shared.schedule.LaneBin(worker.id, weight=worker.schedule_weight, execution="remote", label=worker.label))
+    timings = load_timings()
+    units = [
+        shared.schedule.WorkUnit(relative_spec(spec), size=timings.get(relative_spec(spec), 1.0))
+        for spec in specs
+    ]
+    assignment, estimates = shared.schedule.optimize_assignment(units, bins, exact_limit=12)
+    shared.schedule.apply_assignment(units, bins, assignment, estimates)
+    result: list[Assignment] = []
+    for lane in bins:
+        lane_specs = tuple(REPO / unit.id for unit in lane.units)
+        if lane_specs:
+            result.append(Assignment(lane.lane_id, lane_specs, lane.execution))
+    return result
+
+
+def _path_export(path_prefix: str) -> str:
+    if not path_prefix:
+        return ""
+    return f"export PATH={shlex.quote(path_prefix)}:\"$PATH\"; "
+
+
+def remote_shell_path(worker: RemoteWorker, path: str) -> str:
+    """Return a path accepted by the remote worker's POSIX shell.
+
+    The shared SSH layer uses Git Bash for Windows workers.  Git Bash accepts
+    ``E:/...`` for ``cd`` and Git, but treats the same spelling as a relative
+    path when it is passed to ``mkdir`` or ``rm``.  Normalizing drive paths to
+    ``/e/...`` keeps job creation, polling, retrieval, and cleanup consistent.
+    """
+
+    normalized = str(path).replace("\\", "/")
+    if worker.platform == "windows" and len(normalized) >= 2 and normalized[1] == ":":
+        return f"/{normalized[0].casefold()}{normalized[2:]}"
+    return normalized
+
+
+def remote_scp_path(worker: RemoteWorker, path: str) -> str:
+    """Return a path accepted by OpenSSH SCP on a Windows worker."""
+
+    normalized = str(path).replace("\\", "/")
+    if (
+        worker.platform == "windows"
+        and len(normalized) >= 3
+        and normalized[0] == "/"
+        and normalized[2] == "/"
+        and normalized[1].isalpha()
+    ):
+        return f"{normalized[1].upper()}:{normalized[2:]}"
+    return normalized
+
+
+def _remote_script(shared: Any, worker: RemoteWorker, specs: tuple[Path, ...], remote_dir: str, job_id: str) -> str:
+    quote = shared.ssh.shell_quote
+    spec_args = " ".join(quote(relative_spec(spec)) for spec in specs)
+    stdout_path = quote(f"{remote_dir}/stdout.log")
+    result_path = quote(f"{remote_dir}/result.json")
+    repo_path = remote_shell_path(worker, worker.repo)
+    return "\n".join(
+        [
+            "set -e",
+            _path_export(worker.path_prefix) + f"cd {quote(repo_path)}",
+            "set +e",
+            "overall=0",
+            f"for spec in {spec_args}; do",
+            f"  npx playwright test \"$spec\" --reporter=line >> {stdout_path} 2>&1",
+            "  code=$?",
+            "  if test $code -ne 0; then overall=$code; fi",
+            "done",
+            f"printf '{{\"format\":\"dropbox-browser-distributed-e2e-v1\",\"job_id\":\"{job_id}\",\"exit_code\":%s}}\\n' \"$overall\" > {result_path}",
+            "exit $overall",
+        ]
+    )
+
+
+def _npx_command() -> str:
+    return shutil.which("npx.cmd") or shutil.which("npx") or ("npx.cmd" if os.name == "nt" else "npx")
+
+
+def run_local_specs(specs: tuple[Path, ...], output_dir: Path) -> tuple[bool, float]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    passed = True
+    for spec in specs:
+        log_path = output_dir / (spec.stem + ".log")
+        with log_path.open("w", encoding="utf-8") as log:
+            result = subprocess.run(
+                [_npx_command(), "playwright", "test", relative_spec(spec), "--reporter=line"],
+                cwd=REPO,
+                env={**os.environ, "DROPBOX_BROWSER_E2E_DISTRIBUTED": "1"},
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+        if result.returncode != 0:
+            passed = False
+    return passed, max(0.001, time.monotonic() - started)
+
+
+def check_remote(shared: Any, ssh: Any, worker: RemoteWorker) -> tuple[bool, str]:
+    target = worker.target(shared.ssh)
+    repo_path = remote_shell_path(worker, worker.repo)
+    try:
+        shared.git_ops.preflight(
+            ssh,
+            target,
+            repo=repo_path,
+            git=worker.git,
+            require_clean=True,
+            timeout=45,
+        )
+        branch_check = (
+            f"{_path_export(worker.path_prefix)}"
+            f"{shared.ssh.shell_quote(worker.git)} -C {shared.ssh.shell_quote(repo_path)} "
+            "symbolic-ref --short -q HEAD || "
+            f"{shared.ssh.shell_quote(worker.git)} -C {shared.ssh.shell_quote(repo_path)} rev-parse --abbrev-ref HEAD"
+        )
+        result = ssh.run(target, branch_check, timeout=45)
+        if result.returncode != 0:
+            return False, (result.stderr or result.stdout or "branch check failed").strip()[-500:]
+        branch = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+        if worker.branch and worker.branch not in {"auto", branch}:
+            return False, f"checked out branch {branch or '(detached)'!r}, expected {worker.branch!r}"
+        command_check = (
+            f"{_path_export(worker.path_prefix)}"
+            "command -v npx >/dev/null 2>&1 || command -v npx.cmd >/dev/null 2>&1"
+        )
+        result = ssh.run(target, command_check, timeout=30)
+        if result.returncode != 0:
+            return False, "npx was not found on the configured remote PATH"
+        dependency_check = (
+            f"{_path_export(worker.path_prefix)}"
+            f"cd {shared.ssh.shell_quote(repo_path)} && "
+            "test -d node_modules/@playwright/test"
+        )
+        result = ssh.run(target, dependency_check, timeout=30)
+        if result.returncode != 0:
+            return False, "Playwright dependencies are not installed in the remote checkout"
+    except Exception as exc:  # noqa: BLE001 - unavailable workers fall back locally
+        return False, str(exc)[-800:]
+    return True, "ready"
+
+
+def run_remote_job(shared: Any, ssh: Any, worker: RemoteWorker, specs: tuple[Path, ...], run_id: str, keep_remote: bool, local_dir: Path) -> tuple[bool, float, str]:
+    target = worker.target(shared.ssh)
+    client = shared.jobs.JobClient(ssh)
+    job_id = f"{worker.id}-{uuid.uuid4().hex[:8]}"
+    remote_dir = f"{remote_shell_path(worker, worker.repo).rstrip('/')}/Temp/remote-e2e/{run_id}/{worker.id}"
+    remote_copy_dir = remote_scp_path(worker, remote_dir)
+    local_dir.mkdir(parents=True, exist_ok=True)
+    script = _remote_script(shared, worker, specs, remote_dir, job_id)
+    started = time.monotonic()
+
+    # Windows OpenSSH commonly starts PowerShell as the login shell. Its
+    # Git-Bash child processes are terminated when SSH disconnects, so the
+    # shared detached JobClient protocol is not reliable there. Hold the SSH
+    # session open for the foreground run, matching the worker setup used by
+    # the other distributed E2E runner while keeping the shared JobClient for
+    # Unix-like remotes.
+    if worker.platform == "windows":
+        shell_quote = shared.ssh.shell_quote
+        command = "\n".join(
+            [
+                "set -eu",
+                f"mkdir -p {shell_quote(remote_dir)}",
+                script,
+            ]
+        )
+        result = ssh.run(target, command, timeout=7200)
+        copy_handle = shared.jobs.JobHandle(
+            job_id=job_id,
+            target=target,
+            remote_dir=remote_copy_dir,
+            local_dir=str(local_dir),
+        )
+        cleanup_handle = shared.jobs.JobHandle(
+            job_id=job_id,
+            target=target,
+            remote_dir=remote_dir,
+            local_dir=str(local_dir),
+        )
+        try:
+            payload = client.retrieve(
+                copy_handle,
+                names=("result.json", "stdout.log"),
+                local_dir=local_dir,
+            )
+        except Exception as exc:  # noqa: BLE001 - report both transfer and run failures
+            if not keep_remote:
+                client.cleanup(cleanup_handle)
+            detail = str(exc)
+            if result.returncode != 0:
+                detail = f"remote exit {result.returncode}: {detail}"
+            return False, max(0.001, time.monotonic() - started), detail
+        if not keep_remote:
+            client.cleanup(cleanup_handle)
+        code = int(payload.get("exit_code", result.returncode or 1)) if isinstance(payload, dict) else 1
+        return code == 0, max(0.001, time.monotonic() - started), f"exit {code}"
+
+    handle = client.start(target, job_id, script, run_id=run_id, remote_dir=remote_dir, local_dir=local_dir)
+    payload: dict[str, Any] = {}
+    while True:
+        status, detail = client.poll(handle)
+        if status == shared.jobs.JobPollStatus.RUNNING:
+            time.sleep(DEFAULT_POLL_SECONDS)
+            continue
+        if status != shared.jobs.JobPollStatus.RESULT:
+            if not keep_remote:
+                client.cleanup(handle)
+            return False, max(0.001, time.monotonic() - started), detail or str(status)
+        handle.remote_dir = remote_copy_dir
+        try:
+            payload = client.retrieve(handle, names=("result.json", "stdout.log"), local_dir=local_dir)
+        except Exception as exc:  # noqa: BLE001
+            handle.remote_dir = remote_dir
+            if not keep_remote:
+                client.cleanup(handle)
+            return False, max(0.001, time.monotonic() - started), str(exc)
+        handle.remote_dir = remote_dir
+        if not keep_remote:
+            client.cleanup(handle)
+        code = int(payload.get("exit_code", 1)) if isinstance(payload, dict) else 1
+        return code == 0, max(0.001, time.monotonic() - started), f"exit {code}"
+
+
+def run(args: argparse.Namespace) -> int:
+    specs = collect_specs(args.spec)
+    settings = remote_notes()
+    local_config = settings.get("local") if isinstance(settings.get("local"), dict) else {}
+    local_enabled = bool(local_config.get("enabled", True)) and args.mode != "remote"
+    require_remote = bool(args.require_remote or args.mode == "remote")
+
+    shared_loaded: tuple[Path, Any] | None = None
+    if args.mode != "local":
+        try:
+            shared_loaded = load_shared(args.shared_root, required=require_remote)
+        except BootstrapError as exc:
+            if require_remote:
+                fail(str(exc))
+            print(f"remote E2E unavailable: {exc}; using local lane", file=sys.stderr, flush=True)
+    if shared_loaded is None:
+        if not local_enabled:
+            fail("remote worker SDK is unavailable and the local lane is disabled")
+        assignment = [Assignment("local", tuple(specs), "local")]
+        if args.dry_run:
+            print(f"local plan: {len(specs)} spec(s); remote SDK unavailable")
+            return 0
+        passed, duration = run_local_specs(tuple(specs), REPO / "Temp" / "remote-e2e" / "local")
+        print(f"local E2E {'passed' if passed else 'failed'} in {duration:.1f}s", flush=True)
+        return 0 if passed else 1
+
+    root, package = shared_loaded
+    shared = type(
+        "SharedBindings",
+        (),
+        {
+            "root": root,
+            "package": package,
+            "auth": __import__("network_computers.auth", fromlist=["resolve_auth"]),
+            "availability": __import__("network_computers.availability", fromlist=["select_available_workers"]),
+            "git_ops": __import__("network_computers.git_ops", fromlist=["preflight"]),
+            "jobs": __import__("network_computers.jobs", fromlist=["JobClient"]),
+            "schedule": __import__("network_computers.schedule", fromlist=["optimize_assignment"]),
+            "ssh": __import__("network_computers.ssh", fromlist=["SshClient"]),
+        },
+    )
+    try:
+        workers, skipped = load_workers(shared, settings)
+    except Exception as exc:  # noqa: BLE001 - malformed optional config falls back locally
+        if require_remote:
+            fail(f"remote worker configuration failed: {exc}")
+        print(f"remote E2E unavailable: {exc}; using local lane", file=sys.stderr, flush=True)
+        workers = []
+        skipped = []
+    for message in skipped:
+        print(f"remote worker skipped: {message}", file=sys.stderr, flush=True)
+    if not workers:
+        if require_remote:
+            fail("no compatible remote E2E workers are configured")
+        if not local_enabled:
+            fail("no compatible remote workers and local lane is disabled")
+        print("remote E2E unavailable: no compatible workers; using local lane", file=sys.stderr, flush=True)
+        if args.dry_run:
+            print(f"local plan: {len(specs)} spec(s)")
+            return 0
+        passed, duration = run_local_specs(tuple(specs), REPO / "Temp" / "remote-e2e" / "local")
+        print(f"local E2E {'passed' if passed else 'failed'} in {duration:.1f}s", flush=True)
+        return 0 if passed else 1
+
+    try:
+        auth = shared.auth.resolve_auth(root=root, required=True)
+        ssh = shared.ssh.SshClient(auth, connect_timeout=5)
+        hosts = shared.package.load_hosts(root=root)
+        workers, availability_plan = shared.availability.select_available_workers(
+            ssh,
+            workers,
+            hosts=hosts,
+            timeout=5,
+            connect_timeout=5,
+        )
+        for line in shared.availability.format_plan_lines(availability_plan):
+            print(line, flush=True)
+    except Exception as exc:  # noqa: BLE001 - default is safe local fallback
+        if require_remote:
+            fail(f"remote availability setup failed: {exc}")
+        print(f"remote E2E unavailable: {exc}; using local lane", file=sys.stderr, flush=True)
+        workers = []
+        ssh = None
+
+    ready_workers: list[RemoteWorker] = []
+    if ssh is not None:
+        for worker in workers:
+            ready, detail = check_remote(shared, ssh, worker)
+            if ready:
+                ready_workers.append(worker)
+            else:
+                print(f"remote worker skipped: {worker.label}: {detail}", file=sys.stderr, flush=True)
+    if not ready_workers and require_remote:
+        fail("no compatible reachable remote E2E workers passed preflight")
+    if not ready_workers and not local_enabled:
+        fail("no remote E2E workers passed preflight and local lane is disabled")
+
+    assignments = choose_assignments(shared, specs, ready_workers, local_enabled=local_enabled)
+    for item in assignments:
+        print(f"plan: {item.execution} {item.lane_id}: {len(item.specs)} spec(s)", flush=True)
+    if args.dry_run:
+        return 0
+
+    run_id = uuid.uuid4().hex[:12]
+    timings = load_timings()
+    results: list[tuple[str, bool, float, str]] = []
+    remote_assignments = [item for item in assignments if item.execution == "remote"]
+    local_assignments = [item for item in assignments if item.execution == "local"]
+    worker_by_id = {worker.id: worker for worker in ready_workers}
+    with ThreadPoolExecutor(max_workers=max(1, len(remote_assignments) + len(local_assignments))) as pool:
+        futures = {}
+        for item in remote_assignments:
+            worker = worker_by_id[item.lane_id]
+            futures[pool.submit(
+                run_remote_job,
+                shared,
+                ssh,
+                worker,
+                item.specs,
+                run_id,
+                args.keep_remote,
+                REPO / "Temp" / "remote-e2e" / run_id / worker.id,
+            )] = item
+        for item in local_assignments:
+            futures[pool.submit(run_local_specs, item.specs, REPO / "Temp" / "remote-e2e" / run_id / "local")] = item
+        for future in as_completed(futures):
+            item = futures[future]
+            try:
+                passed, duration, detail = future.result()
+            except Exception as exc:  # noqa: BLE001
+                passed, duration, detail = False, 0.001, str(exc)
+            results.append((item.lane_id, passed, duration, detail))
+            for spec in item.specs:
+                timings[relative_spec(spec)] = duration / max(1, len(item.specs))
+            print(f"result: {item.execution} {item.lane_id}: {'passed' if passed else 'failed'} ({detail})", flush=True)
+
+    save_timings(timings)
+    passed = all(item[1] for item in results) and len(results) == len(assignments)
+    print(f"distributed E2E {'passed' if passed else 'failed'}", flush=True)
+    return 0 if passed else 1
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--mode", choices=("auto", "local", "remote"), default="auto")
+    parser.add_argument("--require-remote", action="store_true", help="fail instead of falling back when remote execution is unavailable")
+    parser.add_argument("--shared-root", help="override the optional shared worker SDK root")
+    parser.add_argument("--spec", action="append", default=[], help="run one tests/e2e spec; repeatable (default: all specs)")
+    parser.add_argument("--dry-run", action="store_true", help="print the plan without starting Playwright")
+    parser.add_argument("--keep-remote", action="store_true", help="retain remote job directories for inspection")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        return run(parse_args(argv))
+    except (RunnerError, OSError, ValueError) as exc:
+        print(f"distributed E2E error: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

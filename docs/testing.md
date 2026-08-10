@@ -113,7 +113,20 @@ real Python server process:
 
 ```powershell
 npm run test:e2e
+npm run test:e2e:local
+npm run test:e2e:remote
 ```
+
+The default full E2E command uses `tools/run_distributed_e2e.py`. It prefers
+reachable compatible Windows and macOS Intel workers when the optional shared
+worker SDK and machine-local `LOCAL_NOTES.md` configuration are available. It
+automatically falls back to the local Playwright run when that setup is absent,
+unreachable, or fails remote checkout preflight. Linux workers are currently
+excluded. Use `npm run test:e2e:remote` when remote execution is required and a
+missing or unusable remote setup should fail the command. Machine-specific
+paths, worker identities, and credentials belong only in the gitignored
+`LOCAL_NOTES.md`; the product source dynamically links the shared SDK when it
+is present and does not vendor or name a private inventory repository.
 
 The Playwright harness launches `python -m dropbox_browser.cli` with an
 isolated `--local-root` through `tests/e2e/support/run_server.py` plus
