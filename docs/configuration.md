@@ -68,8 +68,8 @@ are not published yet.
 Discovery order:
 
 1. Bootstrapped pack under `.tools/<platform-id>/` when present.
-2. Legacy in-repo Windows paths (`rclone.exe`, `FFmpeg/bin/`,
-   `ImageMagick/magick.exe`) and the older `tools/osx-intel/bin/` layout.
+2. Optional legacy layouts (`rclone.exe`, `FFmpeg/bin/`, `ImageMagick/magick.exe`,
+   `tools/osx-intel/bin/`) if present on disk (not shipped in git).
 3. Configured `FFMpegPath` / `FFProbePath` (and siblings), then `PATH`.
 
 `rclone` ultimately falls back to the command name `rclone` / `rclone.exe`.

@@ -25,7 +25,7 @@ concurrent requests for the same key, and rejects unsupported or oversized
 inputs. `HEAD` is supported for the generated response.
 
 Image thumbnails require `ThumbnailEnabled: true` and the vendored
-`ImageMagick/magick.exe`; the feature is unavailable when that executable is
+a discoverable `magick` (from `.tools/` after `setup_exe`); the feature is unavailable when that executable is
 missing.
 
 ## Video thumbnails

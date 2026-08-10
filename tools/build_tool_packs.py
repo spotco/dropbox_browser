@@ -32,15 +32,39 @@ def _copy_file(src: Path, dest: Path) -> None:
 
 
 def _stage_windows(staging_root: Path) -> Path:
+    """Stage Windows tools from an installed .tools pack or legacy on-disk paths."""
     platform_root = staging_root / "windows-x64"
     platform_root.mkdir(parents=True, exist_ok=True)
+
+    pack_root = PROJECT_ROOT / ".tools" / "windows-x64"
+    # Prefer already-bootstrapped pack (post-history-purge layout).
+    if (pack_root / "rclone.exe").is_file() and (pack_root / "ffmpeg.exe").is_file():
+        for name in ("rclone.exe", "ffmpeg.exe", "ffprobe.exe"):
+            src = pack_root / name
+            if not src.is_file():
+                raise FileNotFoundError(f"missing Windows tool in .tools pack: {src}")
+            _copy_file(src, platform_root / name)
+        image_src = pack_root / "ImageMagick"
+        image_dest = platform_root / "ImageMagick"
+        for name in WINDOWS_IMAGEMAGICK_FILES:
+            src = image_src / name
+            if src.is_file():
+                _copy_file(src, image_dest / name)
+        for license_name in ("FFmpeg-LICENSE.txt", "FFmpeg-README.md"):
+            src = pack_root / license_name
+            if src.is_file():
+                _copy_file(src, platform_root / license_name)
+        return platform_root
 
     rclone = PROJECT_ROOT / "rclone.exe"
     ffmpeg = PROJECT_ROOT / "FFmpeg" / "bin" / "ffmpeg.exe"
     ffprobe = PROJECT_ROOT / "FFmpeg" / "bin" / "ffprobe.exe"
     for required in (rclone, ffmpeg, ffprobe):
         if not required.is_file():
-            raise FileNotFoundError(f"missing Windows tool: {required}")
+            raise FileNotFoundError(
+                f"missing Windows tool: {required} "
+                "(run run/win/setup_exe.bat first, or place legacy binaries)"
+            )
 
     _copy_file(rclone, platform_root / "rclone.exe")
     _copy_file(ffmpeg, platform_root / "ffmpeg.exe")
@@ -54,7 +78,6 @@ def _stage_windows(staging_root: Path) -> Path:
             raise FileNotFoundError(f"missing ImageMagick file: {src}")
         _copy_file(src, image_dest / name)
 
-    # Optional licenses next to ffmpeg.
     for license_name in ("LICENSE.txt", "README.md"):
         src = PROJECT_ROOT / "FFmpeg" / license_name
         if src.is_file():

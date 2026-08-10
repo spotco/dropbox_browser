@@ -19,10 +19,9 @@ playback, and a GPS Photo Map.
   python tools\bootstrap_tools.py
   ```
 
-  Details: [tools/README.md](tools/README.md). Legacy in-repo Windows binaries
-  (`rclone.exe`, `FFmpeg/bin/`, `ImageMagick/`) still work until they are
-  removed. `FFMpegPath` / `FFProbePath` and `PATH` remain fallbacks. Image
-  thumbnails are disabled when no `magick` executable is discoverable.
+  Details: [tools/README.md](tools/README.md). `FFMpegPath` / `FFProbePath` and
+  `PATH` remain fallbacks. Image thumbnails are disabled when no `magick`
+  executable is discoverable.
 
 Useful upstream references:
 

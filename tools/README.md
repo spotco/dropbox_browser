@@ -45,8 +45,8 @@ python tools\bootstrap_tools.py --offline
 | `darwin-x64` | Published from the `osx-intel` branch `tools/osx-intel` tree (slimmed) |
 | `linux-x64` | Not yet |
 
-Legacy in-repo Windows paths (`rclone.exe`, `FFmpeg/bin/`, `ImageMagick/`) still
-work so existing checkouts keep running until history purge.
+Runtime binaries are **not** tracked in git. Use `setup_exe` / bootstrap, or
+point `FFMpegPath` / `PATH` at system installs.
 
 ## Maintainer: build and publish
 
