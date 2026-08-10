@@ -11,7 +11,17 @@ from .paths import clean_rel_path
 
 
 MUSIC_ENDPOINT_PREFIX = "/music/endpoints/"
-SUPPORTED_AUDIO_EXTENSIONS = (".mp3", ".m4a", ".aac", ".wav")
+SUPPORTED_AUDIO_EXTENSIONS = (
+    ".mp3",
+    ".m4a",
+    ".m4b",
+    ".aac",
+    ".wav",
+    ".ogg",
+    ".oga",
+    ".opus",
+    ".flac",
+)
 
 
 def _library_endpoint(app: Any, query: str) -> tuple[HTTPStatus, dict]:

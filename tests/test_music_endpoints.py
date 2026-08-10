@@ -309,7 +309,7 @@ class MusicEndpointTests(AppTestCase):
 
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["endpoint_root"], "/music/endpoints")
-        self.assertEqual(payload["supported_extensions"], [".mp3", ".m4a", ".aac", ".wav"])
+        self.assertEqual(payload["supported_extensions"], [".mp3", ".m4a", ".m4b", ".aac", ".wav", ".ogg", ".oga", ".opus", ".flac"])
         self.assertEqual(rclone.calls, [])
 
     def test_unknown_music_endpoint_returns_404(self) -> None:
@@ -434,14 +434,16 @@ class MusicEndpointTests(AppTestCase):
             [(song["display_name"], song["rel_path"], song["stream_path"], song["extension"], song["filename"], song["type"]) for song in payload["songs"]],
             [
                 ("Loose.MP3", "Loose.MP3", "Music/Loose.MP3", ".mp3", "Loose.MP3", "file"),
+                ("raw.flac", "raw.flac", "Music/raw.flac", ".flac", "raw.flac", "file"),
                 ("Track.m4a", "Album/Track.m4a", "Music/Album/Track.m4a", ".m4a", "Track.m4a", "file"),
                 ("Voice.AAC", "Album/Voice.AAC", "Music/Album/Voice.AAC", ".aac", "Voice.AAC", "file"),
                 ("Wave.WAV", "Album/Wave.WAV", "Music/Album/Wave.WAV", ".wav", "Wave.WAV", "file"),
+                ("skip.ogg", "Album/skip.ogg", "Music/Album/skip.ogg", ".ogg", "skip.ogg", "file"),
             ],
         )
         # Shared-client dual field: items aliases songs for media-library consumers.
         self.assertEqual(payload["items"], payload["songs"])
-        self.assertEqual(payload["supported_extensions"], [".mp3", ".m4a", ".aac", ".wav"])
+        self.assertEqual(payload["supported_extensions"], [".mp3", ".m4a", ".m4b", ".aac", ".wav", ".ogg", ".oga", ".opus", ".flac"])
         self.assertEqual(rclone.calls, [])
 
     def test_music_library_stops_at_missing_child_folder_cache_record(self) -> None:
