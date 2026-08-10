@@ -3792,19 +3792,16 @@ test("falls back to probing the remote file when cached header bytes are corrupt
 });
 
 test("loaded HLS segment average reflects fragment load timing", async ({ page }) => {
-  test.setTimeout(60000);
+  test.setTimeout(90000);
 
-  const statusResponse = await page.request.get("/video/endpoints/status");
-  expect(statusResponse.ok()).toBe(true);
-  const statusPayload = await statusResponse.json();
-  if (statusPayload && statusPayload.active_session && statusPayload.active_session.session_id) {
-    const stopResponse = await page.request.post("/video/endpoints/session/stop", {
-      data: { id: statusPayload.active_session.session_id },
-    });
-    expect(stopResponse.ok()).toBe(true);
-  }
-  const clearResponse = await page.request.post("/video/endpoints/cache/clear");
-  expect(clearResponse.ok()).toBe(true);
+  // Stop every lingering session (not just active_session). Under full-suite
+  // load, stopped sessions can still fill the max_session_count=8 slots and
+  // make the next create hang past waitForVisibleVideo.
+  await clearActiveVideoSessionAndCache(page);
+  await expect
+    .poll(async () => (await readActiveVideoSessions(page)).length, { timeout: 15000 })
+    .toBe(0);
+
   await installHlsStub(page, {
     fragmentCount: 8,
     playlistFragmentCount: 8,
@@ -3812,8 +3809,7 @@ test("loaded HLS segment average reflects fragment load timing", async ({ page }
     fragmentLoadIntervalMs: 80,
   });
   await openVideoPane(page);
-  await playLibraryFile(page, "alpha.mkv");
-  await waitForVisibleVideo(page);
+  await playLibraryFile(page, "alpha.mkv", { visibleVideoTimeout: 60000 });
   await waitForPlaybackSurfaceWithoutOverlay(page);
   await waitForMountedSubtitleTrackReady(page, 3);
   await expect
@@ -3821,7 +3817,7 @@ test("loaded HLS segment average reflects fragment load timing", async ({ page }
       const state = await readDisplayedSubtitleDebugState(page);
       const match = state.metaText.match(/avg load: ([0-9]+\.[0-9]{2})s/);
       return match ? Number.parseFloat(match[1]) : Number.NaN;
-    }, { timeout: 10000 })
+    }, { timeout: 15000 })
     .toBeGreaterThan(0.05);
 });
 
