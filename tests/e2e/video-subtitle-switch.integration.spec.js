@@ -3792,14 +3792,14 @@ test("falls back to probing the remote file when cached header bytes are corrupt
 });
 
 test("loaded HLS segment average reflects fragment load timing", async ({ page }) => {
-  test.setTimeout(90000);
+  test.setTimeout(60000);
 
-  // Stop every lingering session (not just active_session). Under full-suite
-  // load, stopped sessions can still fill the max_session_count=8 slots and
-  // make the next create hang past waitForVisibleVideo.
+  // Correct isolation (not a timeout raise): stop *all* lingering sessions.
+  // Only stopping active_session left dead sessions in the registry; with
+  // max_session_count=8 the next create could wait tens of seconds.
   await clearActiveVideoSessionAndCache(page);
   await expect
-    .poll(async () => (await readActiveVideoSessions(page)).length, { timeout: 15000 })
+    .poll(async () => (await readActiveVideoSessions(page)).length, { timeout: 5000 })
     .toBe(0);
 
   await installHlsStub(page, {
@@ -3809,7 +3809,7 @@ test("loaded HLS segment average reflects fragment load timing", async ({ page }
     fragmentLoadIntervalMs: 80,
   });
   await openVideoPane(page);
-  await playLibraryFile(page, "alpha.mkv", { visibleVideoTimeout: 60000 });
+  await playLibraryFile(page, "alpha.mkv");
   await waitForPlaybackSurfaceWithoutOverlay(page);
   await waitForMountedSubtitleTrackReady(page, 3);
   await expect
@@ -3817,7 +3817,7 @@ test("loaded HLS segment average reflects fragment load timing", async ({ page }
       const state = await readDisplayedSubtitleDebugState(page);
       const match = state.metaText.match(/avg load: ([0-9]+\.[0-9]{2})s/);
       return match ? Number.parseFloat(match[1]) : Number.NaN;
-    }, { timeout: 15000 })
+    }, { timeout: 10000 })
     .toBeGreaterThan(0.05);
 });
 
