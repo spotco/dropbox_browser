@@ -13,8 +13,8 @@ so you can invoke them from any working directory.
 
 | Script | Role |
 | --- | --- |
-| `setup_exe.bat` | Download/install the windows-x64 tool pack into `.tools/` |
-| `clear_binaries.bat` | Remove `.tools/`, `tools-packs/`, and legacy Windows tool exes |
+| `setup_exe.bat` | Download/install the windows-x64 tool pack into **repo** `.tools/windows-x64/` (not into `run/win`) |
+| `clear_exe.bat` | Remove `.tools/`, `tools-packs/`, and legacy Windows tool exes |
 | `clear_cache.bat` | Clear FolderInfo/ListingCache JSON and worker-trace temp log |
 | `rclone_setup.bat` | Create the Dropbox rclone remote |
 | `update.bat` | `git pull origin master` |

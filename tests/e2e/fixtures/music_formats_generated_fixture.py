@@ -9,7 +9,13 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-FFMPEG_EXE = REPO_ROOT / "FFmpeg" / "bin" / "ffmpeg.exe"
+sys.path.insert(0, str(REPO_ROOT))
+from tests.e2e.support.media_tools import resolve_ffmpeg  # noqa: E402
+
+try:
+    FFMPEG_EXE = resolve_ffmpeg(REPO_ROOT)
+except FileNotFoundError:
+    FFMPEG_EXE = REPO_ROOT / "FFmpeg" / "bin" / "ffmpeg.exe"
 DURATION_SECONDS = "2"
 
 TRACK_SPECS: list[dict[str, Any]] = [
