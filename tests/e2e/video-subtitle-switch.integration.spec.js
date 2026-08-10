@@ -2884,10 +2884,14 @@ test("seek-triggered subtitle extraction expands scrubber coverage without a ses
 test("windowed subtitles remount when playback crosses mounted coverage", async ({ page }) => {
   test.setTimeout(90000);
 
-  const sessionPosts = [];
+  const sessionCreatePosts = [];
   page.on("request", (request) => {
-    if (request.url().includes("/video/endpoints/session") && request.method() === "POST") {
-      sessionPosts.push(request.postData() || "");
+    if (request.method() !== "POST") return;
+    // Only count session *create* POSTs. Progress/stop share the same path
+    // prefix (/video/endpoints/session/...) and used to flake this assertion.
+    const pathOnly = new URL(request.url()).pathname.replace(/\/+$/, "");
+    if (pathOnly === "/video/endpoints/session") {
+      sessionCreatePosts.push(request.postData() || "");
     }
   });
 
@@ -2941,13 +2945,13 @@ test("windowed subtitles remount when playback crosses mounted coverage", async 
   await setPlaybackTimeForSubtitleChecks(page, 10.5);
   await waitForDisplayedSubtitleDebugText(page, "SEEK-WINDOW-ENG");
 
-  const postsBeforeBoundaryCross = sessionPosts.length;
+  const createsBeforeBoundaryCross = sessionCreatePosts.length;
   await setPlaybackTimeForSubtitleChecks(page, 17);
   await waitForDisplayedSubtitleDebugText(page, "SEEK-WINDOW-ENG AGAIN");
 
   expect(subtitleWindowRequests.some((request) => request.windowStatus === "startup")).toBe(true);
   expect(subtitleWindowRequests.some((request) => request.windowStatus === "seek")).toBe(true);
-  expect(sessionPosts.slice(postsBeforeBoundaryCross)).toEqual([]);
+  expect(sessionCreatePosts.slice(createsBeforeBoundaryCross)).toEqual([]);
 });
 
 test("full cached subtitles stay mounted across timeupdate without remount flicker", async ({ page }) => {

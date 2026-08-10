@@ -91,30 +91,34 @@ async function waitForDecodedVideo(page) {
 }
 
 async function waitForMultilineCue(page) {
+  // Require the on-stage overlay itself (not just debug panel / TextTrack cues).
+  // Debug text can update before syncSubtitleOverlayDisplay clears the `hidden`
+  // attribute; measuring then races and flakes with display:"none".
   await expect
     .poll(async () => {
       return page.evaluate(() => {
-        const debugCue = document.getElementById("video-debug-current-cue");
-        const text = debugCue ? String(debugCue.textContent || "").trim() : "";
         const overlay = document.getElementById("video-subtitle-overlay");
-        const overlayText = overlay ? String(overlay.textContent || "").trim() : "";
-        const video = document.getElementById("video-player-media");
-        let activeCueText = "";
-        if (video && video.textTracks) {
-          for (let index = 0; index < video.textTracks.length; index += 1) {
-            const track = video.textTracks[index];
-            if (!track || (track.mode !== "showing" && track.mode !== "hidden") || !track.activeCues || !track.activeCues.length) {
-              continue;
-            }
-            activeCueText = String(track.activeCues[0].text || "");
-            break;
-          }
+        if (!overlay || overlay.hidden || overlay.classList.contains("hidden")) {
+          return null;
         }
-        const haystack = [text, activeCueText, overlayText].join("\n");
-        return haystack.includes("MULTI-LINE-ONE");
+        const style = window.getComputedStyle(overlay);
+        if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) {
+          return null;
+        }
+        const overlayText = String(overlay.textContent || "").replace(/\s+/g, " ").trim();
+        if (!overlayText.includes("MULTI-LINE-ONE") || !overlayText.includes("MULTI-LINE-TWO")) {
+          return null;
+        }
+        return {
+          display: style.display,
+          text: overlayText,
+        };
       });
     }, { timeout: 20000 })
-    .toBe(true);
+    .toMatchObject({
+      display: expect.stringMatching(/^(block|flex|inline-block|inline|grid)$/),
+      text: expect.stringContaining("MULTI-LINE-ONE"),
+    });
 }
 
 async function seekToMultilineCue(page) {
@@ -122,13 +126,45 @@ async function seekToMultilineCue(page) {
     const video = document.getElementById("video-player-media");
     if (!video) return;
     video.pause();
-    video.currentTime = 0.5;
-    video.dispatchEvent(new Event("seeking"));
-    video.dispatchEvent(new Event("seeked"));
+    // Assign once; wait for the real seeked path rather than faking events that
+    // can run before currentTime has actually settled.
+    if (Math.abs(Number(video.currentTime) - 0.5) > 0.05) {
+      video.currentTime = 0.5;
+    }
+  });
+  await expect
+    .poll(async () => {
+      return page.evaluate(() => {
+        const video = document.getElementById("video-player-media");
+        if (!video) return null;
+        return {
+          seeking: Boolean(video.seeking),
+          currentTime: Number(video.currentTime) || 0,
+        };
+      });
+    }, { timeout: 10000 })
+    .toMatchObject({
+      seeking: false,
+      currentTime: expect.any(Number),
+    });
+  await expect
+    .poll(async () => {
+      return page.evaluate(() => {
+        const video = document.getElementById("video-player-media");
+        return video ? Math.abs(Number(video.currentTime) - 0.5) < 0.2 : false;
+      });
+    }, { timeout: 10000 })
+    .toBe(true);
+
+  // Kick overlay/debug sync if the browser already sat at ~0.5s (no seek event).
+  await page.evaluate(() => {
+    const video = document.getElementById("video-player-media");
+    if (!video) return;
     video.dispatchEvent(new Event("timeupdate"));
   });
   await waitForMultilineCue(page);
-  await page.waitForTimeout(600);
+  // Brief layout settle for font metrics / screenshot band clustering.
+  await page.waitForTimeout(250);
 }
 
 async function enterStageFullscreen(page) {

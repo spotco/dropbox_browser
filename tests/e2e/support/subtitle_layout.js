@@ -258,6 +258,7 @@ async function readSubtitleLayoutMetrics(page, options = {}) {
         fontSizePx: 0,
         lineHeightPx: 0,
         display: "none",
+        hiddenAttr: true,
       };
     }
     const style = window.getComputedStyle(overlay);
@@ -265,7 +266,12 @@ async function readSubtitleLayoutMetrics(page, options = {}) {
       text: String(overlay.textContent || "").trim(),
       fontSizePx: Number.parseFloat(style.fontSize) || 0,
       lineHeightPx: Number.parseFloat(style.lineHeight) || 0,
-      display: style.display,
+      // Prefer computed display, but treat the HTML hidden attribute / .hidden
+      // class as none even if a browser reports something else transiently.
+      display: (overlay.hidden || overlay.classList.contains("hidden"))
+        ? "none"
+        : style.display,
+      hiddenAttr: Boolean(overlay.hidden),
     };
   });
 
