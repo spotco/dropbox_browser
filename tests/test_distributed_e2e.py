@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 
 from tools import network_workers_bootstrap as bootstrap
@@ -73,6 +74,115 @@ class DistributedE2ETests(unittest.TestCase):
         self.assertEqual(
             runner.remote_scp_path(windows, "/e/dev/dropbox_browser/Temp/job"),
             "E:/dev/dropbox_browser/Temp/job",
+        )
+
+    def test_project_map_supplies_worker_runtime_settings(self) -> None:
+        host = SimpleNamespace(
+            nickname="surfacebook3",
+            host="DESKTOP-0DGGB1K",
+            user="spotco",
+            label="surfacebook3",
+            never_remote=False,
+            hardware=SimpleNamespace(
+                os="Windows",
+                model="Microsoft Surface Book 3",
+                cpu="Intel Core i7",
+                notes="",
+            ),
+            defaults=SimpleNamespace(schedule_weight=1.0),
+        )
+        project_worker = SimpleNamespace(
+            repo="E:/dev/dropbox_browser",
+            git="git",
+            path_prefix="C:/Program Files/nodejs",
+            extra={
+                "platform": "windows",
+                "branch": "master",
+                "schedule_weight": 2.4,
+            },
+        )
+        project = SimpleNamespace(
+            workers={"surfacebook3": project_worker},
+            get=lambda nickname: project_worker,
+        )
+        package = SimpleNamespace(
+            load_project=lambda name, root: project,
+            load_hosts=lambda root: SimpleNamespace(get=lambda nickname: host),
+        )
+        shared = SimpleNamespace(root=Path("."), package=package)
+
+        workers, skipped = runner.load_workers(shared, {"project": "dropbox_browser"})
+
+        self.assertEqual(skipped, [])
+        self.assertEqual(len(workers), 1)
+        self.assertEqual(workers[0].repo, "E:/dev/dropbox_browser")
+        self.assertEqual(workers[0].path_prefix, "C:/Program Files/nodejs")
+        self.assertEqual(workers[0].branch, "master")
+        self.assertEqual(workers[0].schedule_weight, 2.4)
+
+    def test_coordination_claim_and_release_use_bounded_owner_lease(self) -> None:
+        worker = runner.RemoteWorker(
+            id="surfacebook3",
+            nickname="surfacebook3",
+            label="surfacebook3",
+            host="surface.example",
+            user="user",
+            repo="E:/dev/dropbox_browser",
+            git="git",
+            path_prefix="",
+            platform="windows",
+            remote_os="Windows",
+            branch="master",
+            schedule_weight=2.4,
+        )
+
+        class Store:
+            def __init__(self) -> None:
+                self.claims: list[dict[str, object]] = []
+                self.releases: list[dict[str, object]] = []
+
+            def claim(self, resources, **kwargs):  # noqa: ANN001
+                self.claims.append({"resources": resources, **kwargs})
+                return {"lease_id": "lease-test"}
+
+            def release(self, lease_id, **kwargs):  # noqa: ANN001
+                self.releases.append({"lease_id": lease_id, **kwargs})
+                return {"status": "released"}
+
+        store = Store()
+        shared = SimpleNamespace(
+            root=Path("."),
+            coordination=SimpleNamespace(coordination_store=lambda root: store),
+        )
+
+        claimed, leases = runner.claim_coordination_workers(
+            shared,
+            [worker],
+            owner="dropbox_browser",
+            duration_seconds=1800,
+            grace_seconds=30,
+        )
+        runner.release_coordination_leases(
+            shared,
+            leases,
+            owner="dropbox_browser",
+            reason="test finished",
+        )
+
+        self.assertEqual(claimed, [worker])
+        self.assertEqual(store.claims[0]["resources"], ["surfacebook3"])
+        self.assertEqual(store.claims[0]["owner"], "dropbox_browser")
+        self.assertEqual(store.claims[0]["duration_seconds"], 1800)
+        self.assertEqual(store.releases[0]["lease_id"], "lease-test")
+
+    def test_local_job_result_is_normalized_for_distributed_result_loop(self) -> None:
+        self.assertEqual(
+            runner.normalize_job_result("local", (True, 12.5)),
+            (True, 12.5, "local run"),
+        )
+        self.assertEqual(
+            runner.normalize_job_result("remote", (False, 8.25, "exit 1")),
+            (False, 8.25, "exit 1"),
         )
 
 

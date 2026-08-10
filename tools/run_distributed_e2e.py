@@ -3,8 +3,10 @@
 
 Normal operation is automatic: reachable compatible Windows and macOS Intel
 workers receive scheduled specs, while the current Windows machine remains a
-local lane.  If the optional shared worker SDK, local notes, credentials, or
-remote checkouts are absent, the runner reports the reason and runs locally.
+local lane. If the optional shared worker SDK, local notes, credentials,
+coordination owner, or remote checkouts are absent, the runner reports the
+reason and runs locally. Actual remote runs claim each selected worker on the
+shared coordination board and release the lease afterward.
 Use ``--require-remote`` when a distributed run must fail instead of falling
 back.  Linux workers are intentionally excluded until browser compatibility is
 implemented.
@@ -115,15 +117,44 @@ def _host_by_nickname(hosts: Any, nickname: str) -> Any:
 
 
 def load_workers(shared: Any, settings: dict[str, Any]) -> tuple[list[RemoteWorker], list[str]]:
-    """Resolve configured workers and exclude unsupported platforms."""
+    """Resolve project-map workers and exclude unsupported platforms.
+
+    The shared project map owns worker checkout/runtime settings.  A worker
+    list in LOCAL_NOTES remains accepted as a compatibility override for
+    machines that have not migrated their private notes yet.
+    """
 
     workers_raw = settings.get("workers")
-    if not isinstance(workers_raw, list):
+    project = None
+    project_error: str | None = None
+    project_name = str(settings.get("project") or "dropbox_browser").strip()
+    try:
+        project = shared.package.load_project(project_name, root=shared.root)
+    except Exception as exc:  # noqa: BLE001 - legacy notes can still work without a map
+        project_error = str(exc)
+        if not isinstance(workers_raw, list):
+            raise RunnerError(
+                f"shared project map {project_name!r} could not be loaded: {exc}"
+            ) from exc
+
+    if isinstance(workers_raw, list):
+        worker_entries: list[dict[str, Any]] = [
+            raw for raw in workers_raw if isinstance(raw, dict)
+        ]
+    elif project is not None:
+        worker_entries = [
+            {"id": nickname.casefold(), "nickname": nickname}
+            for nickname in project.workers
+        ]
+    else:
         return [], ["no local Remote E2E workers are configured"]
+
     hosts = shared.package.load_hosts(root=shared.root)
     workers: list[RemoteWorker] = []
     skipped: list[str] = []
-    for index, raw in enumerate(workers_raw):
+    if project_error:
+        skipped.append(f"project map unavailable; using legacy local notes: {project_error}")
+    for index, raw in enumerate(worker_entries):
         if not isinstance(raw, dict):
             skipped.append(f"worker entry {index} is not an object")
             continue
@@ -131,6 +162,15 @@ def load_workers(shared: Any, settings: dict[str, Any]) -> tuple[list[RemoteWork
         if not nickname:
             skipped.append(f"worker entry {index} has no nickname")
             continue
+        project_worker = None
+        if project is not None:
+            try:
+                project_worker = project.get(nickname)
+            except Exception:
+                project_worker = None
+        project_extra = getattr(project_worker, "extra", {})
+        if not isinstance(project_extra, dict):
+            project_extra = {}
         try:
             host_entry = _host_by_nickname(hosts, nickname)
         except RunnerError as exc:
@@ -139,33 +179,60 @@ def load_workers(shared: Any, settings: dict[str, Any]) -> tuple[list[RemoteWork
         if bool(getattr(host_entry, "never_remote", False)):
             skipped.append(f"{nickname}: inventory marks this host local-only")
             continue
-        platform = str(raw.get("platform") or infer_platform(host_entry)).strip().casefold()
+        platform = str(
+            raw.get("platform")
+            or project_extra.get("platform")
+            or infer_platform(host_entry)
+        ).strip().casefold()
         if not is_supported_platform(platform):
             skipped.append(f"{nickname}: unsupported remote platform {platform or 'unknown'}")
             continue
-        repo = str(raw.get("repo") or "").strip()
+        repo = str(
+            raw.get("repo")
+            or getattr(project_worker, "repo", "")
+            or ""
+        ).strip()
         if not repo:
             skipped.append(f"{nickname}: no remote checkout path configured")
             continue
         hardware = getattr(host_entry, "hardware", None)
-        schedule_weight = raw.get("schedule_weight", getattr(getattr(host_entry, "defaults", None), "schedule_weight", None))
+        schedule_weight = raw.get("schedule_weight")
+        if schedule_weight is None:
+            schedule_weight = project_extra.get("schedule_weight")
+        if schedule_weight is None:
+            schedule_weight = getattr(getattr(host_entry, "defaults", None), "schedule_weight", None)
         try:
             schedule_weight = float(schedule_weight or 1.0)
         except (TypeError, ValueError):
             schedule_weight = 1.0
         workers.append(
             RemoteWorker(
-                id=str(raw.get("id") or nickname.casefold()),
+                id=str(raw.get("id") or project_extra.get("id") or nickname.casefold()),
                 nickname=nickname,
-                label=str(raw.get("label") or getattr(host_entry, "label", None) or nickname),
+                label=str(
+                    raw.get("label")
+                    or project_extra.get("label")
+                    or getattr(host_entry, "label", None)
+                    or nickname
+                ),
                 host=str(getattr(host_entry, "host", "")),
                 user=str(getattr(host_entry, "user", "")),
                 repo=repo,
-                git=str(raw.get("git") or "git"),
-                path_prefix=str(raw.get("path_prefix") or ""),
+                git=str(raw.get("git") or getattr(project_worker, "git", "") or "git"),
+                path_prefix=str(
+                    raw.get("path_prefix")
+                    or getattr(project_worker, "path_prefix", "")
+                    or ""
+                ),
                 platform=platform,
                 remote_os=str(getattr(hardware, "os", "") or ""),
-                branch=str(raw["branch"]) if raw.get("branch") else None,
+                branch=(
+                    str(raw["branch"])
+                    if raw.get("branch")
+                    else str(project_extra["branch"])
+                    if project_extra.get("branch")
+                    else None
+                ),
                 schedule_weight=max(0.01, schedule_weight),
             )
         )
@@ -363,6 +430,89 @@ def check_remote(shared: Any, ssh: Any, worker: RemoteWorker) -> tuple[bool, str
     return True, "ready"
 
 
+def coordination_owner(settings: dict[str, Any], args: argparse.Namespace) -> str:
+    return str(
+        getattr(args, "coord_owner", None)
+        or os.environ.get("SPTMP2_COORD_OWNER")
+        or settings.get("coord_owner")
+        or ""
+    ).strip()
+
+
+def claim_coordination_workers(
+    shared: Any,
+    workers: list[RemoteWorker],
+    *,
+    owner: str,
+    duration_seconds: float,
+    grace_seconds: float,
+) -> tuple[list[RemoteWorker], list[tuple[RemoteWorker, str]]]:
+    """Claim workers before remote preflight/test execution."""
+
+    store = shared.coordination.coordination_store(root=shared.root)
+    claimed: list[RemoteWorker] = []
+    leases: list[tuple[RemoteWorker, str]] = []
+    for worker in workers:
+        try:
+            lease = store.claim(
+                [worker.nickname],
+                owner=owner,
+                duration_seconds=duration_seconds,
+                grace_seconds=grace_seconds,
+                reason="Dropbox Browser distributed E2E",
+            )
+            leases.append((worker, str(lease["lease_id"])))
+            claimed.append(worker)
+            print(
+                f"coordination: claimed {worker.nickname} for {duration_seconds:.0f}s "
+                f"(lease {lease['lease_id']})",
+                flush=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - another project may own it
+            print(
+                f"remote worker skipped: {worker.label}: coordination claim failed: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+    return claimed, leases
+
+
+def release_coordination_leases(
+    shared: Any,
+    leases: list[tuple[RemoteWorker, str]],
+    *,
+    owner: str,
+    reason: str,
+) -> None:
+    if not leases:
+        return
+    store = shared.coordination.coordination_store(root=shared.root)
+    for worker, lease_id in leases:
+        try:
+            store.release(lease_id, owner=owner, reason=reason)
+            print(f"coordination: released {worker.nickname} ({lease_id})", flush=True)
+        except Exception as exc:  # noqa: BLE001 - do not hide the test result
+            print(
+                f"coordination warning: could not release {worker.nickname} "
+                f"({lease_id}): {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+
+def normalize_job_result(
+    execution: str,
+    value: tuple[bool, float] | tuple[bool, float, str],
+) -> tuple[bool, float, str]:
+    """Normalize local and remote job results for the shared result loop."""
+
+    if execution == "local":
+        passed, duration = value
+        return passed, duration, "local run"
+    passed, duration, detail = value
+    return passed, duration, detail
+
+
 def run_remote_job(shared: Any, ssh: Any, worker: RemoteWorker, specs: tuple[Path, ...], run_id: str, keep_remote: bool, local_dir: Path) -> tuple[bool, float, str]:
     target = worker.target(shared.ssh)
     client = shared.jobs.JobClient(ssh)
@@ -460,6 +610,16 @@ def run(args: argparse.Namespace) -> int:
             if require_remote:
                 fail(str(exc))
             print(f"remote E2E unavailable: {exc}; using local lane", file=sys.stderr, flush=True)
+    coord_owner = coordination_owner(settings, args)
+    if shared_loaded is not None and not args.dry_run and not coord_owner:
+        message = (
+            "SPTMP2_COORD_OWNER or LOCAL_NOTES coord_owner is required before "
+            "using remote workers"
+        )
+        if require_remote:
+            fail(message)
+        print(f"remote E2E unavailable: {message}; using local lane", file=sys.stderr, flush=True)
+        shared_loaded = None
     if shared_loaded is None:
         if not local_enabled:
             fail("remote worker SDK is unavailable and the local lane is disabled")
@@ -480,6 +640,7 @@ def run(args: argparse.Namespace) -> int:
             "package": package,
             "auth": __import__("network_computers.auth", fromlist=["resolve_auth"]),
             "availability": __import__("network_computers.availability", fromlist=["select_available_workers"]),
+            "coordination": __import__("network_computers.coordination", fromlist=["coordination_store"]),
             "git_ops": __import__("network_computers.git_ops", fromlist=["preflight"]),
             "jobs": __import__("network_computers.jobs", fromlist=["JobClient"]),
             "schedule": __import__("network_computers.schedule", fromlist=["optimize_assignment"]),
@@ -519,6 +680,7 @@ def run(args: argparse.Namespace) -> int:
             hosts=hosts,
             timeout=5,
             connect_timeout=5,
+            coordination_owner=coord_owner or None,
         )
         for line in shared.availability.format_plan_lines(availability_plan):
             print(line, flush=True)
@@ -529,6 +691,16 @@ def run(args: argparse.Namespace) -> int:
         workers = []
         ssh = None
 
+    coordination_leases: list[tuple[RemoteWorker, str]] = []
+    if ssh is not None and not args.dry_run:
+        workers, coordination_leases = claim_coordination_workers(
+            shared,
+            workers,
+            owner=coord_owner,
+            duration_seconds=args.coord_duration_seconds,
+            grace_seconds=args.coord_grace_seconds,
+        )
+
     ready_workers: list[RemoteWorker] = []
     if ssh is not None:
         for worker in workers:
@@ -537,54 +709,93 @@ def run(args: argparse.Namespace) -> int:
                 ready_workers.append(worker)
             else:
                 print(f"remote worker skipped: {worker.label}: {detail}", file=sys.stderr, flush=True)
+    ready_ids = {worker.id for worker in ready_workers}
+    failed_preflight_leases = [
+        lease for lease in coordination_leases if lease[0].id not in ready_ids
+    ]
+    if failed_preflight_leases:
+        release_coordination_leases(
+            shared,
+            failed_preflight_leases,
+            owner=coord_owner,
+            reason="remote preflight did not pass",
+        )
+        coordination_leases = [
+            lease for lease in coordination_leases if lease[0].id in ready_ids
+        ]
     if not ready_workers and require_remote:
+        release_coordination_leases(
+            shared,
+            coordination_leases,
+            owner=coord_owner,
+            reason="no remote workers passed preflight",
+        )
         fail("no compatible reachable remote E2E workers passed preflight")
     if not ready_workers and not local_enabled:
+        release_coordination_leases(
+            shared,
+            coordination_leases,
+            owner=coord_owner,
+            reason="local lane disabled",
+        )
         fail("no remote E2E workers passed preflight and local lane is disabled")
 
-    assignments = choose_assignments(shared, specs, ready_workers, local_enabled=local_enabled)
-    for item in assignments:
-        print(f"plan: {item.execution} {item.lane_id}: {len(item.specs)} spec(s)", flush=True)
-    if args.dry_run:
-        return 0
+    try:
+        assignments = choose_assignments(shared, specs, ready_workers, local_enabled=local_enabled)
+        for item in assignments:
+            print(f"plan: {item.execution} {item.lane_id}: {len(item.specs)} spec(s)", flush=True)
+        if args.dry_run:
+            return 0
 
-    run_id = uuid.uuid4().hex[:12]
-    timings = load_timings()
-    results: list[tuple[str, bool, float, str]] = []
-    remote_assignments = [item for item in assignments if item.execution == "remote"]
-    local_assignments = [item for item in assignments if item.execution == "local"]
-    worker_by_id = {worker.id: worker for worker in ready_workers}
-    with ThreadPoolExecutor(max_workers=max(1, len(remote_assignments) + len(local_assignments))) as pool:
-        futures = {}
-        for item in remote_assignments:
-            worker = worker_by_id[item.lane_id]
-            futures[pool.submit(
-                run_remote_job,
-                shared,
-                ssh,
-                worker,
-                item.specs,
-                run_id,
-                args.keep_remote,
-                REPO / "Temp" / "remote-e2e" / run_id / worker.id,
-            )] = item
-        for item in local_assignments:
-            futures[pool.submit(run_local_specs, item.specs, REPO / "Temp" / "remote-e2e" / run_id / "local")] = item
-        for future in as_completed(futures):
-            item = futures[future]
-            try:
-                passed, duration, detail = future.result()
-            except Exception as exc:  # noqa: BLE001
-                passed, duration, detail = False, 0.001, str(exc)
-            results.append((item.lane_id, passed, duration, detail))
-            for spec in item.specs:
-                timings[relative_spec(spec)] = duration / max(1, len(item.specs))
-            print(f"result: {item.execution} {item.lane_id}: {'passed' if passed else 'failed'} ({detail})", flush=True)
+        run_id = uuid.uuid4().hex[:12]
+        timings = load_timings()
+        results: list[tuple[str, bool, float, str]] = []
+        remote_assignments = [item for item in assignments if item.execution == "remote"]
+        local_assignments = [item for item in assignments if item.execution == "local"]
+        worker_by_id = {worker.id: worker for worker in ready_workers}
+        with ThreadPoolExecutor(max_workers=max(1, len(remote_assignments) + len(local_assignments))) as pool:
+            futures = {}
+            for item in remote_assignments:
+                worker = worker_by_id[item.lane_id]
+                futures[pool.submit(
+                    run_remote_job,
+                    shared,
+                    ssh,
+                    worker,
+                    item.specs,
+                    run_id,
+                    args.keep_remote,
+                    REPO / "Temp" / "remote-e2e" / run_id / worker.id,
+                )] = item
+            for item in local_assignments:
+                futures[pool.submit(run_local_specs, item.specs, REPO / "Temp" / "remote-e2e" / run_id / "local")] = item
+            for future in as_completed(futures):
+                item = futures[future]
+                try:
+                    passed, duration, detail = normalize_job_result(item.execution, future.result())
+                except Exception as exc:  # noqa: BLE001
+                    passed, duration, detail = False, 0.001, str(exc)
+                results.append((item.lane_id, passed, duration, detail))
+                for spec in item.specs:
+                    timings[relative_spec(spec)] = duration / max(1, len(item.specs))
+                print(
+                    f"result: {item.execution} {item.lane_id}: "
+                    f"{'passed' if passed else 'failed'} "
+                    f"({duration:.1f}s; {detail})",
+                    flush=True,
+                )
 
-    save_timings(timings)
-    passed = all(item[1] for item in results) and len(results) == len(assignments)
-    print(f"distributed E2E {'passed' if passed else 'failed'}", flush=True)
-    return 0 if passed else 1
+        save_timings(timings)
+        passed = all(item[1] for item in results) and len(results) == len(assignments)
+        print(f"distributed E2E {'passed' if passed else 'failed'}", flush=True)
+        return 0 if passed else 1
+    finally:
+        release_coordination_leases(
+            shared,
+            coordination_leases,
+            owner=coord_owner,
+            reason="distributed E2E finished",
+        )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -595,6 +806,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--spec", action="append", default=[], help="run one tests/e2e spec; repeatable (default: all specs)")
     parser.add_argument("--dry-run", action="store_true", help="print the plan without starting Playwright")
     parser.add_argument("--keep-remote", action="store_true", help="retain remote job directories for inspection")
+    parser.add_argument("--coord-owner", help="coordination-board owner; defaults to SPTMP2_COORD_OWNER or LOCAL_NOTES")
+    parser.add_argument("--coord-duration-seconds", type=float, default=1800.0, help="worker lease duration for a remote run (default: 1800)")
+    parser.add_argument("--coord-grace-seconds", type=float, default=30.0, help="worker lease grace period (default: 30)")
     return parser.parse_args(argv)
 
 
