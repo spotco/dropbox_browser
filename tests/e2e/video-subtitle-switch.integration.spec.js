@@ -1400,6 +1400,45 @@ function percentToSeconds(percent, maxSeconds) {
   return (normalizedPercent / 100) * normalizedMax;
 }
 
+async function waitForStableLoadedSeekWindowState(page, {
+  timeout = 15000,
+  stableMs = 400,
+  toleranceSeconds = 0.1,
+} = {}) {
+  const deadline = Date.now() + timeout;
+  let previous = null;
+  let stableSince = 0;
+  while (Date.now() < deadline) {
+    const state = await readLoadedSeekWindowState(page);
+    const displayedEndSeconds = percentToSeconds(
+      state.displayedEndPercent,
+      state.sliderMax,
+    );
+    const valid = [
+      state.sliderMax,
+      state.seekableEnd,
+      displayedEndSeconds,
+    ].every((value) => Number.isFinite(value) && value > 0);
+    const unchanged = valid && previous
+      && Math.abs(state.seekableEnd - previous.seekableEnd) <= toleranceSeconds
+      && Math.abs(displayedEndSeconds - previous.displayedEndSeconds) <= toleranceSeconds;
+    if (unchanged) {
+      if (!stableSince) stableSince = Date.now();
+      if (Date.now() - stableSince >= stableMs) {
+        return state;
+      }
+    } else {
+      stableSince = valid ? Date.now() : 0;
+    }
+    previous = {
+      ...state,
+      displayedEndSeconds,
+    };
+    await page.waitForTimeout(100);
+  }
+  throw new Error(`Loaded seek window did not stabilize: ${JSON.stringify(previous)}`);
+}
+
 async function expectPlaybackNearSeconds(page, targetSeconds, toleranceSeconds = 1) {
   await expect
     .poll(async () => {
@@ -2685,22 +2724,12 @@ test("displayed loaded seek band matches actual instant-seek range during real H
   await waitForScrubberReady(page);
   await pausePlayback(page);
 
-  await expect
-    .poll(async () => {
-      const state = await readLoadedSeekWindowState(page);
-      return {
-        ...state,
-        displayedStartSeconds: percentToSeconds(state.displayedStartPercent, state.sliderMax),
-        displayedEndSeconds: percentToSeconds(state.displayedEndPercent, state.sliderMax),
-      };
-    }, { timeout: 15000 })
-    .toMatchObject({
-      sliderMax: expect.any(Number),
-      seekableEnd: expect.any(Number),
-      displayedEndSeconds: expect.any(Number),
-    });
-
-  const loadedWindowState = await readLoadedSeekWindowState(page);
+  // The browser's live HLS seekable range can move while paused as the
+  // playlist finishes buffering. Capture the range only after it has settled;
+  // otherwise the test can choose a target from an older range and then
+  // correctly observe the player restarting because that target is no longer
+  // in the current in-session range.
+  const loadedWindowState = await waitForStableLoadedSeekWindowState(page);
   const displayedStartSeconds = percentToSeconds(
     loadedWindowState.displayedStartPercent,
     loadedWindowState.sliderMax,

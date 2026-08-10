@@ -2,9 +2,10 @@
 
 The product remains runnable without this optional checkout.  Discovery is
 capability-based: a candidate must contain ``hosts.json`` and a
-``python/network_computers`` package.  Machine-specific paths belong in the
-gitignored ``LOCAL_NOTES.md`` or in environment variables, never in product
-source.
+``python/network_computers`` package. The shared project map owns
+worker-specific checkout/runtime paths. The gitignored ``LOCAL_NOTES.md`` and
+environment variables only select the shared root and local machine behavior,
+never product source.
 """
 
 from __future__ import annotations

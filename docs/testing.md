@@ -123,10 +123,27 @@ worker SDK and machine-local `LOCAL_NOTES.md` configuration are available. It
 automatically falls back to the local Playwright run when that setup is absent,
 unreachable, or fails remote checkout preflight. Linux workers are currently
 excluded. Use `npm run test:e2e:remote` when remote execution is required and a
-missing or unusable remote setup should fail the command. Machine-specific
-paths, worker identities, and credentials belong only in the gitignored
-`LOCAL_NOTES.md`; the product source dynamically links the shared SDK when it
-is present and does not vendor or name a private inventory repository.
+missing or unusable remote setup should fail the command. The gitignored
+`LOCAL_NOTES.md` selects the shared root, project name, and local lane. Worker
+checkout/runtime settings belong in the shared project's private
+`projects/dropbox_browser.json`; credentials remain in the shared worker
+checkout. The product source dynamically links the shared SDK when it is
+present and does not vendor or name a private inventory repository.
+
+Before an actual remote run, set the coordination owner (the local notes may
+also provide `coord_owner`):
+
+```powershell
+$env:SPTMP2_COORD_OWNER = "dropbox_browser"
+python tools/run_distributed_e2e.py
+```
+
+The runner claims each selected worker for a bounded interval before remote
+preflight, passes the owner through availability checks, and releases leases
+when the run ends. `--dry-run` does not claim resources. Use
+`python -m network_computers.cli coord status` to inspect the shared board;
+maintenance should use `coord offline set`. Never force another project's
+lease before its recorded `force_after` time.
 
 The Playwright harness launches `python -m dropbox_browser.cli` with an
 isolated `--local-root` through `tests/e2e/support/run_server.py` plus
