@@ -14,7 +14,8 @@ under the requested folder and returns:
 - `songs` and `items` — the same audio rows, retained for music and shared UI
   compatibility;
 - `status` — cache state, pending/queued/missing counts, and snapshot timing;
-- `supported_extensions` — `.mp3`, `.m4a`, `.aac`, and `.wav`.
+- `supported_extensions` — `.mp3`, `.m4a`, `.m4b`, `.aac`, `.wav`, `.ogg`,
+  `.oga`, `.opus`, and `.flac`.
 
 The library is remote-only and cache-backed. It does not recurse live on every
 poll. The client starts with **Load Current Folder**, then polls while folder
@@ -77,12 +78,14 @@ parses:
 
 - ID3 title/artist text for MP3;
 - RIFF/WAV metadata;
-- MP4/M4A metadata atoms, including a tail range when needed.
+- MP4/M4A/M4B metadata atoms, including a tail range when needed.
+- Vorbis comments and embedded pictures for Ogg Vorbis, Opus, and FLAC.
 
-Embedded artwork extraction supports ID3 APIC and MP4 cover atoms for browser
-supported image MIME types. Artwork is held as a temporary object URL and is
-revoked when the song changes. Metadata and artwork are best-effort; playback
-does not depend on them.
+Embedded artwork extraction supports ID3 APIC, MP4 cover atoms, and the
+Vorbis/FLAC `METADATA_BLOCK_PICTURE` comment/block for browser-supported image
+MIME types. Artwork is held as a temporary object URL and is revoked when the
+song changes. Metadata and artwork are best-effort; playback does not depend
+on them.
 
 ## Waveform visualization
 

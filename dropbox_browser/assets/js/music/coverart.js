@@ -32,6 +32,162 @@ function concatBytes(buffers) {
   return result;
 }
 
+function readTagUint32Le(bytes, offset) {
+  if (offset < 0 || offset + 4 > bytes.length) return null;
+  return ((bytes[offset]) |
+    (bytes[offset + 1] << 8) |
+    (bytes[offset + 2] << 16) |
+    (bytes[offset + 3] << 24)) >>> 0;
+}
+
+function readTagUint32Be(bytes, offset) {
+  if (offset < 0 || offset + 4 > bytes.length) return null;
+  return ((bytes[offset] << 24) >>> 0) |
+    (bytes[offset + 1] << 16) |
+    (bytes[offset + 2] << 8) |
+    bytes[offset + 3];
+}
+
+function hasTagSignature(bytes, offset, signature) {
+  if (offset < 0 || offset + signature.length > bytes.length) return false;
+  for (var index = 0; index < signature.length; index += 1) {
+    if (bytes[offset + index] !== signature[index]) return false;
+  }
+  return true;
+}
+
+function tagSignatureBytes(text) {
+  return Array.from(text).map(function (character) { return character.charCodeAt(0); });
+}
+
+function decodeTagBase64(value) {
+  var binary;
+  var bytes;
+  if (!value || typeof atob !== 'function') return null;
+  try {
+    binary = atob(String(value).replace(/\s+/g, ''));
+  } catch (_error) {
+    return null;
+  }
+  bytes = new Uint8Array(binary.length);
+  for (var index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+function parseTagPictureBlock(bytes) {
+  var offset = 0;
+  var mimeLength;
+  var descriptionLength;
+  var dataLength;
+  var mime;
+  if (!bytes || bytes.length < 32) return null;
+  if (readTagUint32Be(bytes, offset) === null) return null;
+  offset += 4;
+  mimeLength = readTagUint32Be(bytes, offset);
+  if (mimeLength === null || offset + 4 + mimeLength > bytes.length) return null;
+  offset += 4;
+  mime = decodeLatin1(bytes.slice(offset, offset + mimeLength)).trim();
+  offset += mimeLength;
+  descriptionLength = readTagUint32Be(bytes, offset);
+  if (descriptionLength === null || offset + 4 + descriptionLength > bytes.length) return null;
+  offset += 4 + descriptionLength;
+  if (offset + 16 > bytes.length) return null;
+  offset += 16;
+  dataLength = readTagUint32Be(bytes, offset);
+  if (dataLength === null || offset + 4 + dataLength > bytes.length) return null;
+  offset += 4;
+  if (!dataLength) return null;
+  return {
+    mime: mime || 'application/octet-stream',
+    bytes: bytes.slice(offset, offset + dataLength)
+  };
+}
+
+function parseTagCommentPayload(bytes, offset) {
+  var vendorLength;
+  var commentCount;
+  var legacyArt = null;
+  var legacyArtMime = '';
+  var parsedArt = null;
+  var comment;
+  var equals;
+  var key;
+  var value;
+  if (offset < 0) return null;
+  vendorLength = readTagUint32Le(bytes, offset);
+  if (vendorLength === null || offset + 4 + vendorLength > bytes.length) return null;
+  offset += 4 + vendorLength;
+  commentCount = readTagUint32Le(bytes, offset);
+  if (commentCount === null) return null;
+  offset += 4;
+  for (var index = 0; index < commentCount; index += 1) {
+    var commentLength = readTagUint32Le(bytes, offset);
+    if (commentLength === null || offset + 4 + commentLength > bytes.length) break;
+    offset += 4;
+    comment = new TextDecoder('utf-8').decode(bytes.slice(offset, offset + commentLength)).replace(/\u0000+$/g, '').trim();
+    offset += commentLength;
+    equals = comment.indexOf('=');
+    if (equals <= 0) continue;
+    key = comment.slice(0, equals).toUpperCase();
+    value = comment.slice(equals + 1).trim();
+    if (key === 'METADATA_BLOCK_PICTURE' && !parsedArt) parsedArt = parseTagPictureBlock(decodeTagBase64(value));
+    if (key === 'COVERART' && !legacyArt) legacyArt = decodeTagBase64(value);
+    if (key === 'COVERARTMIME') legacyArtMime = value;
+  }
+  if (!parsedArt && legacyArt && legacyArt.length) {
+    parsedArt = {mime: legacyArtMime || 'application/octet-stream', bytes: legacyArt};
+  }
+  return parsedArt;
+}
+
+function extractOggOrFlacArtFromBuffers(extension, buffers) {
+  var ext = String(extension || '').toLowerCase();
+  var bytes = buffers && buffers.length === 1 ? buffers[0] : concatBytes(buffers || []);
+  var parsed;
+  var offset;
+  var header;
+  var blockType;
+  var blockLength;
+  var blockStart;
+  var blockEnd;
+  var vorbisSignature = tagSignatureBytes('\u0003vorbis');
+  var opusSignature = tagSignatureBytes('OpusTags');
+  if (ext === '.flac') {
+    if (!hasTagSignature(bytes, 0, tagSignatureBytes('fLaC'))) return null;
+    offset = 4;
+    while (offset + 4 <= bytes.length) {
+      header = bytes[offset];
+      blockType = header & 0x7F;
+      blockLength = (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3];
+      blockStart = offset + 4;
+      blockEnd = blockStart + blockLength;
+      if (blockEnd > bytes.length) break;
+      if (blockType === 6) {
+        parsed = parseTagPictureBlock(bytes.slice(blockStart, blockEnd));
+        if (parsed) return parsed;
+      } else if (blockType === 4) {
+        parsed = parseTagCommentPayload(bytes, blockStart);
+        if (parsed) return parsed;
+      }
+      offset = blockEnd;
+      if (header & 0x80) break;
+    }
+    return null;
+  }
+  if (ext !== '.ogg' && ext !== '.oga' && ext !== '.opus') return null;
+  for (offset = 0; offset < bytes.length; offset += 1) {
+    if (hasTagSignature(bytes, offset, vorbisSignature)) {
+      parsed = parseTagCommentPayload(bytes, offset + vorbisSignature.length);
+    } else if (hasTagSignature(bytes, offset, opusSignature)) {
+      parsed = parseTagCommentPayload(bytes, offset + opusSignature.length);
+    } else {
+      continue;
+    }
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
 export function supportedArtMime(mime) {
   return mime === 'image/jpeg' || mime === 'image/png' || mime === 'image/gif' || mime === 'image/webp';
 }
@@ -138,9 +294,12 @@ export function extractEmbeddedArtFromBuffers(extension, buffers) {
   var ext = String(extension || '').toLowerCase();
   var art = null;
   if (!buffers || !buffers.length) return null;
+  if (ext === '.ogg' || ext === '.oga' || ext === '.opus' || ext === '.flac') {
+    return extractOggOrFlacArtFromBuffers(ext, buffers);
+  }
   buffers.some(function (bytes) {
     if (ext === '.mp3') art = extractId3ArtFromTagBytes(bytes);
-    else if (ext === '.m4a' || ext === '.aac' || ext === '.mp4') art = extractMp4ArtFromBytes(bytes);
+    else if (ext === '.m4a' || ext === '.m4b' || ext === '.aac' || ext === '.mp4') art = extractMp4ArtFromBytes(bytes);
     return !!art;
   });
   return art;
@@ -156,6 +315,9 @@ export async function resolveCoverArtFromMetadata(options) {
   var remainingTagBytes;
 
   if (initialArt) return initialArt;
+  if (extension === '.ogg' || extension === '.oga' || extension === '.opus' || extension === '.flac') {
+    return extractOggOrFlacArtFromBuffers(extension, initialBuffers);
+  }
   if (extension !== '.mp3' || !initialBuffers.length || !probeSize) return null;
 
   firstChunk = initialBuffers[0];

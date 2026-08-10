@@ -409,7 +409,13 @@ class RequestHandler(BaseHTTPRequestHandler):
         video_session_id = params.get("video_session_id", [""])[0].strip() or None
         tagged_request = source != "local" and video_session_id is not None
         name = Path(rel_path).name
-        content_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
+        content_type = {
+            ".flac": "audio/flac",
+            ".m4b": "audio/mp4",
+            ".oga": "audio/ogg",
+            ".ogg": "audio/ogg",
+            ".opus": "audio/ogg",
+        }.get(Path(name).suffix.casefold()) or mimetypes.guess_type(name)[0] or "application/octet-stream"
         disposition = "inline" if inline else "attachment"
 
         if source == "local" and self.app.local_root:

@@ -48,7 +48,7 @@ export function classifyFileSearchTypeGroup(row) {
   var typeLabel = filenameCompareKey(row && row.type_label ? row.type_label : '');
   if (row && row.kind === 'folder') return 'other';
   if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif', 'tiff', 'heic', 'avif', 'svg'].indexOf(ext) >= 0) return 'images';
-  if (['mp3', 'm4a', 'flac', 'wav', 'ogg', 'aac', 'wma', 'mid', 'midi'].indexOf(ext) >= 0 || typeLabel === 'audio') return 'audio';
+  if (['mp3', 'm4a', 'm4b', 'flac', 'wav', 'ogg', 'oga', 'opus', 'aac', 'wma', 'mid', 'midi'].indexOf(ext) >= 0 || typeLabel === 'audio') return 'audio';
   if (['mp4', 'm4v', 'mkv', 'mov', 'avi', 'webm', 'mpeg', 'mpg', 'wmv'].indexOf(ext) >= 0 || typeLabel === 'video') return 'video';
   if (['pdf', 'doc', 'docx', 'odt', 'rtf', 'txt', 'text', 'md', 'markdown', 'csv', 'tsv', 'xls', 'xlsx', 'ods', 'odp', 'ppt', 'pptx'].indexOf(ext) >= 0 ||
       ['pdf', 'word', 'document', 'table', 'markdown'].indexOf(typeLabel) >= 0) return 'documents';

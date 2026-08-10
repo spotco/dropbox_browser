@@ -1,5 +1,19 @@
 import {setTextOrFallback} from '../media-library/shared.js';
 import {resolveCoverArtFromMetadata, supportedArtMime} from './coverart.js';
+import {flacMetadataEndOffset, parseOggOrFlacMetadata} from './audio-tags.js';
+
+function concatBytes(buffers) {
+  var totalLength = 0;
+  var offset = 0;
+  var result;
+  (buffers || []).forEach(function (bytes) { totalLength += bytes.length; });
+  result = new Uint8Array(totalLength);
+  (buffers || []).forEach(function (bytes) {
+    result.set(bytes, offset);
+    offset += bytes.length;
+  });
+  return result;
+}
 
 export function createMetadataController(ctx) {
   var els = ctx.els;
@@ -122,6 +136,11 @@ export function createMetadataController(ctx) {
       chars.push(String.fromCharCode(value));
     });
     return chars.join('').replace(/\u0000+$/g, '');
+  }
+
+  function readAtomSize(bytes, offset) {
+    return ((bytes[offset] << 24) >>> 0) + (bytes[offset + 1] << 16) +
+      (bytes[offset + 2] << 8) + bytes[offset + 3];
   }
 
   function decodeUtf16(bytes, littleEndian) {
@@ -290,7 +309,23 @@ export function createMetadataController(ctx) {
   async function fetchMetadataBytes(url, extension) {
     var firstChunk = await fetchRangeBytes(url, 0, state.metadataChunkSize - 1);
     var ext = String(extension || '').toLowerCase();
-    if (ext !== '.m4a' || firstChunk.length < state.metadataChunkSize) return [firstChunk];
+    var flacBuffers;
+    var flacBytes;
+    var flacEnd;
+    var flacNext;
+    if (ext === '.flac' && firstChunk.length) {
+      flacBuffers = [firstChunk];
+      flacBytes = firstChunk;
+      flacEnd = flacMetadataEndOffset(flacBytes);
+      while (Number.isFinite(flacEnd) && flacEnd > flacBytes.length) {
+        flacNext = await fetchRangeBytes(url, flacBytes.length, flacEnd - 1);
+        flacBuffers.push(flacNext);
+        flacBytes = concatBytes(flacBuffers);
+        flacEnd = flacMetadataEndOffset(flacBytes);
+      }
+      return flacBuffers;
+    }
+    if ((ext !== '.m4a' && ext !== '.m4b') || firstChunk.length < state.metadataChunkSize) return [firstChunk];
     var contentLength = await fetchHeadContentLength(url);
     var start;
     if (!Number.isFinite(contentLength) || contentLength <= firstChunk.length) return [firstChunk];
@@ -302,11 +337,14 @@ export function createMetadataController(ctx) {
   function parseMetadataBuffers(buffers, extension) {
     var ext = String(extension || '').toLowerCase();
     var parsed = {title: '', artist: ''};
+    if (ext === '.ogg' || ext === '.oga' || ext === '.opus' || ext === '.flac') {
+      return parseOggOrFlacMetadata(ext, [concatBytes(buffers || [])]);
+    }
     buffers.forEach(function (bytes) {
       var next = {title: '', artist: ''};
       if (ext === '.mp3') next = parseId3Metadata(bytes);
       else if (ext === '.wav') next = parseWavInfoMetadata(bytes);
-      else if (ext === '.m4a' || ext === '.aac' || ext === '.mp4') next = parseMp4Metadata(bytes);
+      else if (ext === '.m4a' || ext === '.m4b' || ext === '.aac' || ext === '.mp4') next = parseMp4Metadata(bytes);
       if (!parsed.title && next.title) parsed.title = next.title;
       if (!parsed.artist && next.artist) parsed.artist = next.artist;
     });
@@ -323,7 +361,8 @@ export function createMetadataController(ctx) {
 
   function songMayHaveEmbeddedArt(song) {
     var extension = metadataExtension(song);
-    return extension === '.mp3' || extension === '.m4a' || extension === '.aac' || extension === '.mp4';
+    return extension === '.mp3' || extension === '.m4a' || extension === '.m4b' || extension === '.aac' || extension === '.mp4' ||
+      extension === '.ogg' || extension === '.oga' || extension === '.opus' || extension === '.flac';
   }
 
   function maybeResolveCoverArt(song, requestId, extension, buffers) {
