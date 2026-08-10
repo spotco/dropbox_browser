@@ -319,7 +319,9 @@ class IsolatedPathsTestCase(unittest.TestCase):
             self.addCleanup(patcher.stop)
 
     def create_local_root(self, files: dict[str, bytes | str | None]) -> Path:
-        root = self.root / "local"
+        # Resolve so path strings match DropboxBrowser.local_root (also resolved).
+        # On macOS, tempfile paths under /var/... canonicalize to /private/var/....
+        root = (self.root / "local").resolve()
         root.mkdir(parents=True, exist_ok=True)
         for rel_path, contents in files.items():
             path = root.joinpath(*rel_path.split("/"))

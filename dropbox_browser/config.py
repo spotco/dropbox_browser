@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,13 +19,17 @@ MUSIC_WAVEFORM_MAX_RESOLUTION_DEFAULT = 256
 MUSIC_WAVEFORM_MAX_RESOLUTION_MIN = 64
 MUSIC_WAVEFORM_MAX_RESOLUTION_MAX = 512
 THUMBNAIL_CACHE_DIR = PROJECT_ROOT / "ThumbnailCache"
+TOOLS_EXTRACT_ROOT = PROJECT_ROOT / ".tools"
 VENDORED_MAGICK_EXE = PROJECT_ROOT / "ImageMagick" / "magick.exe"
 VENDORED_FFMPEG_EXE = PROJECT_ROOT / "FFmpeg" / "bin" / "ffmpeg.exe"
 VENDORED_FFPROBE_EXE = PROJECT_ROOT / "FFmpeg" / "bin" / "ffprobe.exe"
+# Legacy Intel macOS layout from the osx-intel branch (pre-pack).
+LEGACY_OSX_INTEL_BIN = PROJECT_ROOT / "tools" / "osx-intel" / "bin"
 
 _APP_CONFIG_DEFAULTS: dict = {
     "DropboxFolder": "./DropboxLocal",
     "RCloneConfig": "",
+    "MagickPath": "",
     "FFMpegPath": "",
     "FFProbePath": "",
     "VideoFFmpegReadRate": 1.1,
@@ -195,11 +201,70 @@ def load_app_config() -> dict:
     )
 
 
+def runtime_platform_id() -> str | None:
+    """Return the tool-pack platform id for this host, or None if unsupported."""
+    system = sys.platform
+    machine = platform.machine().lower()
+    if system == "win32":
+        if machine in {"amd64", "x86_64", "x64", ""}:
+            return "windows-x64"
+        return None
+    if system == "darwin":
+        if machine in {"x86_64", "amd64"}:
+            return "darwin-x64"
+        if machine in {"arm64", "aarch64"}:
+            return "darwin-arm64"
+        return None
+    if system.startswith("linux"):
+        if machine in {"x86_64", "amd64"}:
+            return "linux-x64"
+        if machine in {"aarch64", "arm64"}:
+            return "linux-arm64"
+        return None
+    return None
+
+
+def tools_platform_root() -> Path | None:
+    """Return ``.tools/<platform>/`` when a bootstrapped pack is present."""
+    platform_id = runtime_platform_id()
+    if not platform_id:
+        return None
+    path = TOOLS_EXTRACT_ROOT / platform_id
+    if path.is_dir():
+        return path
+    return None
+
+
+def _first_existing_path(candidates: list[Path]) -> Path | None:
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+    return None
+
+
 def find_default_rclone() -> str:
+    pack_root = tools_platform_root()
+    if pack_root is not None:
+        packed = _first_existing_path(
+            [
+                pack_root / "rclone.exe",
+                pack_root / "rclone",
+                pack_root / "bin" / "rclone.exe",
+                pack_root / "bin" / "rclone",
+            ]
+        )
+        if packed is not None:
+            return str(packed)
+
     local = PROJECT_ROOT / "rclone.exe"
     if local.exists():
         return str(local)
-    found = shutil.which("rclone")
+
+    legacy_osx = LEGACY_OSX_INTEL_BIN / "rclone"
+    if legacy_osx.exists():
+        return str(legacy_osx.resolve())
+
+    found = shutil.which("rclone.exe" if os.name == "nt" else "rclone")
     return found or "rclone"
 
 
@@ -208,6 +273,13 @@ def _rclone_default_config() -> Path | None:
     appdata = os.environ.get("APPDATA")
     if appdata:
         return Path(appdata) / "rclone" / "rclone.conf"
+    # POSIX default (~/.config/rclone/rclone.conf).
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg:
+        return Path(xdg) / "rclone" / "rclone.conf"
+    home = os.environ.get("HOME")
+    if home:
+        return Path(home) / ".config" / "rclone" / "rclone.conf"
     return None
 
 
@@ -215,7 +287,10 @@ def find_default_config() -> str | None:
     value = load_app_config().get("RCloneConfig", "").strip()
     if not value:
         return None
-    resolved = Path(os.path.expandvars(value)).resolve()
+    # Packaged Windows %APPDATA% paths are not meaningful on POSIX hosts.
+    if os.name != "nt" and (value.startswith("%") or "\\" in value):
+        return None
+    resolved = Path(os.path.expandvars(value)).expanduser().resolve()
     default = _rclone_default_config()
     if default is not None and resolved == default.resolve():
         return None  # matches rclone's own default; omit --config
@@ -234,20 +309,66 @@ def find_dropbox_folder(app_config: dict | None = None) -> Path:
 
 
 def find_vendored_magick() -> Path | None:
+    pack_root = tools_platform_root()
+    if pack_root is not None:
+        packed = _first_existing_path(
+            [
+                pack_root / "ImageMagick" / "magick.exe",
+                pack_root / "ImageMagick" / "magick",
+                pack_root / "bin" / "magick",
+                pack_root / "magick",
+                pack_root / "magick.exe",
+            ]
+        )
+        if packed is not None:
+            return packed
     if VENDORED_MAGICK_EXE.exists():
         return VENDORED_MAGICK_EXE
+    legacy_osx = LEGACY_OSX_INTEL_BIN / "magick"
+    if legacy_osx.exists():
+        return legacy_osx.resolve()
     return None
 
 
 def find_vendored_ffmpeg() -> Path | None:
+    pack_root = tools_platform_root()
+    if pack_root is not None:
+        packed = _first_existing_path(
+            [
+                pack_root / "ffmpeg.exe",
+                pack_root / "ffmpeg",
+                pack_root / "bin" / "ffmpeg.exe",
+                pack_root / "bin" / "ffmpeg",
+            ]
+        )
+        if packed is not None:
+            return packed
     if VENDORED_FFMPEG_EXE.exists():
         return VENDORED_FFMPEG_EXE
+    legacy_osx = LEGACY_OSX_INTEL_BIN / "ffmpeg"
+    if legacy_osx.exists():
+        return legacy_osx.resolve()
     return None
 
 
 def find_vendored_ffprobe() -> Path | None:
+    pack_root = tools_platform_root()
+    if pack_root is not None:
+        packed = _first_existing_path(
+            [
+                pack_root / "ffprobe.exe",
+                pack_root / "ffprobe",
+                pack_root / "bin" / "ffprobe.exe",
+                pack_root / "bin" / "ffprobe",
+            ]
+        )
+        if packed is not None:
+            return packed
     if VENDORED_FFPROBE_EXE.exists():
         return VENDORED_FFPROBE_EXE
+    legacy_osx = LEGACY_OSX_INTEL_BIN / "ffprobe"
+    if legacy_osx.exists():
+        return legacy_osx.resolve()
     return None
 
 
@@ -449,7 +570,13 @@ def load_video_tools_config(app_config: dict | None = None) -> VideoToolsConfig:
 def load_thumbnail_config(app_config: dict | None = None) -> ThumbnailConfig:
     config = app_config if app_config is not None else load_app_config()
     configured_enabled = bool(config.get("ThumbnailEnabled", _APP_CONFIG_DEFAULTS["ThumbnailEnabled"]))
-    magick_exe = find_vendored_magick()
+    configured_magick = _resolve_configured_tool_path(config.get("MagickPath"))
+    magick_name = "magick.exe" if os.name == "nt" else "magick"
+    magick_exe = _discover_tool(
+        magick_name,
+        configured_path=configured_magick,
+        vendored_path=find_vendored_magick(),
+    )
     return ThumbnailConfig(
         enabled=bool(configured_enabled and magick_exe is not None),
         configured_enabled=configured_enabled,

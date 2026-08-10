@@ -144,7 +144,11 @@ class ConfigDefaultsTests(unittest.TestCase):
 
 class ThumbnailConfigTests(unittest.TestCase):
     def test_find_vendored_magick_returns_none_when_missing(self) -> None:
-        with patch.object(config_module, "VENDORED_MAGICK_EXE", Path("Z:/missing/ImageMagick/magick.exe")):
+        with (
+            patch.object(config_module, "tools_platform_root", return_value=None),
+            patch.object(config_module, "VENDORED_MAGICK_EXE", Path("Z:/missing/ImageMagick/magick.exe")),
+            patch.object(config_module, "LEGACY_OSX_INTEL_BIN", Path("Z:/missing/osx-intel/bin")),
+        ):
             self.assertIsNone(config_module.find_vendored_magick())
 
     def test_find_vendored_magick_returns_path_when_present(self) -> None:
@@ -152,8 +156,26 @@ class ThumbnailConfigTests(unittest.TestCase):
             magick_exe = Path(temp_dir) / "ImageMagick" / "magick.exe"
             magick_exe.parent.mkdir(parents=True, exist_ok=True)
             magick_exe.write_bytes(b"")
-            with patch.object(config_module, "VENDORED_MAGICK_EXE", magick_exe):
+            with (
+                patch.object(config_module, "tools_platform_root", return_value=None),
+                patch.object(config_module, "VENDORED_MAGICK_EXE", magick_exe),
+            ):
                 self.assertEqual(config_module.find_vendored_magick(), magick_exe)
+
+    def test_find_vendored_magick_prefers_tool_pack(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pack_root = Path(temp_dir) / "windows-x64"
+            packed = pack_root / "ImageMagick" / "magick.exe"
+            packed.parent.mkdir(parents=True, exist_ok=True)
+            packed.write_bytes(b"")
+            legacy = Path(temp_dir) / "legacy" / "magick.exe"
+            legacy.parent.mkdir(parents=True, exist_ok=True)
+            legacy.write_bytes(b"")
+            with (
+                patch.object(config_module, "tools_platform_root", return_value=pack_root),
+                patch.object(config_module, "VENDORED_MAGICK_EXE", legacy),
+            ):
+                self.assertEqual(config_module.find_vendored_magick(), packed.resolve())
 
     def test_load_thumbnail_config_disables_when_magick_missing(self) -> None:
         app_config = {
@@ -184,12 +206,32 @@ class ThumbnailConfigTests(unittest.TestCase):
 
 class VideoToolsConfigTests(unittest.TestCase):
     def test_find_vendored_ffmpeg_returns_none_when_missing(self) -> None:
-        with patch.object(config_module, "VENDORED_FFMPEG_EXE", Path("Z:/missing/FFmpeg/bin/ffmpeg.exe")):
+        with (
+            patch.object(config_module, "tools_platform_root", return_value=None),
+            patch.object(config_module, "VENDORED_FFMPEG_EXE", Path("Z:/missing/FFmpeg/bin/ffmpeg.exe")),
+            patch.object(config_module, "LEGACY_OSX_INTEL_BIN", Path("Z:/missing/osx-intel/bin")),
+        ):
             self.assertIsNone(config_module.find_vendored_ffmpeg())
 
     def test_find_vendored_ffprobe_returns_none_when_missing(self) -> None:
-        with patch.object(config_module, "VENDORED_FFPROBE_EXE", Path("Z:/missing/FFmpeg/bin/ffprobe.exe")):
+        with (
+            patch.object(config_module, "tools_platform_root", return_value=None),
+            patch.object(config_module, "VENDORED_FFPROBE_EXE", Path("Z:/missing/FFmpeg/bin/ffprobe.exe")),
+            patch.object(config_module, "LEGACY_OSX_INTEL_BIN", Path("Z:/missing/osx-intel/bin")),
+        ):
             self.assertIsNone(config_module.find_vendored_ffprobe())
+
+    def test_find_default_rclone_prefers_tool_pack(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pack_root = Path(temp_dir) / "windows-x64"
+            packed = pack_root / "rclone.exe"
+            packed.parent.mkdir(parents=True, exist_ok=True)
+            packed.write_bytes(b"")
+            with (
+                patch.object(config_module, "tools_platform_root", return_value=pack_root),
+                patch.object(config_module.shutil, "which", return_value=None),
+            ):
+                self.assertEqual(config_module.find_default_rclone(), str(packed.resolve()))
 
     def test_load_video_tools_config_prefers_vendored_binaries(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -199,6 +241,7 @@ class VideoToolsConfigTests(unittest.TestCase):
             ffmpeg_exe.write_bytes(b"")
             ffprobe_exe.write_bytes(b"")
             with (
+                patch.object(config_module, "tools_platform_root", return_value=None),
                 patch.object(config_module, "VENDORED_FFMPEG_EXE", ffmpeg_exe),
                 patch.object(config_module, "VENDORED_FFPROBE_EXE", ffprobe_exe),
                 patch.object(config_module.shutil, "which", return_value=None),

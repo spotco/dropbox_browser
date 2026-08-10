@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from http import HTTPStatus
@@ -127,7 +128,8 @@ class WebUiTests(AppTestCase):
 
         local_root_prefix = str(local_root.parent)
         if local_root_prefix and local_root_prefix != "." and not local_root_prefix.endswith(("\\", "/")):
-            local_root_prefix += "\\"
+            local_root_prefix += os.sep
+        # Breadcrumb join is always " \ " (space-backslash-space), independent of OS path sep.
         self.assertIn(
             f'<div class="meta">{local_root_prefix} <a href="/">{local_root.name}</a> \\ <a href="/?path=music">music</a> \\ <a href="/?path=music%2Fmixes">mixes</a></div>',
             html,

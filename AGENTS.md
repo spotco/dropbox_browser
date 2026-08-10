@@ -9,10 +9,13 @@ and renders a client-rendered browse shell with optional media panes.
 Start locally:
 
 ```powershell
+setup_windows.bat
 python dropbox_browser.py --remote dropbox:
 ```
 
-Default URL: `http://127.0.0.1:8000/`.
+`setup_windows.bat` / `setup_osx_intel.sh` download only this machine's platform
+tool pack from the GitHub `tools-v1` release into `.tools/`. Default URL:
+`http://127.0.0.1:8000/`.
 
 ## Read before editing
 
@@ -189,8 +192,9 @@ Python, JavaScript, CSS, templates, fixtures, or generated runtime state.
 - For an explicit commit/push request, inspect the current branch and status,
   stage only intended files, use a focused commit, and push the current branch
   to `origin`. Do not use GitHub CLI or create a PR unless explicitly asked.
-- `rclone.exe` is tracked and large. Do not rewrite history or remove it unless
-  asked.
+- Platform tool packs ship on the GitHub `tools-v1` release; rebuild/upload with
+  `python tools/build_tool_packs.py --publish` (needs `gh` auth). Do not rewrite
+  history or remove in-repo binaries unless asked.
 - Do not probe or remove `.git/index.lock` unless a Git command actually fails
   with that exact error; if so, verify no Git process is live and remove only
   the repository's lock before retrying.

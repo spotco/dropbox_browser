@@ -59,6 +59,9 @@ def main() -> int:
     os.environ["DROPBOX_BROWSER_FAKE_RCLONE_CALL_LOG"] = str(temp_root / "fake-rclone-calls.jsonl")
     os.environ["DROPBOX_BROWSER_FAKE_RCLONE_STATE"] = str(temp_root / "fake-rclone-state.json")
 
+    # Windows uses the .cmd wrapper; POSIX runs the Python fake rclone directly.
+    fake_rclone = repo_root / "tests" / ("fake_rclone.cmd" if os.name == "nt" else "fake_rclone.py")
+
     sys.argv = [
         str(Path(__file__).resolve()),
         "--host",
@@ -68,7 +71,7 @@ def main() -> int:
         "--remote",
         "dropbox:",
         "--rclone",
-        str(repo_root / "tests" / "fake_rclone.cmd"),
+        str(fake_rclone),
         "--local-root",
         str(local_root),
     ]

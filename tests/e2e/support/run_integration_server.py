@@ -16,8 +16,14 @@ from urllib.parse import parse_qs, urlparse
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
-VENDORED_FFMPEG_EXE = REPO_ROOT / "FFmpeg" / "bin" / "ffmpeg.exe"
-VENDORED_FFPROBE_EXE = REPO_ROOT / "FFmpeg" / "bin" / "ffprobe.exe"
+from tests.e2e.support.media_tools import resolve_ffmpeg, resolve_ffprobe
+
+try:
+    VENDORED_FFMPEG_EXE = resolve_ffmpeg(REPO_ROOT)
+    VENDORED_FFPROBE_EXE = resolve_ffprobe(REPO_ROOT)
+except FileNotFoundError:
+    VENDORED_FFMPEG_EXE = REPO_ROOT / "FFmpeg" / "bin" / "ffmpeg.exe"
+    VENDORED_FFPROBE_EXE = REPO_ROOT / "FFmpeg" / "bin" / "ffprobe.exe"
 
 import dropbox_browser.config as config_module
 import dropbox_browser.foldercache as foldercache_module

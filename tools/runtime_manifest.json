@@ -1,0 +1,20 @@
+{
+  "format": "dropbox-browser-tool-packs-v1",
+  "release_tag": "tools-v1",
+  "repository": "spotco/dropbox_browser",
+  "base_url": "https://github.com/spotco/dropbox_browser/releases/download/tools-v1",
+  "platforms": {
+    "windows-x64": {
+      "asset": "dropbox-browser-tools-windows-x64-v1.zip",
+      "sha256": "66b0c09de22f6eb951fe117f3c847030daaa735470d9aa462722c29968599f81",
+      "size_bytes": 189345358,
+      "url": "https://github.com/spotco/dropbox_browser/releases/download/tools-v1/dropbox-browser-tools-windows-x64-v1.zip"
+    },
+    "darwin-x64": {
+      "asset": "dropbox-browser-tools-darwin-x64-v1.zip",
+      "sha256": "d88049d9ea9d7657c1f9aaf445f8858e1cf7b6b9455d4be10be2d8f46f5d6690",
+      "size_bytes": 216746139,
+      "url": "https://github.com/spotco/dropbox_browser/releases/download/tools-v1/dropbox-browser-tools-darwin-x64-v1.zip"
+    }
+  }
+}

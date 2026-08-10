@@ -7,7 +7,10 @@ const repoRoot = __dirname;
 module.exports = defineConfig({
   testDir: path.join(repoRoot, "tests", "e2e"),
   timeout: 10000,
+  // Keep e2e servers on fixed/default ports free of cross-worker collisions.
+  // Music/video integration servers pick their own ports; client-render shares 8010.
   fullyParallel: false,
+  workers: 1,
   use: {
     baseURL: `http://127.0.0.1:${port}`,
     trace: "on-first-retry",

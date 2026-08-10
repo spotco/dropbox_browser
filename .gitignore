@@ -18,3 +18,5 @@ mcps/
 misc/*.json
 terminals/
 debug.log
+.tools/
+tools-packs/

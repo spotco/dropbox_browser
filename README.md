@@ -12,13 +12,17 @@ playback, and a GPS Photo Map.
 ## Requirements
 
 - Python 3.10 or newer.
-- An `rclone` executable and a configured Dropbox remote. The repository ships
-  `rclone.exe` for Windows and prefers it automatically.
-- FFmpeg and FFprobe for video compatibility playback and video posters. The
-  repository's `FFmpeg/bin/` copy is preferred when present; `FFMpegPath` and
-  `FFProbePath` or the system `PATH` are fallback discovery options.
-- ImageMagick's `ImageMagick/magick.exe` for image thumbnails. Image thumbnails
-  are disabled when that vendored executable is unavailable.
+- Native tools: rclone, FFmpeg/FFprobe, and ImageMagick (`magick`). Install the
+  pack for **this platform only** from the GitHub `tools-v1` release:
+
+  ```powershell
+  python tools\bootstrap_tools.py
+  ```
+
+  Details: [tools/README.md](tools/README.md). Legacy in-repo Windows binaries
+  (`rclone.exe`, `FFmpeg/bin/`, `ImageMagick/`) still work until they are
+  removed. `FFMpegPath` / `FFProbePath` and `PATH` remain fallbacks. Image
+  thumbnails are disabled when no `magick` executable is discoverable.
 
 Useful upstream references:
 
@@ -31,7 +35,15 @@ Useful upstream references:
 ## Start the server
 
 ```powershell
+setup_windows.bat
 python dropbox_browser.py --remote dropbox:
+```
+
+On Intel macOS:
+
+```sh
+./setup_osx_intel.sh
+python3 dropbox_browser.py --remote dropbox:
 ```
 
 The default address is `http://127.0.0.1:8000/`. The equivalent module entry

@@ -22,7 +22,7 @@ are:
 | `--host` | `127.0.0.1` | Bind address. The separate `LocalhostOnlyAccess` check still rejects non-loopback clients by default. |
 | `--port` | `8000` | HTTP port. |
 | `--remote` | `dropbox:` | rclone remote root. |
-| `--rclone` | repository `rclone.exe`, then `PATH` | rclone executable. |
+| `--rclone` | `.tools/` pack, then repository `rclone.exe`, then `PATH` | rclone executable. |
 | `--rclone-config` | configured `RCloneConfig`, otherwise rclone's own default | rclone config path. |
 | `--local-root` | configured `DropboxFolder` | Local comparison root; the CLI option takes precedence. |
 | `--client-render` | enabled | Use the maintained client-rendered browse shell. `--no-client-render` is a legacy compatibility mode. |
@@ -47,13 +47,28 @@ the configured path exists as a file.
 
 ## Tool discovery
 
-`rclone` prefers the repository's `rclone.exe`, then a `PATH` executable, then
-the literal command name `rclone`. FFmpeg and FFprobe prefer the vendored files
-under `FFmpeg/bin/`, then configured `FFMpegPath`/`FFProbePath`, then adjacent
-FFmpeg/FFprobe executables, then `PATH`. If only one configured FFmpeg tool is
-given, the loader also looks for its sibling.
+Native tools (rclone, FFmpeg/FFprobe, ImageMagick) can come from a
+**platform tool pack** under `.tools/<platform-id>/`. Install the pack for this
+machine only with:
 
-Image thumbnails use only the vendored `ImageMagick/magick.exe`. The
+```text
+python tools/bootstrap_tools.py
+```
+
+That downloads one zip from the project's GitHub `tools-v1` release (see
+[`tools/README.md`](../tools/README.md) and
+[`tools/runtime_manifest.json`](../tools/runtime_manifest.json)). Linux packs
+are not published yet.
+
+Discovery order:
+
+1. Bootstrapped pack under `.tools/<platform-id>/` when present.
+2. Legacy in-repo Windows paths (`rclone.exe`, `FFmpeg/bin/`,
+   `ImageMagick/magick.exe`) and the older `tools/osx-intel/bin/` layout.
+3. Configured `FFMpegPath` / `FFProbePath` (and siblings), then `PATH`.
+
+`rclone` ultimately falls back to the command name `rclone` / `rclone.exe`.
+Image thumbnails require a discoverable `magick` executable. The
 `ThumbnailEnabled` setting controls whether the feature is requested, but the
 service is considered enabled only when that executable is present.
 

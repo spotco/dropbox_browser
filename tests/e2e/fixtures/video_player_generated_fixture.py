@@ -11,8 +11,15 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURES_DIR = Path(__file__).resolve().parent
-FFMPEG_EXE = REPO_ROOT / "FFmpeg" / "bin" / "ffmpeg.exe"
-FFPROBE_EXE = REPO_ROOT / "FFmpeg" / "bin" / "ffprobe.exe"
+sys.path.insert(0, str(REPO_ROOT))
+from tests.e2e.support.media_tools import resolve_ffmpeg, resolve_ffprobe  # noqa: E402
+
+try:
+    FFMPEG_EXE = resolve_ffmpeg(REPO_ROOT)
+    FFPROBE_EXE = resolve_ffprobe(REPO_ROOT)
+except FileNotFoundError:
+    FFMPEG_EXE = REPO_ROOT / "FFmpeg" / "bin" / "ffmpeg.exe"
+    FFPROBE_EXE = REPO_ROOT / "FFmpeg" / "bin" / "ffprobe.exe"
 BUNDLED_BITMAP_SAMPLE = FIXTURES_DIR / "fairy-tail-sample.sup"
 DEFAULT_BITMAP_SOURCE_URL = (
     "http://127.0.0.1:8000/file?"

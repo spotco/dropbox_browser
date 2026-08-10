@@ -1411,6 +1411,14 @@ class DropboxBrowser:
                 elif row["status"] == "dropbox_only":
                     item["size"] = row.get("remote_size", row.get("size", 0))
                     groups["dropbox_to_local"].append(item)
+        # Deterministic dir order across filesystems (macOS/Windows dir walk order differs).
+        # Deepest dirs first so parent/child mkdir plan order is stable.
+        def _dir_plan_key(item: dict[str, str]) -> tuple[int, str]:
+            path = str(item.get("path") or "")
+            return (-path.count("/"), path.casefold())
+
+        groups["local_dir_to_dropbox"].sort(key=_dir_plan_key)
+        groups["dropbox_dir_to_local"].sort(key=_dir_plan_key)
         return {
             "action": action,
             "recursive": recursive,

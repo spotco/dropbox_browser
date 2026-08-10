@@ -143,7 +143,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             return True
         normalized = host.split("%", 1)[0]
         try:
-            return ipaddress.ip_address(normalized).is_loopback
+            addr = ipaddress.ip_address(normalized)
         except ValueError:
             if normalized.startswith("::ffff:"):
                 try:
@@ -151,6 +151,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                 except ValueError:
                     return False
             return False
+        if addr.is_loopback:
+            return True
+        # IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1) is not is_loopback on some Pythons.
+        ipv4_mapped = getattr(addr, "ipv4_mapped", None)
+        return bool(ipv4_mapped is not None and ipv4_mapped.is_loopback)
 
     def _enforce_localhost_only_access(self) -> None:
         if not self.localhost_only_access:
@@ -409,13 +414,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         video_session_id = params.get("video_session_id", [""])[0].strip() or None
         tagged_request = source != "local" and video_session_id is not None
         name = Path(rel_path).name
-        content_type = {
-            ".flac": "audio/flac",
-            ".m4b": "audio/mp4",
-            ".oga": "audio/ogg",
-            ".ogg": "audio/ogg",
-            ".opus": "audio/ogg",
-        }.get(Path(name).suffix.casefold()) or mimetypes.guess_type(name)[0] or "application/octet-stream"
+        content_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
         disposition = "inline" if inline else "attachment"
 
         if source == "local" and self.app.local_root:

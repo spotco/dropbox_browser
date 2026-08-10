@@ -32,6 +32,13 @@ class ListingMergeNameTests(AppTestCase):
             f"music/{decomposed_local_name}": b"audio",
             f"music/{remote_name}": b"audio",
         })
+        music_dir = local_root / "music"
+        on_disk = {child.name for child in music_dir.iterdir()}
+        if len(on_disk) < 2:
+            self.skipTest(
+                "Filesystem collapses Unicode normalization variants into one name "
+                f"(got {sorted(on_disk)!r}); Windows keeps both forms."
+            )
         rclone = SimulatedRclone({
             "dropbox:music": [SimulatedLsjsonResponse(items=[
                 remote_file_item(remote_name, local_root / "music" / remote_name),
@@ -81,6 +88,13 @@ class ListingMergeNameTests(AppTestCase):
                     f"{rel_path}/{canonical_variant}": b"audio",
                     f"{rel_path}/{remote_name}": b"audio",
                 })
+                folder = local_root.joinpath(*rel_path.split("/"))
+                on_disk = {child.name for child in folder.iterdir()}
+                if len(on_disk) < 2:
+                    self.skipTest(
+                        "Filesystem collapses Unicode normalization variants into one name "
+                        f"(got {sorted(on_disk)!r}); Windows keeps both forms."
+                    )
                 remote_path = local_root.joinpath(*rel_path.split("/"), remote_name)
                 rclone = SimulatedRclone({
                     f"dropbox:{rel_path}": [SimulatedLsjsonResponse(items=[

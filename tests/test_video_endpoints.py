@@ -260,8 +260,9 @@ class VideoEndpointTests(AppTestCase):
         self.assertTrue(payload["ffprobe_available"])
         self.assertTrue(payload["compatibility_available"])
         self.assertFalse(payload["native_only"])
-        self.assertEqual(payload["ffmpeg_path"], "C:\\tools\\ffmpeg\\bin\\ffmpeg.exe")
-        self.assertEqual(payload["ffprobe_path"], "C:\\tools\\ffmpeg\\bin\\ffprobe.exe")
+        # Path str() uses OS separators; accept either form for cross-platform runs.
+        self.assertEqual(str(payload["ffmpeg_path"]).replace("\\", "/"), "C:/tools/ffmpeg/bin/ffmpeg.exe")
+        self.assertEqual(str(payload["ffprobe_path"]).replace("\\", "/"), "C:/tools/ffmpeg/bin/ffprobe.exe")
         self.assertEqual(payload["query_keys"], ["check"])
         self.assertEqual(payload["active_sessions"], [])
         self.assertEqual(payload["session_count"], 0)
@@ -580,7 +581,7 @@ class VideoEndpointTests(AppTestCase):
         self.assertFalse(payload["video_streams"][0]["hls_video_copy_compatible"])
         self.assertEqual(payload["video_streams"][0]["hls_video_copy_reason"], "video_codec_not_h264")
         ffprobe_cmd = run_mock.call_args.args[0]
-        self.assertEqual(ffprobe_cmd[0], "C:\\tools\\ffmpeg\\bin\\ffprobe.exe")
+        self.assertEqual(str(ffprobe_cmd[0]).replace("\\", "/"), "C:/tools/ffmpeg/bin/ffprobe.exe")
         self.assertIn("-probesize", ffprobe_cmd)
         self.assertIn(str(DEFAULT_PROBE_PROBE_SIZE_BYTES), ffprobe_cmd)
         self.assertIn("-analyzeduration", ffprobe_cmd)
@@ -599,9 +600,9 @@ class VideoEndpointTests(AppTestCase):
             analyze_duration_us=DEFAULT_PROBE_ANALYZE_DURATION_US,
         )
         self.assertEqual(
-            command,
+            [str(part).replace("\\", "/") for part in command],
             [
-                "C:\\tools\\ffmpeg\\bin\\ffprobe.exe",
+                "C:/tools/ffmpeg/bin/ffprobe.exe",
                 "-v",
                 "error",
                 "-probesize",
@@ -1285,7 +1286,7 @@ class VideoEndpointTests(AppTestCase):
         self.assertIsNone(payload["audio_stream_index"])
         self.assertIsNone(payload["subtitle_stream_index"])
         self.assertEqual(len(spawned), 1)
-        self.assertEqual(spawned[0].command[0], "C:\\tools\\ffmpeg\\bin\\ffmpeg.exe")
+        self.assertEqual(str(spawned[0].command[0]).replace("\\", "/"), "C:/tools/ffmpeg/bin/ffmpeg.exe")
         self.assertTrue(any(
             ("/file?path=movie.mp4&source=remote&video_session_id=" + payload["session_id"]) in part
             for part in spawned[0].command
@@ -3357,10 +3358,14 @@ class VideoEndpointTests(AppTestCase):
             popen_kwargs.append(dict(kwargs))
             return FakeFfmpegProcess(command)
 
+        # Patch the priority helper instead of os.name: swapping os.name to "nt" on
+        # POSIX makes pathlib.Path try to construct WindowsPath and breaks the suite.
         with (
             TestServer(app) as server,
-            patch("dropbox_browser.video.os.name", "nt"),
-            patch("dropbox_browser.video.subprocess.IDLE_PRIORITY_CLASS", 64, create=True),
+            patch(
+                "dropbox_browser.video.ffmpeg_popen_kwargs_for_priority",
+                return_value={"creationflags": 64},
+            ),
             patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen),
         ):
             server.post_json("/video/endpoints/session", {
