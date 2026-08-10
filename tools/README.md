@@ -41,7 +41,7 @@ python tools\bootstrap_tools.py --offline
 
 | Id | Status |
 | --- | --- |
-| `windows-x64` | Published from the Windows working tree |
+| `windows-x64` | rclone, ffmpeg/ffprobe, ImageMagick, **portable `python/`** |
 | `darwin-x64` | Published from the `osx-intel` branch `tools/osx-intel` tree (slimmed) |
 | `linux-x64` | Not yet |
 

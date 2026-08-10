@@ -7,6 +7,7 @@ Pack layout (zip root is the platform id):
     ffmpeg.exe
     ffprobe.exe
     ImageMagick/magick.exe   (+ xml/icc/licenses)
+    python/                  (portable CPython: python.exe + stdlib)
   darwin-x64/
     bin/rclone
     bin/ffmpeg

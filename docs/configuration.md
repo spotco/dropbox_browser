@@ -35,6 +35,7 @@ the configured path exists as a file.
 | Key | Default | Notes |
 | --- | --- | --- |
 | `DropboxFolder` | `./DropboxLocal` | Local tree compared with Dropbox. Empty or missing values fall back to `./DropboxLocal`; use `--local-root` to select another root for one run. |
+| `PythonPath` | empty (auto) | Interpreter for Windows launchers/helpers. Empty prefers `.tools/windows-x64/python/python.exe`, then repo `python/python.exe`, then `PATH`. Override with an absolute path or `DROPBOX_BROWSER_PYTHON`. |
 | `RCloneConfig` | empty | Environment-expanded path. A path equal to rclone's native default is omitted from the command. |
 | `LocalhostOnlyAccess` | `true` | Rejects requests whose peer is not a loopback address. This is an access boundary, not authentication or TLS. |
 | `CacheStaticAssets` | `true` | Sends one-hour public cache headers for HTML, CSS, JavaScript, icons, and other static assets. `false` restores no-store headers for development. |

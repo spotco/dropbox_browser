@@ -6,8 +6,8 @@
   "platforms": {
     "windows-x64": {
       "asset": "dropbox-browser-tools-windows-x64-v1.zip",
-      "sha256": "66b0c09de22f6eb951fe117f3c847030daaa735470d9aa462722c29968599f81",
-      "size_bytes": 189345358,
+      "sha256": "14b6b7d7b81b3c80f126f7b9b5c0ad3591ba4c12f4426ee3e16d1e7e433c52bb",
+      "size_bytes": 201341043,
       "url": "https://github.com/spotco/dropbox_browser/releases/download/tools-v1/dropbox-browser-tools-windows-x64-v1.zip"
     },
     "darwin-x64": {

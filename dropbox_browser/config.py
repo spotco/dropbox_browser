@@ -29,6 +29,8 @@ LEGACY_OSX_INTEL_BIN = PROJECT_ROOT / "tools" / "osx-intel" / "bin"
 _APP_CONFIG_DEFAULTS: dict = {
     "DropboxFolder": "./DropboxLocal",
     "RCloneConfig": "",
+    # Empty = auto-discover (prefer .tools/<platform>/python, then repo python/, then PATH).
+    "PythonPath": "",
     "MagickPath": "",
     "FFMpegPath": "",
     "FFProbePath": "",
@@ -240,6 +242,65 @@ def _first_existing_path(candidates: list[Path]) -> Path | None:
         if candidate.exists():
             return candidate.resolve()
     return None
+
+
+def default_tools_python_path() -> Path:
+    """Default relative portable Python path under the windows-x64 tool pack."""
+    return TOOLS_EXTRACT_ROOT / "windows-x64" / "python" / "python.exe"
+
+
+def find_python_exe(app_config: dict | None = None) -> str:
+    """Resolve the Python interpreter used by Windows launchers and helpers.
+
+    Order:
+    1. ``DROPBOX_BROWSER_PYTHON`` env (absolute path)
+    2. Config ``PythonPath`` when set
+    3. Bootstrapped ``.tools/windows-x64/python/python.exe`` (and POSIX pack shapes)
+    4. Legacy repo ``python/python.exe``
+    5. ``PATH`` (``python`` / ``python3``)
+    """
+    env_value = str(os.environ.get("DROPBOX_BROWSER_PYTHON") or "").strip()
+    if env_value:
+        env_path = Path(os.path.expandvars(env_value)).expanduser()
+        if env_path.is_file():
+            return str(env_path.resolve())
+
+    config = app_config if app_config is not None else load_app_config()
+    configured = _resolve_configured_tool_path(config.get("PythonPath"))
+    if configured is not None and configured.is_file():
+        return str(configured)
+
+    pack_root = tools_platform_root()
+    pack_candidates: list[Path] = []
+    if pack_root is not None:
+        pack_candidates.extend(
+            [
+                pack_root / "python" / "python.exe",
+                pack_root / "python" / "python",
+                pack_root / "bin" / "python3",
+                pack_root / "bin" / "python",
+            ]
+        )
+    # Explicit windows-x64 default even if tools_platform_root is None on odd hosts.
+    pack_candidates.append(default_tools_python_path())
+    packed = _first_existing_path(pack_candidates)
+    if packed is not None:
+        return str(packed)
+
+    legacy = _first_existing_path(
+        [
+            PROJECT_ROOT / "python" / "python.exe",
+            PROJECT_ROOT / "python" / "python",
+        ]
+    )
+    if legacy is not None:
+        return str(legacy)
+
+    for name in ("python", "python3", "python.exe"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return "python.exe" if os.name == "nt" else "python3"
 
 
 def find_default_rclone() -> str:

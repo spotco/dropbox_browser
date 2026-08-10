@@ -6,28 +6,11 @@ call "%~dp0_repo_root.bat" || (
   exit /b 1
 )
 pushd "%REPO_ROOT%"
-
-rem Explorer double-click often has a thinner PATH than an interactive terminal.
-set "PYTHON_EXE="
-if exist "%REPO_ROOT%\python\python.exe" set "PYTHON_EXE=%REPO_ROOT%\python\python.exe"
-if not defined PYTHON_EXE (
-  where py >nul 2>nul
-  if not errorlevel 1 (
-    for /f "delims=" %%I in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do set "PYTHON_EXE=%%I"
-  )
-)
-if not defined PYTHON_EXE (
-  where python >nul 2>nul
-  if not errorlevel 1 (
-    for /f "delims=" %%I in ('where python') do (
-      if not defined PYTHON_EXE set "PYTHON_EXE=%%I"
-    )
-  )
-)
+call "%~dp0_find_python.bat"
 if not defined PYTHON_EXE (
   echo error: python not found.
-  echo Tried: "%REPO_ROOT%\python\python.exe", py -3, and PATH python.
-  echo Open a terminal where "python --version" works, or install Python 3.
+  echo Need a bootstrap interpreter once: repo python\python.exe, py -3, or PATH python.
+  echo After setup_exe, runtime uses .tools\windows-x64\python\python.exe from the pack.
   popd
   echo.
   pause
@@ -35,11 +18,10 @@ if not defined PYTHON_EXE (
 )
 
 echo Repo root:  %REPO_ROOT%
-echo Python:     %PYTHON_EXE%
+echo Bootstrap Python: %PYTHON_EXE%
 echo.
-echo Installing Windows tool pack into:
+echo Installing Windows tool pack (rclone/ffmpeg/magick + portable python) into:
 echo   %REPO_ROOT%\.tools\windows-x64\
-echo (not into run\win — look under the repo .tools folder)
 echo.
 
 "%PYTHON_EXE%" tools\bootstrap_tools.py %*
@@ -73,6 +55,11 @@ if exist ".tools\windows-x64\ImageMagick\magick.exe" (
   echo   %REPO_ROOT%\.tools\windows-x64\ImageMagick\magick.exe
 ) else (
   echo   magick.exe MISSING
+)
+if exist ".tools\windows-x64\python\python.exe" (
+  echo   %REPO_ROOT%\.tools\windows-x64\python\python.exe
+) else (
+  echo   portable python.exe MISSING
 )
 
 echo.

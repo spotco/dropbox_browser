@@ -233,6 +233,41 @@ class VideoToolsConfigTests(unittest.TestCase):
             ):
                 self.assertEqual(config_module.find_default_rclone(), str(packed.resolve()))
 
+    def test_find_python_exe_prefers_tools_pack(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pack_root = Path(temp_dir) / "windows-x64"
+            packed = pack_root / "python" / "python.exe"
+            packed.parent.mkdir(parents=True, exist_ok=True)
+            packed.write_bytes(b"")
+            legacy = Path(temp_dir) / "legacy" / "python.exe"
+            legacy.parent.mkdir(parents=True, exist_ok=True)
+            legacy.write_bytes(b"")
+            with (
+                patch.dict(config_module.os.environ, {"DROPBOX_BROWSER_PYTHON": ""}, clear=False),
+                patch.object(config_module, "tools_platform_root", return_value=pack_root),
+                patch.object(config_module, "load_app_config", return_value={"PythonPath": ""}),
+                patch.object(config_module, "PROJECT_ROOT", Path(temp_dir) / "repo"),
+                patch.object(config_module.shutil, "which", return_value=None),
+            ):
+                self.assertEqual(config_module.find_python_exe(), str(packed.resolve()))
+
+    def test_find_python_exe_respects_config_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            configured = Path(temp_dir) / "custom" / "python.exe"
+            configured.parent.mkdir(parents=True, exist_ok=True)
+            configured.write_bytes(b"")
+            with (
+                patch.dict(config_module.os.environ, {"DROPBOX_BROWSER_PYTHON": ""}, clear=False),
+                patch.object(
+                    config_module,
+                    "load_app_config",
+                    return_value={"PythonPath": str(configured)},
+                ),
+                patch.object(config_module, "tools_platform_root", return_value=None),
+                patch.object(config_module.shutil, "which", return_value=None),
+            ):
+                self.assertEqual(config_module.find_python_exe(), str(configured.resolve()))
+
     def test_load_video_tools_config_prefers_vendored_binaries(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             ffmpeg_exe = Path(temp_dir) / "FFmpeg" / "bin" / "ffmpeg.exe"

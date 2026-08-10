@@ -1,5 +1,6 @@
 const path = require("path");
 const { spawn } = require("node:child_process");
+const { resolvePython } = require("./resolve_python");
 
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
 
@@ -46,8 +47,9 @@ async function startIntegrationServer() {
   const baseURL = resolveBaseURL();
   const fixturePath = process.env.DROPBOX_BROWSER_E2E_FIXTURE ||
     path.join(repoRoot, "tests", "e2e", "fixtures", "basic-library.json");
+  const pythonExe = resolvePython(repoRoot);
   const child = spawn(
-    "python",
+    pythonExe,
     [path.join(repoRoot, "tests", "e2e", "support", "run_integration_server.py")],
     {
       cwd: repoRoot,
@@ -56,6 +58,7 @@ async function startIntegrationServer() {
         PYTHONUNBUFFERED: "1",
         PLAYWRIGHT_PORT: port,
         DROPBOX_BROWSER_E2E_FIXTURE: fixturePath,
+        DROPBOX_BROWSER_PYTHON: pythonExe,
       },
       stdio: ["ignore", "pipe", "pipe"],
     },

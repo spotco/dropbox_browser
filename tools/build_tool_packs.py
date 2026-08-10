@@ -31,13 +31,36 @@ def _copy_file(src: Path, dest: Path) -> None:
     shutil.copy2(src, dest)
 
 
+def _copy_tree(src: Path, dest: Path) -> None:
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, dest)
+
+
+def _stage_windows_python(platform_root: Path) -> None:
+    """Include portable CPython in the windows pack (from repo tree or existing pack)."""
+    candidates = (
+        PROJECT_ROOT / "python",
+        PROJECT_ROOT / ".tools" / "windows-x64" / "python",
+    )
+    src = next((path for path in candidates if (path / "python.exe").is_file()), None)
+    if src is None:
+        raise FileNotFoundError(
+            "missing portable python/ tree (need repo python/python.exe or "
+            ".tools/windows-x64/python/python.exe to build the windows pack)"
+        )
+    print(f"  including portable python from {src}")
+    _copy_tree(src, platform_root / "python")
+
+
 def _stage_windows(staging_root: Path) -> Path:
     """Stage Windows tools from an installed .tools pack or legacy on-disk paths."""
     platform_root = staging_root / "windows-x64"
     platform_root.mkdir(parents=True, exist_ok=True)
 
     pack_root = PROJECT_ROOT / ".tools" / "windows-x64"
-    # Prefer already-bootstrapped pack (post-history-purge layout).
+    # Prefer already-bootstrapped pack (post-history-purge layout) for media tools.
     if (pack_root / "rclone.exe").is_file() and (pack_root / "ffmpeg.exe").is_file():
         for name in ("rclone.exe", "ffmpeg.exe", "ffprobe.exe"):
             src = pack_root / name
@@ -54,6 +77,7 @@ def _stage_windows(staging_root: Path) -> Path:
             src = pack_root / license_name
             if src.is_file():
                 _copy_file(src, platform_root / license_name)
+        _stage_windows_python(platform_root)
         return platform_root
 
     rclone = PROJECT_ROOT / "rclone.exe"
@@ -83,6 +107,7 @@ def _stage_windows(staging_root: Path) -> Path:
         if src.is_file():
             _copy_file(src, platform_root / f"FFmpeg-{license_name}")
 
+    _stage_windows_python(platform_root)
     return platform_root
 
 
