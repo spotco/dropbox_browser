@@ -252,13 +252,13 @@ def default_tools_python_path() -> Path:
 def find_python_exe(app_config: dict | None = None) -> str:
     """Resolve the Python interpreter used by Windows launchers and helpers.
 
-    Order:
-    1. ``DROPBOX_BROWSER_PYTHON`` env (absolute path)
-    2. Config ``PythonPath`` when set
-    3. Bootstrapped ``.tools/windows-x64/python/python.exe`` (and POSIX pack shapes)
-    4. Legacy repo ``python/python.exe``
-    5. ``PATH`` (``python`` / ``python3``)
+    Windows uses the bootstrapped tool-pack Python exclusively. Other platforms
+    retain the historical configurable/PATH discovery for development helpers.
     """
+    if os.name == "nt":
+        packed = _first_existing_path([default_tools_python_path()])
+        return str(packed) if packed is not None else str(default_tools_python_path())
+
     env_value = str(os.environ.get("DROPBOX_BROWSER_PYTHON") or "").strip()
     if env_value:
         env_path = Path(os.path.expandvars(env_value)).expanduser()

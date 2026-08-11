@@ -35,7 +35,7 @@ the configured path exists as a file.
 | Key | Default | Notes |
 | --- | --- | --- |
 | `DropboxFolder` | `./DropboxLocal` | Local tree compared with Dropbox. Empty or missing values fall back to `./DropboxLocal`; use `--local-root` to select another root for one run. |
-| `PythonPath` | empty (auto) | Interpreter for Windows launchers/helpers. Empty prefers `.tools/windows-x64/python/python.exe`, then repo `python/python.exe`, then `PATH`. Override with an absolute path or `DROPBOX_BROWSER_PYTHON`. |
+| `PythonPath` | empty (auto) | Interpreter setting retained for compatibility. Windows launchers always use `.tools/windows-x64/python/python.exe`; install it with `run\win\setup_exe.bat`. |
 | `RCloneConfig` | empty | Environment-expanded path. A path equal to rclone's native default is omitted from the command. |
 | `LocalhostOnlyAccess` | `true` | Rejects requests whose peer is not a loopback address. This is an access boundary, not authentication or TLS. |
 | `CacheStaticAssets` | `true` | Sends one-hour public cache headers for HTML, CSS, JavaScript, icons, and other static assets. `false` restores no-store headers for development. |
@@ -60,11 +60,15 @@ run\win\setup_exe.bat
 run/osx_intel/setup_exe.sh
 ```
 
-Or: `python tools/bootstrap_tools.py`. That downloads one zip from the
-project's GitHub `tools-v1` release (see [`tools/README.md`](../tools/README.md),
+On Windows, use `run\win\setup_exe.bat`. It downloads and extracts the pack
+with only built-in Windows PowerShell 5.1/.NET APIs—no Python, PowerShell
+modules, package manager, or other preinstalled dependency. On other
+platforms, `python tools/bootstrap_tools.py` downloads one zip from the
+project’s GitHub `tools-v1` release (see [`tools/README.md`](../tools/README.md),
 [`run/README.md`](../run/README.md), and
 [`tools/runtime_manifest.json`](../tools/runtime_manifest.json)). Linux packs
-are not published yet.
+are not published yet. The bootstrap script uses only the Python standard
+library, so it can run before any pack or project module is available.
 
 Discovery order:
 

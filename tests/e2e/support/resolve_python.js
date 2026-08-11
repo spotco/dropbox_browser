@@ -6,10 +6,17 @@ const path = require("node:path");
  * Prefer the windows tool-pack portable interpreter.
  */
 function resolvePython(repoRoot) {
+  const toolPackPython = path.join(repoRoot, ".tools", "windows-x64", "python", "python.exe");
+  if (process.platform === "win32") {
+    if (fs.existsSync(toolPackPython) && fs.statSync(toolPackPython).isFile()) {
+      return toolPackPython;
+    }
+    throw new Error("Windows tool-pack Python is missing. Run run\\win\\setup_exe.bat first.");
+  }
+
   const envPath = String(process.env.DROPBOX_BROWSER_PYTHON || "").trim();
   const candidates = [
     envPath,
-    path.join(repoRoot, ".tools", "windows-x64", "python", "python.exe"),
     path.join(repoRoot, "python", "python.exe"),
   ].filter(Boolean);
 
@@ -22,7 +29,7 @@ function resolvePython(repoRoot) {
       // try next
     }
   }
-  return process.platform === "win32" ? "python" : "python3";
+  return "python3";
 }
 
 module.exports = {

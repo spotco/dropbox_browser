@@ -17,11 +17,13 @@ run/osx_intel/setup_exe.sh
 run/osx_intel/run.sh
 ```
 
-Or call the shared bootstrap directly:
+On Windows, `setup_exe.bat` is the supported bootstrap. It requires only the
+default Windows 10 PowerShell 5.1 and built-in .NET APIs; it never invokes or
+requires a system Python, Python package, PowerShell module, or package manager.
+Afterward, every Windows launcher uses only
+`.tools\windows-x64\python\python.exe`.
 
-```bat
-python tools\bootstrap_tools.py
-```
+On non-Windows platforms, call the shared bootstrap directly:
 
 ```sh
 python3 tools/bootstrap_tools.py
@@ -31,10 +33,10 @@ python3 tools/bootstrap_tools.py
 downloads one zip from the `tools-v1` release URL for the current platform,
 verifies SHA-256, and extracts into `.tools/<platform-id>/` (gitignored).
 
-Offline: place the zip under `tools-packs/` and run:
+Offline (non-Windows): place the zip under `tools-packs/` and run:
 
-```bat
-python tools\bootstrap_tools.py --offline
+```sh
+python3 tools/bootstrap_tools.py --offline
 ```
 
 ## Platforms

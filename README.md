@@ -11,17 +11,17 @@ playback, and a GPS Photo Map.
 
 ## Requirements
 
-- Python 3.10 or newer.
 - Native tools: rclone, FFmpeg/FFprobe, and ImageMagick (`magick`). Install the
   pack for **this platform only** from the GitHub `tools-v1` release:
 
   ```powershell
-  python tools\bootstrap_tools.py
+  run\win\setup_exe.bat
   ```
 
-  Details: [tools/README.md](tools/README.md). `FFMpegPath` / `FFProbePath` and
-  `PATH` remain fallbacks. Image thumbnails are disabled when no `magick`
-  executable is discoverable.
+  On Windows, setup uses only built-in PowerShell 5.1/.NET APIs to download and
+  extract the pack. It installs the only supported Windows Python runtime under
+  `.tools\windows-x64\python\`; no system Python, Python packages, or PowerShell
+  modules are required. Details: [tools/README.md](tools/README.md).
 
 Useful upstream references:
 
@@ -48,8 +48,7 @@ run/osx_intel/run.sh
 Platform helpers live under [`run/`](run/README.md) (`run/win`, `run/osx_intel`) and
 resolve the repo root from their own path, so they work from any cwd.
 
-The default address is `http://127.0.0.1:8000/`. The equivalent module entry
-point is `python -m dropbox_browser.cli`.
+The default address is `http://127.0.0.1:8000/`.
 
 Useful options:
 
@@ -150,10 +149,10 @@ used as test fixtures.
 
 Run the Python unit-test groups with:
 
-```powershell
-python -m tests.run --list
-python -m tests.run <relevant-group> -v
-python -m unittest discover -s tests -v
+```bat
+run\win\run_python.bat tests.run --list
+run\win\run_python.bat tests.run <relevant-group> -v
+run\win\run_python.bat unittest discover -s tests -v
 ```
 
 Run the JavaScript and Playwright suites with:

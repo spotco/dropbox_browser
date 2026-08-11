@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
+import platform
 import shutil
 import ssl
 import sys
@@ -14,19 +17,90 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from tool_packs import (
-    EXTRACT_ROOT,
-    MANIFEST_PATH,
-    PACKS_DIR,
-    PROJECT_ROOT,
-    first_existing,
-    load_manifest,
-    read_stamp,
-    release_asset_url,
-    runtime_platform_id,
-    sha256_file,
-    write_stamp,
-)
+
+# This script is deliberately standalone: it is used to install the tool pack
+# before any installed runtime exists.  Keep its only dependencies in Python's
+# standard library so `python tools/bootstrap_tools.py` works from a fresh
+# checkout.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+TOOLS_DIR = PROJECT_ROOT / "tools"
+PACKS_DIR = PROJECT_ROOT / "tools-packs"
+EXTRACT_ROOT = PROJECT_ROOT / ".tools"
+MANIFEST_PATH = TOOLS_DIR / "runtime_manifest.json"
+STAMP_NAME = ".pack-sha256"
+PACK_FORMAT = "dropbox-browser-tool-packs-v1"
+DEFAULT_RELEASE_TAG = "tools-v1"
+DEFAULT_REPOSITORY = "spotco/dropbox_browser"
+
+
+def runtime_platform_id() -> str | None:
+    """Return the supported pack identifier for this host, if any."""
+    machine = platform.machine().lower()
+    if sys.platform == "win32":
+        return "windows-x64" if machine in {"amd64", "x86_64", "x64", ""} else None
+    if sys.platform == "darwin":
+        if machine in {"x86_64", "amd64"}:
+            return "darwin-x64"
+        if machine in {"arm64", "aarch64"}:
+            return "darwin-arm64"
+    if sys.platform.startswith("linux"):
+        if machine in {"x86_64", "amd64"}:
+            return "linux-x64"
+        if machine in {"aarch64", "arm64"}:
+            return "linux-arm64"
+    return None
+
+
+def load_manifest(path: Path) -> dict:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if data.get("format") != PACK_FORMAT:
+        raise ValueError(f"unsupported tool pack manifest format: {data.get('format')!r}")
+    return data
+
+
+def sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(chunk_size):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def release_asset_url(manifest: dict, platform_id: str) -> str:
+    entry = (manifest.get("platforms") or {}).get(platform_id)
+    if not isinstance(entry, dict):
+        raise KeyError(f"platform {platform_id!r} not in manifest")
+    asset = str(entry.get("asset") or "").strip()
+    if not asset:
+        raise KeyError(f"platform {platform_id!r} missing asset name")
+    explicit = str(entry.get("url") or "").strip()
+    if explicit:
+        return explicit
+    base = str(manifest.get("base_url") or "").rstrip("/")
+    if base:
+        return f"{base}/{asset}"
+    repository = str(manifest.get("repository") or DEFAULT_REPOSITORY).strip()
+    tag = str(manifest.get("release_tag") or DEFAULT_RELEASE_TAG).strip()
+    return f"https://github.com/{repository}/releases/download/{tag}/{asset}"
+
+
+def first_existing(candidates: list[Path]) -> Path | None:
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+    return None
+
+
+def read_stamp(platform_root: Path) -> str | None:
+    stamp = platform_root / STAMP_NAME
+    if not stamp.is_file():
+        return None
+    return stamp.read_text(encoding="utf-8").strip() or None
+
+
+def write_stamp(platform_root: Path, sha256: str) -> None:
+    platform_root.mkdir(parents=True, exist_ok=True)
+    (platform_root / STAMP_NAME).write_text(sha256.strip() + "\n", encoding="utf-8")
 
 
 def _progress_write(prefix: str, done: int, total: int | None) -> None:
@@ -86,15 +160,28 @@ def extract_pack_zip(zip_path: Path, extract_root: Path) -> Path:
     """Extract pack zip into extract_root; return the platform directory."""
     extract_root.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path, "r") as zf:
-        names = [info.filename for info in zf.infolist() if not info.is_dir()]
-        if not names:
+        entries = [info for info in zf.infolist() if not info.is_dir()]
+        if not entries:
             raise RuntimeError(f"empty pack zip: {zip_path}")
-        top = names[0].split("/")[0]
+        top = entries[0].filename.split("/", 1)[0]
+        if not top or top in {".", ".."}:
+            raise RuntimeError(f"invalid top-level pack directory in {zip_path}")
+        for info in zf.infolist():
+            name = info.filename.replace("\\", "/")
+            parts = tuple(part for part in name.split("/") if part)
+            if (
+                name.startswith("/")
+                or not parts
+                or parts[0] != top
+                or any(part == ".." for part in parts)
+            ):
+                raise RuntimeError(f"unsafe pack archive member: {info.filename!r}")
         # Remove previous platform dir if present.
         platform_dir = extract_root / top
         if platform_dir.exists():
             shutil.rmtree(platform_dir)
-        zf.extractall(extract_root)
+        for info in zf.infolist():
+            zf.extract(info, extract_root)
         # Restore executable bits recorded in the zip on POSIX.
         if sys.platform != "win32":
             for info in zf.infolist():

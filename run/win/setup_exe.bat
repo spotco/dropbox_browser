@@ -6,25 +6,14 @@ call "%~dp0_repo_root.bat" || (
   exit /b 1
 )
 pushd "%REPO_ROOT%"
-call "%~dp0_find_python.bat"
-if not defined PYTHON_EXE (
-  echo error: python not found.
-  echo Need a bootstrap interpreter once: repo python\python.exe, py -3, or PATH python.
-  echo After setup_exe, runtime uses .tools\windows-x64\python\python.exe from the pack.
-  popd
-  echo.
-  pause
-  exit /b 1
-)
 
 echo Repo root:  %REPO_ROOT%
-echo Bootstrap Python: %PYTHON_EXE%
 echo.
-echo Installing Windows tool pack (rclone/ffmpeg/magick + portable python) into:
+echo Installing Windows tool pack with Windows PowerShell into:
 echo   %REPO_ROOT%\.tools\windows-x64\
 echo.
 
-"%PYTHON_EXE%" tools\bootstrap_tools.py %*
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup_exe.ps1" -RepoRoot "%REPO_ROOT%"
 if errorlevel 1 (
   echo.
   echo setup_exe failed.
@@ -68,5 +57,4 @@ echo   run\win\run.bat
 echo Or: run\win\run_server.bat
 popd
 echo.
-pause
 exit /b 0

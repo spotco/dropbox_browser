@@ -18,6 +18,18 @@ Platform scripts live under `run/win` and `run/osx_intel` (see
 tool pack from the GitHub `tools-v1` release into `.tools/`. Default URL:
 `http://127.0.0.1:8000/`.
 
+### Windows runtime bootstrap invariant
+
+Windows must not require a system Python, Python packages, PowerShell modules,
+or package manager. `run\win\setup_exe.bat` must download and extract the
+`windows-x64` pack using only APIs available in the default Windows 10
+PowerShell 5.1/.NET installation. After setup, every Windows launcher must use
+only `.tools\windows-x64\python\python.exe`; do not add system-Python fallbacks.
+
+Windows batch setup scripts must work from any current directory. Resolve the
+repository and all helper-script paths relative to the invoking `.bat` file;
+never rely on the caller's current directory.
+
 ## Read before editing
 
 Use the document that matches the subsystem being changed:
@@ -143,19 +155,19 @@ contracts.
 
 Run the smallest relevant check first, then the broader group for shared code:
 
-```powershell
-python -m tests.run --list
-python -m tests.run <relevant-group> -v
+```bat
+run\win\run_python.bat tests.run --list
+run\win\run_python.bat tests.run <relevant-group> -v
 npm run test:js
-python -m unittest discover -s tests -v
+run\win\run_python.bat unittest discover -s tests -v
 ```
 
 Useful smoke checks:
 
-```powershell
-python -m py_compile dropbox_browser.py
-python -m compileall -q dropbox_browser.py dropbox_browser
-python dropbox_browser.py --help
+```bat
+run\win\run_python.bat py_compile dropbox_browser.py
+run\win\run_python.bat compileall -q dropbox_browser.py dropbox_browser
+run\win\run_server.bat --help
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/ -TimeoutSec 30
 ```
 

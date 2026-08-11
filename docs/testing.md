@@ -3,6 +3,12 @@
 The suite uses stdlib `unittest`, fake rclone responses, and isolated temp/cache
 paths. Keep regression coverage focused and cheap to run while iterating.
 
+On Windows, install the pack first with `run\win\setup_exe.bat`, then use
+`run\win\run_python.bat <module> [arguments]` in place of every
+`python -m <module> [arguments]` command below. It uses only the portable
+tool-pack Python and adds the checkout to its intentionally isolated import
+path; never substitute a system Python.
+
 ## Test Groups
 
 List groups:
