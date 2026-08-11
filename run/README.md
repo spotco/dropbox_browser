@@ -8,6 +8,7 @@ so you can invoke them from any working directory.
 | --- | --- |
 | Windows | [`win/`](win/) |
 | Intel macOS | [`osx_intel/`](osx_intel/) |
+| Debian/Ubuntu x86_64 | [`linux-deb/`](linux-deb/) |
 
 ## Windows (`run/win`)
 
@@ -45,3 +46,16 @@ F:\dev\dropbox_browser\run\win\run.bat
 ```
 
 Shared bootstrap implementation: [`tools/bootstrap_tools.py`](../tools/bootstrap_tools.py).
+
+## Debian/Ubuntu Linux x86_64 (run/linux-deb)
+
+The Linux launcher uses the host python3, matching Intel macOS. The native
+tool pack is staged under .tools/linux-x64/; Linux is not yet published as a
+GitHub tools-v1 asset.
+
+| Script | Role |
+| --- | --- |
+| setup_exe.sh | Download/checksum/install native Linux tools into .tools/linux-x64/ |
+| rclone_setup.sh | Create the Dropbox rclone remote |
+| run_server.sh | Start the HTTP server |
+| run.sh | Start the server and open the browser |

@@ -57,6 +57,18 @@ class CliArgumentTests(unittest.TestCase):
         self.assertFalse(args.client_render)
 
 
+class CliPythonWarningTests(unittest.TestCase):
+    def test_old_python_warning_is_written_without_blocking(self) -> None:
+        stderr = io.StringIO()
+        with (
+            patch.object(cli, "python_version_warning", return_value="old runtime"),
+            patch.object(sys, "stderr", stderr),
+        ):
+            cli.warn_if_python_too_old()
+
+        self.assertIn("Warning: old runtime", stderr.getvalue())
+
+
 class CliShutdownTests(unittest.TestCase):
     def _thumbnail_config(self, *, enabled: bool = False, configured_enabled: bool = True) -> ThumbnailConfig:
         return ThumbnailConfig(

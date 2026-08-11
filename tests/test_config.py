@@ -9,6 +9,22 @@ from dropbox_browser import config as config_module
 
 
 class ConfigDefaultsTests(unittest.TestCase):
+    def test_python_runtime_versions_are_documented(self) -> None:
+        self.assertEqual(config_module.WINDOWS_BUNDLED_PYTHON_VERSION, (3, 14, 0))
+        self.assertEqual(config_module.MINIMUM_PYTHON_VERSION, (3, 9))
+
+    def test_python_version_warning_is_nonfatal_below_support_floor(self) -> None:
+        warning = config_module.python_version_warning((3, 8))
+
+        self.assertIn("Python 3.8", warning or "")
+        self.assertIn("minimum supported Python 3.9", warning or "")
+        self.assertIn("CPython 3.14.0", warning or "")
+        self.assertIn("Attempting to start anyway", warning or "")
+
+    def test_python_version_warning_is_absent_at_or_above_support_floor(self) -> None:
+        self.assertIsNone(config_module.python_version_warning((3, 9)))
+        self.assertIsNone(config_module.python_version_warning((3, 12)))
+
     def test_default_localhost_only_access_is_enabled(self) -> None:
         config = dict(config_module._APP_CONFIG_DEFAULTS)
 

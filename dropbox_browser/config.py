@@ -26,6 +26,12 @@ VENDORED_FFPROBE_EXE = PROJECT_ROOT / "FFmpeg" / "bin" / "ffprobe.exe"
 # Legacy Intel macOS layout from the osx-intel branch (pre-pack).
 LEGACY_OSX_INTEL_BIN = PROJECT_ROOT / "tools" / "osx-intel" / "bin"
 
+# The Windows tool pack currently embeds CPython 3.14.0. POSIX launchers use
+# the host interpreter, whose compatibility floor is lower than the bundled
+# Windows runtime so macOS/Linux do not need to ship a second Python runtime.
+WINDOWS_BUNDLED_PYTHON_VERSION = (3, 14, 0)
+MINIMUM_PYTHON_VERSION = (3, 9)
+
 _APP_CONFIG_DEFAULTS: dict = {
     "DropboxFolder": "./DropboxLocal",
     "RCloneConfig": "",
@@ -200,6 +206,24 @@ def load_app_config() -> dict:
     return _merge_app_config_layers(
         _read_config_file(PROJECT_ROOT / "config.json"),
         _read_config_file(PROJECT_ROOT / "config_local.json"),
+    )
+
+
+def python_version_warning(version_info: object = sys.version_info) -> str | None:
+    """Return a non-fatal warning when the interpreter is below the support floor."""
+    try:
+        major = int(getattr(version_info, "major", version_info[0]))  # type: ignore[index]
+        minor = int(getattr(version_info, "minor", version_info[1]))  # type: ignore[index]
+    except (IndexError, TypeError, ValueError):
+        return None
+    current = (major, minor)
+    if current >= MINIMUM_PYTHON_VERSION:
+        return None
+    minimum = ".".join(str(part) for part in MINIMUM_PYTHON_VERSION)
+    bundled = ".".join(str(part) for part in WINDOWS_BUNDLED_PYTHON_VERSION)
+    return (
+        f"Python {major}.{minor} is older than the minimum supported Python {minimum}; "
+        f"the Windows tool pack uses CPython {bundled}. Attempting to start anyway."
     )
 
 

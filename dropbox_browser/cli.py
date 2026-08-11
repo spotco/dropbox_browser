@@ -17,6 +17,7 @@ from .config import (
     load_video_tools_config,
     normalize_music_waveform_cache_entry_limit,
     normalize_music_waveform_max_resolution,
+    python_version_warning,
 )
 from .clientlog import client_log_config
 from .foldercache import FolderCacheManager
@@ -45,7 +46,14 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def warn_if_python_too_old() -> None:
+    warning = python_version_warning()
+    if warning:
+        print(f"Warning: {warning}", file=sys.stderr)
+
+
 def main() -> int:
+    warn_if_python_too_old()
     args = parse_args()
     started_at = time.time()
     app_config = load_app_config()

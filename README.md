@@ -11,6 +11,10 @@ playback, and a GPS Photo Map.
 
 ## Requirements
 
+- POSIX launchers use the local python3/python interpreter (Python 3.9 or
+  newer is supported). The Windows tool pack currently embeds CPython 3.14.0;
+  on an older local interpreter the server warns at startup and still attempts
+  to run.
 - Native tools: rclone, FFmpeg/FFprobe, and ImageMagick (`magick`). Install the
   pack for **this platform only** from the GitHub `tools-v1` release:
 
