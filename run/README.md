@@ -49,13 +49,13 @@ Shared bootstrap implementation: [`tools/bootstrap_tools.py`](../tools/bootstrap
 
 ## Debian/Ubuntu Linux x86_64 (run/linux-deb)
 
-The Linux launcher uses the host python3, matching Intel macOS. The native
-tool pack is staged under .tools/linux-x64/; Linux is not yet published as a
-GitHub tools-v1 asset.
+The Linux launcher uses the host python3, matching Intel macOS. It downloads
+the `linux-x64` tool pack from the GitHub `tools-v1` release and stages it
+under `.tools/linux-x64/`.
 
 | Script | Role |
 | --- | --- |
-| setup_exe.sh | Download/checksum/install native Linux tools into .tools/linux-x64/ |
+| setup_exe.sh | Download/checksum/install the GitHub linux-x64 tool pack into .tools/linux-x64/ |
 | rclone_setup.sh | Create the Dropbox rclone remote |
 | run_server.sh | Start the HTTP server |
 | run.sh | Start the server and open the browser |

@@ -66,9 +66,10 @@ modules, package manager, or other preinstalled dependency. On other
 platforms, `python tools/bootstrap_tools.py` downloads one zip from the
 project’s GitHub `tools-v1` release (see [`tools/README.md`](../tools/README.md),
 [`run/README.md`](../run/README.md), and
-[`tools/runtime_manifest.json`](../tools/runtime_manifest.json)). Linux packs
-are not published yet. The bootstrap script uses only the Python standard
-library, so it can run before any pack or project module is available.
+[`tools/runtime_manifest.json`](../tools/runtime_manifest.json)). Linux uses
+the published `linux-x64` pack from the same release. The bootstrap script
+uses only the Python standard library, so it can run before any pack or
+project module is available.
 
 Discovery order:
 

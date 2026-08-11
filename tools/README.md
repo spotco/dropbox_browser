@@ -45,7 +45,7 @@ python3 tools/bootstrap_tools.py --offline
 | --- | --- |
 | `windows-x64` | rclone, ffmpeg/ffprobe, ImageMagick, **portable `python/`** |
 | `darwin-x64` | Published from the `osx-intel` branch `tools/osx-intel` tree (slimmed) |
-| `linux-x64` | Not yet |
+| `linux-x64` | Published as `dropbox-browser-tools-linux-x64-v1.zip` |
 
 Runtime binaries are **not** tracked in git. Use `setup_exe` / bootstrap, or
 point `FFMpegPath` / `PATH` at system installs.

@@ -15,6 +15,12 @@
       "sha256": "d88049d9ea9d7657c1f9aaf445f8858e1cf7b6b9455d4be10be2d8f46f5d6690",
       "size_bytes": 216746139,
       "url": "https://github.com/spotco/dropbox_browser/releases/download/tools-v1/dropbox-browser-tools-darwin-x64-v1.zip"
+    },
+    "linux-x64": {
+      "asset": "dropbox-browser-tools-linux-x64-v1.zip",
+      "sha256": "ad8729bf3d0bbd47c9ce77dc7bfa24bfa74633d891460dd4db2e691722fcdfc2",
+      "size_bytes": 120648902,
+      "url": "https://github.com/spotco/dropbox_browser/releases/download/tools-v1/dropbox-browser-tools-linux-x64-v1.zip"
     }
   }
 }

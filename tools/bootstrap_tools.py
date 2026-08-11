@@ -31,6 +31,7 @@ STAMP_NAME = ".pack-sha256"
 PACK_FORMAT = "dropbox-browser-tool-packs-v1"
 DEFAULT_RELEASE_TAG = "tools-v1"
 DEFAULT_REPOSITORY = "spotco/dropbox_browser"
+POSIX_TOOL_NAMES = {"rclone", "ffmpeg", "ffprobe", "magick"}
 
 
 def runtime_platform_id() -> str | None:
@@ -101,6 +102,31 @@ def read_stamp(platform_root: Path) -> str | None:
 def write_stamp(platform_root: Path, sha256: str) -> None:
     platform_root.mkdir(parents=True, exist_ok=True)
     (platform_root / STAMP_NAME).write_text(sha256.strip() + "\n", encoding="utf-8")
+
+
+def repair_posix_tool_permissions(platform_root: Path) -> None:
+    """Make packed POSIX binaries executable, including legacy extracts.
+
+    ZIP external attributes were not preserved by an early tools-v1
+    extraction. Repairing the four known launchers is safe and also makes a
+    previously installed pack usable without requiring a forced reinstall.
+    """
+    if os.name == "nt":
+        return
+    candidates = [
+        platform_root / name
+        for name in POSIX_TOOL_NAMES
+    ] + [
+        platform_root / "bin" / name
+        for name in POSIX_TOOL_NAMES
+    ]
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            path.chmod(path.stat().st_mode | 0o111)
+        except OSError:
+            continue
 
 
 def _progress_write(prefix: str, done: int, total: int | None) -> None:
@@ -222,7 +248,7 @@ def bootstrap(
         available = ", ".join(sorted(platforms)) or "(none)"
         raise RuntimeError(
             f"no tool pack for {platform_id}. Available in manifest: {available}. "
-            "Linux packs are not published yet."
+            "Check the tools-v1 release and runtime manifest."
         )
 
     expected_sha = str(entry.get("sha256") or "").strip().lower()
@@ -233,6 +259,7 @@ def bootstrap(
     platform_dir = extract_root / platform_id
     current = read_stamp(platform_dir) if platform_dir.is_dir() else None
     if not force and current and current.lower() == expected_sha:
+        repair_posix_tool_permissions(platform_dir)
         print(f"tool pack already installed: {platform_dir} (sha256 match)")
         return platform_dir
 
@@ -269,6 +296,7 @@ def bootstrap(
 
         print(f"extracting to {extract_root / platform_id}…")
         platform_dir = extract_pack_zip(zip_path, extract_root)
+        repair_posix_tool_permissions(platform_dir)
         write_stamp(platform_dir, expected_sha)
 
     print(f"installed: {platform_dir}")

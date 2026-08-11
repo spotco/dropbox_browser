@@ -21,7 +21,15 @@ def _is_usable_binary(path: Path) -> bool:
         if head.startswith(b"version https://git-lfs.github.com/spec/v1"):
             return False
     if os.name != "nt" and not os.access(path, os.X_OK):
-        return False
+        # Older Darwin tool-pack archives were extracted without preserving
+        # executable bits. Repair that harmless metadata in place so an
+        # already-installed pack remains usable after the source is updated.
+        try:
+            path.chmod(path.stat().st_mode | 0o111)
+        except OSError:
+            return False
+        if not os.access(path, os.X_OK):
+            return False
     return True
 
 
