@@ -185,6 +185,17 @@ class DistributedE2ETests(unittest.TestCase):
             (False, 8.25, "exit 1"),
         )
 
+    def test_worker_needs_publish_for_dirty_or_stale_checkout(self) -> None:
+        expected = "a" * 40
+        self.assertFalse(runner.worker_needs_publish(SimpleNamespace(head=expected, clean=True), expected))
+        self.assertTrue(runner.worker_needs_publish(SimpleNamespace(head="b" * 40, clean=True), expected))
+        self.assertTrue(runner.worker_needs_publish(SimpleNamespace(head=expected, clean=False), expected))
+
+    def test_publish_arguments_default_to_auto(self) -> None:
+        args = runner.parse_args([])
+        self.assertEqual(args.publish_workers, "auto")
+        self.assertFalse(args.sync_clean)
+
 
 if __name__ == "__main__":
     unittest.main()

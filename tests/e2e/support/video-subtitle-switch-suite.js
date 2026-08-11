@@ -1,16 +1,7 @@
 const fs = require("fs");
 const path = require("path");
-const { test, expect } = require("@playwright/test");
 
-const workerPortOffset = Number(process.env.TEST_WORKER_INDEX || "0") * 100;
-process.env.PLAYWRIGHT_PORT = String(8013 + workerPortOffset);
-process.env.DROPBOX_BROWSER_E2E_FIXTURE = path.join(
-  __dirname,
-  "fixtures",
-  "video_player_generated_fixture.py",
-);
-
-const { startIntegrationServer, stopIntegrationServer } = require("./support/integration_server");
+const { startIntegrationServer, stopIntegrationServer } = require("./integration_server");
 const {
   libraryRow,
   playLibraryFile: playLibraryFileBase,
@@ -18,15 +9,79 @@ const {
   expectActivePlaylistTitle,
   expectPlaylistCount,
   loadVideoLibrary,
-} = require("./support/video_library");
-const baseURL = `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT}`;
+} = require("./video_library");
 
-const hlsStubSource = fs.readFileSync(
-  path.join(__dirname, "support", "hls-stub.js"),
-  "utf8",
-);
+const TEST_SHARDS = {
+  core: new Set([
+    "video playlist labels and export filename use video terminology",
+    "video controls navigate the queue, persist loop, and wrap natural end when enabled",
+    "video session cleanup stops the active session on reload",
+    "closing during session creation stops the server session before the response arrives",
+    "rapid next and previous navigation keeps the final subtitle item isolated",
+    "delayed prior client stop cannot stop a newer session",
+    "switching during delayed subtitle extraction ignores the old item response",
+    "video controls seek backward and forward by 15 seconds in embedded playback",
+    "video Space shortcut toggles playback in embedded and fullscreen modes without hijacking text inputs",
+    "video controls stay visible and usable in fullscreen",
+  ]),
+  subtitles: new Set([
+    "video playback loads tracks, switches tracks, and hides video before subtitle teardown",
+    "empty successful subtitle batch preload falls back to per-track extraction",
+    "ASS subtitles are converted into clean browser-rendered WebVTT cues",
+    "WebVTT subtitle debug timing stays aligned after in-session scrub remount",
+    "WebVTT subtitle timing stays aligned after restart at offset and later in-session scrub",
+    "automatic playlist next clears old subtitles and mounts the next video track",
+    "video playback never shows loading or placeholder copy on top of active playback during real HLS switching",
+    "forward scrub beyond encoded range keeps the requested playback position",
+    "scrub beyond tracked encoded range restarts when seekable overstates duration",
+    "fairy-tail-like PGS burned-in subtitle session creates successfully",
+    "displayed loaded seek band matches actual instant-seek range during real HLS playback",
+    "seek-triggered subtitle extraction expands scrubber coverage without a session restart",
+    "windowed subtitles remount when playback crosses mounted coverage",
+    "full cached subtitles stay mounted across timeupdate without remount flicker",
+    "seek subtitle extraction failure keeps playback running and shows subtitle refresh failure state",
+    "subtitle track switch and audio restart keep windowed subtitles correct at non-zero playback",
+    "turning subtitles off clears only the mounted track and remounts cached windowed subtitles without refetch",
+  ]),
+  recovery: new Set([
+    "missing HLS segment recovery restarts session instead of looping in-session seek",
+    "video play toggle keeps intended state during compatibility seek loading",
+    "video controls follow standard hover and idle visibility behavior",
+    "video fullscreen keeps the scrubber overlay visible and functional",
+    "clear cache button recovers track selectors from stale server and client probe cache",
+    "clear cache button reloads track selectors after stale client probe cache",
+    "ignores incomplete probe disk cache and still loads track selectors",
+    "falls back to probing the remote file when cached header bytes are corrupt",
+    "loaded HLS segment average reflects fragment load timing",
+    "subtitle-ready scrubber debug info reflects full cached subtitle coverage after reload",
+    "video track selections persist across reload and matching track layouts",
+  ]),
+};
 
-let server = null;
+function registerVideoSubtitleSwitchSuite({ test: playwrightTest, expect, shard, port }) {
+  if (!Object.prototype.hasOwnProperty.call(TEST_SHARDS, shard)) {
+    throw new Error(`Unknown video subtitle switch test shard: ${shard}`);
+  }
+  const titles = TEST_SHARDS[shard];
+  const test = new Proxy(playwrightTest, {
+    apply(target, thisArg, args) {
+      const [title] = args;
+      if (!titles.has(title)) return undefined;
+      return Reflect.apply(target, thisArg, args);
+    },
+  });
+  const fixturePath = path.join(
+    __dirname,
+    "..",
+    "fixtures",
+    "video_player_generated_fixture.py",
+  );
+  const baseURL = `http://127.0.0.1:${port}`;
+  const hlsStubSource = fs.readFileSync(
+    path.join(__dirname, "hls-stub.js"),
+    "utf8",
+  );
+  let server = null;
 
 function isClosedRouteError(error) {
   const message = error && error.message ? String(error.message) : "";
@@ -465,17 +520,20 @@ async function clearActiveVideoSessionAndCache(page) {
     if (!sessionIds.length && !clientIds.size) break;
     for (const sessionId of sessionIds) {
       const stopResponse = await page.request.post("/video/endpoints/session/stop", {
-        data: { id: sessionId },
+        form: { id: sessionId },
       });
       expect(stopResponse.ok()).toBe(true);
     }
     for (const clientId of clientIds) {
       const stopResponse = await page.request.post("/video/endpoints/session/stop", {
-        data: {client_id: clientId},
+        form: {client_id: clientId},
       });
       expect(stopResponse.ok()).toBe(true);
     }
-    await page.waitForTimeout(50);
+    await expect
+      .poll(async () => (await readActiveVideoSessions(page)).length, { timeout: 5000 })
+      .toBe(0);
+    break;
   }
   const clearResponse = await page.request.post("/video/endpoints/cache/clear");
   expect(clearResponse.ok()).toBe(true);
@@ -1253,7 +1311,7 @@ async function scrubInSession(page, targetSeconds) {
       element.dispatchEvent(new Event("input", { bubbles: true }));
       element.dispatchEvent(new Event("change", { bubbles: true }));
     }, targetSeconds);
-    await page.waitForTimeout(300);
+    await waitForPlaybackSurfaceWithoutOverlay(page);
     expect(sessionPosted).toBe(false);
   } finally {
     page.off("request", onRequest);
@@ -1288,7 +1346,7 @@ async function startScrubInSession(page, targetSeconds) {
     element.dispatchEvent(new Event("input", { bubbles: true }));
     element.dispatchEvent(new Event("change", { bubbles: true }));
   }, targetSeconds);
-  await page.waitForTimeout(100);
+  await expectPlaybackNearSeconds(page, targetSeconds, 1);
 }
 
 async function openVideoPane(page) {
@@ -1500,7 +1558,7 @@ test.use({ baseURL });
 
 test.beforeAll(async () => {
   test.setTimeout(90000);
-  server = await startIntegrationServer();
+  server = await startIntegrationServer({ port, fixturePath });
 });
 
 test.beforeEach(async ({ page }) => {
@@ -1746,8 +1804,17 @@ test("closing during session creation stops the server session before the respon
 test("rapid next and previous navigation keeps the final subtitle item isolated", async ({ page }) => {
   test.setTimeout(90000);
 
+  let releaseDelayedStop;
+  let delayedStopSeen;
+  const delayedStopReleased = new Promise((resolve) => {
+    releaseDelayedStop = resolve;
+  });
+  const delayedStopSeenPromise = new Promise((resolve) => {
+    delayedStopSeen = resolve;
+  });
   await page.route("**/video/endpoints/session/stop", async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    delayedStopSeen();
+    await delayedStopReleased;
     await route.continue();
   });
   await installHlsStub(page);
@@ -1768,7 +1835,12 @@ test("rapid next and previous navigation keeps the final subtitle item isolated"
   });
   const bravoSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fbravo.mkv"));
   const finalAlphaSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
+  await page.locator("#video-playback-surface").hover({ position: { x: 40, y: 40 } });
+  await expectControlsOverlayVisible(page);
   await page.locator("#video-next").click();
+  await delayedStopSeenPromise;
+  await expectActiveQueueTitle(page, "bravo.mkv");
+  releaseDelayedStop();
   const bravoRequest = await bravoSession;
   const bravoParams = new URLSearchParams(bravoRequest.postData() || "");
   const bravoTransitionToken = Number(bravoParams.get("transition_token"));
@@ -1856,13 +1928,22 @@ test("delayed prior client stop cannot stop a newer session", async ({ page }) =
 test("switching during delayed subtitle extraction ignores the old item response", async ({ page }) => {
   test.setTimeout(90000);
 
+  let releaseAlphaSubtitles;
+  let alphaSubtitlesSeen;
+  const alphaSubtitlesReleased = new Promise((resolve) => {
+    releaseAlphaSubtitles = resolve;
+  });
+  const alphaSubtitlesSeenPromise = new Promise((resolve) => {
+    alphaSubtitlesSeen = resolve;
+  });
   await page.route("**/video/endpoints/subtitles/all**", async (route) => {
     const path = new URL(route.request().url()).searchParams.get("path") || "";
     if (path !== "Videos/alpha.mkv") {
       await route.continue();
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    alphaSubtitlesSeen();
+    await alphaSubtitlesReleased;
     await route.continue();
   });
   await installHlsStub(page);
@@ -1873,13 +1954,15 @@ test("switching during delayed subtitle extraction ignores the old item response
     if (request.method() !== "GET" || !request.url().includes("/video/endpoints/subtitles/all")) return false;
     return (new URL(request.url()).searchParams.get("path") || "") === "Videos/alpha.mkv";
   }, {timeout: 15000});
-  await playLibraryFile(page, "alpha.mkv");
+  await playLibraryFileBase(page, "alpha.mkv");
   await alphaSession;
   await alphaSubtitleRequest;
+  await alphaSubtitlesSeenPromise;
 
   const bravoSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Fbravo.mkv"));
   await playLibraryFile(page, "bravo.mkv");
   await bravoSession;
+  releaseAlphaSubtitles();
   await expectActiveQueueTitle(page, "bravo.mkv");
   await waitForVisibleVideo(page);
   await waitForPlaybackSurfaceWithoutOverlay(page);
@@ -2110,7 +2193,6 @@ test("video playback loads tracks, switches tracks, and hides video before subti
     tagName: "b",
     expectedText: "ALPHA-SUBTITLE-FRA",
   });
-  await page.waitForTimeout(500);
 
   await page.evaluate(() => {
     window.__subtitleTeardownEvents = [];
@@ -3464,7 +3546,6 @@ test("video play toggle keeps intended state during compatibility seek loading",
   await expectPlayToggleState(page, "Play");
   await clickPlayToggle(page);
   await expectPlayToggleState(page, "Pause");
-  await page.waitForTimeout(300);
   await waitForVisibleVideo(page);
   await expectPlayToggleState(page, "Pause");
 });
@@ -3493,7 +3574,6 @@ test("video controls follow standard hover and idle visibility behavior", async 
   await surface.hover({ position: { x: 48, y: 48 } });
   await expectControlsOverlayVisible(page);
 
-  await page.waitForTimeout(3200);
   await expectControlsOverlayHidden(page);
 
   await surface.hover({ position: { x: 56, y: 56 } });
@@ -3514,7 +3594,6 @@ test("video controls follow standard hover and idle visibility behavior", async 
 
   try {
     await startSyntheticControlsPointerStorm(page);
-    await page.waitForTimeout(3200);
     await expectControlsOverlayHidden(page);
   } finally {
     await stopSyntheticControlsPointerStorm(page);
@@ -3549,7 +3628,6 @@ test("video fullscreen keeps the scrubber overlay visible and functional", async
       fullscreenLabel: "Exit fullscreen",
     });
 
-  await page.waitForTimeout(3200);
   await expectControlsOverlayHidden(page);
 
   const scrubTarget = await scrubInSessionForward(page, 1);
@@ -3975,3 +4053,7 @@ test("video track selections persist across reload and matching track layouts", 
   });
   await waitForSubtitleStreamIndex(page, 4);
 });
+
+}
+
+module.exports = { registerVideoSubtitleSwitchSuite };

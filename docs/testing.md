@@ -136,6 +136,14 @@ checkout/runtime settings belong in the shared project's private
 checkout. The product source dynamically links the shared SDK when it is
 present and does not vendor or name a private inventory repository.
 
+Before a remote run, the default `--publish-workers auto` compares each
+selected worker with local `HEAD`. Dirty or stale checkouts are preserved in a
+remote stash and reset to that commit. The runner normally fetches from
+`origin`; if that is unavailable it transfers a Git bundle over SSH, so the
+final remote preflight still requires an exact, clean checkout. Use
+`--publish-workers never` to reject instead of synchronizing, or
+`--sync-clean`/`--publish-workers always` to force a refresh.
+
 Before an actual remote run, set the coordination owner (the local notes may
 also provide `coord_owner`):
 

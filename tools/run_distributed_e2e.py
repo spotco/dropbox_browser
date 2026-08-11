@@ -3,10 +3,14 @@
 
 Normal operation is automatic: reachable compatible Windows and macOS Intel
 workers receive scheduled specs, while the current Windows machine remains a
-local lane. If the optional shared worker SDK, local notes, credentials,
-coordination owner, or remote checkouts are absent, the runner reports the
-reason and runs locally. Actual remote runs claim each selected worker on the
-shared coordination board and release the lease afterward.
+local lane. Before a remote run, workers which are dirty or not at the local
+``HEAD`` are reset to that commit. The normal path fetches from ``origin``;
+when that is unavailable the runner transfers a Git bundle directly over SSH.
+Both paths keep the worker checkout clean before tests begin. If the optional
+shared worker SDK, local notes, credentials, coordination owner, or remote
+checkouts are absent, the runner reports the reason and runs locally. Actual
+remote runs claim each selected worker on the shared coordination board and
+release the lease afterward.
 Use ``--require-remote`` when a distributed run must fail instead of falling
 back.  Linux workers are intentionally excluded until browser compatibility is
 implemented.
@@ -395,6 +399,7 @@ def check_remote(shared: Any, ssh: Any, worker: RemoteWorker) -> tuple[bool, str
             target,
             repo=repo_path,
             git=worker.git,
+            expected_head=None,
             require_clean=True,
             timeout=45,
         )
@@ -428,6 +433,202 @@ def check_remote(shared: Any, ssh: Any, worker: RemoteWorker) -> tuple[bool, str
     except Exception as exc:  # noqa: BLE001 - unavailable workers fall back locally
         return False, str(exc)[-800:]
     return True, "ready"
+
+
+def inspect_remote_git(shared: Any, ssh: Any, worker: RemoteWorker) -> Any:
+    """Return HEAD/cleanliness without rejecting a stale worker checkout."""
+
+    return shared.git_ops.preflight(
+        ssh,
+        worker.target(shared.ssh),
+        repo=remote_shell_path(worker, worker.repo),
+        git=worker.git,
+        expected_head=None,
+        require_clean=False,
+        timeout=45,
+    )
+
+
+def worker_needs_publish(report: Any, expected_head: str) -> bool:
+    return (
+        not bool(getattr(report, "clean", False))
+        or str(getattr(report, "head", "") or "") != expected_head
+    )
+
+
+def _git_result(args: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        args,
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def origin_has_commit(commit: str, *, branch: str) -> bool:
+    """Return whether origin/<branch> contains ``commit`` after a best-effort fetch."""
+
+    _git_result(["git", "fetch", "origin", branch])
+    return _git_result(
+        ["git", "merge-base", "--is-ancestor", commit, f"origin/{branch}"]
+    ).returncode == 0
+
+
+def ensure_origin_has_head(commit: str, *, branch: str) -> None:
+    """Publish HEAD only when the configured branch cannot serve it to workers."""
+
+    if origin_has_commit(commit, branch=branch):
+        return
+    print(
+        f"publish: origin/{branch} lacks {commit[:12]}; pushing HEAD so workers can fetch…",
+        flush=True,
+    )
+    pushed = _git_result(["git", "push", "origin", f"HEAD:{branch}"])
+    if pushed.returncode != 0:
+        detail = (pushed.stderr or pushed.stdout or "").strip()[-2000:]
+        raise RunnerError(
+            f"cannot push {commit[:12]} to origin/{branch}: {detail}"
+        )
+    if not origin_has_commit(commit, branch=branch):
+        raise RunnerError(
+            f"origin/{branch} still lacks {commit[:12]} after push; refusing to reset workers"
+        )
+
+
+def create_sync_bundle(commit: str, prerequisite_heads: Iterable[str]) -> Path:
+    """Create a source-pinned bundle for direct worker synchronization."""
+
+    bundle = REPO / "Temp" / "remote-e2e" / "sync" / f"{commit}.bundle"
+    bundle.parent.mkdir(parents=True, exist_ok=True)
+    heads = [head for head in prerequisite_heads if head and head != commit]
+    revision_args = ["HEAD", "--not", heads[0]] if len(heads) == 1 else ["--all"]
+    result = _git_result(["git", "bundle", "create", str(bundle), *revision_args])
+    if result.returncode != 0 or not bundle.is_file() or bundle.stat().st_size == 0:
+        detail = (result.stderr or result.stdout or "").strip()[-2000:]
+        raise RunnerError(f"could not create direct worker sync bundle for {commit[:12]}: {detail}")
+    return bundle
+
+
+def _worker_branch(worker: RemoteWorker) -> str:
+    return worker.branch if worker.branch and worker.branch != "auto" else "master"
+
+
+def publish_worker_to_head(
+    shared: Any,
+    ssh: Any,
+    worker: RemoteWorker,
+    expected_head: str,
+    *,
+    bundle: Path | None,
+) -> None:
+    """Reset one worker to ``expected_head`` through origin or a direct bundle."""
+
+    quote = shared.ssh.shell_quote
+    target = worker.target(shared.ssh)
+    repo = remote_shell_path(worker, worker.repo)
+    branch = _worker_branch(worker)
+    git_q = quote(worker.git)
+    repo_q = quote(repo)
+    head_q = quote(expected_head)
+    branch_q = quote(branch)
+    remote_bundle = ""
+    if bundle is not None:
+        remote_dir = f"{repo.rstrip('/')}/Temp/remote-e2e/sync"
+        remote_bundle = f"{remote_dir}/runner-sync-{expected_head}.bundle"
+        created = ssh.run(target, f"set -eu; mkdir -p {quote(remote_dir)}", timeout=45)
+        if created.returncode != 0:
+            detail = (created.stderr or created.stdout or "").strip()[-2000:]
+            raise RunnerError(f"could not create sync directory on {worker.label}: {detail}")
+        ssh.scp_to(target, bundle, remote_scp_path(worker, remote_bundle), timeout=180, check=True)
+        fetch = f"{git_q} -C {repo_q} fetch {quote(remote_bundle)} {head_q}:refs/remotes/dropbox-browser/direct-sync"
+    else:
+        fetch = (
+            f"{git_q} -C {repo_q} fetch origin {branch_q}; "
+            f"if ! {git_q} -C {repo_q} cat-file -e {head_q}^{{commit}} 2>/dev/null; then "
+            f"{git_q} -C {repo_q} fetch origin --prune; fi"
+        )
+    # Preserve a worker's local work before making its checkout testable.  The
+    # clean preflight remains strict; the stash is intentional worker recovery.
+    command = "\n".join(
+        [
+            "set -eu",
+            f"{git_q} -C {repo_q} stash push -u -m dropbox-browser-runner-preserve-before-sync >/dev/null 2>&1 || true",
+            fetch,
+            f"{git_q} -C {repo_q} rev-parse --verify {head_q}^{{commit}} >/dev/null",
+            f"{git_q} -C {repo_q} checkout {branch_q}",
+            f"{git_q} -C {repo_q} reset --hard {head_q}",
+            f"{git_q} -C {repo_q} clean -fd",
+            *([f"rm -f {quote(remote_bundle)}"] if remote_bundle else []),
+            f"printf 'PUBLISHED_HEAD='; {git_q} -C {repo_q} rev-parse HEAD; printf '\\n'",
+        ]
+    )
+    result = ssh.run(target, command, timeout=180)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()[-2000:]
+        raise RunnerError(f"publish {worker.label} failed: {detail}")
+    published = next(
+        (line.split("=", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("PUBLISHED_HEAD=")),
+        "",
+    )
+    if published != expected_head:
+        raise RunnerError(
+            f"publish {worker.label}: reset landed on {published[:12] or '?'}; expected {expected_head[:12]}"
+        )
+    print(f"publish {worker.label}: reset to {expected_head[:12]}", flush=True)
+
+
+def prepare_workers_for_run(
+    shared: Any,
+    ssh: Any,
+    workers: list[RemoteWorker],
+    *,
+    expected_head: str,
+    publish_mode: str,
+    force_sync_clean: bool,
+) -> None:
+    """Synchronize stale/dirty workers, then enforce a clean exact-HEAD preflight."""
+
+    mode = publish_mode.strip().lower()
+    if mode not in {"auto", "always", "never"}:
+        raise RunnerError("--publish-workers must be auto, always, or never")
+    reports: list[tuple[RemoteWorker, Any]] = []
+    for worker in workers:
+        reports.append((worker, inspect_remote_git(shared, ssh, worker)))
+    needing = [
+        worker
+        for worker, report in reports
+        if force_sync_clean or mode == "always" or worker_needs_publish(report, expected_head)
+    ]
+    if needing and mode == "never" and not force_sync_clean:
+        raise RunnerError(
+            "publish-workers=never but remote(s) need update: "
+            + ", ".join(worker.label for worker in needing)
+        )
+    if needing:
+        branches = {_worker_branch(worker) for worker in needing}
+        if len(branches) != 1:
+            raise RunnerError("workers needing publish must use one configured branch")
+        branch = branches.pop()
+        bundle: Path | None = None
+        try:
+            ensure_origin_has_head(expected_head, branch=branch)
+        except RunnerError as exc:
+            bundle = create_sync_bundle(expected_head, [str(getattr(report, "head", "") or "") for _, report in reports])
+            print(f"publish: origin unavailable ({exc}); using direct SSH bundle {bundle.name}", flush=True)
+        for worker in needing:
+            publish_worker_to_head(shared, ssh, worker, expected_head, bundle=bundle)
+    for worker in workers:
+        report = shared.git_ops.preflight(
+            ssh,
+            worker.target(shared.ssh),
+            repo=remote_shell_path(worker, worker.repo),
+            git=worker.git,
+            expected_head=expected_head,
+            require_clean=True,
+            timeout=45,
+        )
+        print(f"preflight {worker.label}: HEAD {report.head[:12]} clean", flush=True)
 
 
 def coordination_owner(settings: dict[str, Any], args: argparse.Namespace) -> str:
@@ -701,6 +902,28 @@ def run(args: argparse.Namespace) -> int:
             grace_seconds=args.coord_grace_seconds,
         )
 
+    expected_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    if ssh is not None and coordination_leases and not args.dry_run:
+        try:
+            prepare_workers_for_run(
+                shared,
+                ssh,
+                workers,
+                expected_head=expected_head,
+                publish_mode=args.publish_workers,
+                force_sync_clean=args.sync_clean,
+            )
+        except Exception:
+            release_coordination_leases(
+                shared,
+                coordination_leases,
+                owner=coord_owner,
+                reason="worker publication failed",
+            )
+            raise
+
     ready_workers: list[RemoteWorker] = []
     if ssh is not None:
         for worker in workers:
@@ -805,6 +1028,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--shared-root", help="override the optional shared worker SDK root")
     parser.add_argument("--spec", action="append", default=[], help="run one tests/e2e spec; repeatable (default: all specs)")
     parser.add_argument("--dry-run", action="store_true", help="print the plan without starting Playwright")
+    parser.add_argument(
+        "--publish-workers",
+        choices=("auto", "always", "never"),
+        default="auto",
+        help="sync dirty or stale workers to local HEAD: auto (default), always, or never",
+    )
+    parser.add_argument(
+        "--sync-clean",
+        action="store_true",
+        help="force synchronization of every selected worker before preflight",
+    )
     parser.add_argument("--keep-remote", action="store_true", help="retain remote job directories for inspection")
     parser.add_argument("--coord-owner", help="coordination-board owner; defaults to SPTMP2_COORD_OWNER or LOCAL_NOTES")
     parser.add_argument("--coord-duration-seconds", type=float, default=1800.0, help="worker lease duration for a remote run (default: 1800)")

@@ -42,10 +42,10 @@ function mirrorOutput(stream, prefix) {
   });
 }
 
-async function startIntegrationServer() {
-  const port = resolvePort();
-  const baseURL = resolveBaseURL();
-  const fixturePath = process.env.DROPBOX_BROWSER_E2E_FIXTURE ||
+async function startIntegrationServer({ port: requestedPort, fixturePath: requestedFixturePath } = {}) {
+  const port = String(requestedPort || resolvePort());
+  const baseURL = `http://127.0.0.1:${port}`;
+  const fixturePath = requestedFixturePath || process.env.DROPBOX_BROWSER_E2E_FIXTURE ||
     path.join(repoRoot, "tests", "e2e", "fixtures", "basic-library.json");
   const pythonExe = resolvePython(repoRoot);
   const child = spawn(
