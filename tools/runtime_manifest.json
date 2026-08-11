@@ -18,8 +18,8 @@
     },
     "linux-x64": {
       "asset": "dropbox-browser-tools-linux-x64-v1.zip",
-      "sha256": "ad8729bf3d0bbd47c9ce77dc7bfa24bfa74633d891460dd4db2e691722fcdfc2",
-      "size_bytes": 120648902,
+      "sha256": "8afdb9471cc0607661230030988810a6606d903571576c7400d42e01eaaae61d",
+      "size_bytes": 209850438,
       "url": "https://github.com/spotco/dropbox_browser/releases/download/tools-v1/dropbox-browser-tools-linux-x64-v1.zip"
     }
   }

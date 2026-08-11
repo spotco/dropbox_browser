@@ -23,7 +23,7 @@
   },
   "LogRcloneCommands": true,
   "LogHttpRequests": true,
-  "LocalhostOnlyAccess": true,
+  "LocalhostOnlyAccess": false,
   "FolderCacheWorkers": 8,
   "SyncJobWorkers": 8,
   "FolderCacheTTLSeconds": 1209600,
