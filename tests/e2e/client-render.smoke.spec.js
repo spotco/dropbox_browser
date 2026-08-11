@@ -3,6 +3,8 @@ const { test, expect } = require("@playwright/test");
 process.env.PLAYWRIGHT_PORT = "8022";
 const clientRenderBaseURL = "http://127.0.0.1:8022";
 test.use({ baseURL: clientRenderBaseURL });
+// Shared default is 10s; several navigations need more headroom after long suites.
+test.describe.configure({timeout: 30000});
 
 const { startServer, stopServer } = require("./support/server");
 
@@ -192,7 +194,9 @@ test("client-render folder navigation uses history without a full page reload", 
 
 test("client-render ignores legacy sort and direction URL parameters", async ({ page }) => {
   await page.goto("/?sort=date&dir=desc");
-  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  // After long suites the first paint can land before the browse client marks
+  // ready; give it the same headroom as other client-render navigations.
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready", {timeout: 15000});
   await expect(page.locator("body")).toHaveAttribute("data-current-sort-key", "name");
   await expect(page.locator("body")).toHaveAttribute("data-current-sort-direction", "asc");
   await expect(page).not.toHaveURL(/(?:\?|&)(?:sort|dir)=/);

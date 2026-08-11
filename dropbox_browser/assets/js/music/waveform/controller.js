@@ -60,31 +60,51 @@ function summaryLogDetails(summary) {
 // Browser-native decodeAudioData is asynchronous, but portable Web Audio APIs
 // do not expose CPU-slice control for the decoder. Only post-decode sample
 // scanning and summary reduction can be budgeted in our worker.
-function decodeAudioData(context, bytes) {
-  return new Promise(function (resolve, reject) {
-    var settled = false;
-    function finish(callback, value) {
-      if (settled) return;
-      settled = true;
-      callback(value);
-    }
-    var result;
-    try {
-      result = context.decodeAudioData(
-        bytes,
-        function (decoded) { finish(resolve, decoded); },
-        function (error) { finish(reject, error || new Error('Audio decode failed')); },
-      );
-    } catch (error) {
-      finish(reject, error);
-      return;
-    }
+// Prefer the promise form. Passing success/error callbacks can hang in some
+// Chromium builds (callbacks never fire and no usable promise is returned).
+// Closing the AudioContext while decode is in-flight can also leave the
+// promise pending forever, so callers may pass an AbortSignal to fail fast.
+function decodeAudioData(context, bytes, signal) {
+  if (signal && signal.aborted) {
+    return Promise.reject(Object.assign(new Error('Audio decode aborted'), {name: 'AbortError'}));
+  }
+  var decodePromise;
+  try {
+    var result = context.decodeAudioData(bytes);
     if (result && typeof result.then === 'function') {
-      result.then(
-        function (decoded) { finish(resolve, decoded); },
-        function (error) { finish(reject, error || new Error('Audio decode failed')); },
-      );
+      decodePromise = result;
+    } else {
+      decodePromise = new Promise(function (resolve, reject) {
+        try {
+          context.decodeAudioData(
+            bytes,
+            function (decoded) { resolve(decoded); },
+            function (error) { reject(error || new Error('Audio decode failed')); },
+          );
+        } catch (error) {
+          reject(error);
+        }
+      });
     }
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  if (!signal || typeof signal.addEventListener !== 'function') return decodePromise;
+  return new Promise(function (resolve, reject) {
+    function onAbort() {
+      reject(Object.assign(new Error('Audio decode aborted'), {name: 'AbortError'}));
+    }
+    signal.addEventListener('abort', onAbort, {once: true});
+    decodePromise.then(
+      function (decoded) {
+        signal.removeEventListener('abort', onAbort);
+        resolve(decoded);
+      },
+      function (error) {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
   });
 }
 
@@ -308,9 +328,17 @@ export function initWaveformController(ctx, options) {
       state.worker = null;
       state.workerGeneration = null;
     }
+    // Closing the context can leave an in-flight decodeAudioData promise pending
+    // forever on some Chromium builds. Abort first, then close asynchronously so
+    // the raced decode path can reject instead of hanging the UI status.
     if (state.audioContext && typeof state.audioContext.close === 'function') {
-      void state.audioContext.close();
+      var closingContext = state.audioContext;
       state.audioContext = null;
+      try {
+        void closingContext.close();
+      } catch (_closeError) {
+        // Ignore close failures from already-closed contexts.
+      }
     }
     state.pointerScrubbing = false;
     state.sourceBytes = null;
@@ -773,19 +801,35 @@ export function initWaveformController(ctx, options) {
     var copied;
     var worker;
     var payload;
+    var decodeBytes;
     var decodeStartedAt = waveformClock();
     try {
       context = audioContextFactory();
       if (!context || typeof context.decodeAudioData !== 'function') {
         throw new Error('AudioContext.decodeAudioData is unavailable');
       }
+      // Some headless/suspended contexts hang decode until resume is requested.
+      if (context.state === 'suspended' && typeof context.resume === 'function') {
+        try {
+          await context.resume();
+        } catch (_resumeError) {
+          // Decode may still succeed while suspended; continue either way.
+        }
+      }
       state.audioContext = context;
       state.sourceState = 'decoding';
       state.sourceBytes = null;
       waveformLog('decode-start', Object.assign(identityLogDetails(identity), {
         byteLength: bytes && bytes.byteLength ? bytes.byteLength : 0,
+        contextState: context.state || '',
       }));
-      decoded = await decodeAudioData(context, bytes);
+      // decodeAudioData may detach the input buffer; keep a private copy.
+      decodeBytes = bytes && typeof bytes.slice === 'function' ? bytes.slice(0) : bytes;
+      decoded = await decodeAudioData(
+        context,
+        decodeBytes,
+        state.abortController ? state.abortController.signal : null,
+      );
       if (!isCurrentRequest(token, identity)) {
         waveformLog('decode-stale-result', Object.assign(identityLogDetails(identity), {
           elapsedMs: Math.round(waveformClock() - decodeStartedAt),
@@ -826,6 +870,7 @@ export function initWaveformController(ctx, options) {
         maxResolution: maximumResolution,
       };
       if (typeof worker.postMessage !== 'function') throw new Error('Waveform worker is unavailable');
+      setStatus('Audio visualization processing samples…');
       waveformLog('worker-start', Object.assign(identityLogDetails(identity), {
         generation: state.workerGeneration,
         targetResolution: payload.targetResolution,
@@ -833,9 +878,17 @@ export function initWaveformController(ctx, options) {
         channels: copied.channels.length,
       }));
       worker.postMessage(payload, copied.transferables);
+      // Fetch/decode abort is no longer needed once the worker owns the work.
+      state.abortController = null;
       return true;
     } catch (error) {
-      if (!isCurrentRequest(token, identity)) return false;
+      if (!isCurrentRequest(token, identity) || (error && error.name === 'AbortError')) {
+        waveformLog('decode-aborted', Object.assign(identityLogDetails(identity), {
+          elapsedMs: Math.round(waveformClock() - decodeStartedAt),
+          name: error && error.name ? error.name : '',
+        }));
+        return false;
+      }
       if (state.audioContext && typeof state.audioContext.close === 'function') {
         void state.audioContext.close();
       }
@@ -931,13 +984,14 @@ export function initWaveformController(ctx, options) {
       }
       state.sourceBytes = bytes;
       state.sourceState = 'loaded';
-      state.abortController = null;
       waveformLog('fetch-done', Object.assign(identityLogDetails(identity), {
         elapsedMs: Math.round(waveformClock() - fetchStartedAt),
         byteLength: bytes.byteLength,
         status: response.status,
       }));
       setStatus('Audio source loaded; decoding for visualization.');
+      // Keep abortController alive through decode so song changes can reject a
+      // hung decodeAudioData instead of leaving the status stuck forever.
       return decodeAndReduce(bytes, token, identity);
     } catch (error) {
       if (!isCurrentRequest(token, identity)) {

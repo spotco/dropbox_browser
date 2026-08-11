@@ -3,8 +3,8 @@
   "private": true,
   "scripts": {
     "test": "npm run test:js",
-    "test:js": "node --test \"tests/js/*.test.js\"",
-    "test:js:photo-map": "node --test \"tests/js/photo-map-*.test.js\"",
+    "test:js": "node --test tests/js",
+    "test:js:photo-map": "node --test tests/js/photo-map-*.test.js",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:music": "playwright test --project=music",

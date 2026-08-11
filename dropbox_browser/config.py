@@ -443,9 +443,15 @@ def _resolve_configured_tool_path(value: object) -> Path | None:
 def _adjacent_tool_path(path: Path | None, sibling_name: str) -> Path | None:
     if path is None:
         return None
-    candidate = path.with_name(sibling_name)
-    if candidate.exists():
-        return candidate
+    names = [sibling_name]
+    if sibling_name.lower().endswith(".exe"):
+        names.append(sibling_name[:-4])
+    else:
+        names.append(f"{sibling_name}.exe")
+    for name in names:
+        candidate = path.with_name(name)
+        if candidate.exists():
+            return candidate
     return None
 
 

@@ -678,40 +678,64 @@ export function createPhotoMap(L, element, options) {
       if (!mapContainer || typeof mapContainer.getBoundingClientRect !== 'function' ||
           typeof map.panBy !== 'function') return;
       var panIntoView = function (attempt) {
+        if (!currentEntry.groupPopupElement ||
+            typeof currentEntry.groupPopupElement.getBoundingClientRect !== 'function') return;
         var mapRect = mapContainer.getBoundingClientRect();
         var popupRect = currentEntry.groupPopupElement.getBoundingClientRect();
         var mapWidth = mapRect.right - mapRect.left;
         var mapHeight = mapRect.bottom - mapRect.top;
-        // A popup taller/wider than its containing map cannot be fully placed
-        // inside it. Leave its position alone rather than causing a disruptive
-        // pan that still cannot satisfy the bounds.
-        if (popupRect.width > mapWidth || popupRect.height > mapHeight) return;
+        if (!(mapWidth > 0) || !(mapHeight > 0)) return;
         var padding = 8;
         var offsetX = 0;
         var offsetY = 0;
-        if (popupRect.left < mapRect.left + padding) offsetX = popupRect.left - mapRect.left - padding;
-        else if (popupRect.right > mapRect.right - padding) offsetX = popupRect.right - mapRect.right + padding;
-        if (popupRect.top < mapRect.top + padding) offsetY = popupRect.top - mapRect.top - padding;
-        else if (popupRect.bottom > mapRect.bottom - padding) offsetY = popupRect.bottom - mapRect.bottom + padding;
+        // Prefer a fully in-bounds placement when the popup fits. When it is
+        // larger than the map, pin the top/left edges so as much content as
+        // possible remains visible rather than leaving an overflow alone.
+        if (popupRect.width <= mapWidth - (padding * 2)) {
+          if (popupRect.left < mapRect.left + padding) {
+            offsetX = popupRect.left - mapRect.left - padding;
+          } else if (popupRect.right > mapRect.right - padding) {
+            offsetX = popupRect.right - mapRect.right + padding;
+          }
+        } else if (popupRect.left < mapRect.left + padding || popupRect.right > mapRect.right - padding) {
+          offsetX = popupRect.left - mapRect.left - padding;
+        }
+        if (popupRect.height <= mapHeight - (padding * 2)) {
+          if (popupRect.top < mapRect.top + padding) {
+            offsetY = popupRect.top - mapRect.top - padding;
+          } else if (popupRect.bottom > mapRect.bottom - padding) {
+            offsetY = popupRect.bottom - mapRect.bottom + padding;
+          }
+        } else if (popupRect.top < mapRect.top + padding || popupRect.bottom > mapRect.bottom - padding) {
+          offsetY = popupRect.top - mapRect.top - padding;
+        }
         debug.log('group-popup-viewport-pan', {
           path: itemPath(currentEntry.item),
           selectedMemberPath: currentEntry.groupSelectedPath || '',
           attempt: attempt,
           offsetX: offsetX,
           offsetY: offsetY,
+          popupWidth: popupRect.width,
+          popupHeight: popupRect.height,
+          mapWidth: mapWidth,
+          mapHeight: mapHeight,
         });
         if (!offsetX && !offsetY) {
           popupDiagnostics.viewportFitNoops += 1;
+          // Layout can still settle after images/fonts reflow. Recheck a few
+          // frames even when the first measurement already looked in-bounds.
+          if (attempt < 3 && windowImpl && typeof windowImpl.requestAnimationFrame === 'function') {
+            windowImpl.requestAnimationFrame(function () { panIntoView(attempt + 1); });
+          }
           return;
         }
         popupDiagnostics.viewportFitPans += 1;
         map.panBy([offsetX, offsetY], {animate: false});
         // Leaflet completes a non-animated pan synchronously, but its popup
-        // transform is reconciled on the following frame. Recheck once so the
-        // final visual popup bounds, rather than its pre-transform bounds,
-        // determine the fit.
-        if (attempt === 0 && windowImpl && typeof windowImpl.requestAnimationFrame === 'function') {
-          windowImpl.requestAnimationFrame(function () { panIntoView(1); });
+        // transform is reconciled on the following frame. Recheck so the final
+        // visual popup bounds, rather than pre-transform bounds, determine the fit.
+        if (attempt < 3 && windowImpl && typeof windowImpl.requestAnimationFrame === 'function') {
+          windowImpl.requestAnimationFrame(function () { panIntoView(attempt + 1); });
         }
       };
       panIntoView(0);

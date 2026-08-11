@@ -14,6 +14,10 @@ module.exports = defineConfig({
   use: {
     baseURL: `http://127.0.0.1:${port}`,
     trace: "on-first-retry",
+    // Waveform e2e needs Web Audio decode without a prior user gesture.
+    launchOptions: {
+      args: ["--autoplay-policy=no-user-gesture-required"],
+    },
   },
   // Named groups so suites can be run in isolation:
   //   npx playwright test --project=music

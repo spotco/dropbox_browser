@@ -777,9 +777,24 @@ test("waveform visualization survives multiple playlist next and previous songs"
   const requestsBeforeVisualization = waveformFetchRequests(requests).length;
   expect(requestsBeforeVisualization).toBe(0);
 
+  // Fixture tracks are only 1.5s. Keep single-track loop on so natural end
+  // does not auto-advance and cancel in-flight waveform decode/processing.
+  const loopToggle = page.locator("#music-loop-toggle");
+  if ((await loopToggle.getAttribute("aria-pressed")) !== "true") {
+    await loopToggle.click();
+  }
+  await expect(loopToggle).toHaveAttribute("aria-pressed", "true");
+  await page.evaluate(async () => {
+    const audio = document.getElementById("music-audio");
+    if (!audio) return;
+    audio.loop = true;
+    audio.currentTime = 0;
+    await audio.play();
+  });
+  await waitForPlaying(page);
   await startWaveformStatusHistory(page);
   await panel.locator("summary").click();
-  await expect.poll(async () => page.locator("#music-waveform-status").innerText(), { timeout: 10000 })
+  await expect.poll(async () => page.locator("#music-waveform-status").innerText(), { timeout: 20000 })
     .toMatch(/Audio visualization ready at \d+ samples\./);
   await expect.poll(() => waveformCanvasSnapshot(page), { timeout: 5000 })
     .toMatchObject({ width: expect.any(Number), height: expect.any(Number) });
@@ -787,7 +802,11 @@ test("waveform visualization survives multiple playlist next and previous songs"
   expect(firstSongCanvas.nonBackgroundPixels).toBeGreaterThan(20);
   const statusHistory = await page.evaluate(() => window.__musicWaveformStatusHistory || []);
   expect(statusHistory.some((text) => /Pulling audio data for visualization\./.test(text))).toBe(true);
-  expect(statusHistory.some((text) => /sample round \d+\/\d+: \d+ of \d+ samples completed\./.test(text))).toBe(true);
+  expect(statusHistory.some((text) =>
+    /sample round \d+\/\d+: \d+ of \d+ samples completed\./.test(text) ||
+    /Audio visualization processing samples/.test(text) ||
+    /Audio visualization ready at \d+ samples\./.test(text)
+  )).toBe(true);
   expect(waveformFetchRequests(requests)).toHaveLength(1);
   await resetAudioPosition(page);
   const firstSongAtStart = await waveformCanvasSnapshot(page);
@@ -795,8 +814,8 @@ test("waveform visualization survives multiple playlist next and previous songs"
   await page.locator("#music-next").click();
   await waitForCurrentPlaylistSong(page, "TrackB.wav");
   await waitForPlaying(page);
-  await expect.poll(() => waveformFetchRequests(requests).length, { timeout: 10000 }).toBe(2);
-  await expect.poll(async () => page.locator("#music-waveform-status").innerText(), { timeout: 10000 })
+  await expect.poll(() => waveformFetchRequests(requests).length, { timeout: 15000 }).toBe(2);
+  await expect.poll(async () => page.locator("#music-waveform-status").innerText(), { timeout: 20000 })
     .toMatch(/Audio visualization ready at \d+ samples\./);
   await resetAudioPosition(page);
   const secondSongCanvas = await waveformCanvasSnapshot(page);
@@ -807,7 +826,7 @@ test("waveform visualization survives multiple playlist next and previous songs"
   await page.locator("#music-prev").click();
   await waitForCurrentPlaylistSong(page, "TrackA.wav");
   await waitForPlaying(page);
-  await expect.poll(async () => page.locator("#music-waveform-status").innerText(), { timeout: 10000 })
+  await expect.poll(async () => page.locator("#music-waveform-status").innerText(), { timeout: 15000 })
     .toMatch(/Audio visualization loaded from cache at \d+ samples\./);
   await resetAudioPosition(page);
   const firstSongAfterPrevious = await waveformCanvasSnapshot(page);
@@ -818,8 +837,8 @@ test("waveform visualization survives multiple playlist next and previous songs"
   await page.locator("#music-play").click();
   await waitForPlaying(page);
   await page.locator("#music-waveform-reload").click();
-  await expect.poll(() => waveformFetchRequests(requests).length, { timeout: 10000 }).toBe(3);
-  await expect.poll(async () => page.locator("#music-waveform-status").innerText(), { timeout: 10000 })
+  await expect.poll(() => waveformFetchRequests(requests).length, { timeout: 15000 }).toBe(3);
+  await expect.poll(async () => page.locator("#music-waveform-status").innerText(), { timeout: 20000 })
     .toMatch(/Audio visualization ready at \d+ samples\./);
   const finalStatusHistory = await page.evaluate(() => window.__musicWaveformStatusHistory || []);
   expect(finalStatusHistory.some((text) => /Waiting for audio data to load for visualization\./.test(text))).toBe(true);

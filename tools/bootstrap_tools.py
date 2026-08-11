@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
+import ssl
 import sys
 import tempfile
 import urllib.error
@@ -36,6 +38,24 @@ def _progress_write(prefix: str, done: int, total: int | None) -> None:
     sys.stdout.flush()
 
 
+def _ssl_context():
+    """Build an SSL context, preferring well-known CA bundles when Python's default trust store is empty."""
+    candidates = [
+        os.environ.get("SSL_CERT_FILE"),
+        os.environ.get("REQUESTS_CA_BUNDLE"),
+        "/usr/local/etc/ca-certificates/cert.pem",
+        "/etc/ssl/cert.pem",
+        "/etc/ssl/certs/ca-certificates.crt",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if path.is_file():
+            return ssl.create_default_context(cafile=str(path))
+    return ssl.create_default_context()
+
+
 def download_file(url: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     request = urllib.request.Request(
@@ -43,7 +63,7 @@ def download_file(url: str, dest: Path) -> None:
         headers={"User-Agent": "dropbox-browser-bootstrap/1.0"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=120) as response:
+        with urllib.request.urlopen(request, timeout=120, context=_ssl_context()) as response:
             total = response.headers.get("Content-Length")
             total_n = int(total) if total and total.isdigit() else None
             done = 0
