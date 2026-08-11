@@ -196,6 +196,33 @@ class DistributedE2ETests(unittest.TestCase):
         self.assertEqual(args.publish_workers, "auto")
         self.assertFalse(args.sync_clean)
 
+    def test_remote_script_exports_worker_browser(self) -> None:
+        worker = runner.RemoteWorker(
+            id="spmba2014",
+            nickname="spmba2014",
+            label="spmba2014",
+            host="spmba.example",
+            user="spotco",
+            repo="/Users/spotco/dev/dropbox_browser",
+            git="git",
+            path_prefix="/opt/local/bin",
+            platform="macos-intel",
+            remote_os="macOS",
+            branch="master",
+            schedule_weight=1.0,
+            browser="/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+        )
+        shared = SimpleNamespace(ssh=SimpleNamespace(shell_quote=lambda value: f"'{value}'"))
+        script = runner._remote_script(
+            shared,
+            worker,
+            (runner.E2E_DIR / "client-render.smoke.spec.js",),
+            "/tmp/run",
+            "job-test",
+        )
+        self.assertIn("DROPBOX_BROWSER_BROWSER_EXECUTABLE", script)
+        self.assertIn("Brave Browser.app", script)
+
 
 if __name__ == "__main__":
     unittest.main()

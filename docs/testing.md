@@ -136,6 +136,11 @@ checkout/runtime settings belong in the shared project's private
 checkout. The product source dynamically links the shared SDK when it is
 present and does not vendor or name a private inventory repository.
 
+Workers with older macOS releases may use an installed browser instead of
+Playwright's bundled Chromium. Set the worker's private `browser` path; the
+distributed runner exports it as `DROPBOX_BROWSER_BROWSER_EXECUTABLE`, and the
+Playwright config uses that executable for the lane.
+
 Before a remote run, the default `--publish-workers auto` compares each
 selected worker with local `HEAD`. Dirty or stale checkouts are preserved in a
 remote stash and reset to that commit. The runner normally fetches from

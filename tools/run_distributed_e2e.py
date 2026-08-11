@@ -64,6 +64,7 @@ class RemoteWorker:
     remote_os: str
     branch: str | None
     schedule_weight: float
+    browser: str = ""
 
     def target(self, ssh_module: Any) -> Any:
         return ssh_module.SshTarget(
@@ -238,6 +239,12 @@ def load_workers(shared: Any, settings: dict[str, Any]) -> tuple[list[RemoteWork
                     else None
                 ),
                 schedule_weight=max(0.01, schedule_weight),
+                browser=str(
+                    raw.get("browser")
+                    or getattr(project_worker, "browser", "")
+                    or project_extra.get("browser", "")
+                    or ""
+                ).strip(),
             )
         )
     return workers, skipped
@@ -349,10 +356,17 @@ def _remote_script(shared: Any, worker: RemoteWorker, specs: tuple[Path, ...], r
     stdout_path = quote(f"{remote_dir}/stdout.log")
     result_path = quote(f"{remote_dir}/result.json")
     repo_path = remote_shell_path(worker, worker.repo)
+    browser_export = (
+        f"export DROPBOX_BROWSER_BROWSER_EXECUTABLE={quote(worker.browser)}; "
+        if worker.browser
+        else ""
+    )
     return "\n".join(
         [
             "set -e",
-            _path_export(worker.path_prefix) + f"cd {quote(repo_path)}",
+            _path_export(worker.path_prefix)
+            + browser_export
+            + f"cd {quote(repo_path)}",
             "set +e",
             "overall=0",
             f"for spec in {spec_args}; do",

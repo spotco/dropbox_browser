@@ -3,6 +3,13 @@ const { defineConfig } = require("@playwright/test");
 
 const port = Number(process.env.PLAYWRIGHT_PORT || "8010");
 const repoRoot = __dirname;
+// Older macOS workers may not be able to launch Playwright's bundled
+// Chromium. Match the OSPhoto worker setup by allowing the dispatcher to
+// provide an installed Chrome/Brave executable per worker.
+const browserExecutable =
+  process.env.DROPBOX_BROWSER_BROWSER_EXECUTABLE ||
+  process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ||
+  "";
 
 module.exports = defineConfig({
   testDir: path.join(repoRoot, "tests", "e2e"),
@@ -17,6 +24,7 @@ module.exports = defineConfig({
     // Waveform e2e needs Web Audio decode without a prior user gesture.
     launchOptions: {
       args: ["--autoplay-policy=no-user-gesture-required"],
+      ...(browserExecutable ? { executablePath: browserExecutable } : {}),
     },
   },
   // Named groups so suites can be run in isolation:
