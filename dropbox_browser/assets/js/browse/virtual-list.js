@@ -86,3 +86,235 @@ export function measureMountedRowHeight(tbody, fallbackHeight) {
   var height = row.getBoundingClientRect().height;
   return height > 0 ? height : (fallbackHeight || DEFAULT_VIRTUAL_ROW_HEIGHT);
 }
+
+/*
+ * Shared bounded row pool for virtualized list consumers.
+ *
+ * The recycler deliberately knows nothing about row markup. Consumers provide
+ * a row factory, a binder, and an optional mount/render hook. This keeps the
+ * window math, pool lifetime, and animation-frame scheduling identical for
+ * media playlists and the file-browser table while preserving their distinct
+ * DOM contracts.
+ */
+export function createVirtualRowRecycler(options) {
+  var settings = options || {};
+  var viewport = settings.viewport || null;
+  var rowCount = Math.max(0, Number(settings.rowCount) || 0);
+  var getItem = typeof settings.getItem === 'function' ? settings.getItem : function () { return null; };
+  var rowHeight = Math.max(1, Number(settings.rowHeight) || DEFAULT_VIRTUAL_ROW_HEIGHT);
+  var overscan = Math.max(0, Number(settings.overscan) || DEFAULT_VIRTUAL_OVERSCAN);
+  var threshold = Math.max(1, Number(settings.threshold) || DEFAULT_VIRTUAL_THRESHOLD);
+  var pool = [];
+  var windowKey = '';
+  var lastWindow = null;
+  var renderFrame = null;
+  var destroyed = false;
+  var rowHeightMeasured = false;
+
+  function readViewport() {
+    var value;
+    if (typeof settings.getViewport === 'function') {
+      value = settings.getViewport() || {};
+    } else {
+      value = {
+        scrollTop: viewport && Number(viewport.scrollTop) || 0,
+        viewportHeight: viewport && Number(viewport.clientHeight) || rowHeight
+      };
+    }
+    return {
+      scrollTop: Math.max(0, Number(value.scrollTop) || 0),
+      viewportHeight: Math.max(rowHeight, Number(value.viewportHeight) || rowHeight)
+    };
+  }
+
+  function currentWindow() {
+    var visible = readViewport();
+    return computeVirtualWindow({
+      rowCount: rowCount,
+      rowHeight: rowHeight,
+      scrollTop: visible.scrollTop,
+      viewportHeight: visible.viewportHeight,
+      overscan: overscan
+    });
+  }
+
+  function poolSizeFor(windowState) {
+    return Math.max(0, windowState.endIndex - windowState.startIndex);
+  }
+
+  function ensurePool(size) {
+    var row;
+    while (pool.length < size) {
+      if (typeof settings.createRow !== 'function') break;
+      row = settings.createRow(pool.length);
+      if (!row) break;
+      pool.push(row);
+      if (typeof settings.mountRow === 'function') settings.mountRow(row, pool.length - 1);
+    }
+  }
+
+  function hideRow(row, hidden) {
+    if (!row) return;
+    if (typeof settings.hideRow === 'function') {
+      settings.hideRow(row, hidden);
+      return;
+    }
+    row.hidden = !!hidden;
+  }
+
+  function render(force) {
+    var windowState;
+    var nextWindowKey;
+    var activeCount;
+    var index;
+    var row;
+    var measuredHeight;
+    var measuredDiff;
+    if (destroyed) return lastWindow;
+    if (!shouldVirtualizeRows(rowCount, {threshold: threshold})) {
+      pool.forEach(function (pooledRow) { hideRow(pooledRow, true); });
+      lastWindow = null;
+      return null;
+    }
+    windowState = currentWindow();
+    nextWindowKey = [
+      rowCount,
+      rowHeight,
+      windowState.startIndex,
+      windowState.endIndex,
+      windowState.topSpacerHeight,
+      windowState.bottomSpacerHeight
+    ].join(':');
+    if (!force && windowKey === nextWindowKey) return lastWindow;
+
+    activeCount = poolSizeFor(windowState);
+    ensurePool(activeCount);
+    for (index = 0; index < pool.length; index += 1) {
+      row = pool[index];
+      if (index >= activeCount) {
+        hideRow(row, true);
+        continue;
+      }
+      hideRow(row, false);
+      if (typeof settings.updateRow === 'function') {
+        settings.updateRow(
+          row,
+          getItem(windowState.startIndex + index),
+          windowState.startIndex + index,
+          index,
+          windowState,
+          {
+            rowHeight: rowHeight,
+            rowHeightMeasured: rowHeightMeasured,
+            rowCount: rowCount,
+          },
+        );
+      }
+    }
+    windowKey = nextWindowKey;
+    lastWindow = windowState;
+    if (typeof settings.renderWindow === 'function') {
+      settings.renderWindow(windowState, activeCount, pool, {
+        rowHeight: rowHeight,
+        rowHeightMeasured: rowHeightMeasured,
+        rowCount: rowCount,
+        windowKey: windowKey,
+      });
+    }
+
+    if (!rowHeightMeasured && pool.length > 0 && typeof settings.measureRowHeight === 'function') {
+      measuredHeight = Number(settings.measureRowHeight(pool[0], rowHeight));
+      if (measuredHeight > 0) {
+        rowHeightMeasured = true;
+        measuredDiff = Math.abs(measuredHeight - rowHeight);
+        if (measuredDiff > 0.5) {
+          rowHeight = measuredHeight;
+          windowKey = '';
+          return render(true);
+        }
+      }
+    }
+    if (typeof settings.afterRender === 'function') {
+      settings.afterRender(windowState, activeCount, pool, {
+        rowHeight: rowHeight,
+        rowHeightMeasured: rowHeightMeasured,
+        rowCount: rowCount,
+        windowKey: windowKey,
+      });
+    }
+    return lastWindow;
+  }
+
+  function schedule(force) {
+    if (destroyed || renderFrame !== null) return;
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      renderFrame = window.requestAnimationFrame(function () {
+        renderFrame = null;
+        render(!!force);
+      });
+      return;
+    }
+    render(!!force);
+  }
+
+  function cancel() {
+    if (renderFrame === null) return;
+    if (typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+      window.cancelAnimationFrame(renderFrame);
+    }
+    renderFrame = null;
+  }
+
+  function setData(nextRowCount, nextGetItem) {
+    rowCount = Math.max(0, Number(nextRowCount) || 0);
+    if (typeof nextGetItem === 'function') getItem = nextGetItem;
+    windowKey = '';
+    lastWindow = null;
+    return api;
+  }
+
+  function setRowHeight(nextRowHeight) {
+    rowHeight = Math.max(1, Number(nextRowHeight) || DEFAULT_VIRTUAL_ROW_HEIGHT);
+    rowHeightMeasured = false;
+    windowKey = '';
+    lastWindow = null;
+    return api;
+  }
+
+  function stateSnapshot() {
+    return {
+      enabled: shouldVirtualizeRows(rowCount, {threshold: threshold}),
+      rowCount: rowCount,
+      rowHeight: rowHeight,
+      rowHeightMeasured: rowHeightMeasured,
+      overscan: overscan,
+      threshold: threshold,
+      windowKey: windowKey,
+      window: lastWindow,
+      mountedCount: pool.filter(function (row) { return row && !row.hidden; }).length,
+      poolSize: pool.length,
+    };
+  }
+
+  function destroy() {
+    cancel();
+    pool.forEach(function (row) {
+      if (typeof settings.unmountRow === 'function') settings.unmountRow(row);
+      else if (row && row.parentNode && typeof row.parentNode.removeChild === 'function') row.parentNode.removeChild(row);
+    });
+    pool = [];
+    destroyed = true;
+    lastWindow = null;
+  }
+
+  var api = {
+    cancel: cancel,
+    destroy: destroy,
+    getState: stateSnapshot,
+    render: render,
+    schedule: schedule,
+    setData: setData,
+    setRowHeight: setRowHeight,
+  };
+  return api;
+}

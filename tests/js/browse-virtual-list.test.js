@@ -36,6 +36,107 @@ test("shouldVirtualizeRows keeps small listings on the full-render path", async 
   assert.equal(virtualList.shouldVirtualizeRows(10, { threshold: 10 }), true);
 });
 
+test("createVirtualRowRecycler reuses a bounded pool as the window moves", async () => {
+  const previousWindow = global.window;
+  const previousDocument = global.document;
+  global.window = {};
+  global.document = {};
+
+  try {
+    const virtualList = await importModuleFromWorkspace("dropbox_browser/assets/js/browse/virtual-list.js");
+    const viewport = { scrollTop: 0, clientHeight: 100 };
+    const createdRows = [];
+    const updatedRows = [];
+    const recycler = virtualList.createVirtualRowRecycler({
+      rowCount: 100,
+      rowHeight: 10,
+      overscan: 1,
+      threshold: 10,
+      viewport,
+      createRow() {
+        const row = { hidden: false, poolId: createdRows.length };
+        createdRows.push(row);
+        return row;
+      },
+      updateRow(row, item, index) {
+        row.hidden = false;
+        row.item = item;
+        row.index = index;
+        updatedRows.push(row);
+      },
+    });
+
+    recycler.setData(100, (index) => `item-${index}`);
+    const firstWindow = recycler.render(true);
+    const firstPool = createdRows.slice();
+
+    assert.equal(firstWindow.startIndex, 0);
+    assert.equal(firstWindow.endIndex, 12);
+    assert.equal(createdRows.length, 12);
+    assert.equal(recycler.getState().mountedCount, 12);
+
+    viewport.scrollTop = 500;
+    const secondWindow = recycler.render(true);
+
+    assert.equal(secondWindow.startIndex, 49);
+    assert.equal(secondWindow.endIndex, 61);
+    assert.equal(createdRows.length, 12);
+    assert.deepEqual(createdRows, firstPool);
+    assert.deepEqual(
+      createdRows.map((row) => row.index),
+      Array.from({ length: 12 }, (_, offset) => 49 + offset),
+    );
+    assert.equal(updatedRows.length, 24);
+  } finally {
+    if (previousWindow === undefined) delete global.window;
+    else global.window = previousWindow;
+    if (previousDocument === undefined) delete global.document;
+    else global.document = previousDocument;
+  }
+});
+
+test("createVirtualRowRecycler publishes the measured row height to row adapters", async () => {
+  const previousWindow = global.window;
+  const previousDocument = global.document;
+  global.window = {};
+  global.document = {};
+
+  try {
+    const virtualList = await importModuleFromWorkspace("dropbox_browser/assets/js/browse/virtual-list.js");
+    const updates = [];
+    const recycler = virtualList.createVirtualRowRecycler({
+      rowCount: 20,
+      rowHeight: 10,
+      overscan: 1,
+      threshold: 10,
+      viewport: { scrollTop: 0, clientHeight: 100 },
+      createRow() {
+        return { hidden: false };
+      },
+      updateRow(_row, _item, _index, _slot, _windowState, recyclerState) {
+        updates.push({
+          rowHeight: recyclerState.rowHeight,
+          rowHeightMeasured: recyclerState.rowHeightMeasured,
+        });
+      },
+      measureRowHeight() {
+        return 24;
+      },
+    });
+
+    recycler.render(true);
+
+    assert.equal(recycler.getState().rowHeight, 24);
+    assert.equal(recycler.getState().rowHeightMeasured, true);
+    assert.deepEqual(updates.at(-1), { rowHeight: 24, rowHeightMeasured: true });
+  } finally {
+    if (previousWindow === undefined) delete global.window;
+    else global.window = previousWindow;
+    if (previousDocument === undefined) delete global.document;
+    else global.document = previousDocument;
+  }
+});
+
 test("rowIndexForScrollPosition maps the scrollbar position across the full sorted result set", async () => {
   const virtualList = await importModuleFromWorkspace("dropbox_browser/assets/js/browse/virtual-list.js");
 

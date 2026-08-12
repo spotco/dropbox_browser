@@ -76,7 +76,7 @@ function renderFolderMetadataCell(row, kind) {
   return prefix + esc(row.date_display || '');
 }
 
-function renderBrowseRow(row) {
+function browseRowAttributes(row) {
   var attrs = [
     ' data-browse-row-id="' + esc(row.id) + '"',
     ' data-row-path="' + esc(row.path) + '"',
@@ -90,15 +90,43 @@ function renderBrowseRow(row) {
   if (row.kind === 'file' && row.remote && row.local) {
     attrs.push(' data-file-status-path="' + esc(row.path) + '"');
   }
-  return '<tr' + attrs.join('') + '>' +
-    '<td class="col-name">' + renderNameCell(row) + '</td>' +
+  return attrs;
+}
+
+function renderBrowseRowCells(row) {
+  return '<td class="col-name">' + renderNameCell(row) + '</td>' +
     '<td>' + esc(row.type_label) + '</td>' +
     '<td><span class="status ' + esc(row.status_class) + '">' + esc(row.status_label) + '</span></td>' +
     '<td class="col-size">' + renderFolderMetadataCell(row, 'size') + '</td>' +
     '<td class="col-date">' + renderFolderMetadataCell(row, 'date') + '</td>' +
     renderViewCell(row) +
-    renderSyncCell(row) +
+    renderSyncCell(row);
+}
+
+function renderBrowseRow(row) {
+  return '<tr' + browseRowAttributes(row).join('') + '>' +
+    renderBrowseRowCells(row) +
     '</tr>';
+}
+
+export function createBrowseRow() {
+  return document.createElement('tr');
+}
+
+export function updateBrowseRow(element, row) {
+  if (!element || !row) return element;
+  element.className = '';
+  element.setAttribute('data-browse-row-id', row.id);
+  element.setAttribute('data-row-path', row.path);
+  element.setAttribute('data-row-kind', row.kind);
+  element.setAttribute('data-sort-name', row.sort_name);
+  element.setAttribute('data-sort-date', row.sort_date);
+  if (row.kind === 'folder' && row.remote) element.setAttribute('data-folder-path', row.path);
+  else element.removeAttribute('data-folder-path');
+  if (row.kind === 'file' && row.remote && row.local) element.setAttribute('data-file-status-path', row.path);
+  else element.removeAttribute('data-file-status-path');
+  element.innerHTML = renderBrowseRowCells(row);
+  return element;
 }
 
 function renderSpacerRow(height) {

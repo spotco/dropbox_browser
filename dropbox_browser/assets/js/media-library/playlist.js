@@ -1,7 +1,7 @@
 import {clearObject, formatShortDateTime} from './shared.js';
 import {formatMediaItemCount, mediaKindPresentation} from './media-kind.js';
 import {
-  computeVirtualWindow,
+  createVirtualRowRecycler,
   shouldVirtualizeRows,
 } from '../browse/virtual-list.js';
 import {
@@ -246,6 +246,7 @@ export function initPlaylist(ctx) {
     rowHeightMeasured: false,
     windowKey: '',
     contentEl: null,
+    recycler: null,
     renderFrame: null,
     resizeObserver: null
   };
@@ -1096,17 +1097,6 @@ export function initPlaylist(ctx) {
     };
   }
 
-  function playlistVirtualWindow() {
-    var viewport = playlistVirtualViewport();
-    return computeVirtualWindow({
-      rowCount: state.playlist.length,
-      rowHeight: playlistVirtual.rowHeight,
-      scrollTop: viewport.scrollTop,
-      viewportHeight: viewport.viewportHeight,
-      overscan: playlistVirtual.overscan
-    });
-  }
-
   function setPlaylistVirtualDataset(windowState, mountedCount) {
     if (!els.playlistListEl) return;
     els.playlistListEl.dataset.playlistCount = String(state.playlist.length);
@@ -1120,77 +1110,80 @@ export function initPlaylist(ctx) {
     els.playlistListEl.dataset.playlistMountedCount = String(mountedCount);
   }
 
-  function measurePlaylistRowHeight() {
-    var row;
-    var height;
-    if (!playlistVirtual.contentEl || typeof playlistVirtual.contentEl.querySelector !== 'function') return 0;
-    row = playlistVirtual.contentEl.querySelector('.music-playlist-entry');
-    if (!row || typeof row.getBoundingClientRect !== 'function') return 0;
-    height = Number(row.getBoundingClientRect().height);
-    return height > 0 ? height : 0;
-  }
-
-  function cancelPlaylistVirtualRender() {
-    if (playlistVirtual.renderFrame === null) return;
-    if (typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
-      window.cancelAnimationFrame(playlistVirtual.renderFrame);
-    }
-    playlistVirtual.renderFrame = null;
-  }
-
-  function renderPlaylistVirtualWindow(force) {
-    var windowState;
-    var nextWindowKey;
-    var contentEl;
-    var row;
-    var measuredHeight;
-    var index;
-    if (!playlistVirtual.enabled || !playlistVirtual.contentEl) return;
-    windowState = playlistVirtualWindow();
-    nextWindowKey = [
+  function playlistVirtualWindowKey(windowState) {
+    return [
       state.playlist.length,
       playlistVirtual.rowHeight,
       windowState.startIndex,
-      windowState.endIndex
+      windowState.endIndex,
+      windowState.topSpacerHeight,
+      windowState.bottomSpacerHeight
     ].join(':');
-    if (!force && playlistVirtual.windowKey === nextWindowKey) return;
-    contentEl = playlistVirtual.contentEl;
-    contentEl.style.height = String(windowState.totalHeight) + 'px';
-    contentEl.textContent = '';
-    for (index = windowState.startIndex; index < windowState.endIndex; index += 1) {
-      row = createPlaylistRow(state.playlist[index], index, true);
-      row.style.top = String(index * playlistVirtual.rowHeight) + 'px';
-      if (playlistVirtual.rowHeightMeasured) row.style.height = String(playlistVirtual.rowHeight) + 'px';
-      contentEl.appendChild(row);
+  }
+
+  function cancelPlaylistVirtualRender() {
+    if (playlistVirtual.recycler) {
+      playlistVirtual.recycler.cancel();
+      return;
     }
-    playlistVirtual.windowKey = nextWindowKey;
-    setPlaylistVirtualDataset(windowState, windowState.endIndex - windowState.startIndex);
-    if (!playlistVirtual.rowHeightMeasured) {
-      measuredHeight = measurePlaylistRowHeight();
-      if (measuredHeight > 0) {
-        playlistVirtual.rowHeightMeasured = true;
-        if (Math.abs(measuredHeight - playlistVirtual.rowHeight) > 0.5) {
-          playlistVirtual.rowHeight = measuredHeight;
-          playlistVirtual.windowKey = '';
-          renderPlaylistVirtualWindow(true);
-          return;
-        }
+    if (playlistVirtual.renderFrame !== null && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+      window.cancelAnimationFrame(playlistVirtual.renderFrame);
+      playlistVirtual.renderFrame = null;
+    }
+  }
+
+  function createPlaylistVirtualRecycler(contentEl) {
+    playlistVirtual.contentEl = contentEl;
+    return createVirtualRowRecycler({
+      viewport: els.playlistListEl,
+      rowCount: state.playlist.length,
+      getItem: function (index) { return state.playlist[index]; },
+      rowHeight: playlistVirtual.rowHeight,
+      overscan: playlistVirtual.overscan,
+      threshold: playlistVirtual.threshold,
+      getViewport: playlistVirtualViewport,
+      createRow: function () { return createPlaylistRow(null, 0, true); },
+      mountRow: function (row) { contentEl.appendChild(row); },
+      updateRow: function (row, song, index, _slot, _windowState, recyclerState) {
+        var height = recyclerState && recyclerState.rowHeight
+          ? recyclerState.rowHeight
+          : playlistVirtual.rowHeight;
+        updatePlaylistRow(row, song, index, true);
+        row.style.top = String(index * height) + 'px';
+        row.style.height = recyclerState && recyclerState.rowHeightMeasured
+          ? String(height) + 'px'
+          : '';
+      },
+      measureRowHeight: function (row) {
+        if (!row || typeof row.getBoundingClientRect !== 'function') return 0;
+        return Number(row.getBoundingClientRect().height) || 0;
+      },
+      renderWindow: function (windowState, mountedCount, _pool, recyclerState) {
+        playlistVirtual.rowHeight = recyclerState.rowHeight;
+        playlistVirtual.rowHeightMeasured = recyclerState.rowHeightMeasured;
+        playlistVirtual.windowKey = playlistVirtualWindowKey(windowState);
+        contentEl.style.height = String(windowState.totalHeight) + 'px';
+        setPlaylistVirtualDataset(windowState, mountedCount);
+      },
+      afterRender: function (windowState, mountedCount, _pool, recyclerState) {
+        playlistVirtual.rowHeight = recyclerState.rowHeight;
+        playlistVirtual.rowHeightMeasured = recyclerState.rowHeightMeasured;
+        playlistVirtual.windowKey = playlistVirtualWindowKey(windowState);
+        setPlaylistVirtualDataset(windowState, mountedCount);
+        paintPlaylistSelection();
+        updatePlaylistDragIndicators();
       }
-    }
-    paintPlaylistSelection();
-    updatePlaylistDragIndicators();
+    });
+  }
+
+  function renderPlaylistVirtualWindow(force) {
+    if (!playlistVirtual.enabled || !playlistVirtual.recycler) return null;
+    return playlistVirtual.recycler.render(!!force);
   }
 
   function schedulePlaylistVirtualRender() {
-    if (!playlistVirtual.enabled || playlistVirtual.renderFrame !== null) return;
-    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-      playlistVirtual.renderFrame = window.requestAnimationFrame(function () {
-        playlistVirtual.renderFrame = null;
-        renderPlaylistVirtualWindow(false);
-      });
-      return;
-    }
-    renderPlaylistVirtualWindow(false);
+    if (!playlistVirtual.enabled || !playlistVirtual.recycler) return;
+    playlistVirtual.recycler.schedule(false);
   }
 
   function scrollPlaylistIndexIntoView(index) {
@@ -1784,6 +1777,23 @@ export function initPlaylist(ctx) {
     renderPlaylist();
   }
 
+  function updatePlaylistRow(row, song, index, virtualized) {
+    if (!row || !song) return row;
+    row.className = 'music-playlist-row music-playlist-entry';
+    row.setAttribute('role', 'row');
+    row.setAttribute('aria-selected', state.selectedPlaylistRemotePaths[song.remote_path] ? 'true' : 'false');
+    row.dataset.remotePath = song.remote_path;
+    row.dataset.streamPath = song.stream_path;
+    row.dataset.playlistIndex = String(index);
+    row.classList.toggle('selected', !!state.selectedPlaylistRemotePaths[song.remote_path]);
+    row.classList.toggle('current', index === state.currentPlaylistIndex);
+    row.classList.toggle('music-playlist-virtual-entry', !!virtualized);
+    row.querySelector('.music-playlist-index-cell').textContent = String(index + 1);
+    row.querySelector('.music-playlist-filename-cell').textContent = song.display_name || '';
+    row.querySelector('.music-playlist-path-cell').textContent = absolutePlaylistPath(song);
+    return row;
+  }
+
   function createPlaylistRow(song, index, virtualized) {
     var row = document.createElement('div');
     var dragHandle;
@@ -1794,30 +1804,23 @@ export function initPlaylist(ctx) {
     var dragHandleIcon;
     row.className = 'music-playlist-row music-playlist-entry';
     row.setAttribute('role', 'row');
-    row.setAttribute('aria-selected', state.selectedPlaylistRemotePaths[song.remote_path] ? 'true' : 'false');
-    row.dataset.remotePath = song.remote_path;
-    row.dataset.streamPath = song.stream_path;
-    row.dataset.playlistIndex = String(index);
-    if (state.selectedPlaylistRemotePaths[song.remote_path]) row.classList.add('selected');
-    if (index === state.currentPlaylistIndex) row.classList.add('current');
-    if (virtualized) row.classList.add('music-playlist-virtual-entry');
 
     indexCell = document.createElement('div');
     indexCell.className = 'music-playlist-index-cell';
     indexCell.setAttribute('role', 'cell');
-    indexCell.textContent = String(index + 1);
+    indexCell.textContent = '';
     row.appendChild(indexCell);
 
     nameCell = document.createElement('div');
     nameCell.className = 'music-playlist-filename-cell';
     nameCell.setAttribute('role', 'cell');
-    nameCell.textContent = song.display_name || '';
+    nameCell.textContent = '';
     row.appendChild(nameCell);
 
     pathCell = document.createElement('div');
     pathCell.className = 'music-playlist-path-cell';
     pathCell.setAttribute('role', 'cell');
-    pathCell.textContent = absolutePlaylistPath(song);
+    pathCell.textContent = '';
     row.appendChild(pathCell);
 
     handleCell = document.createElement('div');
@@ -1834,7 +1837,14 @@ export function initPlaylist(ctx) {
     dragHandle.appendChild(dragHandleIcon);
     handleCell.appendChild(dragHandle);
     row.appendChild(handleCell);
+    updatePlaylistRow(row, song, index, virtualized);
     return row;
+  }
+
+  function destroyPlaylistVirtualRecycler() {
+    if (playlistVirtual.recycler) playlistVirtual.recycler.destroy();
+    playlistVirtual.recycler = null;
+    playlistVirtual.contentEl = null;
   }
 
   function resetPlaylistVirtualState() {
@@ -1851,14 +1861,16 @@ export function initPlaylist(ctx) {
   function paintPlaylist() {
     var empty;
     var contentEl;
+    var useVirtual = playlistVirtualShouldRender();
     if (!els.playlistListEl) return;
     updateActivePlaylistName();
     state.playlistRenderDirty = false;
     state.playlistSelectionDirty = false;
-    resetPlaylistVirtualState();
-    els.playlistListEl.textContent = '';
     els.playlistListEl.dataset.playlistCount = String(state.playlist.length);
     if (state.playlist.length === 0) {
+      destroyPlaylistVirtualRecycler();
+      resetPlaylistVirtualState();
+      els.playlistListEl.textContent = '';
       empty = document.createElement('div');
       empty.className = 'music-empty-state';
       empty.textContent = 'Playlist is empty.';
@@ -1867,16 +1879,25 @@ export function initPlaylist(ctx) {
       ctx.pane.dataset.playlistSelectionCount = String(playlistSelectedCount());
       return;
     }
-    if (playlistVirtualShouldRender()) {
+    if (useVirtual) {
       playlistVirtual.enabled = true;
-      contentEl = document.createElement('div');
-      contentEl.className = 'music-playlist-virtual-content';
-      contentEl.setAttribute('role', 'presentation');
-      playlistVirtual.contentEl = contentEl;
-      els.playlistListEl.appendChild(contentEl);
+      if (!playlistVirtual.recycler) {
+        els.playlistListEl.textContent = '';
+        contentEl = document.createElement('div');
+        contentEl.className = 'music-playlist-virtual-content';
+        contentEl.setAttribute('role', 'presentation');
+        els.playlistListEl.appendChild(contentEl);
+        playlistVirtual.recycler = createPlaylistVirtualRecycler(contentEl);
+      }
+      playlistVirtual.recycler.setData(state.playlist.length, function (index) {
+        return state.playlist[index];
+      });
       renderPlaylistVirtualWindow(true);
       return;
     }
+    destroyPlaylistVirtualRecycler();
+    resetPlaylistVirtualState();
+    els.playlistListEl.textContent = '';
     state.playlist.forEach(function (song, index) {
       els.playlistListEl.appendChild(createPlaylistRow(song, index, false));
     });

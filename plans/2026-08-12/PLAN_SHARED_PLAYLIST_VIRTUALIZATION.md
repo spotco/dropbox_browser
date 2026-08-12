@@ -1,18 +1,21 @@
 # Shared Active Playlist Virtualization and Memory Plan
 
 Date: 2026-08-12  
-Status: Virtualization implemented; shared recycling is the next step  
+Status: Shared virtualization and row recycling implemented; validation complete
 Scope: one implementation day
 
-## Next step
+## Implemented next step
 
-Implement a shared, adapter-driven row recycler on top of the existing
-virtual-window math. The generic core will own bounded row pools, source-index
-assignment, scroll scheduling, and lifecycle cleanup. Music/video playlists
-and the file-browser table will supply separate row adapters so their existing
-DOM contracts remain unchanged. Preserve the non-virtualized small-list path
-and existing E2E selectors while migrating both consumers to shared
-virtualization plus recycling.
+Implemented a shared, adapter-driven row recycler on top of the existing
+virtual-window math. The generic core owns bounded row pools, source-index
+assignment, scroll scheduling, measurement, and lifecycle cleanup. Music/video
+playlists and the file-browser table supply separate row adapters, preserving
+their existing DOM contracts. The non-virtualized small-list paths and E2E
+selectors remain unchanged.
+
+The file-browser recycler also refreshes the scrollbar preview when the scroll
+position changes without changing the mounted window, which matters for short
+filtered virtual lists.
 
 ## Objective
 
@@ -226,6 +229,9 @@ Acceptance targets:
 
 ## Expected implementation files
 
+- `dropbox_browser/assets/js/browse/virtual-list.js`
+- `dropbox_browser/assets/js/browse/main.js`
+- `dropbox_browser/assets/js/browse/render.js`
 - `dropbox_browser/assets/js/media-library/playlist.js`
 - `dropbox_browser/assets/css/media-library.css`
 - `tests/js/music-playlist.test.js`
@@ -238,9 +244,16 @@ Acceptance targets:
 
 ## Definition of done for today
 
-The change is ready to merge into implementation when the shared renderer has
-a small-list compatibility path, the virtual path is bounded and
-virtualization-aware for selection/focus/drag, JS tests cover both media kinds,
-and the existing music/video E2E suites pass. The final handoff should include
-before/after browser memory observations and any deliberate threshold or
-overscan adjustment.
+The shared renderer has a small-list compatibility path, the virtual path is
+bounded and virtualization-aware for selection/focus/drag, JS tests cover the
+recycler, and the existing client-render, music, and video E2E suites pass.
+The implementation retains the existing 100-row threshold and 12-row overscan
+defaults from the prior virtualization step.
+
+## Validation completed
+
+- `npm run test:js`: 342 passing tests.
+- Client-render E2E suite: 35 passing tests, run serially after isolating the
+  local rclone test configuration.
+- Music E2E suite: 10 passing tests in the distributed run.
+- Video E2E suite: 47 passing tests in the distributed run.
