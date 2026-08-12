@@ -1,6 +1,10 @@
 import {clearObject, formatShortDateTime} from './shared.js';
 import {formatMediaItemCount, mediaKindPresentation} from './media-kind.js';
 import {
+  computeVirtualWindow,
+  shouldVirtualizeRows,
+} from '../browse/virtual-list.js';
+import {
   DEFAULT_PLAYLIST_NAME,
   parseM3uPlaylistText,
   playlistNameFromFilename,
@@ -205,6 +209,10 @@ export function playlistMatchesLoadFilter(playlist, filterText) {
   return String(playlistName).toLocaleLowerCase().indexOf(normalizedFilter) !== -1;
 }
 
+export var DEFAULT_PLAYLIST_VIRTUAL_THRESHOLD = 100;
+export var DEFAULT_PLAYLIST_VIRTUAL_OVERSCAN = 12;
+export var DEFAULT_PLAYLIST_VIRTUAL_ROW_HEIGHT = 30;
+
 export function initPlaylist(ctx) {
   var els = ctx.els;
   var state = ctx.state;
@@ -223,6 +231,23 @@ export function initPlaylist(ctx) {
     startY: 0,
     suppressClickUntil: 0,
     targetRemotePath: null
+  };
+  var playlistVirtual = {
+    enabled: false,
+    threshold: Number.isFinite(cfg.playlistVirtualThreshold)
+      ? Math.max(1, cfg.playlistVirtualThreshold)
+      : DEFAULT_PLAYLIST_VIRTUAL_THRESHOLD,
+    overscan: Number.isFinite(cfg.playlistVirtualOverscan)
+      ? Math.max(0, cfg.playlistVirtualOverscan)
+      : DEFAULT_PLAYLIST_VIRTUAL_OVERSCAN,
+    rowHeight: Number.isFinite(cfg.playlistVirtualRowHeight)
+      ? Math.max(1, cfg.playlistVirtualRowHeight)
+      : DEFAULT_PLAYLIST_VIRTUAL_ROW_HEIGHT,
+    rowHeightMeasured: false,
+    windowKey: '',
+    contentEl: null,
+    renderFrame: null,
+    resizeObserver: null
   };
 
   function activePlaylistName() {
@@ -1052,14 +1077,151 @@ export function initPlaylist(ctx) {
     ctx.setStatus(added ? 'Added ' + added + ' cached song' + (added === 1 ? '' : 's') + ' to playlist.' : 'No new cached songs to add.');
   }
 
+  function playlistVirtualShouldRender() {
+    return !!(
+      els.playlistListEl
+      && shouldVirtualizeRows(state.playlist.length, {threshold: playlistVirtual.threshold})
+    );
+  }
+
+  function playlistVirtualViewport() {
+    var listEl = els.playlistListEl;
+    var viewportHeight = listEl && Number(listEl.clientHeight) > 0
+      ? Number(listEl.clientHeight)
+      : playlistVirtual.rowHeight;
+    var scrollTop = listEl && Number(listEl.scrollTop) > 0 ? Number(listEl.scrollTop) : 0;
+    return {
+      scrollTop: Math.max(0, scrollTop),
+      viewportHeight: Math.max(playlistVirtual.rowHeight, viewportHeight)
+    };
+  }
+
+  function playlistVirtualWindow() {
+    var viewport = playlistVirtualViewport();
+    return computeVirtualWindow({
+      rowCount: state.playlist.length,
+      rowHeight: playlistVirtual.rowHeight,
+      scrollTop: viewport.scrollTop,
+      viewportHeight: viewport.viewportHeight,
+      overscan: playlistVirtual.overscan
+    });
+  }
+
+  function setPlaylistVirtualDataset(windowState, mountedCount) {
+    if (!els.playlistListEl) return;
+    els.playlistListEl.dataset.playlistCount = String(state.playlist.length);
+    els.playlistListEl.dataset.playlistVirtualized = playlistVirtual.enabled ? '1' : '0';
+    if (!playlistVirtual.enabled || !windowState) {
+      delete els.playlistListEl.dataset.playlistVisibleRange;
+      delete els.playlistListEl.dataset.playlistMountedCount;
+      return;
+    }
+    els.playlistListEl.dataset.playlistVisibleRange = String(windowState.startIndex) + ':' + String(windowState.endIndex);
+    els.playlistListEl.dataset.playlistMountedCount = String(mountedCount);
+  }
+
+  function measurePlaylistRowHeight() {
+    var row;
+    var height;
+    if (!playlistVirtual.contentEl || typeof playlistVirtual.contentEl.querySelector !== 'function') return 0;
+    row = playlistVirtual.contentEl.querySelector('.music-playlist-entry');
+    if (!row || typeof row.getBoundingClientRect !== 'function') return 0;
+    height = Number(row.getBoundingClientRect().height);
+    return height > 0 ? height : 0;
+  }
+
+  function cancelPlaylistVirtualRender() {
+    if (playlistVirtual.renderFrame === null) return;
+    if (typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+      window.cancelAnimationFrame(playlistVirtual.renderFrame);
+    }
+    playlistVirtual.renderFrame = null;
+  }
+
+  function renderPlaylistVirtualWindow(force) {
+    var windowState;
+    var nextWindowKey;
+    var contentEl;
+    var row;
+    var measuredHeight;
+    var index;
+    if (!playlistVirtual.enabled || !playlistVirtual.contentEl) return;
+    windowState = playlistVirtualWindow();
+    nextWindowKey = [
+      state.playlist.length,
+      playlistVirtual.rowHeight,
+      windowState.startIndex,
+      windowState.endIndex
+    ].join(':');
+    if (!force && playlistVirtual.windowKey === nextWindowKey) return;
+    contentEl = playlistVirtual.contentEl;
+    contentEl.style.height = String(windowState.totalHeight) + 'px';
+    contentEl.textContent = '';
+    for (index = windowState.startIndex; index < windowState.endIndex; index += 1) {
+      row = createPlaylistRow(state.playlist[index], index, true);
+      row.style.top = String(index * playlistVirtual.rowHeight) + 'px';
+      if (playlistVirtual.rowHeightMeasured) row.style.height = String(playlistVirtual.rowHeight) + 'px';
+      contentEl.appendChild(row);
+    }
+    playlistVirtual.windowKey = nextWindowKey;
+    setPlaylistVirtualDataset(windowState, windowState.endIndex - windowState.startIndex);
+    if (!playlistVirtual.rowHeightMeasured) {
+      measuredHeight = measurePlaylistRowHeight();
+      if (measuredHeight > 0) {
+        playlistVirtual.rowHeightMeasured = true;
+        if (Math.abs(measuredHeight - playlistVirtual.rowHeight) > 0.5) {
+          playlistVirtual.rowHeight = measuredHeight;
+          playlistVirtual.windowKey = '';
+          renderPlaylistVirtualWindow(true);
+          return;
+        }
+      }
+    }
+    paintPlaylistSelection();
+    updatePlaylistDragIndicators();
+  }
+
+  function schedulePlaylistVirtualRender() {
+    if (!playlistVirtual.enabled || playlistVirtual.renderFrame !== null) return;
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      playlistVirtual.renderFrame = window.requestAnimationFrame(function () {
+        playlistVirtual.renderFrame = null;
+        renderPlaylistVirtualWindow(false);
+      });
+      return;
+    }
+    renderPlaylistVirtualWindow(false);
+  }
+
+  function scrollPlaylistIndexIntoView(index) {
+    var viewport;
+    var top;
+    var bottom;
+    var nextScrollTop;
+    if (!playlistVirtual.enabled || !els.playlistListEl || index < 0) return;
+    viewport = playlistVirtualViewport();
+    top = index * playlistVirtual.rowHeight;
+    bottom = top + playlistVirtual.rowHeight;
+    nextScrollTop = viewport.scrollTop;
+    if (top < viewport.scrollTop) nextScrollTop = top;
+    else if (bottom > viewport.scrollTop + viewport.viewportHeight) {
+      nextScrollTop = bottom - viewport.viewportHeight;
+    }
+    if (nextScrollTop !== viewport.scrollTop) els.playlistListEl.scrollTop = Math.max(0, nextScrollTop);
+    renderPlaylistVirtualWindow(true);
+  }
+
   function focusPlaylistRemotePath(remotePath) {
     var rows;
     var target = null;
+    var index;
     if (!els.playlistListEl || !remotePath) return;
     if (!ctx.layoutApi.playbackUiMayPaint()) {
       state.pendingPlaylistFocusRemotePath = remotePath;
       return;
     }
+    index = playlistIndexByRemotePath(remotePath);
+    if (playlistVirtual.enabled && index !== -1) scrollPlaylistIndexIntoView(index);
     rows = els.playlistListEl.querySelectorAll('.music-playlist-entry');
     Array.prototype.forEach.call(rows, function (row) {
       if (!target && row.dataset.remotePath === remotePath) target = row;
@@ -1183,6 +1345,69 @@ export function initPlaylist(ctx) {
     return Array.prototype.slice.call(els.playlistListEl.querySelectorAll('.music-playlist-entry'));
   }
 
+  function playlistRowFromEventTarget(target) {
+    var row;
+    if (!target || typeof target.closest !== 'function') return null;
+    row = target.closest('.music-playlist-entry');
+    return row && row.dataset && row.dataset.remotePath ? row : null;
+  }
+
+  function handlePlaylistListClick(ev) {
+    var row = playlistRowFromEventTarget(ev.target);
+    var handle = ev.target && typeof ev.target.closest === 'function'
+      ? ev.target.closest('.music-playlist-drag-handle')
+      : null;
+    if (!row) return;
+    if (handle) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      return;
+    }
+    if (playlistDragSuppressed()) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      return;
+    }
+    selectPlaylistRemotePath(row.dataset.remotePath, ev);
+  }
+
+  function handlePlaylistListDoubleClick(ev) {
+    var row = playlistRowFromEventTarget(ev.target);
+    if (!row || playlistDragSuppressed()) {
+      if (row && playlistDragSuppressed()) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+      return;
+    }
+    ctx.playbackApi.playPlaylistRemotePath(row.dataset.remotePath);
+  }
+
+  function handlePlaylistListContextMenu(ev) {
+    var row = playlistRowFromEventTarget(ev.target);
+    if (!row || playlistDragSuppressed()) {
+      if (row && playlistDragSuppressed()) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+      return;
+    }
+    openPlaylistContextMenu(ev, row.dataset.remotePath);
+  }
+
+  function handlePlaylistListPointerDown(ev) {
+    var handle = ev.target && typeof ev.target.closest === 'function'
+      ? ev.target.closest('.music-playlist-drag-handle')
+      : null;
+    var row = playlistRowFromEventTarget(ev.target);
+    if (!handle || !row) return;
+    startPlaylistDrag(row.dataset.remotePath, handle, ev);
+  }
+
+  function handlePlaylistListScroll() {
+    schedulePlaylistVirtualRender();
+  }
+
   function stopPlaylistAutoScroll() {
     if (playlistDrag.autoScrollFrame === null) return;
     window.cancelAnimationFrame(playlistDrag.autoScrollFrame);
@@ -1254,7 +1479,23 @@ export function initPlaylist(ctx) {
       row.classList.toggle('drag-source', isDragged);
       if (!dropRow && playlistDrag.targetRemotePath === rowRemotePath) dropRow = row;
     });
-    if (dropRow) {
+    if (playlistVirtual.enabled && playlistDrag.targetRemotePath) {
+      var targetIndex = playlistIndexByRemotePath(playlistDrag.targetRemotePath);
+      if (targetIndex !== -1) {
+        els.playlistListEl.dataset.dropIndicatorVisible = 'true';
+        els.playlistListEl.style.setProperty(
+          '--music-playlist-drop-indicator-y',
+          String(
+            targetIndex * playlistVirtual.rowHeight
+            - playlistVirtualViewport().scrollTop
+            + (playlistDrag.insertAfter ? playlistVirtual.rowHeight : 0)
+          ) + 'px'
+        );
+      } else {
+        els.playlistListEl.dataset.dropIndicatorVisible = 'false';
+        els.playlistListEl.style.removeProperty('--music-playlist-drop-indicator-y');
+      }
+    } else if (dropRow) {
       els.playlistListEl.dataset.dropIndicatorVisible = 'true';
       els.playlistListEl.style.setProperty(
         '--music-playlist-drop-indicator-y',
@@ -1272,10 +1513,33 @@ export function initPlaylist(ctx) {
     var listRect;
     var listTop;
     var listBottom;
+    var virtualIndex;
+    var virtualY;
+    var virtualRowTop;
     if (!els.playlistListEl || rows.length === 0) return null;
     listRect = els.playlistListEl.getBoundingClientRect();
     listTop = listRect.top;
     listBottom = listRect.bottom;
+    if (playlistVirtual.enabled) {
+      if (clientY <= listTop) virtualIndex = 0;
+      else if (clientY >= listBottom) virtualIndex = state.playlist.length - 1;
+      else {
+        virtualY = clientY - listTop + playlistVirtualViewport().scrollTop;
+        virtualIndex = Math.floor(virtualY / playlistVirtual.rowHeight);
+        virtualIndex = Math.max(0, Math.min(state.playlist.length - 1, virtualIndex));
+      }
+      virtualRowTop = virtualIndex * playlistVirtual.rowHeight;
+      if (clientY <= listTop) {
+        return {insertAfter: false, remotePath: state.playlist[virtualIndex].remote_path || ''};
+      }
+      if (clientY >= listBottom) {
+        return {insertAfter: true, remotePath: state.playlist[virtualIndex].remote_path || ''};
+      }
+      return {
+        insertAfter: virtualY - virtualRowTop >= playlistVirtual.rowHeight / 2,
+        remotePath: state.playlist[virtualIndex].remote_path || ''
+      };
+    }
     if (clientY <= listTop) {
       return {insertAfter: false, remotePath: rows[0].dataset.remotePath || ''};
     }
@@ -1520,96 +1784,103 @@ export function initPlaylist(ctx) {
     renderPlaylist();
   }
 
+  function createPlaylistRow(song, index, virtualized) {
+    var row = document.createElement('div');
+    var dragHandle;
+    var handleCell;
+    var indexCell;
+    var nameCell;
+    var pathCell;
+    var dragHandleIcon;
+    row.className = 'music-playlist-row music-playlist-entry';
+    row.setAttribute('role', 'row');
+    row.setAttribute('aria-selected', state.selectedPlaylistRemotePaths[song.remote_path] ? 'true' : 'false');
+    row.dataset.remotePath = song.remote_path;
+    row.dataset.streamPath = song.stream_path;
+    row.dataset.playlistIndex = String(index);
+    if (state.selectedPlaylistRemotePaths[song.remote_path]) row.classList.add('selected');
+    if (index === state.currentPlaylistIndex) row.classList.add('current');
+    if (virtualized) row.classList.add('music-playlist-virtual-entry');
+
+    indexCell = document.createElement('div');
+    indexCell.className = 'music-playlist-index-cell';
+    indexCell.setAttribute('role', 'cell');
+    indexCell.textContent = String(index + 1);
+    row.appendChild(indexCell);
+
+    nameCell = document.createElement('div');
+    nameCell.className = 'music-playlist-filename-cell';
+    nameCell.setAttribute('role', 'cell');
+    nameCell.textContent = song.display_name || '';
+    row.appendChild(nameCell);
+
+    pathCell = document.createElement('div');
+    pathCell.className = 'music-playlist-path-cell';
+    pathCell.setAttribute('role', 'cell');
+    pathCell.textContent = absolutePlaylistPath(song);
+    row.appendChild(pathCell);
+
+    handleCell = document.createElement('div');
+    handleCell.className = 'music-playlist-handle-cell';
+    handleCell.setAttribute('role', 'cell');
+    dragHandle = document.createElement('button');
+    dragHandle.type = 'button';
+    dragHandle.className = 'music-playlist-drag-handle';
+    dragHandle.setAttribute('aria-label', 'Reorder playlist item');
+    dragHandle.title = 'Drag to reorder playlist';
+    dragHandleIcon = document.createElement('span');
+    dragHandleIcon.className = 'music-playlist-drag-handle-icon';
+    dragHandleIcon.setAttribute('aria-hidden', 'true');
+    dragHandle.appendChild(dragHandleIcon);
+    handleCell.appendChild(dragHandle);
+    row.appendChild(handleCell);
+    return row;
+  }
+
+  function resetPlaylistVirtualState() {
+    cancelPlaylistVirtualRender();
+    playlistVirtual.enabled = false;
+    playlistVirtual.windowKey = '';
+    playlistVirtual.contentEl = null;
+    playlistVirtual.rowHeightMeasured = false;
+    playlistVirtual.rowHeight = Number.isFinite(cfg.playlistVirtualRowHeight)
+      ? Math.max(1, cfg.playlistVirtualRowHeight)
+      : DEFAULT_PLAYLIST_VIRTUAL_ROW_HEIGHT;
+  }
+
   function paintPlaylist() {
+    var empty;
+    var contentEl;
     if (!els.playlistListEl) return;
     updateActivePlaylistName();
     state.playlistRenderDirty = false;
     state.playlistSelectionDirty = false;
+    resetPlaylistVirtualState();
     els.playlistListEl.textContent = '';
+    els.playlistListEl.dataset.playlistCount = String(state.playlist.length);
     if (state.playlist.length === 0) {
-      var empty = document.createElement('div');
+      empty = document.createElement('div');
       empty.className = 'music-empty-state';
       empty.textContent = 'Playlist is empty.';
       els.playlistListEl.appendChild(empty);
+      setPlaylistVirtualDataset(null, 0);
       ctx.pane.dataset.playlistSelectionCount = String(playlistSelectedCount());
       return;
     }
+    if (playlistVirtualShouldRender()) {
+      playlistVirtual.enabled = true;
+      contentEl = document.createElement('div');
+      contentEl.className = 'music-playlist-virtual-content';
+      contentEl.setAttribute('role', 'presentation');
+      playlistVirtual.contentEl = contentEl;
+      els.playlistListEl.appendChild(contentEl);
+      renderPlaylistVirtualWindow(true);
+      return;
+    }
     state.playlist.forEach(function (song, index) {
-      var row = document.createElement('div');
-      var dragHandle;
-      var handleCell;
-      row.className = 'music-playlist-row music-playlist-entry';
-      row.setAttribute('role', 'row');
-      row.setAttribute('aria-selected', state.selectedPlaylistRemotePaths[song.remote_path] ? 'true' : 'false');
-      row.dataset.remotePath = song.remote_path;
-      row.dataset.streamPath = song.stream_path;
-      if (state.selectedPlaylistRemotePaths[song.remote_path]) row.classList.add('selected');
-      if (index === state.currentPlaylistIndex) row.classList.add('current');
-
-      var indexCell = document.createElement('div');
-      indexCell.className = 'music-playlist-index-cell';
-      indexCell.setAttribute('role', 'cell');
-      indexCell.textContent = String(index + 1);
-      row.appendChild(indexCell);
-
-      var nameCell = document.createElement('div');
-      nameCell.className = 'music-playlist-filename-cell';
-      nameCell.setAttribute('role', 'cell');
-      nameCell.textContent = song.display_name || '';
-      row.appendChild(nameCell);
-
-      var pathCell = document.createElement('div');
-      pathCell.className = 'music-playlist-path-cell';
-      pathCell.setAttribute('role', 'cell');
-      pathCell.textContent = absolutePlaylistPath(song);
-      row.appendChild(pathCell);
-      handleCell = document.createElement('div');
-      handleCell.className = 'music-playlist-handle-cell';
-      handleCell.setAttribute('role', 'cell');
-      dragHandle = document.createElement('button');
-      dragHandle.type = 'button';
-      dragHandle.className = 'music-playlist-drag-handle';
-      dragHandle.setAttribute('aria-label', 'Reorder playlist item');
-      dragHandle.title = 'Drag to reorder playlist';
-      var dragHandleIcon = document.createElement('span');
-      dragHandleIcon.className = 'music-playlist-drag-handle-icon';
-      dragHandleIcon.setAttribute('aria-hidden', 'true');
-      dragHandle.appendChild(dragHandleIcon);
-      dragHandle.addEventListener('pointerdown', function (ev) {
-        startPlaylistDrag(song.remote_path, dragHandle, ev);
-      });
-      dragHandle.addEventListener('click', function (ev) {
-        ev.preventDefault();
-        ev.stopPropagation();
-      });
-      handleCell.appendChild(dragHandle);
-      row.appendChild(handleCell);
-      row.addEventListener('click', function (ev) {
-        if (playlistDragSuppressed()) {
-          ev.preventDefault();
-          ev.stopPropagation();
-          return;
-        }
-        selectPlaylistRemotePath(song.remote_path, ev);
-      });
-      row.addEventListener('dblclick', function (ev) {
-        if (playlistDragSuppressed()) {
-          ev.preventDefault();
-          ev.stopPropagation();
-          return;
-        }
-        ctx.playbackApi.playPlaylistRemotePath(song.remote_path);
-      });
-      row.addEventListener('contextmenu', function (ev) {
-        if (playlistDragSuppressed()) {
-          ev.preventDefault();
-          ev.stopPropagation();
-          return;
-        }
-        openPlaylistContextMenu(ev, song.remote_path);
-      });
-      els.playlistListEl.appendChild(row);
+      els.playlistListEl.appendChild(createPlaylistRow(song, index, false));
     });
+    setPlaylistVirtualDataset(null, state.playlist.length);
     paintPlaylistSelection();
   }
 
@@ -1833,5 +2104,20 @@ export function initPlaylist(ctx) {
       hidePlaylistLoadContextMenu();
     });
   }
-  if (els.playlistListEl) els.playlistListEl.addEventListener('keydown', handlePlaylistSelectAllShortcut);
+  if (els.playlistListEl) {
+    els.playlistListEl.addEventListener('click', handlePlaylistListClick);
+    els.playlistListEl.addEventListener('dblclick', handlePlaylistListDoubleClick);
+    els.playlistListEl.addEventListener('contextmenu', handlePlaylistListContextMenu);
+    els.playlistListEl.addEventListener('pointerdown', handlePlaylistListPointerDown);
+    els.playlistListEl.addEventListener('scroll', handlePlaylistListScroll, {passive: true});
+    els.playlistListEl.addEventListener('keydown', handlePlaylistSelectAllShortcut);
+    if (typeof ResizeObserver === 'function') {
+      playlistVirtual.resizeObserver = new ResizeObserver(function () {
+        if (!playlistVirtual.enabled) return;
+        playlistVirtual.windowKey = '';
+        schedulePlaylistVirtualRender();
+      });
+      playlistVirtual.resizeObserver.observe(els.playlistListEl);
+    }
+  }
 }

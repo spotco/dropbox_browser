@@ -743,6 +743,18 @@
   position: relative;
 }
 
+.music-playlist-virtual-content {
+  min-width: var(--music-playlist-grid-min-width);
+  position: relative;
+  width: 100%;
+}
+
+.music-playlist-virtual-entry {
+  left: 0;
+  position: absolute;
+  right: 0;
+}
+
 .music-playlist-entry:hover {
   background: #23364c;
 }

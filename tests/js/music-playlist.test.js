@@ -16,9 +16,13 @@ async function importModuleFromWorkspace(relativePath) {
     const mediaKindPath = path.resolve(path.dirname(absolutePath), "media-kind.js");
     const mediaKindSource = await fs.readFile(mediaKindPath, "utf8");
     const mediaKindUrl = `data:text/javascript;base64,${Buffer.from(mediaKindSource, "utf8").toString("base64")}`;
+    const virtualListPath = path.resolve(path.dirname(absolutePath), "../browse/virtual-list.js");
+    const virtualListSource = await fs.readFile(virtualListPath, "utf8");
+    const virtualListUrl = `data:text/javascript;base64,${Buffer.from(virtualListSource, "utf8").toString("base64")}`;
     source = source.replace("'./shared.js'", `'${sharedUrl}'`);
     source = source.replace("'./playlist-store.js'", `'${storeUrl}'`);
     source = source.replace("'./media-kind.js'", `'${mediaKindUrl}'`);
+    source = source.replace("'../browse/virtual-list.js'", `'${virtualListUrl}'`);
   }
   return import(`data:text/javascript;base64,${Buffer.from(source, "utf8").toString("base64")}`);
 }
@@ -221,6 +225,20 @@ function createPlaylistDomNode(tagName) {
     type: "",
     dataset: Object.create(null),
     attributes: Object.create(null),
+    style: {
+      _values: Object.create(null),
+      setProperty(name, value) {
+        this._values[name] = String(value);
+      },
+      removeProperty(name) {
+        delete this._values[name];
+      },
+      getPropertyValue(name) {
+        return this._values[name] || "";
+      },
+    },
+    clientHeight: 0,
+    scrollTop: 0,
     _className: "",
     _textContent: "",
     classList: {
@@ -255,6 +273,12 @@ function createPlaylistDomNode(tagName) {
       return child;
     },
     addEventListener() {},
+    getBoundingClientRect() {
+      const explicitHeight = Number.parseFloat(this.style._values.height || "");
+      const height = explicitHeight > 0 ? explicitHeight : (this.clientHeight > 0 ? this.clientHeight : 30);
+      const top = Number.parseFloat(this.style._values.top || "") || 0;
+      return {top, bottom: top + height, height, left: 0, right: 600, width: 600};
+    },
     querySelector(selector) {
       return this.querySelectorAll(selector)[0] || null;
     },
@@ -416,4 +440,116 @@ test("paintPlaylist renders 1-based index cells and refreshes after reorder/remo
   ctx.playlistApi.paintPlaylist();
   assert.deepEqual(playlistIndexLabels(playlistListEl), ["1", "2", "3"]);
   assert.deepEqual(playlistFilenameLabels(playlistListEl), ["alpha.mp3", "bravo.mp3", "delta.mp3"]);
+});
+
+test("paintPlaylist virtualizes large active playlists and focuses late rows", async () => {
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist.js");
+  const playlistListEl = createPlaylistDomNode("div");
+  const activePlaylistNameEl = createPlaylistDomNode("span");
+  const settingsStore = Object.create(null);
+  const playlist = Array.from({length: 250}, (_, index) => song(`music/track-${index}.mp3`));
+  global.Settings = {
+    get(key, fallback) {
+      return Object.prototype.hasOwnProperty.call(settingsStore, key) ? settingsStore[key] : fallback;
+    },
+    set(key, value) {
+      settingsStore[key] = value;
+    },
+  };
+  playlistListEl.clientHeight = 90;
+  global.document = {
+    activeElement: null,
+    createElement(tagName) {
+      return createPlaylistDomNode(tagName);
+    },
+  };
+  global.window = {
+    requestAnimationFrame(callback) {
+      callback();
+      return 1;
+    },
+    cancelAnimationFrame() {},
+  };
+
+  const state = {
+    playlist,
+    activePlaylist: {
+      name: "Large Playlist",
+      replaceSongs() {},
+      removeSongsByRemotePaths() {},
+      addSongs() { return 0; },
+    },
+    selectedPlaylistRemotePaths: Object.create(null),
+    playlistSelectionAnchor: null,
+    playlistContextRemotePath: null,
+    activePlaylistSavedName: null,
+    activePlaylistSavedSignature: "",
+    activePlaylistDirty: false,
+    playlistRenameMode: "rename",
+    playlistLoadSortKey: "last_modified",
+    playlistLoadSortDirection: "desc",
+    playlistLoadSortSettingKey: "music-playlist-load-sort",
+    playlistLoadFilterText: "",
+    playlistLoadFilterSettingKey: "music-playlist-load-filter",
+    selectedPersistedPlaylistName: null,
+    playlistLoadContextName: null,
+    recentSortKey: "played_at",
+    recentSortDirection: "desc",
+    recentSortSettingKey: "music-recent-sort",
+    selectedRecentId: null,
+    pendingPlaylistConfirmAction: null,
+    playlistSaveToastTimer: null,
+    currentPlaylistIndex: 0,
+    playlistRenderDirty: false,
+    playlistSelectionDirty: false,
+    pendingPlaylistFocusRemotePath: null,
+    shuffleBag: [],
+    shuffleSequence: [],
+    shuffleCursor: -1,
+  };
+  const ctx = {
+    els: {
+      playlistListEl,
+      activePlaylistNameEl,
+      playlistLoadConfirmButton: null,
+    },
+    state,
+    pane: {dataset: Object.create(null)},
+    mediaLibraryConfig: {mediaKind: "music"},
+    layoutApi: {
+      playbackUiMayPaint() {
+        return true;
+      },
+    },
+    playbackApi: {
+      playPlaylistRemotePath() {},
+      playPlaylistIndex() {},
+      clearCurrentSong() {},
+    },
+    setStatus() {},
+  };
+
+  playlistModule.initPlaylist(ctx);
+  ctx.playlistApi.paintPlaylist();
+  assert.equal(playlistListEl.dataset.playlistVirtualized, "1");
+  assert.equal(playlistListEl.dataset.playlistCount, "250");
+  assert.equal(playlistListEl.dataset.playlistMountedCount, "27");
+  assert.deepEqual(
+    playlistListEl.querySelectorAll(".music-playlist-entry").map((row) => row.dataset.playlistIndex),
+    Array.from({length: 27}, (_, index) => String(index)),
+  );
+
+  playlistListEl.scrollTop = 2000;
+  ctx.playlistApi.paintPlaylist();
+  assert.equal(playlistListEl.dataset.playlistVisibleRange, "54:81");
+  assert.equal(playlistListEl.querySelectorAll(".music-playlist-entry").length, 27);
+
+  state.currentPlaylistIndex = 249;
+  ctx.playlistApi.focusPlaylistRemotePath("music/track-249.mp3");
+  const focusedRow = playlistListEl
+    .querySelectorAll(".music-playlist-entry")
+    .find((row) => row.dataset.remotePath === "music/track-249.mp3");
+  assert.ok(focusedRow);
+  assert.equal(focusedRow.classList.contains("current"), true);
+  assert.equal(playlistListEl.dataset.playlistVisibleRange, "235:250");
 });
