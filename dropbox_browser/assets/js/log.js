@@ -9,6 +9,7 @@
   var minHeight = 42;
   var normalPanelMaxHeightOffset = 80;
   var fullWindowSettingKey = 'bottom-panel-full-window';
+  var modeSelect = document.getElementById('bottom-pane-mode');
   var currentHeight = defaultHeight;
   var preferredHeight = defaultHeight;
   var fullWindowActive = false;
@@ -282,6 +283,10 @@
 
   var nextIndex = 0;
   var nextUpdateSeq = 0;
+  var pollTimer = null;
+  var pollController = null;
+  var pollGeneration = 0;
+  var polling = false;
 
   function esc(s) {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -299,10 +304,47 @@
     div.innerHTML = buildEntry(e);
   }
 
+  function stopPolling() {
+    polling = false;
+    pollGeneration += 1;
+    if (pollTimer !== null) {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+    if (pollController) {
+      pollController.abort();
+      pollController = null;
+    }
+  }
+
+  function schedulePoll(delay, generation) {
+    if (!polling || generation !== pollGeneration) return;
+    pollTimer = setTimeout(function () {
+      pollTimer = null;
+      poll();
+    }, delay);
+  }
+
+  function startPolling() {
+    if (polling) return;
+    polling = true;
+    pollGeneration += 1;
+    schedulePoll(500, pollGeneration);
+  }
+
   function poll() {
-    fetch('/logs?since=' + nextIndex + '&since_upd=' + nextUpdateSeq)
+    var generation;
+    var controller;
+    var fetchOptions;
+    if (!polling) return;
+    generation = pollGeneration;
+    controller = typeof AbortController === 'function' ? new AbortController() : null;
+    pollController = controller;
+    fetchOptions = controller ? {signal: controller.signal} : undefined;
+    fetch('/logs?since=' + nextIndex + '&since_upd=' + nextUpdateSeq, fetchOptions)
       .then(function (r) { return r.json(); })
       .then(function (data) {
+        if (!polling || generation !== pollGeneration) return;
         if (data.update_seq !== undefined) nextUpdateSeq = data.update_seq;
         data.entries.forEach(function (e) {
           nextIndex = Math.max(nextIndex, e.index + 1);
@@ -320,8 +362,21 @@
         }
       })
       .catch(function () {})
-      .then(function () { setTimeout(poll, 2000); });
+      .then(function () {
+        if (pollController === controller) pollController = null;
+        schedulePoll(2000, generation);
+      });
   }
 
-  setTimeout(poll, 500);
+  window.addEventListener('bottom-pane-mode-changed', function (ev) {
+    if (!ev.detail) return;
+    if (ev.detail.mode === 'server-log') {
+      startPolling();
+      scrollLogToBottom();
+    } else {
+      stopPolling();
+    }
+  });
+
+  if (modeSelect && modeSelect.value === 'server-log') startPolling();
 }());
