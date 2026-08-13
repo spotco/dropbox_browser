@@ -45,7 +45,7 @@ except ModuleNotFoundError:  # package import from the repository test suite
 REPO = Path(__file__).resolve().parents[1]
 E2E_DIR = REPO / "tests" / "e2e"
 TIMING_PATH = REPO / "Temp" / "remote-e2e" / "spec-timing.json"
-DEFAULT_LOCAL_WEIGHT = 10.0
+DEFAULT_LOCAL_WEIGHT = 1.0
 DEFAULT_POLL_SECONDS = 2.0
 SUPPORTED_PLATFORMS = frozenset({"windows", "linux", "macos-intel"})
 
