@@ -39,12 +39,36 @@ export function initLayout(ctx) {
     return completed;
   }
   var activePlaylistColumnDrag = null;
+  var activeNarrowMusicPaneDrag = null;
   var musicPaneRestoreFrame = null;
   var musicPaneRestorePending = false;
   var musicPaneRestoreObserver = null;
 
   function isVisible() {
     return !ctx.pane.hidden && !ctx.pane.classList.contains('hidden');
+  }
+
+  function isNarrowMusicLayout() {
+    return !!(
+      window.matchMedia
+      && window.matchMedia('(max-width: 860px)').matches
+    );
+  }
+
+  function normalizeNarrowMusicPanePercents(values, defaults) {
+    var fallback = Array.isArray(defaults) && defaults.length === 2 ? defaults : [50, 50];
+    if (!Array.isArray(values) || values.length !== 2) return fallback.slice();
+    var parsed = values.map(function (value) {
+      return Number(value);
+    });
+    if (parsed.some(function (value) { return !Number.isFinite(value) || value <= 0; })) {
+      return fallback.slice();
+    }
+    var total = parsed[0] + parsed[1];
+    if (!Number.isFinite(total) || total <= 0) return fallback.slice();
+    return parsed.map(function (value) {
+      return (value / total) * 100;
+    });
   }
 
   function normalizeMusicPanePercents(values) {
@@ -64,6 +88,14 @@ export function initLayout(ctx) {
 
   function musicPaneResizeEnabled() {
     return !!(els.playerShell && els.libraryPlaylistResizer && els.playlistPlaybackResizer &&
+      !isNarrowMusicLayout() &&
+      window.getComputedStyle(els.libraryPlaylistResizer).display !== 'none' &&
+      window.getComputedStyle(els.playlistPlaybackResizer).display !== 'none');
+  }
+
+  function narrowMusicPaneResizeEnabled() {
+    return !!(els.playerShell && els.libraryPlaylistResizer && els.playlistPlaybackResizer &&
+      isNarrowMusicLayout() &&
       window.getComputedStyle(els.libraryPlaylistResizer).display !== 'none' &&
       window.getComputedStyle(els.playlistPlaybackResizer).display !== 'none');
   }
@@ -73,6 +105,138 @@ export function initLayout(ctx) {
     return Math.max(
       0,
       els.playerShell.getBoundingClientRect().width - (state.musicPaneResizerWidth * 2)
+    );
+  }
+
+  function narrowMusicPaneAvailableWidth() {
+    if (!els.playerShell) return 0;
+    return Math.max(
+      0,
+      (Number(els.playerShell.getBoundingClientRect().width) || 0) - state.musicPaneResizerWidth
+    );
+  }
+
+  function narrowMusicPaneAvailableHeight() {
+    if (!els.playerShell) return 0;
+    return Math.max(
+      0,
+      (Number(els.playerShell.getBoundingClientRect().height) || 0) - state.musicPaneResizerWidth
+    );
+  }
+
+  function adjustedNarrowMusicPanePixels(rawValues, total, minimums) {
+    var targetTotal = Math.max(total, minimums[0] + minimums[1]);
+    var extras = rawValues.map(function (value, index) {
+      return Math.max(0, value - minimums[index]);
+    });
+    var extraTotal = extras[0] + extras[1];
+    if (extraTotal <= 0) {
+      extras = [1, 1];
+      extraTotal = 2;
+    }
+    return minimums.map(function (minimum, index) {
+      return minimum + ((targetTotal - minimums[0] - minimums[1]) * extras[index] / extraTotal);
+    });
+  }
+
+  function syncMusicPaneResizerOrientation() {
+    if (els.libraryPlaylistResizer && typeof els.libraryPlaylistResizer.setAttribute === 'function') {
+      els.libraryPlaylistResizer.setAttribute('aria-orientation', 'vertical');
+    }
+    if (els.playlistPlaybackResizer && typeof els.playlistPlaybackResizer.setAttribute === 'function') {
+      els.playlistPlaybackResizer.setAttribute(
+        'aria-orientation',
+        isNarrowMusicLayout() ? 'horizontal' : 'vertical'
+      );
+    }
+  }
+
+  function narrowMusicPaneWidthSettingKey() {
+    return state.narrowMusicPaneWidthSettingKey || 'music-narrow-pane-widths';
+  }
+
+  function narrowMusicPaneHeightSettingKey() {
+    return state.narrowMusicPaneHeightSettingKey || 'music-narrow-pane-heights';
+  }
+
+  function persistNarrowMusicPaneSizes() {
+    Settings.set(
+      narrowMusicPaneWidthSettingKey(),
+      state.currentNarrowMusicPaneWidthPercents
+    );
+    Settings.set(
+      narrowMusicPaneHeightSettingKey(),
+      state.currentNarrowMusicPaneHeightPercents
+    );
+  }
+
+  function applyNarrowMusicPaneSizes(widths, heights, persist) {
+    var normalizedWidths = normalizeNarrowMusicPanePercents(
+      widths,
+      state.defaultNarrowMusicPaneWidthPercents
+    );
+    var normalizedHeights = normalizeNarrowMusicPanePercents(
+      heights,
+      state.defaultNarrowMusicPaneHeightPercents
+    );
+    var availableWidth;
+    var availableHeight;
+    var widthPixels;
+    var heightPixels;
+    state.currentNarrowMusicPaneWidthPercents = normalizedWidths.slice();
+    state.currentNarrowMusicPaneHeightPercents = normalizedHeights.slice();
+    if (!els.playerShell || !isNarrowMusicLayout()) {
+      return {widths: normalizedWidths, heights: normalizedHeights};
+    }
+    availableWidth = narrowMusicPaneAvailableWidth();
+    availableHeight = narrowMusicPaneAvailableHeight();
+    widthPixels = adjustedNarrowMusicPanePixels(
+      normalizedWidths.map(function (percent) { return availableWidth * percent / 100; }),
+      availableWidth,
+      state.minNarrowMusicPaneWidthsPx
+    );
+    heightPixels = adjustedNarrowMusicPanePixels(
+      normalizedHeights.map(function (percent) { return availableHeight * percent / 100; }),
+      availableHeight,
+      state.minNarrowMusicPaneHeightsPx
+    );
+    state.currentNarrowMusicPaneWidthPercents = normalizeNarrowMusicPanePercents(
+      widthPixels,
+      state.defaultNarrowMusicPaneWidthPercents
+    );
+    state.currentNarrowMusicPaneHeightPercents = normalizeNarrowMusicPanePercents(
+      heightPixels,
+      state.defaultNarrowMusicPaneHeightPercents
+    );
+    els.playerShell.style.gridTemplateColumns =
+      widthPixels[0] + 'px ' + state.musicPaneResizerWidth + 'px ' + widthPixels[1] + 'px';
+    els.playerShell.style.gridTemplateRows =
+      heightPixels[0] + 'px ' + state.musicPaneResizerWidth + 'px ' + heightPixels[1] + 'px';
+    syncMusicPaneResizerOrientation();
+    if (persist !== false) persistNarrowMusicPaneSizes();
+    return {
+      widths: state.currentNarrowMusicPaneWidthPercents.slice(),
+      heights: state.currentNarrowMusicPaneHeightPercents.slice()
+    };
+  }
+
+  function readSavedNarrowMusicPaneWidthPercents() {
+    return normalizeNarrowMusicPanePercents(
+      Settings.get(
+        narrowMusicPaneWidthSettingKey(),
+        state.defaultNarrowMusicPaneWidthPercents
+      ),
+      state.defaultNarrowMusicPaneWidthPercents
+    );
+  }
+
+  function readSavedNarrowMusicPaneHeightPercents() {
+    return normalizeNarrowMusicPanePercents(
+      Settings.get(
+        narrowMusicPaneHeightSettingKey(),
+        state.defaultNarrowMusicPaneHeightPercents
+      ),
+      state.defaultNarrowMusicPaneHeightPercents
     );
   }
 
@@ -110,8 +274,11 @@ export function initLayout(ctx) {
     var pixels;
     state.currentMusicPanePercents = normalized.slice();
     if (!els.playerShell) return normalized;
+    if (isNarrowMusicLayout()) return normalized;
     if (!musicPaneResizeEnabled()) {
       els.playerShell.style.removeProperty('grid-template-columns');
+      els.playerShell.style.removeProperty('grid-template-rows');
+      syncMusicPaneResizerOrientation();
       if (persist !== false) persistMusicPanePercents(normalized);
       return normalized;
     }
@@ -125,6 +292,8 @@ export function initLayout(ctx) {
       pixels[0] + 'px ' + state.musicPaneResizerWidth + 'px ' +
       pixels[1] + 'px ' + state.musicPaneResizerWidth + 'px ' +
       pixels[2] + 'px';
+    els.playerShell.style.removeProperty('grid-template-rows');
+    syncMusicPaneResizerOrientation();
     if (persist !== false) persistMusicPanePercents(normalized);
     return normalized;
   }
@@ -134,6 +303,19 @@ export function initLayout(ctx) {
   }
 
   function restoreMusicPanePercents() {
+    if (isNarrowMusicLayout()) {
+      var narrowWidths = readSavedNarrowMusicPaneWidthPercents();
+      var narrowHeights = readSavedNarrowMusicPaneHeightPercents();
+      if (!musicPaneCanApply()) {
+        musicPaneRestorePending = true;
+        observeMusicPaneRestore();
+        scheduleMusicPaneRestore();
+        return narrowWidths;
+      }
+      musicPaneRestorePending = false;
+      applyNarrowMusicPaneSizes(narrowWidths, narrowHeights, false);
+      return narrowWidths;
+    }
     var savedWidths = readSavedMusicPanePercents();
     if (!musicPaneCanApply()) {
       musicPaneRestorePending = true;
@@ -146,13 +328,29 @@ export function initLayout(ctx) {
   }
 
   function musicPaneCanApply() {
+    if (isNarrowMusicLayout()) {
+      return !!(
+        els.playerShell
+        && narrowMusicPaneResizeEnabled()
+        && narrowMusicPaneAvailableWidth() > 0
+        && narrowMusicPaneAvailableHeight() > 0
+      );
+    }
     return !!(els.playerShell && musicPaneResizeEnabled() && musicPaneAvailableWidth() > 0);
   }
 
   function applyPendingMusicPaneRestore() {
     if (!musicPaneRestorePending || !musicPaneCanApply()) return false;
     musicPaneRestorePending = false;
-    applyMusicPanePercents(readSavedMusicPanePercents(), false);
+    if (isNarrowMusicLayout()) {
+      applyNarrowMusicPaneSizes(
+        readSavedNarrowMusicPaneWidthPercents(),
+        readSavedNarrowMusicPaneHeightPercents(),
+        false
+      );
+    } else {
+      applyMusicPanePercents(readSavedMusicPanePercents(), false);
+    }
     // Pane width just became measurable; re-fit playlist columns to the new list width.
     refreshPlaylistColumnWidths(false);
     return true;
@@ -183,6 +381,20 @@ export function initLayout(ctx) {
       els.libraryPane ? els.libraryPane.getBoundingClientRect().width : 0,
       els.playlistPane ? els.playlistPane.getBoundingClientRect().width : 0,
       els.playbackPane ? els.playbackPane.getBoundingClientRect().width : 0
+    ];
+  }
+
+  function currentNarrowMusicPanePixels() {
+    return [
+      els.libraryPane ? els.libraryPane.getBoundingClientRect().width : 0,
+      els.playlistPane ? els.playlistPane.getBoundingClientRect().width : 0
+    ];
+  }
+
+  function currentNarrowMusicPaneHeights() {
+    return [
+      els.libraryPane ? els.libraryPane.getBoundingClientRect().height : 0,
+      els.playbackPane ? els.playbackPane.getBoundingClientRect().height : 0
     ];
   }
 
@@ -285,7 +497,79 @@ export function initLayout(ctx) {
     window.addEventListener('pointercancel', activePlaylistColumnDrag.end);
   }
 
+  function stopNarrowMusicPaneResize() {
+    var active = activeNarrowMusicPaneDrag;
+    if (!active) return;
+    active.handle.classList.remove('dragging');
+    window.removeEventListener('pointermove', active.move);
+    window.removeEventListener('pointerup', active.end);
+    window.removeEventListener('pointercancel', active.end);
+    Settings.set(
+      active.axis === 'width'
+        ? narrowMusicPaneWidthSettingKey()
+        : narrowMusicPaneHeightSettingKey(),
+      active.axis === 'width'
+        ? state.currentNarrowMusicPaneWidthPercents
+        : state.currentNarrowMusicPaneHeightPercents
+    );
+    activeNarrowMusicPaneDrag = null;
+  }
+
+  function startNarrowMusicPaneResize(axis, ev) {
+    var handle = ev.currentTarget;
+    var startValues;
+    var minimums;
+    var total;
+    var startPointer;
+    if (!narrowMusicPaneResizeEnabled() || !handle) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    stopNarrowMusicPaneResize();
+    startValues = axis === 'width'
+      ? currentNarrowMusicPanePixels()
+      : currentNarrowMusicPaneHeights();
+    minimums = axis === 'width'
+      ? state.minNarrowMusicPaneWidthsPx
+      : state.minNarrowMusicPaneHeightsPx;
+    total = startValues[0] + startValues[1];
+    startPointer = axis === 'width' ? ev.clientX : ev.clientY;
+    if (total <= 0) return;
+    if (typeof handle.setPointerCapture === 'function' && ev.pointerId !== undefined) {
+      try {
+        handle.setPointerCapture(ev.pointerId);
+      } catch (_error) {}
+    }
+    handle.classList.add('dragging');
+
+    function move(moveEv) {
+      var delta = (axis === 'width' ? moveEv.clientX : moveEv.clientY) - startPointer;
+      var nextValue = Math.min(
+        Math.max(startValues[0] + delta, minimums[0]),
+        Math.max(minimums[0], total - minimums[1])
+      );
+      var values = [nextValue, total - nextValue];
+      if (axis === 'width') {
+        applyNarrowMusicPaneSizes(values, state.currentNarrowMusicPaneHeightPercents, false);
+      } else {
+        applyNarrowMusicPaneSizes(state.currentNarrowMusicPaneWidthPercents, values, false);
+      }
+    }
+
+    function end() {
+      stopNarrowMusicPaneResize();
+    }
+
+    activeNarrowMusicPaneDrag = {axis: axis, handle: handle, move: move, end: end};
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+  }
+
   function startMusicPaneResize(resizerIndex, ev) {
+    if (isNarrowMusicLayout()) {
+      startNarrowMusicPaneResize(resizerIndex === 0 ? 'width' : 'height', ev);
+      return;
+    }
     if (!musicPaneResizeEnabled()) return;
     ev.preventDefault();
     var startX = ev.clientX;
@@ -370,17 +654,24 @@ export function initLayout(ctx) {
   ctx.layoutApi = {
     adjustedMusicPanePixels: adjustedMusicPanePixels,
     applyMusicPanePercents: applyMusicPanePercents,
+    applyNarrowMusicPaneSizes: applyNarrowMusicPaneSizes,
     applyPlaylistColumnWidths: applyPlaylistColumnWidths,
     clearPlaybackUiPaintTimer: clearPlaybackUiPaintTimer,
     currentMusicPanePixels: currentMusicPanePixels,
+    currentNarrowMusicPaneHeights: currentNarrowMusicPaneHeights,
+    currentNarrowMusicPanePixels: currentNarrowMusicPanePixels,
     flushDeferredMusicPaneUpdates: flushDeferredMusicPaneUpdates,
     musicPaneAvailableWidth: musicPaneAvailableWidth,
     musicPaneResizeEnabled: musicPaneResizeEnabled,
+    narrowMusicPaneResizeEnabled: narrowMusicPaneResizeEnabled,
+    normalizeNarrowMusicPanePercents: normalizeNarrowMusicPanePercents,
     normalizeMusicPanePercents: normalizeMusicPanePercents,
     persistMusicPanePercents: persistMusicPanePercents,
     playbackUiMayPaint: playbackUiMayPaint,
     refreshPlaylistColumnWidths: refreshPlaylistColumnWidths,
     readSavedMusicPanePercents: readSavedMusicPanePercents,
+    readSavedNarrowMusicPaneHeightPercents: readSavedNarrowMusicPaneHeightPercents,
+    readSavedNarrowMusicPaneWidthPercents: readSavedNarrowMusicPaneWidthPercents,
     restoreMusicPanePercents: restoreMusicPanePercents,
     resumeLibraryUpdates: resumeLibraryUpdates,
     schedulePlaybackDisplayPaint: schedulePlaybackDisplayPaint,
@@ -413,6 +704,8 @@ export function initLayout(ctx) {
   );
   applyPlaylistColumnWidths(playlistColumnWidths, false);
   window.addEventListener('resize', function () {
+    restoreMusicPanePercents();
     refreshPlaylistColumnWidths(false);
   });
+  syncMusicPaneResizerOrientation();
 }

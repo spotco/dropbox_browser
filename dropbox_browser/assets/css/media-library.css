@@ -78,7 +78,14 @@
 }
 
 .music-playlist-pane {
+  container-name: music-playlist;
+  container-type: inline-size;
   position: relative;
+}
+
+.music-library-pane {
+  container-name: music-library;
+  container-type: inline-size;
 }
 
 .music-pane-resizer {
@@ -205,6 +212,14 @@
   min-height: 0;
   overscroll-behavior: contain;
   overflow: auto;
+}
+
+.music-library-tree,
+.music-playlist-list,
+.music-library-toolbar,
+.music-playlist-toolbar-actions,
+.music-playlist-toolbar-save,
+.music-playlist-toolbar-secondary {
   scrollbar-color: #70859a #162033;
   scrollbar-width: auto;
 }
@@ -214,30 +229,50 @@
 }
 
 .music-library-tree::-webkit-scrollbar,
-.music-playlist-list::-webkit-scrollbar {
+.music-playlist-list::-webkit-scrollbar,
+.music-library-toolbar::-webkit-scrollbar,
+.music-playlist-toolbar-actions::-webkit-scrollbar,
+.music-playlist-toolbar-save::-webkit-scrollbar,
+.music-playlist-toolbar-secondary::-webkit-scrollbar {
   height: 12px;
   width: 12px;
 }
 
 .music-library-tree::-webkit-scrollbar-track,
-.music-playlist-list::-webkit-scrollbar-track {
+.music-playlist-list::-webkit-scrollbar-track,
+.music-library-toolbar::-webkit-scrollbar-track,
+.music-playlist-toolbar-actions::-webkit-scrollbar-track,
+.music-playlist-toolbar-save::-webkit-scrollbar-track,
+.music-playlist-toolbar-secondary::-webkit-scrollbar-track {
   background: #162033;
 }
 
 .music-library-tree::-webkit-scrollbar-thumb,
-.music-playlist-list::-webkit-scrollbar-thumb {
+.music-playlist-list::-webkit-scrollbar-thumb,
+.music-library-toolbar::-webkit-scrollbar-thumb,
+.music-playlist-toolbar-actions::-webkit-scrollbar-thumb,
+.music-playlist-toolbar-save::-webkit-scrollbar-thumb,
+.music-playlist-toolbar-secondary::-webkit-scrollbar-thumb {
   background: linear-gradient(180deg, #7f93a8 0%, #6d8399 100%);
   border: 2px solid #162033;
   border-radius: 999px;
 }
 
 .music-library-tree::-webkit-scrollbar-thumb:hover,
-.music-playlist-list::-webkit-scrollbar-thumb:hover {
+.music-playlist-list::-webkit-scrollbar-thumb:hover,
+.music-library-toolbar::-webkit-scrollbar-thumb:hover,
+.music-playlist-toolbar-actions::-webkit-scrollbar-thumb:hover,
+.music-playlist-toolbar-save::-webkit-scrollbar-thumb:hover,
+.music-playlist-toolbar-secondary::-webkit-scrollbar-thumb:hover {
   background: linear-gradient(180deg, #95a9bd 0%, #7d94ab 100%);
 }
 
 .music-library-tree::-webkit-scrollbar-corner,
-.music-playlist-list::-webkit-scrollbar-corner {
+.music-playlist-list::-webkit-scrollbar-corner,
+.music-library-toolbar::-webkit-scrollbar-corner,
+.music-playlist-toolbar-actions::-webkit-scrollbar-corner,
+.music-playlist-toolbar-save::-webkit-scrollbar-corner,
+.music-playlist-toolbar-secondary::-webkit-scrollbar-corner {
   background: #162033;
 }
 
@@ -1048,15 +1083,48 @@ body.music-playlist-column-resizing {
 
 @media (max-width: 860px) {
   .music-player-shell {
-    grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr);
+    grid-template-columns: minmax(180px, 1fr) 8px minmax(180px, 1fr);
+    grid-template-rows: minmax(220px, 1fr) 8px minmax(220px, 1fr);
   }
 
   .music-pane-resizer {
-    display: none;
+    display: block;
+  }
+
+  #music-library-pane,
+  #video-library-pane {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  #music-resizer-library-playlist,
+  #video-resizer-library-playlist {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  #music-playlist-pane,
+  #video-playlist-pane {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  #music-resizer-playlist-playback,
+  #video-resizer-playlist-playback {
+    cursor: row-resize;
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  #music-resizer-playlist-playback::before,
+  #video-resizer-playlist-playback::before {
+    height: 2px;
+    width: 32px;
   }
 
   .music-playback-pane {
     grid-column: 1 / -1;
+    grid-row: 3;
   }
 
   .music-now-playing {
@@ -1080,16 +1148,6 @@ body.music-playlist-column-resizing {
 
   .music-volume-row {
     grid-template-columns: 58px minmax(0, 1fr);
-  }
-
-  .music-playlist-toolbar {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .music-playlist-toolbar-actions,
-  .music-playlist-toolbar-save {
-    margin-left: 0;
   }
 
   .music-playlist-save-toast {
@@ -1116,6 +1174,90 @@ body.music-playlist-column-resizing {
 
   .music-playlist-recent-time {
     white-space: normal;
+  }
+}
+
+/* A narrow playlist pane cannot fit every action button beside its title.
+   Keep the title and action strips compact, then let the action strips scroll
+   horizontally instead of consuming the playlist's vertical list space. */
+@container music-playlist (max-width: 300px) {
+  .music-playlist-toolbar {
+    align-items: stretch;
+    gap: 4px;
+    padding: 4px 6px;
+  }
+
+  .music-playlist-toolbar-primary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    justify-content: stretch;
+  }
+
+  .music-playlist-toolbar-title {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    min-height: 28px;
+  }
+
+  .music-playlist-toolbar-actions,
+  .music-playlist-toolbar-save {
+    flex: 0 0 auto;
+    margin-left: 0;
+    max-width: 100%;
+    flex-wrap: nowrap;
+    min-width: 0;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .music-playlist-toolbar-actions button,
+  .music-playlist-toolbar-save button {
+    flex: 0 0 auto;
+  }
+
+  .music-playlist-toolbar-secondary {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+
+  .music-playlist-toolbar-secondary > .music-playlist-toolbar-group {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+  }
+
+  .music-playlist-toolbar-secondary .music-playlist-toolbar-save {
+    flex: 0 0 auto;
+  }
+}
+
+/* Keep library controls on one compact strip at narrow pane widths. */
+@container music-library (max-width: 300px) {
+  .music-library-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 4px;
+    padding: 4px 6px;
+  }
+
+  .music-library-toolbar {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    margin-left: 0;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+    overscroll-behavior: contain;
+    padding-bottom: 2px;
+  }
+
+  .music-library-toolbar button,
+  .music-library-sort-controls {
+    flex: 0 0 auto;
+  }
+
+  .music-library-sort-controls {
+    flex-wrap: nowrap;
   }
 }
 

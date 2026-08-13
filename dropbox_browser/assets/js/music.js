@@ -149,12 +149,20 @@ import {initWaveformController} from './music/waveform/controller.js';
       playlistSaveToastTimer: null,
       currentPlaylistIndex: -1,
       musicPaneWidthSettingKey: 'music-pane-widths',
+      narrowMusicPaneWidthSettingKey: 'music-narrow-pane-widths',
+      narrowMusicPaneHeightSettingKey: 'music-narrow-pane-heights',
       playlistColumnWidthSettingKey: 'music-playlist-column-widths',
       defaultPlaylistColumnWidths: {index: 52, filename: 220, path: 340, reorder: 56},
       musicPaneResizerWidth: 8,
       defaultMusicPanePercents: [35, 38.333333, 26.666667],
       minMusicPaneWidthsPx: [190, 210, 220],
       currentMusicPanePercents: [35, 38.333333, 26.666667],
+      defaultNarrowMusicPaneWidthPercents: [50, 50],
+      defaultNarrowMusicPaneHeightPercents: [50, 50],
+      minNarrowMusicPaneWidthsPx: [140, 140],
+      minNarrowMusicPaneHeightsPx: [220, 220],
+      currentNarrowMusicPaneWidthPercents: [50, 50],
+      currentNarrowMusicPaneHeightPercents: [50, 50],
       shuffleEnabled: false,
       loopPlaylist: false,
       shuffleBag: [],
@@ -302,7 +310,7 @@ import {initWaveformController} from './music/waveform/controller.js';
     ctx.state.windowFocused = false;
   });
   window.addEventListener('resize', function () {
-    ctx.layoutApi.applyMusicPanePercents(ctx.state.currentMusicPanePercents, false);
+    ctx.layoutApi.restoreMusicPanePercents();
     ctx.playbackApi.metadata.scheduleNowPlayingMarqueeRefresh();
   });
   window.addEventListener('beforeunload', function () {

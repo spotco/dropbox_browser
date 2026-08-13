@@ -60,6 +60,8 @@ function createClassList() {
 
 function createLayoutDom(options) {
   const listWidth = options.listWidth == null ? 500 : options.listWidth;
+  const shellWidth = options.shellWidth == null ? Math.max(listWidth * 3, 900) : options.shellWidth;
+  const shellHeight = options.shellHeight == null ? 800 : options.shellHeight;
   const playlistListEl = {
     clientWidth: listWidth,
     getBoundingClientRect() {
@@ -85,7 +87,7 @@ function createLayoutDom(options) {
   const playerShell = {
     style: createStyleBag(),
     getBoundingClientRect() {
-      return {width: Math.max(listWidth * 3, 900)};
+      return {width: shellWidth, height: shellHeight};
     },
   };
   return {
@@ -100,11 +102,14 @@ function createLayoutDom(options) {
   };
 }
 
-function installLayoutGlobals(settings) {
+function installLayoutGlobals(settings, options = {}) {
   global.Settings = settings;
   global.window = {
     getComputedStyle() {
       return {display: "block"};
+    },
+    matchMedia() {
+      return {matches: options.narrow === true};
     },
     addEventListener() {},
     removeEventListener() {},
@@ -223,6 +228,42 @@ test("music and video playlist column widths persist under separate Settings key
     videoReload.els.playlistTableEl.style.getPropertyValue("--music-playlist-grid-columns"),
     new RegExp(String(videoSaved.filename) + "px"),
   );
+});
+
+test("narrow pane sizes persist independently from wide pane widths", async () => {
+  const settings = createMemorySettings();
+  settings.set("music-pane-widths", [20, 30, 50]);
+  settings.set("music-narrow-pane-widths", [30, 70]);
+  settings.set("music-narrow-pane-heights", [65, 35]);
+  installLayoutGlobals(settings, {narrow: true});
+  const {initLayout} = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/layout.js");
+  const state = {
+    musicPaneWidthSettingKey: "music-pane-widths",
+    narrowMusicPaneWidthSettingKey: "music-narrow-pane-widths",
+    narrowMusicPaneHeightSettingKey: "music-narrow-pane-heights",
+    defaultNarrowMusicPaneWidthPercents: [50, 50],
+    defaultNarrowMusicPaneHeightPercents: [50, 50],
+    minNarrowMusicPaneWidthsPx: [140, 140],
+    minNarrowMusicPaneHeightsPx: [220, 220],
+    currentNarrowMusicPaneWidthPercents: [50, 50],
+    currentNarrowMusicPaneHeightPercents: [50, 50],
+  };
+  const ctx = buildLayoutCtx(settings, state, {
+    playerShell: Object.assign(createLayoutDom({listWidth: 300, shellWidth: 900, shellHeight: 800}).playerShell, {
+      style: createStyleBag(),
+    }),
+  });
+  initLayout(ctx);
+  ctx.layoutApi.restoreMusicPanePercents();
+  assert.deepEqual(ctx.layoutApi.readSavedNarrowMusicPaneWidthPercents(), [30, 70]);
+  assert.deepEqual(ctx.layoutApi.readSavedNarrowMusicPaneHeightPercents(), [65, 35]);
+  assert.match(ctx.els.playerShell.style.gridTemplateColumns, /px 8px .*px/);
+  assert.match(ctx.els.playerShell.style.gridTemplateRows, /px 8px .*px/);
+
+  ctx.layoutApi.applyNarrowMusicPaneSizes([40, 60], [55, 45], true);
+  assert.deepEqual(settings.store["music-pane-widths"], [20, 30, 50]);
+  assert.deepEqual(settings.store["music-narrow-pane-widths"].map(Math.round), [40, 60]);
+  assert.deepEqual(settings.store["music-narrow-pane-heights"].map(Math.round), [55, 45]);
 });
 
 test("refreshPlaylistColumnWidths refits fixed px columns after the list width changes", async () => {

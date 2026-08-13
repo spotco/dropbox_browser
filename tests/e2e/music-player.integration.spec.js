@@ -267,6 +267,158 @@ test("narrow music toolbars wrap without clipping or overlap", async ({ page }) 
   expect(snapshots.every((snapshot) => !snapshot.buttonOutside)).toBe(true);
 });
 
+test("very narrow playlist keeps its list visible while action strips stay usable", async ({ page }) => {
+  await page.setViewportSize({width: 374, height: 749});
+  await openMusicPlayer(page);
+
+  const snapshot = await page.evaluate(() => {
+    const selectors = {
+      pane: "#music-playlist-pane",
+      primary: ".music-playlist-toolbar-primary",
+      secondary: "#music-playlist-controls",
+      table: "#music-playlist-table",
+      list: "#music-playlist-list",
+    };
+    const boxes = {};
+    Object.keys(selectors).forEach((key) => {
+      const element = document.querySelector(selectors[key]);
+      const rect = element.getBoundingClientRect();
+      boxes[key] = {
+        top: rect.top,
+        bottom: rect.bottom,
+        height: rect.height,
+        width: rect.width,
+      };
+    });
+    return {
+      boxes,
+      primaryLayout: getComputedStyle(document.querySelector(selectors.primary)).display,
+      actionStrip: (() => {
+        const element = document.querySelector(".music-playlist-toolbar-actions");
+        return {clientWidth: element.clientWidth, scrollWidth: element.scrollWidth};
+      })(),
+      secondaryStrip: (() => {
+        const element = document.querySelector(selectors.secondary);
+        return {clientWidth: element.clientWidth, scrollWidth: element.scrollWidth};
+      })(),
+    };
+  });
+  expect(snapshot.primaryLayout).toBe("grid");
+  expect(snapshot.boxes.list.height).toBeGreaterThan(100);
+  expect(snapshot.boxes.list.top).toBeGreaterThanOrEqual(snapshot.boxes.table.top);
+  expect(snapshot.boxes.secondary.bottom).toBeLessThanOrEqual(snapshot.boxes.table.top + 0.5);
+  expect(snapshot.actionStrip.scrollWidth).toBeGreaterThan(snapshot.actionStrip.clientWidth);
+  expect(snapshot.secondaryStrip.scrollWidth).toBeGreaterThan(snapshot.secondaryStrip.clientWidth);
+});
+
+test("narrow music library keeps rows horizontally scrollable with the player scrollbar style", async ({ page }) => {
+  await page.setViewportSize({width: 374, height: 749});
+  await openMusicPlayer(page);
+  await loadCompleteLibrary(page);
+
+  const snapshot = await page.evaluate(() => {
+    const tree = document.querySelector("#music-library-tree");
+    const name = tree.querySelector(".music-tree-song .music-tree-name");
+    name.textContent += " - " + "A deliberately long song title ".repeat(12);
+    const scrollbar = getComputedStyle(tree, "::-webkit-scrollbar");
+    const thumb = getComputedStyle(tree, "::-webkit-scrollbar-thumb");
+    return {
+      clientWidth: tree.clientWidth,
+      scrollWidth: tree.scrollWidth,
+      scrollbarHeight: scrollbar.height,
+      thumbBackground: thumb.backgroundImage,
+    };
+  });
+  expect(snapshot.scrollWidth).toBeGreaterThan(snapshot.clientWidth);
+  expect(snapshot.scrollbarHeight).toBe("12px");
+  expect(snapshot.thumbBackground).toContain("linear-gradient");
+});
+
+test("very narrow music library keeps controls in one styled scroll strip", async ({ page }) => {
+  await page.setViewportSize({width: 374, height: 749});
+  await openMusicPlayer(page);
+
+  const snapshot = await page.evaluate(() => {
+    const toolbar = document.querySelector(".music-library-toolbar");
+    const sortControls = document.querySelector(".music-library-sort-controls");
+    const scrollbar = getComputedStyle(toolbar, "::-webkit-scrollbar");
+    const thumb = getComputedStyle(toolbar, "::-webkit-scrollbar-thumb");
+    return {
+      toolbar: {
+        clientWidth: toolbar.clientWidth,
+        scrollWidth: toolbar.scrollWidth,
+        flexWrap: getComputedStyle(toolbar).flexWrap,
+        overflowX: getComputedStyle(toolbar).overflowX,
+      },
+      sortWrap: getComputedStyle(sortControls).flexWrap,
+      scrollbarHeight: scrollbar.height,
+      thumbBackground: thumb.backgroundImage,
+    };
+  });
+  expect(snapshot.toolbar.scrollWidth).toBeGreaterThan(snapshot.toolbar.clientWidth);
+  expect(snapshot.toolbar.flexWrap).toBe("nowrap");
+  expect(snapshot.toolbar.overflowX).toBe("auto");
+  expect(snapshot.sortWrap).toBe("nowrap");
+  expect(snapshot.scrollbarHeight).toBe("12px");
+  expect(snapshot.thumbBackground).toContain("linear-gradient");
+});
+
+test("narrow music pane dividers resize and persist separately from wide pane sizes", async ({ page }) => {
+  await page.setViewportSize({width: 374, height: 749});
+  await openMusicPlayer(page);
+  await page.evaluate(() => Settings.set("music-pane-widths", [25, 35, 40]));
+
+  async function paneSnapshot() {
+    return page.evaluate(() => {
+      const rectFor = (selector) => {
+        const rect = document.querySelector(selector).getBoundingClientRect();
+        return {left: rect.left, top: rect.top, width: rect.width, height: rect.height};
+      };
+      return {
+        library: rectFor("#music-library-pane"),
+        playlist: rectFor("#music-playlist-pane"),
+        playback: rectFor("#music-playback-pane"),
+        libraryPlaylistResizer: rectFor("#music-resizer-library-playlist"),
+        playlistPlaybackResizer: rectFor("#music-resizer-playlist-playback"),
+        wide: Settings.get("music-pane-widths", null),
+        narrowWidths: Settings.get("music-narrow-pane-widths", null),
+        narrowHeights: Settings.get("music-narrow-pane-heights", null),
+      };
+    });
+  }
+
+  const before = await paneSnapshot();
+  const verticalHandle = await page.locator("#music-resizer-library-playlist").boundingBox();
+  expect(verticalHandle).not.toBeNull();
+  await page.mouse.move(verticalHandle.x + verticalHandle.width / 2, verticalHandle.y + 100);
+  await page.mouse.down();
+  await page.mouse.move(verticalHandle.x + verticalHandle.width / 2 + 35, verticalHandle.y + 100);
+  await page.mouse.up();
+  const afterWidth = await paneSnapshot();
+  expect(afterWidth.library.width).toBeGreaterThan(before.library.width + 20);
+  expect(afterWidth.playlist.width).toBeLessThan(before.playlist.width - 20);
+  expect(afterWidth.wide).toEqual([25, 35, 40]);
+  expect(afterWidth.narrowWidths).toHaveLength(2);
+
+  const horizontalHandle = await page.locator("#music-resizer-playlist-playback").boundingBox();
+  expect(horizontalHandle).not.toBeNull();
+  await page.mouse.move(horizontalHandle.x + 100, horizontalHandle.y + horizontalHandle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(horizontalHandle.x + 100, horizontalHandle.y + horizontalHandle.height / 2 + 45);
+  await page.mouse.up();
+  const afterHeight = await paneSnapshot();
+  expect(afterHeight.playback.top).toBeGreaterThan(before.playback.top + 8);
+  expect(afterHeight.playback.height).toBeLessThan(before.playback.height - 8);
+  expect(afterHeight.narrowHeights).toHaveLength(2);
+
+  await page.reload();
+  await openMusicPlayer(page);
+  const restored = await paneSnapshot();
+  expect(Math.abs(restored.library.width - afterWidth.library.width)).toBeLessThan(2);
+  expect(Math.abs(restored.playback.top - afterHeight.playback.top)).toBeLessThan(2);
+  expect(restored.wide).toEqual([25, 35, 40]);
+});
+
 async function selectedLibrarySongNames(page) {
   return (
     await page

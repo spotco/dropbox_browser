@@ -67,7 +67,9 @@ Persisted music settings include:
 - `music-library-sort`;
 - `music-playlist-load-sort` and `music-playlist-load-filter`;
 - `music-recent-sort`;
-- `music-playlist-column-widths` and `music-media-library-pane-widths`;
+- `music-playlist-column-widths`;
+- `music-pane-widths` for wide mode, plus `music-narrow-pane-widths` and
+  `music-narrow-pane-heights` for the narrow library/playlist/playback split;
 - `music-waveform-open`.
 
 ## Metadata and cover art

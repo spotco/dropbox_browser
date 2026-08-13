@@ -270,6 +270,11 @@
     if (ev.detail.mode === 'server-log') scrollLogToBottom();
   });
 
+  // bottom-pane.js restores the persisted mode before this classic script is
+  // loaded, so the initial Music Player selection does not emit an event that
+  // the listener above can observe.
+  if (modeSelect && modeSelect.value === 'music-player') ensureMusicPaneHeight();
+
   window.DropboxBrowserLogPanel = {
     getHeight: getHeight,
     applyHeight: applyHeight,

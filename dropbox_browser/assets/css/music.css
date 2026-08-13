@@ -8,6 +8,13 @@
   min-height: 0;
 }
 #music-player-pane * { box-sizing: border-box; }
+
+@media (max-width: 860px) {
+  #music-player-pane {
+    --music-min-pane-height: 520px;
+  }
+}
+
 #music-player-pane button {
   background: #263547;
   border: 1px solid #4c6a86;
