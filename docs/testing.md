@@ -143,10 +143,13 @@ Playwright config uses that executable for the lane.
 
 Before a remote run, the default `--publish-workers auto` compares each
 selected worker with local `HEAD`. Dirty or stale checkouts are preserved in a
-remote stash and reset to that commit. The runner normally fetches from
-`origin`; if that is unavailable it transfers a Git bundle over SSH, so the
-final remote preflight still requires an exact, clean checkout. Use
-`--publish-workers never` to reject instead of synchronizing, or
+remote stash and reset to that commit. `--publish-source auto` (default) fetches
+from `origin` only when that remote already contains local `HEAD`. Unpublished
+local commits are shipped with a Git bundle over SSH; GitHub is not updated.
+Use `--publish-source local` to always use the SSH bundle, or
+`--publish-source origin` to push `HEAD` to `origin/<branch>` when needed.
+`--include-worktree` also copies uncommitted local files onto workers after the
+reset. Use `--publish-workers never` to reject instead of synchronizing, or
 `--sync-clean`/`--publish-workers always` to force a refresh.
 
 Before an actual remote run, set the coordination owner (the local notes may

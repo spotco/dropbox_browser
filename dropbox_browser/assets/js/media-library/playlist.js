@@ -1132,6 +1132,7 @@ export function initPlaylist(ctx) {
     }
   }
 
+  // Must stay inside initPlaylist so afterRender can call selection/drag helpers.
   function createPlaylistVirtualRecycler(contentEl) {
     playlistVirtual.contentEl = contentEl;
     return createVirtualRowRecycler({
@@ -1881,6 +1882,13 @@ export function initPlaylist(ctx) {
     }
     if (useVirtual) {
       playlistVirtual.enabled = true;
+      if (
+        playlistVirtual.recycler &&
+        playlistVirtual.contentEl &&
+        playlistVirtual.contentEl.parentNode !== els.playlistListEl
+      ) {
+        destroyPlaylistVirtualRecycler();
+      }
       if (!playlistVirtual.recycler) {
         els.playlistListEl.textContent = '';
         contentEl = document.createElement('div');

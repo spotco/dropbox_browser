@@ -194,7 +194,31 @@ class DistributedE2ETests(unittest.TestCase):
     def test_publish_arguments_default_to_auto(self) -> None:
         args = runner.parse_args([])
         self.assertEqual(args.publish_workers, "auto")
+        self.assertEqual(args.publish_source, "auto")
         self.assertFalse(args.sync_clean)
+        self.assertFalse(args.include_worktree)
+
+    def test_publish_source_local_uses_bundle_without_origin(self) -> None:
+        self.assertEqual(
+            runner.resolve_publish_transport("local", origin_contains_head=True),
+            "bundle",
+        )
+        self.assertEqual(
+            runner.resolve_publish_transport("local", origin_contains_head=False),
+            "bundle",
+        )
+        self.assertEqual(
+            runner.resolve_publish_transport("auto", origin_contains_head=True),
+            "origin",
+        )
+        self.assertEqual(
+            runner.resolve_publish_transport("auto", origin_contains_head=False),
+            "bundle",
+        )
+        self.assertEqual(
+            runner.resolve_publish_transport("origin", origin_contains_head=False),
+            "origin",
+        )
 
     def test_remote_script_exports_worker_browser(self) -> None:
         worker = runner.RemoteWorker(

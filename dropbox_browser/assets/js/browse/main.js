@@ -27,6 +27,7 @@ import {
   DEFAULT_VIRTUAL_ROW_HEIGHT,
   DEFAULT_VIRTUAL_THRESHOLD,
   createVirtualRowRecycler,
+  insertBeforeChild,
   readTableViewport,
   rowIndexForScrollPosition,
   shouldVirtualizeRows,
@@ -230,6 +231,7 @@ function createVirtualState() {
     enabled: false,
     windowKey: '',
     recycler: null,
+    createRecycler: null,
     topSpacer: null,
     bottomSpacer: null,
   };
@@ -332,55 +334,6 @@ function setBrowseSpacerHeight(spacer, height) {
   if (cell) cell.style.height = String(Math.max(0, Number(height) || 0)) + 'px';
 }
 
-function createBrowseVirtualRecycler(mount, state, virtualState) {
-  var topSpacer = document.createElement('tr');
-  var bottomSpacer = document.createElement('tr');
-  [topSpacer, bottomSpacer].forEach(function (spacer) {
-    var cell = document.createElement('td');
-    spacer.className = 'browse-virtual-spacer';
-    spacer.setAttribute('aria-hidden', 'true');
-    cell.colSpan = 7;
-    spacer.appendChild(cell);
-    mount.appendChild(spacer);
-  });
-  virtualState.topSpacer = topSpacer;
-  virtualState.bottomSpacer = bottomSpacer;
-  return createVirtualRowRecycler({
-    viewport: mount,
-    rowCount: 0,
-    rowHeight: virtualState.rowHeight,
-    overscan: virtualState.overscan,
-    threshold: virtualState.threshold,
-    getViewport: function () { return readTableViewport(mount, virtualState.rowHeight); },
-    createRow: createBrowseRow,
-    mountRow: function (row) { mount.insertBefore(row, bottomSpacer); },
-    updateRow: updateBrowseRow,
-    measureRowHeight: function (row) {
-      if (!row || typeof row.getBoundingClientRect !== 'function') return 0;
-      return Number(row.getBoundingClientRect().height) || 0;
-    },
-    renderWindow: function (windowState, _mountedCount, _pool, recyclerState) {
-      virtualState.rowHeight = recyclerState.rowHeight;
-      virtualState.rowHeightMeasured = recyclerState.rowHeightMeasured;
-      virtualState.windowKey = recyclerState.windowKey;
-      setBrowseSpacerHeight(topSpacer, windowState.topSpacerHeight);
-      setBrowseSpacerHeight(bottomSpacer, windowState.bottomSpacerHeight);
-      setVirtualizationDataset(document.body, virtualState, windowState, _mountedCount);
-    },
-    afterRender: function (windowState, mountedCount, _pool, recyclerState) {
-      virtualState.rowHeight = recyclerState.rowHeight;
-      virtualState.rowHeightMeasured = recyclerState.rowHeightMeasured;
-      virtualState.windowKey = recyclerState.windowKey;
-      setBrowseSpacerHeight(topSpacer, windowState.topSpacerHeight);
-      setBrowseSpacerHeight(bottomSpacer, windowState.bottomSpacerHeight);
-      setVirtualizationDataset(document.body, virtualState, windowState, mountedCount);
-      if (document.body.dataset.browseScrollPreview === 'visible') {
-        updateScrollPreview({persistent: previewScrollbarDragActive});
-      }
-    },
-  });
-}
-
 function renderRows(mount, state, virtualState, options) {
   var body = document.body;
   var filteredRows = getFilteredRows(state);
@@ -405,9 +358,15 @@ function renderRows(mount, state, virtualState, options) {
   }
   if (shouldVirtualizeRows(sortedRows.length, {threshold: virtualState.threshold})) {
     virtualState.enabled = true;
+    if (virtualState.recycler && virtualState.bottomSpacer && virtualState.bottomSpacer.parentNode !== mount) {
+      destroyBrowseVirtualRecycler(virtualState);
+    }
     if (!virtualState.recycler) {
+      if (typeof virtualState.createRecycler !== 'function') {
+        throw new Error('browse virtual recycler factory is not installed');
+      }
       mount.innerHTML = '';
-      virtualState.recycler = createBrowseVirtualRecycler(mount, state, virtualState);
+      virtualState.recycler = virtualState.createRecycler(mount);
     }
     virtualState.recycler.setData(sortedRows.length, function (index) {
       return sortedRows[index];
@@ -598,6 +557,58 @@ function initBrowse() {
     }
     scheduleScrollPreviewHide(PREVIEW_HIDE_DELAY_MS);
   }
+
+  // Nested with updateScrollPreview so afterRender cannot ReferenceError.
+  function createBrowseVirtualRecycler(mount) {
+    var topSpacer = document.createElement('tr');
+    var bottomSpacer = document.createElement('tr');
+    [topSpacer, bottomSpacer].forEach(function (spacer) {
+      var cell = document.createElement('td');
+      spacer.className = 'browse-virtual-spacer';
+      spacer.setAttribute('aria-hidden', 'true');
+      cell.colSpan = 7;
+      spacer.appendChild(cell);
+      mount.appendChild(spacer);
+    });
+    virtualState.topSpacer = topSpacer;
+    virtualState.bottomSpacer = bottomSpacer;
+    return createVirtualRowRecycler({
+      viewport: mount,
+      rowCount: 0,
+      rowHeight: virtualState.rowHeight,
+      overscan: virtualState.overscan,
+      threshold: virtualState.threshold,
+      getViewport: function () { return readTableViewport(mount, virtualState.rowHeight); },
+      createRow: createBrowseRow,
+      mountRow: function (row) { insertBeforeChild(mount, row, bottomSpacer); },
+      updateRow: updateBrowseRow,
+      measureRowHeight: function (row) {
+        if (!row || typeof row.getBoundingClientRect !== 'function') return 0;
+        return Number(row.getBoundingClientRect().height) || 0;
+      },
+      renderWindow: function (windowState, _mountedCount, _pool, recyclerState) {
+        virtualState.rowHeight = recyclerState.rowHeight;
+        virtualState.rowHeightMeasured = recyclerState.rowHeightMeasured;
+        virtualState.windowKey = recyclerState.windowKey;
+        setBrowseSpacerHeight(topSpacer, windowState.topSpacerHeight);
+        setBrowseSpacerHeight(bottomSpacer, windowState.bottomSpacerHeight);
+        setVirtualizationDataset(document.body, virtualState, windowState, _mountedCount);
+      },
+      afterRender: function (windowState, mountedCount, _pool, recyclerState) {
+        virtualState.rowHeight = recyclerState.rowHeight;
+        virtualState.rowHeightMeasured = recyclerState.rowHeightMeasured;
+        virtualState.windowKey = recyclerState.windowKey;
+        setBrowseSpacerHeight(topSpacer, windowState.topSpacerHeight);
+        setBrowseSpacerHeight(bottomSpacer, windowState.bottomSpacerHeight);
+        setVirtualizationDataset(document.body, virtualState, windowState, mountedCount);
+        if (body.dataset.browseScrollPreview === 'visible') {
+          updateScrollPreview({persistent: previewScrollbarDragActive});
+        }
+      },
+    });
+  }
+
+  virtualState.createRecycler = createBrowseVirtualRecycler;
 
   function renderAndRefresh(options) {
     var nextOptions = Object.assign({reason: 'render-refresh'}, options || {});
@@ -802,6 +813,7 @@ function initBrowse() {
 
   function renderLoading(nextState) {
     setBrowseLoading(state, true);
+    destroyBrowseVirtualRecycler(virtualState);
     mount.innerHTML = loadingRowHtml('Loading folder listing...');
     thumbnailLoader.refresh();
     horizontalScrollbar.refresh();
@@ -890,6 +902,7 @@ function initBrowse() {
         if (version !== requestVersion) return false;
         currentController = null;
         setBrowseError(state, error && error.message ? error.message : 'Could not load folder listing.');
+        destroyBrowseVirtualRecycler(virtualState);
         mount.innerHTML = errorRowHtml(state.error);
         thumbnailLoader.refresh();
         horizontalScrollbar.refresh();

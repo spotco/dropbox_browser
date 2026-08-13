@@ -6,7 +6,11 @@ workers receive scheduled specs, while the current Windows machine remains a
 local lane. Before a remote run, workers which are dirty or not at the local
 ``HEAD`` are reset to that commit. The normal path fetches from ``origin``;
 when that is unavailable the runner transfers a Git bundle directly over SSH.
-Both paths keep the worker checkout clean before tests begin. If the optional
+Both paths keep the worker checkout clean before tests begin unless
+``--include-worktree`` is set. ``--publish-source local`` never talks to
+GitHub and always ships unpublished local commits over SSH. ``auto`` uses
+origin only when it already has local ``HEAD``; otherwise it falls back to
+the same SSH bundle. If the optional
 shared worker SDK, local notes, credentials, coordination owner, or remote
 checkouts are absent, the runner reports the reason and runs locally. Actual
 remote runs claim each selected worker on the shared coordination board and
@@ -404,7 +408,13 @@ def run_local_specs(specs: tuple[Path, ...], output_dir: Path) -> tuple[bool, fl
     return passed, max(0.001, time.monotonic() - started)
 
 
-def check_remote(shared: Any, ssh: Any, worker: RemoteWorker) -> tuple[bool, str]:
+def check_remote(
+    shared: Any,
+    ssh: Any,
+    worker: RemoteWorker,
+    *,
+    require_clean: bool = True,
+) -> tuple[bool, str]:
     target = worker.target(shared.ssh)
     repo_path = remote_shell_path(worker, worker.repo)
     try:
@@ -414,7 +424,7 @@ def check_remote(shared: Any, ssh: Any, worker: RemoteWorker) -> tuple[bool, str
             repo=repo_path,
             git=worker.git,
             expected_head=None,
-            require_clean=True,
+            require_clean=require_clean,
             timeout=45,
         )
         branch_check = (
@@ -510,6 +520,78 @@ def ensure_origin_has_head(commit: str, *, branch: str) -> None:
         )
 
 
+def resolve_publish_transport(source: str, *, origin_contains_head: bool) -> str:
+    """Return ``origin`` or ``bundle`` for worker publication.
+
+    ``local`` never uses GitHub. ``auto`` uses origin only when it already
+    contains local HEAD. ``origin`` always prefers GitHub (and may push).
+    """
+
+    mode = (source or "auto").strip().lower()
+    if mode not in {"auto", "origin", "local"}:
+        raise RunnerError("--publish-source must be auto, origin, or local")
+    if mode == "local":
+        return "bundle"
+    if mode == "origin":
+        return "origin"
+    return "origin" if origin_contains_head else "bundle"
+
+
+def local_worktree_is_dirty() -> bool:
+    return bool(_git_result(["git", "status", "--porcelain=v1"]).stdout.strip())
+
+
+def create_local_worktree_patch() -> Path | None:
+    """Binary patch of tracked + untracked (non-ignored) local changes."""
+
+    patch = REPO / "Temp" / "remote-e2e" / "sync" / "local-worktree.patch"
+    patch.parent.mkdir(parents=True, exist_ok=True)
+    if patch.exists():
+        patch.unlink()
+    index_path = patch.with_suffix(patch.suffix + ".index")
+    env = os.environ.copy()
+    env["GIT_INDEX_FILE"] = str(index_path)
+    try:
+        read_tree = subprocess.run(
+            ["git", "read-tree", "HEAD"],
+            cwd=REPO,
+            capture_output=True,
+            env=env,
+            check=False,
+        )
+        if read_tree.returncode != 0:
+            raise RunnerError("could not snapshot HEAD for a local worktree patch")
+        add = subprocess.run(
+            ["git", "add", "-A"],
+            cwd=REPO,
+            capture_output=True,
+            env=env,
+            check=False,
+        )
+        if add.returncode != 0:
+            detail = (add.stderr or add.stdout or b"").decode("utf-8", errors="replace").strip()[-2000:]
+            raise RunnerError(f"could not stage local worktree for publish: {detail}")
+        with patch.open("wb") as handle:
+            diff = subprocess.run(
+                ["git", "diff", "--cached", "--binary", "--no-ext-diff", "--no-color"],
+                cwd=REPO,
+                stdout=handle,
+                stderr=subprocess.PIPE,
+                env=env,
+                check=False,
+            )
+        if diff.returncode != 0:
+            detail = (diff.stderr or b"").decode("utf-8", errors="replace").strip()[-2000:]
+            raise RunnerError(f"could not create local worktree patch: {detail}")
+    finally:
+        for leftover in (index_path, Path(str(index_path) + ".lock")):
+            if leftover.exists():
+                leftover.unlink()
+    if not patch.is_file() or patch.stat().st_size == 0:
+        return None
+    return patch
+
+
 def create_sync_bundle(commit: str, prerequisite_heads: Iterable[str]) -> Path:
     """Create a source-pinned bundle for direct worker synchronization."""
 
@@ -535,6 +617,7 @@ def publish_worker_to_head(
     expected_head: str,
     *,
     bundle: Path | None,
+    worktree_patch: Path | None = None,
 ) -> None:
     """Reset one worker to ``expected_head`` through origin or a direct bundle."""
 
@@ -547,6 +630,7 @@ def publish_worker_to_head(
     head_q = quote(expected_head)
     branch_q = quote(branch)
     remote_bundle = ""
+    remote_patch = ""
     if bundle is not None:
         remote_dir = f"{repo.rstrip('/')}/Temp/remote-e2e/sync"
         remote_bundle = f"{remote_dir}/runner-sync-{expected_head}.bundle"
@@ -562,8 +646,24 @@ def publish_worker_to_head(
             f"if ! {git_q} -C {repo_q} cat-file -e {head_q}^{{commit}} 2>/dev/null; then "
             f"{git_q} -C {repo_q} fetch origin --prune; fi"
         )
+    if worktree_patch is not None:
+        remote_dir = f"{repo.rstrip('/')}/Temp/remote-e2e/sync"
+        remote_patch = f"{remote_dir}/runner-local-worktree.patch"
+        created = ssh.run(target, f"set -eu; mkdir -p {quote(remote_dir)}", timeout=45)
+        if created.returncode != 0:
+            detail = (created.stderr or created.stdout or "").strip()[-2000:]
+            raise RunnerError(f"could not create sync directory on {worker.label}: {detail}")
+        ssh.scp_to(target, worktree_patch, remote_scp_path(worker, remote_patch), timeout=60, check=True)
     # Preserve a worker's local work before making its checkout testable.  The
-    # clean preflight remains strict; the stash is intentional worker recovery.
+    # clean preflight remains strict unless a local worktree patch is applied.
+    apply_lines = (
+        [
+            f"{git_q} -C {repo_q} apply {quote(remote_patch)}",
+            f"rm -f {quote(remote_patch)}",
+        ]
+        if remote_patch
+        else []
+    )
     command = "\n".join(
         [
             "set -eu",
@@ -573,6 +673,7 @@ def publish_worker_to_head(
             f"{git_q} -C {repo_q} checkout {branch_q}",
             f"{git_q} -C {repo_q} reset --hard {head_q}",
             f"{git_q} -C {repo_q} clean -fd",
+            *apply_lines,
             *([f"rm -f {quote(remote_bundle)}"] if remote_bundle else []),
             f"printf 'PUBLISHED_HEAD='; {git_q} -C {repo_q} rev-parse HEAD; printf '\\n'",
         ]
@@ -589,7 +690,8 @@ def publish_worker_to_head(
         raise RunnerError(
             f"publish {worker.label}: reset landed on {published[:12] or '?'}; expected {expected_head[:12]}"
         )
-    print(f"publish {worker.label}: reset to {expected_head[:12]}", flush=True)
+    extra = " + local worktree" if worktree_patch is not None else ""
+    print(f"publish {worker.label}: reset to {expected_head[:12]}{extra}", flush=True)
 
 
 def prepare_workers_for_run(
@@ -600,19 +702,29 @@ def prepare_workers_for_run(
     expected_head: str,
     publish_mode: str,
     force_sync_clean: bool,
+    publish_source: str = "auto",
+    include_worktree: bool = False,
 ) -> None:
-    """Synchronize stale/dirty workers, then enforce a clean exact-HEAD preflight."""
+    """Synchronize stale/dirty workers, then enforce a matching-HEAD preflight."""
 
     mode = publish_mode.strip().lower()
     if mode not in {"auto", "always", "never"}:
         raise RunnerError("--publish-workers must be auto, always, or never")
+    worktree_patch: Path | None = None
+    if include_worktree and local_worktree_is_dirty():
+        worktree_patch = create_local_worktree_patch()
+        if worktree_patch is not None:
+            print(f"publish: including local worktree patch ({worktree_patch.stat().st_size} bytes)", flush=True)
     reports: list[tuple[RemoteWorker, Any]] = []
     for worker in workers:
         reports.append((worker, inspect_remote_git(shared, ssh, worker)))
     needing = [
         worker
         for worker, report in reports
-        if force_sync_clean or mode == "always" or worker_needs_publish(report, expected_head)
+        if force_sync_clean
+        or mode == "always"
+        or worktree_patch is not None
+        or worker_needs_publish(report, expected_head)
     ]
     if needing and mode == "never" and not force_sync_clean:
         raise RunnerError(
@@ -625,13 +737,37 @@ def prepare_workers_for_run(
             raise RunnerError("workers needing publish must use one configured branch")
         branch = branches.pop()
         bundle: Path | None = None
-        try:
-            ensure_origin_has_head(expected_head, branch=branch)
-        except RunnerError as exc:
-            bundle = create_sync_bundle(expected_head, [str(getattr(report, "head", "") or "") for _, report in reports])
-            print(f"publish: origin unavailable ({exc}); using direct SSH bundle {bundle.name}", flush=True)
+        origin_contains = origin_has_commit(expected_head, branch=branch)
+        transport = resolve_publish_transport(publish_source, origin_contains_head=origin_contains)
+        if transport == "origin":
+            try:
+                if publish_source.strip().lower() == "origin" and not origin_contains:
+                    ensure_origin_has_head(expected_head, branch=branch)
+            except RunnerError as exc:
+                bundle = create_sync_bundle(
+                    expected_head,
+                    [str(getattr(report, "head", "") or "") for _, report in reports],
+                )
+                print(f"publish: origin unavailable ({exc}); using direct SSH bundle {bundle.name}", flush=True)
+        if transport == "bundle":
+            bundle = create_sync_bundle(
+                expected_head,
+                [str(getattr(report, "head", "") or "") for _, report in reports],
+            )
+            print(
+                f"publish: using local SSH bundle {bundle.name} "
+                f"(publish-source={publish_source.strip().lower() or 'auto'})",
+                flush=True,
+            )
         for worker in needing:
-            publish_worker_to_head(shared, ssh, worker, expected_head, bundle=bundle)
+            publish_worker_to_head(
+                shared,
+                ssh,
+                worker,
+                expected_head,
+                bundle=bundle,
+                worktree_patch=worktree_patch,
+            )
     for worker in workers:
         report = shared.git_ops.preflight(
             ssh,
@@ -639,10 +775,11 @@ def prepare_workers_for_run(
             repo=remote_shell_path(worker, worker.repo),
             git=worker.git,
             expected_head=expected_head,
-            require_clean=True,
+            require_clean=worktree_patch is None,
             timeout=45,
         )
-        print(f"preflight {worker.label}: HEAD {report.head[:12]} clean", flush=True)
+        cleanliness = "clean" if report.clean else "with local worktree"
+        print(f"preflight {worker.label}: HEAD {report.head[:12]} {cleanliness}", flush=True)
 
 
 def coordination_owner(settings: dict[str, Any], args: argparse.Namespace) -> str:
@@ -928,6 +1065,8 @@ def run(args: argparse.Namespace) -> int:
                 expected_head=expected_head,
                 publish_mode=args.publish_workers,
                 force_sync_clean=args.sync_clean,
+                publish_source=args.publish_source,
+                include_worktree=args.include_worktree,
             )
         except Exception:
             release_coordination_leases(
@@ -941,7 +1080,12 @@ def run(args: argparse.Namespace) -> int:
     ready_workers: list[RemoteWorker] = []
     if ssh is not None:
         for worker in workers:
-            ready, detail = check_remote(shared, ssh, worker)
+            ready, detail = check_remote(
+                shared,
+                ssh,
+                worker,
+                require_clean=not args.include_worktree,
+            )
             if ready:
                 ready_workers.append(worker)
             else:
@@ -1052,6 +1196,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--sync-clean",
         action="store_true",
         help="force synchronization of every selected worker before preflight",
+    )
+    parser.add_argument(
+        "--publish-source",
+        choices=("auto", "origin", "local"),
+        default="auto",
+        help=(
+            "how to ship unpublished local HEAD: auto uses origin only if it "
+            "already has the commit, otherwise an SSH bundle; local never uses "
+            "GitHub; origin may push HEAD to origin/<branch>"
+        ),
+    )
+    parser.add_argument(
+        "--include-worktree",
+        action="store_true",
+        help="also copy uncommitted local tracked/untracked files onto workers after reset",
     )
     parser.add_argument("--keep-remote", action="store_true", help="retain remote job directories for inspection")
     parser.add_argument("--coord-owner", help="coordination-board owner; defaults to SPTMP2_COORD_OWNER or LOCAL_NOTES")

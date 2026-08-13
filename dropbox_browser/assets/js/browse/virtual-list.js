@@ -2,6 +2,16 @@ export var DEFAULT_VIRTUAL_ROW_HEIGHT = 49;
 export var DEFAULT_VIRTUAL_OVERSCAN = 6;
 export var DEFAULT_VIRTUAL_THRESHOLD = 10;
 
+export function insertBeforeChild(parent, node, reference) {
+  if (!parent || !node) return node;
+  if (reference && reference.parentNode === parent && typeof parent.insertBefore === 'function') {
+    parent.insertBefore(node, reference);
+    return node;
+  }
+  if (typeof parent.appendChild === 'function') parent.appendChild(node);
+  return node;
+}
+
 export function shouldVirtualizeRows(rowCount, options) {
   var threshold = options && options.threshold ? options.threshold : DEFAULT_VIRTUAL_THRESHOLD;
   return rowCount >= threshold && typeof window !== 'undefined' && typeof document !== 'undefined';
