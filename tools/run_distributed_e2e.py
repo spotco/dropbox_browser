@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run Dropbox Browser E2E specs locally and, when configured, on remotes.
 
-Normal operation is automatic: reachable compatible Windows and macOS Intel
+Normal operation is automatic: reachable compatible Windows, Linux, and macOS Intel
 workers receive scheduled specs, while the current Windows machine remains a
 local lane. Before a remote run, workers which are dirty or not at the local
 ``HEAD`` are reset to that commit. The normal path fetches from ``origin``;
@@ -16,8 +16,8 @@ checkouts are absent, the runner reports the reason and runs locally. Actual
 remote runs claim each selected worker on the shared coordination board and
 release the lease afterward.
 Use ``--require-remote`` when a distributed run must fail instead of falling
-back.  Linux workers are intentionally excluded until browser compatibility is
-implemented.
+back. Linux workers use the configured browser path when present, otherwise
+Playwright's bundled browser.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ E2E_DIR = REPO / "tests" / "e2e"
 TIMING_PATH = REPO / "Temp" / "remote-e2e" / "spec-timing.json"
 DEFAULT_LOCAL_WEIGHT = 10.0
 DEFAULT_POLL_SECONDS = 2.0
-SUPPORTED_PLATFORMS = frozenset({"windows", "macos-intel"})
+SUPPORTED_PLATFORMS = frozenset({"windows", "linux", "macos-intel"})
 
 
 class RunnerError(RuntimeError):

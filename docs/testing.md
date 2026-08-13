@@ -123,23 +123,27 @@ npm run test:e2e:local
 npm run test:e2e:remote
 ```
 
-The default full E2E command uses `tools/run_distributed_e2e.py`. It prefers
-reachable compatible Windows and macOS Intel workers when the optional shared
-worker SDK and machine-local `LOCAL_NOTES.md` configuration are available. It
-automatically falls back to the local Playwright run when that setup is absent,
-unreachable, or fails remote checkout preflight. Linux workers are currently
-excluded. Use `npm run test:e2e:remote` when remote execution is required and a
-missing or unusable remote setup should fail the command. The gitignored
+`npm run test:e2e` is the default full E2E command. It runs
+`tools/run_distributed_e2e.py` in automatic mode across the local lane and every
+reachable compatible Windows or macOS Intel worker selected by the shared
+configuration. It includes the current worktree so remote lanes test the same
+uncommitted changes as the local lane. Linux workers are supported when their
+private project-map checkout and browser dependencies pass preflight.
+If no usable remote setup is available, automatic mode falls back to the local
+Playwright run. Use `npm run test:e2e:local` to force a local-only run, or
+`npm run test:e2e:remote` when remote execution is required and a missing or
+unusable remote setup should fail the command. The gitignored
 `LOCAL_NOTES.md` selects the shared root, project name, and local lane. Worker
 checkout/runtime settings belong in the shared project's private
 `projects/dropbox_browser.json`; credentials remain in the shared worker
 checkout. The product source dynamically links the shared SDK when it is
 present and does not vendor or name a private inventory repository.
 
-Workers with older macOS releases may use an installed browser instead of
-Playwright's bundled Chromium. Set the worker's private `browser` path; the
-distributed runner exports it as `DROPBOX_BROWSER_BROWSER_EXECUTABLE`, and the
-Playwright config uses that executable for the lane.
+Workers may use an installed browser instead of Playwright's bundled Chromium.
+Set the worker's private `browser` path when needed; the distributed runner
+exports it as `DROPBOX_BROWSER_BROWSER_EXECUTABLE`, and the Playwright config
+uses that executable for the lane. Linux workers with no configured browser
+path use the bundled Chromium.
 
 Before a remote run, the default `--publish-workers auto` compares each
 selected worker with local `HEAD`. Dirty or stale checkouts are preserved in a

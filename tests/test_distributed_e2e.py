@@ -11,10 +11,10 @@ from tools import run_distributed_e2e as runner
 
 
 class DistributedE2ETests(unittest.TestCase):
-    def test_supported_platforms_exclude_linux_and_non_intel_macos(self) -> None:
+    def test_supported_platforms_include_linux_and_exclude_non_intel_macos(self) -> None:
         self.assertTrue(runner.is_supported_platform("windows"))
+        self.assertTrue(runner.is_supported_platform("linux"))
         self.assertTrue(runner.is_supported_platform("macos-intel"))
-        self.assertFalse(runner.is_supported_platform("linux"))
         self.assertFalse(runner.is_supported_platform("macos-arm"))
 
     def test_remote_notes_are_optional_and_parse_json_block(self) -> None:

@@ -601,6 +601,7 @@ function initBrowse() {
         setBrowseSpacerHeight(topSpacer, windowState.topSpacerHeight);
         setBrowseSpacerHeight(bottomSpacer, windowState.bottomSpacerHeight);
         setVirtualizationDataset(document.body, virtualState, windowState, mountedCount);
+        thumbnailLoader.refresh();
         if (body.dataset.browseScrollPreview === 'visible') {
           updateScrollPreview({persistent: previewScrollbarDragActive});
         }

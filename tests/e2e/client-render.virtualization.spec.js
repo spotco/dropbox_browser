@@ -5,6 +5,11 @@ const virtualBaseURL = "http://127.0.0.1:8027";
 test.use({ baseURL: virtualBaseURL, viewport: { width: 1280, height: 420 } });
 
 const { startServer, stopServer } = require("./support/server");
+const thumbnailFixture = require("./fixtures/photo-map-preview.json");
+const thumbnailImage = Buffer.from(
+  thumbnailFixture.entries.find((entry) => entry.path.endsWith("group-newer.jpg")).base64,
+  "base64",
+);
 
 async function scrollBrowseToBottom(page) {
   await page.evaluate(() => {
@@ -46,6 +51,29 @@ test("client-render virtualizes large browse listings and updates the visible wi
 
   await expect.poll(async () => await page.locator("body").getAttribute("data-browse-visible-range")).not.toBe(initialRange);
   await expect(page.locator('tr[data-browse-row-id] .entry-name', { hasText: "2024-03-01 0040.jpg" })).toBeVisible();
+});
+
+test("client-render reloads thumbnails after recycled rows are rebound on scroll", async ({ page }) => {
+  const thumbnailPaths = [];
+  await page.route("**/thumbnail?*", async (route) => {
+    const url = new URL(route.request().url());
+    thumbnailPaths.push(url.searchParams.get("path"));
+    await route.fulfill({status: 200, contentType: "image/jpeg", body: thumbnailImage});
+  });
+
+  await page.goto("/?path=Camera%20Uploads");
+
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  const initialRequestCount = thumbnailPaths.length;
+
+  await scrollBrowseToBottom(page);
+
+  const bottomRow = page.locator('tr[data-browse-row-id]', {hasText: "2024-03-01 0040.jpg"});
+  const bottomThumbnail = bottomRow.locator("img.file-icon-thumbnail");
+  await expect(bottomThumbnail).toHaveAttribute("data-thumbnail-href", /0040\.jpg/);
+  await expect(bottomThumbnail).toHaveAttribute("data-thumbnail-state", "loaded");
+  await expect.poll(() => thumbnailPaths.length).toBeGreaterThan(initialRequestCount);
+  expect(thumbnailPaths.some((path) => path && path.endsWith("0040.jpg"))).toBe(true);
 });
 
 test("client-render shows a scrollbar drag preview for the active filtered order", async ({ page }) => {

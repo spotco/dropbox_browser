@@ -857,7 +857,10 @@ class WebUiTests(AppTestCase):
         self.assertIn("document.body.classList.add('music-playlist-column-resizing');", music_layout_js)
         self.assertIn("document.body.classList.remove('music-playlist-column-resizing');", music_layout_js)
         self.assertIn("if (els.treeEl) els.treeEl.addEventListener('keydown', handleLibrarySelectAllShortcut)", music_library_js)
-        self.assertIn("if (els.playlistListEl) els.playlistListEl.addEventListener('keydown', handlePlaylistSelectAllShortcut)", music_playlist_js)
+        self.assertIn(
+            "els.playlistListEl.addEventListener('keydown', handlePlaylistSelectAllShortcut)",
+            music_playlist_js,
+        )
         self.assertIn("if (action === 'select-all') performLibrarySelectAll();", music_library_js)
         self.assertIn("if (action === 'select-all') performPlaylistSelectAll();", music_playlist_js)
         self.assertIn("function playPlaylistIndex(index)", music_playback_js)
