@@ -363,6 +363,35 @@ test("very narrow music library keeps controls in one styled scroll strip", asyn
   expect(snapshot.thumbBackground).toContain("linear-gradient");
 });
 
+test("music playback controls use the shared scrollbar style when they overflow", async ({ page }) => {
+  await page.setViewportSize({width: 374, height: 749});
+  await openMusicPlayer(page);
+
+  const snapshot = await page.evaluate(() => {
+    const pane = document.querySelector("#music-playback-pane");
+    pane.style.height = "120px";
+    pane.style.minHeight = "0";
+    const scrollbar = getComputedStyle(pane, "::-webkit-scrollbar");
+    const track = getComputedStyle(pane, "::-webkit-scrollbar-track");
+    const thumb = getComputedStyle(pane, "::-webkit-scrollbar-thumb");
+    return {
+      clientHeight: pane.clientHeight,
+      scrollHeight: pane.scrollHeight,
+      scrollbarWidth: scrollbar.width,
+      scrollbarHeight: scrollbar.height,
+      trackBackground: track.backgroundColor,
+      thumbBackground: thumb.backgroundImage,
+      thumbBorder: thumb.borderTopWidth,
+    };
+  });
+  expect(snapshot.scrollHeight).toBeGreaterThan(snapshot.clientHeight);
+  expect(snapshot.scrollbarWidth).toBe("12px");
+  expect(snapshot.scrollbarHeight).toBe("12px");
+  expect(snapshot.trackBackground).toBe("rgb(22, 32, 51)");
+  expect(snapshot.thumbBackground).toContain("linear-gradient");
+  expect(snapshot.thumbBorder).toBe("2px");
+});
+
 test("narrow music pane dividers resize and persist separately from wide pane sizes", async ({ page }) => {
   await page.setViewportSize({width: 374, height: 749});
   await openMusicPlayer(page);
