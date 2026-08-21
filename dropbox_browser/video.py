@@ -1677,6 +1677,7 @@ def build_ffmpeg_hls_command(
     filter_threads: int = 0,
     copy_video: bool = False,
     copy_audio: bool = False,
+    extra_video_filter: str | None = None,
 ) -> list[str]:
     segment_pattern = HLS_SEGMENT_PATTERN
     command = [
@@ -1709,7 +1710,16 @@ def build_ffmpeg_hls_command(
             "-filter_complex_threads",
             filter_thread_count,
         ])
-    if subtitle_stream_index is None:
+    if extra_video_filter:
+        # Forced text-subtitle burn-in: the caller already composed the
+        # subtitles-filter graph (see dropbox_browser/video_burnin.py).
+        command.extend([
+            "-filter_complex",
+            f"[0:v:0]{extra_video_filter}[vout]",
+            "-map",
+            "[vout]",
+        ])
+    elif subtitle_stream_index is None:
         command.extend([
             "-map",
             "0:v:0",
@@ -1939,6 +1949,9 @@ class VideoSessionManager:
         subtitle_stream_index: int | None = None,
         subtitle_stroke_enabled: bool = True,
         subtitle_shadow_enabled: bool = True,
+        subtitle_font_size_px: int | None = None,
+        subtitle_offset_px: int | None = None,
+        force_subtitle_burn_in: bool = False,
         start_time_seconds: float = 0.0,
         force_video_transcode: bool = False,
         force_audio_transcode: bool = False,
@@ -2026,6 +2039,49 @@ class VideoSessionManager:
             session_dir.mkdir(parents=True, exist_ok=True)
             playlist_path = session_dir / HLS_PLAYLIST_NAME
             segment_base_url = "/video/endpoints/session/file?" + urlencode({"id": session_id, "name": ""})
+            extra_video_filter: str | None = None
+            burnin_mode: str | None = None
+            burnin_srt_name: str | None = None
+            if (
+                force_subtitle_burn_in
+                and subtitle_stream_index is not None
+            ):
+                try:
+                    from .video_burnin import (
+                        build_text_subtitle_burnin_filter,
+                        extract_subtitle_stream_to_srt,
+                    )
+
+                    # The extraction runs before this session is registered, so
+                    # it must NOT use the tagged input URL: tagged requests are
+                    # cancelled while their session is unknown to the manager.
+                    extraction_url = base_url + "/file?" + urlencode({
+                        "path": rel_path,
+                        "source": "remote",
+                    })
+                    srt_path = session_dir / "burnin.srt"
+                    extract_subtitle_stream_to_srt(
+                        ffmpeg_exe,
+                        extraction_url,
+                        srt_path,
+                        subtitle_stream_index=int(subtitle_stream_index),
+                        start_time_seconds=start_time_seconds,
+                    )
+                    extra_video_filter = build_text_subtitle_burnin_filter(
+                        srt_path.name,
+                        stroke_enabled=subtitle_stroke_enabled,
+                        shadow_enabled=subtitle_shadow_enabled,
+                        font_size_px=subtitle_font_size_px,
+                        offset_px=subtitle_offset_px,
+                    )
+                    burnin_mode = "text_subtitles_filter"
+                    burnin_srt_name = srt_path.name
+                except RuntimeError:
+                    shutil.rmtree(session_dir, ignore_errors=True)
+                    raise BrowserError(
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                        "Forced subtitle burn-in extraction failed.",
+                    )
             command = build_ffmpeg_hls_command(
                 ffmpeg_exe,
                 input_url,
@@ -2045,6 +2101,7 @@ class VideoSessionManager:
                 filter_threads=int(getattr(video_config, "ffmpeg_filter_threads", 0) or 0),
                 copy_video=video_mode == "video_copy",
                 copy_audio=audio_mode == "audio_copy",
+                extra_video_filter=extra_video_filter,
             )
             process_priority = str(getattr(video_config, "ffmpeg_process_priority", "below_normal") or "below_normal")
             priority_popen_kwargs = ffmpeg_popen_kwargs_for_priority(process_priority)
@@ -2068,6 +2125,9 @@ class VideoSessionManager:
                 playlist=str(playlist_path),
                 command=command,
                 ffmpeg_process_priority=process_priority,
+                force_subtitle_burn_in=bool(force_subtitle_burn_in and extra_video_filter is not None),
+                burnin_mode=burnin_mode,
+                burnin_subtitle_file=burnin_srt_name,
             )
             try:
                 process: subprocess.Popen[bytes] = subprocess.Popen(  # type: ignore[type-var]

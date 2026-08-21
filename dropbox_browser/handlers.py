@@ -1557,6 +1557,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                 subtitle_stream_index = int(subtitle_stream_index_raw) if subtitle_stream_index_raw else None
                 subtitle_stroke_enabled = params.get("subtitle_stroke_enabled", ["1"])[0].strip() != "0"
                 subtitle_shadow_enabled = params.get("subtitle_shadow_enabled", ["1"])[0].strip() != "0"
+                force_subtitle_burn_in = params.get("force_subtitle_burn_in", [""])[0].strip() == "1"
+                subtitle_font_size_raw = params.get("subtitle_font_size_px", [""])[0].strip()
+                subtitle_font_size_px = int(subtitle_font_size_raw) if subtitle_font_size_raw else None
+                subtitle_offset_raw = params.get("subtitle_offset_px", [""])[0].strip()
+                subtitle_offset_px = int(subtitle_offset_raw) if subtitle_offset_raw else None
                 start_time_seconds = parse_video_start_seconds(params.get("start_time_seconds", [""])[0])
                 force_video_transcode = params.get("force_video_transcode", [""])[0].strip() == "1"
                 force_audio_transcode = params.get("force_audio_transcode", [""])[0].strip() == "1"
@@ -1572,6 +1577,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                     subtitle_stream_index=subtitle_stream_index,
                     subtitle_stroke_enabled=subtitle_stroke_enabled,
                     subtitle_shadow_enabled=subtitle_shadow_enabled,
+                    subtitle_font_size_px=subtitle_font_size_px,
+                    subtitle_offset_px=subtitle_offset_px,
+                    force_subtitle_burn_in=force_subtitle_burn_in,
                     start_time_seconds=start_time_seconds,
                     force_video_transcode=force_video_transcode,
                     force_audio_transcode=force_audio_transcode,

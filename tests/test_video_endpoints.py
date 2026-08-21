@@ -3175,6 +3175,119 @@ class VideoEndpointTests(AppTestCase):
         self.assertNotIn("-force_key_frames", spawned[0].command)
         self.assertNotIn("-pix_fmt", spawned[0].command)
 
+    def test_session_endpoint_force_subtitle_burn_in_uses_subtitles_filter(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffprobe/bin/ffprobe.exe"),
+            ),
+        )
+        spawned: list[FakeFfmpegProcess] = []
+
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            if not is_ffmpeg_hls_spawn(command):
+                return FakeFfmpegProcess(command)
+            playlist_path = Path(command[-1])
+            write_hls_session_fixture(playlist_path)
+            process = FakeFfmpegProcess(command)
+            spawned.append(process)
+            return process
+
+        def fake_extract(ffmpeg_exe, input_url, output_path, *, subtitle_stream_index, start_time_seconds=0.0, timeout_seconds=60.0):
+            Path(output_path).write_text("WEBVTT-LIKE-SRT\n", encoding="utf-8")
+            return True
+
+        with (
+            TestServer(app) as server,
+            patch(
+                "dropbox_browser.video.probe_remote_media",
+                return_value={
+                    "video_streams": [
+                        {
+                            "index": 0,
+                            "codec_name": "h264",
+                            "pix_fmt": "yuv420p",
+                            "hls_video_copy_compatible": True,
+                            "hls_video_copy_reason": "selected_h264_stream_copy_safe",
+                        }
+                    ]
+                },
+            ),
+            patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen),
+            patch(
+                "dropbox_browser.video_burnin.extract_subtitle_stream_to_srt",
+                side_effect=fake_extract,
+            ),
+        ):
+            payload = server.post_json("/video/endpoints/session", {
+                "path": "movie.mp4",
+                "source": "remote",
+                "subtitle_stream_index": "3",
+                "force_subtitle_burn_in": "1",
+                "subtitle_stroke_enabled": "1",
+                "subtitle_shadow_enabled": "1",
+                "subtitle_font_size_px": "32",
+                "subtitle_offset_px": "6",
+            })
+
+            command = spawned[0].command
+            filter_value = command[command.index("-filter_complex") + 1]
+            self.assertIn("[0:v:0]subtitles=filename='burnin.srt'", filter_value)
+            self.assertIn("Fontsize=32", filter_value)
+            self.assertIn("MarginV=6", filter_value)
+            self.assertIn("Shadow=2", filter_value)
+            self.assertEqual(command[command.index("-map") + 1], "[vout]")
+            self.assertEqual(payload["video_mode"], "video_transcode")
+
+            # Without the flag, the same request keeps the legacy bitmap-overlay
+            # burn-in path (still a transcode, but not the subtitles filter).
+            payload_off = server.post_json("/video/endpoints/session", {
+                "path": "movie.mp4",
+                "source": "remote",
+                "subtitle_stream_index": "3",
+            })
+            legacy_command = spawned[1].command
+            self.assertNotIn("subtitles=", " ".join(legacy_command))
+            self.assertIn("colorchannelmixer", " ".join(legacy_command))
+            self.assertEqual(payload_off["video_mode"], "video_transcode")
+            self.assertEqual(payload_off["video_mode_reason"], "subtitle_burn_in_requires_filter")
+
+    def test_session_endpoint_force_subtitle_burn_in_extraction_failure_returns_service_unavailable(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffprobe/bin/ffprobe.exe"),
+            ),
+        )
+
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            return FakeFfmpegProcess(command)
+
+        with (
+            TestServer(app) as server,
+            patch("dropbox_browser.video.probe_remote_media", return_value=None),
+            patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen),
+            patch(
+                "dropbox_browser.video_burnin.extract_subtitle_stream_to_srt",
+                side_effect=RuntimeError("Subtitle burn-in extraction failed: boom"),
+            ),
+        ):
+            with self.assertRaises(HTTPError) as error_ctx:
+                server.post_json("/video/endpoints/session", {
+                    "path": "movie.mp4",
+                    "source": "remote",
+                    "subtitle_stream_index": "3",
+                    "force_subtitle_burn_in": "1",
+                })
+
+        self.assertEqual(error_ctx.exception.code, HTTPStatus.SERVICE_UNAVAILABLE)
+
     def test_session_endpoint_uses_audio_copy_for_copy_safe_aac_selection(self) -> None:
         rclone = self._remote_media_rclone()
         app = self._build_app(
@@ -3545,6 +3658,33 @@ class VideoEndpointTests(AppTestCase):
         self.assertNotIn("-readrate", command)
         self.assertNotIn("-readrate_initial_burst", command)
         self.assertNotIn("-readrate_catchup", command)
+
+    def test_build_ffmpeg_hls_command_uses_extra_video_filter_when_forced_burnin(self) -> None:
+        command = build_ffmpeg_hls_command(
+            Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+            "http://127.0.0.1:8000/file?path=movie.mkv&source=remote",
+            Path("E:/dev/dropbox_browser/Temp/video_sessions/test/stream.m3u8"),
+            segment_base_url="/video/endpoints/session/file?id=test&name=",
+            subtitle_stream_index=3,
+            extra_video_filter="subtitles=filename='burnin.srt'",
+        )
+
+        filter_index = command.index("-filter_complex")
+        filter_value = command[filter_index + 1]
+        self.assertIn("[0:v:0]subtitles=filename='burnin.srt'[vout]", filter_value)
+        self.assertEqual(command[command.index("-map") + 1], "[vout]")
+        # Forced burn-in always stays on the transcode path.
+        self.assertIn("libx264", command)
+
+    def test_build_ffmpeg_hls_command_without_extra_filter_unchanged(self) -> None:
+        command = build_ffmpeg_hls_command(
+            Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+            "http://127.0.0.1:8000/file?path=movie.mkv&source=remote",
+            Path("E:/dev/dropbox_browser/Temp/video_sessions/test/stream.m3u8"),
+            segment_base_url="/video/endpoints/session/file?id=test&name=",
+        )
+        self.assertIn("0:v:0", command)
+        self.assertNotIn("subtitles=", " ".join(command))
 
     def test_build_ffmpeg_hls_command_adds_thread_flags_when_configured(self) -> None:
         command = build_ffmpeg_hls_command(

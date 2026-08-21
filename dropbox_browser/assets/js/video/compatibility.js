@@ -1186,9 +1186,15 @@ async function createCompatibilitySession(item, audioStreamIndex, startSeconds, 
   if (typeof subtitleStreamIndex === 'number') {
     body += '&subtitle_stream_index=' + encodeURIComponent(String(subtitleStreamIndex));
     if (subtitleStyleOptions) {
-      // Burned-in sessions do not yet accept subtitle size or vertical offset.
       body += '&subtitle_stroke_enabled=' + (subtitleStyleOptions.strokeEnabled ? '1' : '0');
       body += '&subtitle_shadow_enabled=' + (subtitleStyleOptions.shadowEnabled ? '1' : '0');
+      // Forced text burn-in maps the overlay size/offset onto ffmpeg
+      // force_style args; bitmap burn-in sessions ignore them server-side.
+      if (subtitleStyleOptions.forceBurnIn) {
+        body += '&force_subtitle_burn_in=1';
+        body += '&subtitle_font_size_px=' + encodeURIComponent(String(subtitleStyleOptions.fontSizePx));
+        body += '&subtitle_offset_px=' + encodeURIComponent(String(subtitleStyleOptions.offsetPx));
+      }
     }
   }
   if (options && options.forceVideoTranscode) {

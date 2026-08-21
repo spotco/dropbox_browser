@@ -42,7 +42,7 @@ GROUPS: dict[str, list[str]] = {
     "rclone": ["tests.test_rclone"],
     "thumbnails": ["tests.test_thumbnails"],
     "video-thumbnails": ["tests.test_video_thumbnails"],
-    "video": ["tests.test_video_endpoints", "tests.test_video_benchmark"],
+    "video": ["tests.test_video_endpoints", "tests.test_video_benchmark", "tests.test_video_burnin"],
     "video-endpoints": ["tests.test_video_endpoints"],
 }
 

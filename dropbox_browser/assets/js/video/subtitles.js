@@ -1013,8 +1013,15 @@ function selectedSubtitleStream(item, probePayload) {
 
 function selectedBurnedInSubtitleStreamIndex(item, probePayload) {
   var stream = selectedSubtitleStream(item, probePayload);
-  if (!stream || !subtitleStreamRequiresBurnIn(stream)) return null;
-  return normalizeSubtitleStreamIndex(stream.index);
+  if (!stream) return null;
+  if (subtitleStreamRequiresBurnIn(stream)) {
+    return normalizeSubtitleStreamIndex(stream.index);
+  }
+  // Forced burn-in: render WebVTT-capable tracks inside the session too.
+  if (typeof ctx.forceBurnInApplied === 'function' && ctx.forceBurnInApplied()) {
+    return normalizeSubtitleStreamIndex(stream.index);
+  }
+  return null;
 }
 
 function compatibilitySessionHasBurnedInSubtitles() {

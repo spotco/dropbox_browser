@@ -108,6 +108,7 @@ import {initPane} from './video/pane.js';
       subtitleStyleControlsEl: document.getElementById('video-subtitle-style-controls'),
       subtitleShadowEnabledEl: document.getElementById('video-subtitle-shadow-enabled'),
       subtitleStrokeEnabledEl: document.getElementById('video-subtitle-stroke-enabled'),
+      subtitleForceBurnInEl: document.getElementById('video-subtitle-force-burnin'),
       subtitleFontSizeInputEl: document.getElementById('video-subtitle-font-size'),
       subtitleOffsetInputEl: document.getElementById('video-subtitle-offset'),
       subtitleStyleResetButtonEl: document.getElementById('video-subtitle-style-reset'),

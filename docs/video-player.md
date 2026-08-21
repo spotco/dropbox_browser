@@ -54,6 +54,7 @@ loads `media-library.css` from the page shell.
 | Endpoint routing, JSON/VTT/HLS asset responses | `handlers.py` (`serve_video_endpoint`, `serve_video_endpoint_post`) |
 | Recursive library listing (folder-cache walk, video extensions) | `media_library.py` via `video_library_payload` in `video.py` |
 | Probe, subtitle extraction, HLS session lifecycle | `video.py` |
+| Forced text-subtitle burn-in (SRT extraction, filter build) | `video_burnin.py` |
 | On-demand video poster generation | `video_thumbnails.py` (ffmpeg, dedicated video cache) |
 | Disk caches for probe, subtitles, header bytes | `videocache.py` (`DiskCacheStore`) |
 | Remote file byte streaming used as ffmpeg input | `/file` route + `streaming.py` |
@@ -171,6 +172,11 @@ Session creation (`POST /video/endpoints/session`) accepts form fields:
   delayed stop from an older navigation cannot remove a newer session.
 - `audio_stream_index` — optional ffmpeg audio stream index
 - `subtitle_stream_index` — optional burned-in subtitle stream index
+- `force_subtitle_burn_in` — optional `1` flag: render the selected
+  WebVTT-capable subtitle stream as burned-in subtitles via ffmpeg's
+  `subtitles` filter (see the Subtitles section)
+- `subtitle_font_size_px` / `subtitle_offset_px` — optional style values used
+  only by forced burn-in sessions (mapped onto `force_style`)
 - `start_time_seconds` — seek target for the new session
 - `force_video_transcode` — optional retry knob (`1`) that disables H.264
   stream copy for that session request
@@ -522,6 +528,24 @@ Two subtitle paths:
   parsed by `vtt-parse-core.js`, rendered in the custom overlay via `webvtt-core.js`.
 - **Burned-in** — selected bitmap or burn-in-required tracks set
   `subtitle_stream_index` on session create; ffmpeg embeds subtitles in the HLS output.
+
+A third path, **forced burn-in**, is opt-in via the "Force Subtitle Burn-in"
+switch in the Subtitle Style section. When applied, a selected
+WebVTT-compatible (text) stream is rendered as burned-in subtitles instead of a
+sidecar overlay. Server-side (`video_burnin.py`) the selected stream is first
+extracted to an SRT file in the session directory using an untagged `/file`
+input (the session is not yet registered, so tagged input would be cancelled),
+and the main command's filter graph becomes
+`[0:v:0]subtitles=filename='burnin.srt':force_style='...'[vout]`. The
+`force_style` string maps every subtitle style option: stroke toggles
+(`BorderStyle=3`, `Outline=2`), shadow toggle (`Shadow=2`), text size
+(`Fontsize`), and height offset (`MarginV`, positive moves up like the
+overlay). Forced burn-in sessions always report `video_transcode` /
+`subtitle_burn_in_requires_filter`. On the client,
+`selectedBurnedInSubtitleStreamIndex()` returns the selected index for any
+stream when force burn-in is applied, so track-change restarts, style-apply
+restarts, seek decisions, and sidecar-mount suppression all reuse the existing
+burn-in machinery without duplicated branching.
 
 Subtitle styling is intentionally only approximate across those two paths. The
 WebVTT overlay uses browser CSS text rendering, while burned-in subtitle tracks

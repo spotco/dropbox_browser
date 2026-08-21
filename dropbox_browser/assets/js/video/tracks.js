@@ -4,6 +4,7 @@ var SUBTITLE_STYLE_DEFAULTS = {
   strokeEnabled: true,
   fontSizePx: 28,
   offsetPx: 0,
+  forceBurnIn: false,
 };
 var SUBTITLE_STYLE_SETTING_KEY = 'video-subtitle-style';
 var SUBTITLE_STYLE_OUTLINE_OFFSET_PX = 1.25;
@@ -39,6 +40,7 @@ function cloneSubtitleStyleOptions(options) {
     strokeEnabled: source.strokeEnabled !== false,
     fontSizePx: parseSubtitleStyleNumber(source.fontSizePx, SUBTITLE_STYLE_DEFAULTS.fontSizePx),
     offsetPx: parseSubtitleStyleNumber(source.offsetPx, SUBTITLE_STYLE_DEFAULTS.offsetPx),
+    forceBurnIn: source.forceBurnIn === true,
   };
 }
 
@@ -48,16 +50,28 @@ function subtitleStyleOptionsEqual(left, right) {
   return leftNormalized.shadowEnabled === rightNormalized.shadowEnabled
     && leftNormalized.strokeEnabled === rightNormalized.strokeEnabled
     && leftNormalized.fontSizePx === rightNormalized.fontSizePx
-    && leftNormalized.offsetPx === rightNormalized.offsetPx;
+    && leftNormalized.offsetPx === rightNormalized.offsetPx
+    && leftNormalized.forceBurnIn === rightNormalized.forceBurnIn;
 }
 
 // Burned-in ffmpeg sessions only consume shadow and stroke toggles.
-// fontSizePx and offsetPx apply to the WebVTT overlay CSS variables only.
+// fontSizePx and offsetPx apply to the WebVTT overlay CSS variables only,
+// except under forced burn-in where they map onto the ffmpeg force_style args.
 function burnedInSubtitleStyleOptionsEqual(left, right) {
   var leftNormalized = cloneSubtitleStyleOptions(left);
   var rightNormalized = cloneSubtitleStyleOptions(right);
+  if (leftNormalized.forceBurnIn !== rightNormalized.forceBurnIn) return false;
+  if (leftNormalized.forceBurnIn) {
+    // Forced text burn-in consumes every style option (force_style args).
+    return subtitleStyleOptionsEqual(leftNormalized, rightNormalized);
+  }
   return leftNormalized.shadowEnabled === rightNormalized.shadowEnabled
     && leftNormalized.strokeEnabled === rightNormalized.strokeEnabled;
+}
+
+function readForceBurnInCheckbox() {
+  var input = ctx.els.subtitleForceBurnInEl;
+  return Boolean(input && input.checked);
 }
 
 function parseSubtitleStyleNumber(value, fallback) {
@@ -74,6 +88,7 @@ function readSubtitleStyleCheckboxOptions() {
   return {
     shadowEnabled: !shadowInput || shadowInput.checked !== false,
     strokeEnabled: !strokeInput || strokeInput.checked !== false,
+    forceBurnIn: readForceBurnInCheckbox(),
   };
 }
 
@@ -85,6 +100,7 @@ function currentSubtitleStyleOptions() {
   return cloneSubtitleStyleOptions({
     shadowEnabled: checkboxOptions.shadowEnabled,
     strokeEnabled: checkboxOptions.strokeEnabled,
+    forceBurnIn: checkboxOptions.forceBurnIn,
     fontSizePx: parseSubtitleStyleNumber(
       fontSizeInput ? fontSizeInput.value : appliedOptions.fontSizePx,
       appliedOptions.fontSizePx
@@ -100,6 +116,10 @@ function appliedSubtitleStyleOptions() {
   return cloneSubtitleStyleOptions(ctx.state.subtitleStyleApplied || SUBTITLE_STYLE_DEFAULTS);
 }
 
+function forceBurnInApplied() {
+  return appliedSubtitleStyleOptions().forceBurnIn === true;
+}
+
 function readStoredSubtitleStyleOptions() {
   if (!ctx || typeof ctx.readVideoSetting !== 'function') return cloneSubtitleStyleOptions(SUBTITLE_STYLE_DEFAULTS);
   return cloneSubtitleStyleOptions(ctx.readVideoSetting(SUBTITLE_STYLE_SETTING_KEY, SUBTITLE_STYLE_DEFAULTS));
@@ -112,6 +132,7 @@ function persistSubtitleStyleOptions(options) {
 
 function syncSubtitleStyleInputs(options) {
   var nextOptions = options || SUBTITLE_STYLE_DEFAULTS;
+  if (ctx.els.subtitleForceBurnInEl) ctx.els.subtitleForceBurnInEl.checked = nextOptions.forceBurnIn === true;
   if (ctx.els.subtitleShadowEnabledEl) ctx.els.subtitleShadowEnabledEl.checked = nextOptions.shadowEnabled !== false;
   if (ctx.els.subtitleStrokeEnabledEl) ctx.els.subtitleStrokeEnabledEl.checked = nextOptions.strokeEnabled !== false;
   if (ctx.els.subtitleFontSizeInputEl) ctx.els.subtitleFontSizeInputEl.value = String(nextOptions.fontSizePx);
@@ -212,6 +233,15 @@ async function handleSubtitleStyleApply() {
     burnedInSelectedStreamIndex = ctx.selectedBurnedInSubtitleStreamIndex(active, probePayload);
   }
   var hasBurnedInContext = burnedInSelectedStreamIndex !== null || ctx.compatibilitySessionHasBurnedInSubtitles();
+  // Toggling force burn-in with a subtitle selected must also restart so an
+  // active sidecar track switches into (or out of) the burned-in session.
+  var forceBurnInToggled = previousApplied.forceBurnIn !== nextOptions.forceBurnIn;
+  var subtitleSelectionActive = Boolean(selectedSubtitleValue)
+    || (active && probePayload && typeof ctx.subtitlesEnabledForItem === 'function'
+      && ctx.subtitlesEnabledForItem(active, probePayload));
+  if (forceBurnInToggled && subtitleSelectionActive) {
+    hasBurnedInContext = true;
+  }
   var needsBurnedInRestart = hasBurnedInContext && !burnedInSubtitleStyleOptionsEqual(previousApplied, nextOptions);
   ctx.state.subtitleStyleDraft = cloneSubtitleStyleOptions(nextOptions);
   ctx.state.subtitleStyleApplied = cloneSubtitleStyleOptions(nextOptions);
@@ -741,6 +771,7 @@ async function handleSubtitleTrackChange() {
   ctx.handleSubtitleTrackChange = handleSubtitleTrackChange;
   ctx.currentSubtitleStyleOptions = currentSubtitleStyleOptions;
   ctx.appliedSubtitleStyleOptions = appliedSubtitleStyleOptions;
+  ctx.forceBurnInApplied = forceBurnInApplied;
   ctx.applySubtitleStylePreview = applySubtitleStylePreview;
   ctx.syncSubtitleStyleInputs = syncSubtitleStyleInputs;
   ctx.handleSubtitleStyleApply = handleSubtitleStyleApply;
@@ -761,6 +792,9 @@ async function handleSubtitleTrackChange() {
   }
   if (ctx.els.subtitleStrokeEnabledEl) {
     ctx.els.subtitleStrokeEnabledEl.addEventListener('change', handleSubtitleStyleCheckboxPreviewChange);
+  }
+  if (ctx.els.subtitleForceBurnInEl) {
+    ctx.els.subtitleForceBurnInEl.addEventListener('change', handleSubtitleStyleCheckboxPreviewChange);
   }
   if (ctx.els.subtitleStyleControlsEl) {
     var stepButtons = ctx.els.subtitleStyleControlsEl.querySelectorAll('.video-control-number-step');

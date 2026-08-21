@@ -23,6 +23,8 @@ function makeEl() {
 function createCtx(overrides = {}) {
   const shadowEl = makeEl();
   const strokeEl = makeEl();
+  const forceBurnInEl = makeEl();
+  forceBurnInEl.checked = false;
   const fontSizeEl = makeEl();
   const offsetEl = makeEl();
   const applyEl = makeEl();
@@ -39,6 +41,7 @@ function createCtx(overrides = {}) {
     els: {
       subtitleShadowEnabledEl: shadowEl,
       subtitleStrokeEnabledEl: strokeEl,
+      subtitleForceBurnInEl: forceBurnInEl,
       subtitleFontSizeInputEl: fontSizeEl,
       subtitleOffsetInputEl: offsetEl,
       subtitleStyleApplyButtonEl: applyEl,
@@ -121,6 +124,7 @@ test("initTracks restores persisted subtitle style options on startup", async ()
     strokeEnabled: false,
     fontSizePx: 36,
     offsetPx: -14,
+    forceBurnIn: false,
   });
   assert.deepEqual(ctx.state.subtitleStyleDraft, ctx.state.subtitleStyleApplied);
   assert.equal(ctx.bodyStyleValues["--video-subtitle-font-size"], "36px");
@@ -142,6 +146,7 @@ test("subtitle style number inputs stay local until Apply is pressed", async () 
     strokeEnabled: false,
     fontSizePx: 36,
     offsetPx: -14,
+    forceBurnIn: false,
   });
   assert.equal(ctx.bodyStyleValues["--video-subtitle-font-size"], "36px");
   assert.equal(ctx.bodyStyleValues["--video-subtitle-offset"], "-14px");
@@ -156,6 +161,7 @@ test("subtitle style number inputs stay local until Apply is pressed", async () 
       strokeEnabled: false,
       fontSizePx: 42,
       offsetPx: -20,
+      forceBurnIn: false,
     },
   ]);
   assert.deepEqual(ctx.state.subtitleStyleApplied, ctx.state.subtitleStyleDraft);
@@ -178,6 +184,7 @@ test("subtitle style checkbox preview uses applied size and offset values", asyn
     strokeEnabled: true,
     fontSizePx: 42,
     offsetPx: -20,
+    forceBurnIn: false,
   });
   assert.equal(ctx.bodyStyleValues["--video-subtitle-font-size"], "36px");
   assert.equal(ctx.bodyStyleValues["--video-subtitle-offset"], "-14px");
@@ -247,6 +254,7 @@ test("subtitle style Apply accepts values outside the old input limits", async (
     strokeEnabled: false,
     fontSizePx: 120,
     offsetPx: -240,
+    forceBurnIn: false,
   });
   assert.equal(ctx.bodyStyleValues["--video-subtitle-font-size"], "120px");
   assert.equal(ctx.bodyStyleValues["--video-subtitle-offset"], "-240px");
@@ -274,6 +282,7 @@ test("subtitle style Reset restores defaults and applies them", async () => {
     strokeEnabled: true,
     fontSizePx: 28,
     offsetPx: 0,
+    forceBurnIn: false,
   });
   assert.equal(ctx.bodyStyleValues["--video-subtitle-font-size"], "28px");
   assert.equal(ctx.bodyStyleValues["--video-subtitle-offset"], "0px");
@@ -295,6 +304,69 @@ test("subtitle style Apply with unchanged values is a no-op", async () => {
   assert.equal(ctx.writes.length, 0);
   assert.equal(ctx.restartCalls.length, 0);
   assert.equal(ctx.lastStatus, "Subtitle style is already applied.");
+});
+
+test("force burn-in toggle persists and restarts burned-in playback when applied", async () => {
+  const { initTracks } = await importModuleFromWorkspace("dropbox_browser/assets/js/video/tracks.js");
+  const ctx = createCtx({
+    compatibilitySessionHasBurnedInSubtitles: true,
+  });
+
+  initTracks(ctx);
+  ctx.els.subtitleForceBurnInEl.checked = true;
+  ctx.els.subtitleForceBurnInEl.listeners.change();
+
+  assert.equal(ctx.writes.length, 0);
+
+  await ctx.handleSubtitleStyleApply();
+
+  assert.equal(ctx.writes.length, 1);
+  assert.equal(ctx.writes[0][1].forceBurnIn, true);
+  assert.equal(ctx.restartCalls.length, 1);
+  assert.equal(ctx.lastStatus, "Applying subtitle style to burned-in subtitles.");
+});
+
+test("force burn-in restarts on any style change while enabled (size and offset apply to burn-in)", async () => {
+  const { initTracks } = await importModuleFromWorkspace("dropbox_browser/assets/js/video/tracks.js");
+  const settingsStore = {
+    shadowEnabled: true,
+    strokeEnabled: true,
+    fontSizePx: 28,
+    offsetPx: 0,
+    forceBurnIn: true,
+  };
+  const ctx = createCtx({
+    settingsStore,
+    compatibilitySessionHasBurnedInSubtitles: true,
+  });
+
+  initTracks(ctx);
+  assert.equal(ctx.els.subtitleForceBurnInEl.checked, true);
+  ctx.els.subtitleFontSizeInputEl.value = "40";
+
+  await ctx.handleSubtitleStyleApply();
+
+  assert.equal(ctx.restartCalls.length, 1);
+  assert.equal(ctx.writes[0][1].fontSizePx, 40);
+});
+
+test("forceBurnInApplied reports the applied switch state", async () => {
+  const { initTracks } = await importModuleFromWorkspace("dropbox_browser/assets/js/video/tracks.js");
+  const settingsStore = {
+    shadowEnabled: true,
+    strokeEnabled: true,
+    fontSizePx: 28,
+    offsetPx: 0,
+    forceBurnIn: true,
+  };
+  const ctx = createCtx({ settingsStore, disallowRestart: true });
+
+  initTracks(ctx);
+  assert.equal(ctx.forceBurnInApplied(), true);
+
+  const offCtx = createCtx({ disallowRestart: true });
+  initTracks(offCtx);
+  assert.equal(offCtx.forceBurnInApplied(), false);
 });
 
 test("subtitle track change during seek restart defers replay until playback seek completes", async () => {

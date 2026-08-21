@@ -284,6 +284,10 @@
           <section id="video-subtitle-style-controls" class="video-subtitle-style-section" aria-labelledby="video-subtitle-style-title">
             <div id="video-subtitle-style-title" class="video-subtitle-style-title">Subtitle Style</div>
             <div class="video-subtitle-style-checkbox-row">
+              <label class="video-subtitle-style-checkbox" for="video-subtitle-force-burnin">
+                <input type="checkbox" id="video-subtitle-force-burnin">
+                <span>Force Subtitle Burn-in</span>
+              </label>
               <label class="video-subtitle-style-checkbox" for="video-subtitle-shadow-enabled">
                 <input type="checkbox" id="video-subtitle-shadow-enabled" checked>
                 <span>Enable drop shadow</span>
@@ -321,7 +325,7 @@
                 </span>
               </label>
             </div>
-            <p id="video-subtitle-offset-help" class="video-subtitle-style-help">Positive values move subtitles up; negative values move them down. WebVTT overlay only; burned-in subtitles ignore size and offset.</p>
+            <p id="video-subtitle-offset-help" class="video-subtitle-style-help">Positive values move subtitles up; negative values move them down. WebVTT overlay only; burned-in subtitles ignore size and offset. Force Subtitle Burn-in renders WebVTT-capable subtitle tracks as burned-in subtitles instead.</p>
             <div class="video-subtitle-style-actions">
               <button type="button" id="video-subtitle-style-reset" class="video-subtitle-style-reset-button" aria-label="Reset default subtitle style" title="Reset default subtitle style">
                 Reset Default Style
