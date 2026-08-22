@@ -1189,14 +1189,18 @@ async function createCompatibilitySession(item, audioStreamIndex, startSeconds, 
       body += '&subtitle_stroke_enabled=' + (subtitleStyleOptions.strokeEnabled ? '1' : '0');
       body += '&subtitle_shadow_enabled=' + (subtitleStyleOptions.shadowEnabled ? '1' : '0');
       // Forced text burn-in maps the overlay size/offset onto ffmpeg
-      // force_style args; bitmap burn-in sessions ignore them server-side.
-      if (subtitleStyleOptions.forceBurnIn) {
-        // Burn-in Fontsize is relative to the frame; the server scales the
-        // overlay's on-screen size using the displayed video box height so
-        // burned-in text matches the WebVTT overlay's rendered size.
-        // Embedded pane layout applies a CSS scale to subtitle sizes, so use
-        // the overlay element's COMPUTED font size rather than the raw style
-        // value, and scale the offset by the same factor.
+      // force_style args. Only WebVTT-capable (text) tracks can take it;
+      // bitmap streams keep the legacy overlay graph.
+      var selectedStream = typeof ctx.selectedSubtitleStream === 'function'
+        ? ctx.selectedSubtitleStream(item, ctx.state.probeCache[item.path || ''] || null)
+        : null;
+      var streamIsTextCapable = Boolean(selectedStream)
+        && typeof ctx.subtitleStreamRequiresBurnIn === 'function'
+        && !ctx.subtitleStreamRequiresBurnIn(selectedStream);
+      if (subtitleStyleOptions.forceBurnIn && streamIsTextCapable) {
+        // Use the overlay element's COMPUTED font size (embedded pane layout
+        // applies a CSS scale) so burned-in text matches the overlay's
+        // rendered size; scale the offset by the same factor.
         var videoEl = ctx.els.videoEl;
         var displayHeight = videoEl ? Math.round(Number(videoEl.clientHeight) || 0) : 0;
         if (!displayHeight && ctx.els.playbackStageEl) {

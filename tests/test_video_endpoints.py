@@ -3196,7 +3196,7 @@ class VideoEndpointTests(AppTestCase):
             spawned.append(process)
             return process
 
-        def fake_extract(ffmpeg_exe, input_url, output_path, *, subtitle_stream_index, start_time_seconds=0.0, timeout_seconds=60.0):
+        def fake_extract(ffmpeg_exe, input_url, output_path, *, subtitle_stream_index, timeout_seconds=120.0):
             Path(output_path).write_text("WEBVTT-LIKE-SRT\n", encoding="utf-8")
             return True
 
@@ -3287,6 +3287,221 @@ class VideoEndpointTests(AppTestCase):
                 })
 
         self.assertEqual(error_ctx.exception.code, HTTPStatus.SERVICE_UNAVAILABLE)
+
+    def test_session_endpoint_force_burn_in_falls_back_to_bitmap_overlay_for_pgs(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffprobe/bin/ffprobe.exe"),
+            ),
+        )
+        spawned: list[FakeFfmpegProcess] = []
+
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            if not is_ffmpeg_hls_spawn(command):
+                return FakeFfmpegProcess(command)
+            playlist_path = Path(command[-1])
+            write_hls_session_fixture(playlist_path)
+            process = FakeFfmpegProcess(command)
+            spawned.append(process)
+            return process
+
+        extract_calls: list[int] = []
+
+        def fail_extract(*args, **kwargs):
+            extract_calls.append(1)
+            raise AssertionError("PGS streams must not take the SRT extraction path")
+
+        with (
+            TestServer(app) as server,
+            patch(
+                "dropbox_browser.video.probe_remote_media",
+                return_value={
+                    "video_streams": [
+                        {
+                            "index": 0,
+                            "codec_name": "h264",
+                            "pix_fmt": "yuv420p",
+                            "hls_video_copy_compatible": True,
+                            "hls_video_copy_reason": "selected_h264_stream_copy_safe",
+                        }
+                    ],
+                    "subtitle_streams": [
+                        {
+                            "index": 3,
+                            "codec_name": "hdmv_pgs_subtitle",
+                            "webvtt_compatible": False,
+                        }
+                    ],
+                },
+            ),
+            patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen),
+            patch(
+                "dropbox_browser.video_burnin.extract_subtitle_stream_to_srt",
+                side_effect=fail_extract,
+            ),
+        ):
+            payload = server.post_json("/video/endpoints/session", {
+                "path": "movie.mp4",
+                "source": "remote",
+                "subtitle_stream_index": "3",
+                "force_subtitle_burn_in": "1",
+            })
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(extract_calls, [])
+        command = spawned[0].command
+        joined = " ".join(command)
+        # Falls through to the legacy bitmap overlay graph.
+        self.assertIn("colorchannelmixer", joined)
+        self.assertNotIn("subtitles=", joined)
+
+    def test_session_endpoint_force_burn_in_empty_extraction_returns_service_unavailable(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffprobe/bin/ffprobe.exe"),
+            ),
+        )
+
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            return FakeFfmpegProcess(command)
+
+        with (
+            TestServer(app) as server,
+            patch("dropbox_browser.video.probe_remote_media", return_value=None),
+            patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen),
+            patch(
+                "dropbox_browser.video_burnin.extract_subtitle_stream_to_srt",
+                return_value=False,
+            ),
+        ):
+            with self.assertRaises(HTTPError) as error_ctx:
+                server.post_json("/video/endpoints/session", {
+                    "path": "movie.mp4",
+                    "source": "remote",
+                    "subtitle_stream_index": "3",
+                    "force_subtitle_burn_in": "1",
+                })
+
+        self.assertEqual(error_ctx.exception.code, HTTPStatus.SERVICE_UNAVAILABLE)
+
+    def test_session_endpoint_force_burn_in_rebases_srt_for_seek_start(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffprobe/bin/ffprobe.exe"),
+            ),
+        )
+        spawned: list[FakeFfmpegProcess] = []
+
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            if not is_ffmpeg_hls_spawn(command):
+                return FakeFfmpegProcess(command)
+            playlist_path = Path(command[-1])
+            write_hls_session_fixture(playlist_path)
+            process = FakeFfmpegProcess(command)
+            spawned.append(process)
+            return process
+
+        def fake_extract(ffmpeg_exe, input_url, output_path, *, subtitle_stream_index, timeout_seconds=120.0):
+            Path(output_path).write_text(
+                "1\n00:02:10,000 --> 00:02:11,000\nShifted cue\n",
+                encoding="utf-8",
+            )
+            return True
+
+        with (
+            TestServer(app) as server,
+            patch("dropbox_browser.video.probe_remote_media", return_value=None),
+            patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen),
+            patch(
+                "dropbox_browser.video_burnin.extract_subtitle_stream_to_srt",
+                side_effect=fake_extract,
+            ),
+        ):
+            payload = server.post_json("/video/endpoints/session", {
+                "path": "movie.mp4",
+                "source": "remote",
+                "subtitle_stream_index": "3",
+                "force_subtitle_burn_in": "1",
+                "start_time_seconds": "120",
+            })
+
+            self.assertEqual(payload["status"], "ok")
+            command = spawned[0].command
+            filter_value = command[command.index("-filter_complex") + 1]
+            self.assertIn("subtitles=filename='burnin.srt'", filter_value)
+            # Locate the SRT through the playlist path's directory.
+            playlist_path = Path(command[-1])
+            srt_file = playlist_path.parent / "burnin.srt"
+            text = srt_file.read_text(encoding="utf-8")
+            self.assertIn("00:00:10,000 --> 00:00:11,000", text)
+            self.assertIn("Shifted cue", text)
+            self.assertNotIn("00:02:10,000", text)
+
+    def test_session_endpoint_force_burn_in_rebase_past_all_cues_succeeds_without_filter(self) -> None:
+        rclone = self._remote_media_rclone()
+        app = self._build_app(
+            rclone,
+            local_root=None,
+            video_tools_config=VideoToolsConfig(
+                ffmpeg_exe=Path("C:/tools/ffmpeg/bin/ffmpeg.exe"),
+                ffprobe_exe=Path("C:/tools/ffprobe/bin/ffprobe.exe"),
+            ),
+        )
+        spawned: list[FakeFfmpegProcess] = []
+
+        def fake_popen(command, stdout=None, stderr=None, cwd=None, **kwargs):
+            if not is_ffmpeg_hls_spawn(command):
+                return FakeFfmpegProcess(command)
+            playlist_path = Path(command[-1])
+            write_hls_session_fixture(playlist_path)
+            process = FakeFfmpegProcess(command)
+            spawned.append(process)
+            return process
+
+        def fake_extract(ffmpeg_exe, input_url, output_path, *, subtitle_stream_index, timeout_seconds=120.0):
+            Path(output_path).write_text(
+                "1\n00:00:01,000 --> 00:00:02,000\nEarly cue\n",
+                encoding="utf-8",
+            )
+            return True
+
+        with (
+            TestServer(app) as server,
+            patch("dropbox_browser.video.probe_remote_media", return_value=None),
+            patch("dropbox_browser.video.subprocess.Popen", side_effect=fake_popen),
+            patch(
+                "dropbox_browser.video_burnin.extract_subtitle_stream_to_srt",
+                side_effect=fake_extract,
+            ),
+        ):
+            payload = server.post_json("/video/endpoints/session", {
+                "path": "movie.mp4",
+                "source": "remote",
+                "subtitle_stream_index": "3",
+                "force_subtitle_burn_in": "1",
+                # Seek past every cue end: rebase drops all cues.
+                "start_time_seconds": "600",
+            })
+
+        self.assertEqual(payload["status"], "ok")
+        command = spawned[0].command
+        joined = " ".join(command)
+        # No subtitles= filter and no bitmap overlay fallthrough for a text
+        # stream: a clean session without burned-in cues.
+        self.assertNotIn("subtitles=", joined)
+        self.assertNotIn("colorchannelmixer", joined)
 
     def test_session_endpoint_uses_audio_copy_for_copy_safe_aac_selection(self) -> None:
         rclone = self._remote_media_rclone()

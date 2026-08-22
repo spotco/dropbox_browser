@@ -109,8 +109,11 @@ def build_force_style_arg(
     """Map the shared subtitle style options onto an ASS ``force_style`` string.
 
     Mirrors the WebVTT overlay semantics:
-    - stroke enabled adds an opaque outline (libass ``BorderStyle=3`` box used
-      only for its outline rendering here) via ``Outline`` weight,
+    - stroke enabled renders a plain glyph outline (``BorderStyle=1`` with
+      ``Outline=2``, or ``Outline=0`` when disabled) approximating the
+      overlay's text-shadow stroke,
+    - background enabled takes precedence and renders an opaque box
+      (``BorderStyle=3`` + opaque ``BackColour``),
     - shadow enabled adds the drop shadow component,
     - positive ``offset_px`` moves subtitles up like the overlay does.
     """
@@ -175,26 +178,99 @@ def build_text_subtitle_burnin_filter(
     return f"subtitles=filename='{escaped}':force_style='{force_style}'"
 
 
+def _format_srt_timestamp(total_seconds: float) -> str:
+    total_ms = max(0, int(round(total_seconds * 1000)))
+    hours, remainder = divmod(total_ms, 3_600_000)
+    minutes, remainder = divmod(remainder, 60_000)
+    seconds, millis = divmod(remainder, 1000)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
+
+
+_SRT_TIMING_RE = re.compile(
+    r"^(\d{2,}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{2,}):(\d{2}):(\d{2})[,.](\d{3})\s*$"
+)
+
+
+def _shift_srt_timing_line(line: str, delta_seconds: float) -> str | None:
+    match = _SRT_TIMING_RE.match(line.strip())
+    if match is None:
+        return None
+    parts = [int(group) for group in match.groups()]
+    start = parts[0] * 3600 + parts[1] * 60 + parts[2] + parts[3] / 1000.0
+    end = parts[4] * 3600 + parts[5] * 60 + parts[6] + parts[7] / 1000.0
+    shifted_start = start + delta_seconds
+    shifted_end = end + delta_seconds
+    if shifted_end <= 0:
+        # Cue finished before the seek point; drop it.
+        return None
+    return (
+        f"{_format_srt_timestamp(shifted_start)} --> {_format_srt_timestamp(shifted_end)}"
+    )
+
+
+def rebase_srt_text(text: str, start_time_seconds: float) -> str:
+    """Shift extracted SRT cues so they align with a seek-started HLS session.
+
+    The HLS encode starts at ``start_time_seconds``, so cues must be shifted
+    back by that amount; cues that end before the seek point are dropped.
+    """
+    normalized = str(text or "").replace("\r\n", "\n")
+    if start_time_seconds <= 0:
+        return normalized
+    out_blocks: list[str] = []
+    for block in re.split(r"\n\n+", normalized.strip()):
+        trimmed = block.strip()
+        if not trimmed:
+            continue
+        lines = trimmed.split("\n")
+        timing_idx = 0
+        if len(lines) > 1 and "-->" not in lines[0] and "-->" in lines[1]:
+            timing_idx = 1
+        shifted = _shift_srt_timing_line(lines[timing_idx], -start_time_seconds)
+        if shifted is None:
+            continue
+        lines[timing_idx] = shifted
+        out_blocks.append("\n".join(lines))
+    return "\n\n".join(out_blocks) + ("\n" if out_blocks else "")
+
+
+def rebase_srt_file(path: Path, start_time_seconds: float) -> bool:
+    """Rebase an extracted SRT in place for a seek-started session.
+
+    Returns True when any cue changed or was dropped.
+    """
+    if start_time_seconds <= 0:
+        return False
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    rebased = rebase_srt_text(raw, start_time_seconds)
+    if rebased == raw:
+        return False
+    path.write_text(rebased, encoding="utf-8", newline="")
+    return True
+
+
 def build_srt_extraction_command(
     ffmpeg_exe: Path | str,
     input_url: str,
     output_path: Path | str,
     *,
     subtitle_stream_index: int,
-    start_time_seconds: float = 0.0,
 ) -> list[str]:
     """Build the short ffmpeg command that extracts one text subtitle stream
-    to an SRT file."""
+    to an SRT file.
+
+    The full stream is extracted (no ``-ss``); seek alignment is handled by
+    :func:`rebase_srt_file` so mid-playback restarts keep correct timings.
+    """
     command = [
         str(ffmpeg_exe),
         "-hide_banner",
         "-loglevel",
         "error",
         "-y",
-    ]
-    if start_time_seconds > 0:
-        command.extend(["-ss", f"{float(start_time_seconds):.3f}"])
-    command.extend([
         "-i",
         str(input_url),
         "-map",
@@ -202,7 +278,7 @@ def build_srt_extraction_command(
         "-f",
         "srt",
         str(output_path),
-    ])
+    ]
     return command
 
 
@@ -212,8 +288,7 @@ def extract_subtitle_stream_to_srt(
     output_path: Path,
     *,
     subtitle_stream_index: int,
-    start_time_seconds: float = 0.0,
-    timeout_seconds: float = 60.0,
+    timeout_seconds: float = 120.0,
 ) -> bool:
     """Extract one text subtitle stream to ``output_path``.
 
@@ -226,7 +301,6 @@ def extract_subtitle_stream_to_srt(
         input_url,
         output_path,
         subtitle_stream_index=subtitle_stream_index,
-        start_time_seconds=start_time_seconds,
     )
     try:
         completed = subprocess.run(  # noqa: S603 - fixed argv list

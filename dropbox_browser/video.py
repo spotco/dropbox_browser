@@ -388,6 +388,49 @@ def audio_stream_supports_aac_copy(stream_data: dict[str, object]) -> tuple[bool
     return True, "selected_aac_stream_copy_safe"
 
 
+def _subtitle_stream_supports_text_burnin(
+    probe_payload: dict[str, object] | None,
+    subtitle_stream_index: int | None,
+) -> bool:
+    """True when the selected subtitle stream is a text codec that the
+    ``subtitles`` filter can rasterize (i.e. WebVTT-capable).
+
+    Bitmap codecs (PGS/DVD/DVB) cannot be extracted to SRT, so forced burn-in
+    falls through to the legacy bitmap overlay graph for those streams. When
+    the probe payload does not identify the stream's codec, assume text so the
+    forced path keeps its previous behavior.
+    """
+    if subtitle_stream_index is None:
+        return False
+    if not isinstance(probe_payload, dict):
+        return True
+    subtitle_streams = probe_payload.get("subtitle_streams")
+    if not isinstance(subtitle_streams, list):
+        return True
+    for stream in subtitle_streams:
+        if not isinstance(stream, dict):
+            continue
+        try:
+            stream_index = int(stream.get("index"))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+        if stream_index != int(subtitle_stream_index):
+            continue
+        codec_name = stream.get("codec_name")
+        if not isinstance(codec_name, str) or not codec_name.strip():
+            return True
+        return subtitle_codec_supports_webvtt(codec_name)
+    return True
+
+
+def _srt_file_has_cues(path) -> bool:
+    """True when the SRT file exists and is non-empty."""
+    try:
+        return path.exists() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
 def _probe_video_height(probe_payload: dict[str, object] | None) -> int | None:
     """Best-effort video frame height from probe metadata."""
     if not isinstance(probe_payload, dict):
@@ -1695,6 +1738,7 @@ def build_ffmpeg_hls_command(
     copy_video: bool = False,
     copy_audio: bool = False,
     extra_video_filter: str | None = None,
+    burn_in_subtitles: bool = True,
 ) -> list[str]:
     segment_pattern = HLS_SEGMENT_PATTERN
     command = [
@@ -1736,7 +1780,11 @@ def build_ffmpeg_hls_command(
             "-map",
             "[vout]",
         ])
-    elif subtitle_stream_index is None:
+    elif subtitle_stream_index is None or not burn_in_subtitles:
+        # burn_in_subtitles=False: forced text burn-in dropped its cues (e.g.
+        # seek past the last subtitle), so skip the legacy bitmap overlay and
+        # let the session succeed without burned-in text (the unconditional
+        # -sn below drops subtitle streams).
         command.extend([
             "-map",
             "0:v:0",
@@ -2061,19 +2109,25 @@ class VideoSessionManager:
             extra_video_filter: str | None = None
             burnin_mode: str | None = None
             burnin_srt_name: str | None = None
-            if (
-                force_subtitle_burn_in
-                and subtitle_stream_index is not None
-            ):
+            text_burnin_dropped = False
+            from .video_burnin import (
+                build_text_subtitle_burnin_filter,
+                extract_subtitle_stream_to_srt,
+                forced_burnin_requested,
+                log_fields_for_session,
+                rebase_srt_file,
+                sanitize_srt_file,
+                scale_burnin_font_size,
+                scale_burnin_offset_px,
+            )
+            force_burnin_requested = forced_burnin_requested(
+                True if force_subtitle_burn_in else False,
+                subtitle_stream_index,
+            ) and _subtitle_stream_supports_text_burnin(
+                probe_payload, subtitle_stream_index
+            )
+            if force_burnin_requested:
                 try:
-                    from .video_burnin import (
-                        build_text_subtitle_burnin_filter,
-                        extract_subtitle_stream_to_srt,
-                        sanitize_srt_file,
-                        scale_burnin_font_size,
-                        scale_burnin_offset_px,
-                    )
-
                     # The extraction runs before this session is registered, so
                     # it must NOT use the tagged input URL: tagged requests are
                     # cancelled while their session is unknown to the manager.
@@ -2087,31 +2141,54 @@ class VideoSessionManager:
                         _probe_video_height(probe_payload),
                     )
                     srt_path = session_dir / "burnin.srt"
-                    extract_subtitle_stream_to_srt(
+                    extracted_ok = extract_subtitle_stream_to_srt(
                         ffmpeg_exe,
                         extraction_url,
                         srt_path,
                         subtitle_stream_index=int(subtitle_stream_index),
-                        start_time_seconds=start_time_seconds,
                     )
+                    if not extracted_ok:
+                        raise RuntimeError(
+                            "Subtitle burn-in extraction produced no cues."
+                        )
                     # ASS-to-SRT conversion bakes <font size=...> markup into
                     # cue text; libass honors it and would override the
                     # force_style sizing, so strip it before rendering.
                     sanitize_srt_file(srt_path)
-                    extra_video_filter = build_text_subtitle_burnin_filter(
-                        srt_path.name,
-                        stroke_enabled=subtitle_stroke_enabled,
-                        shadow_enabled=subtitle_shadow_enabled,
-                        font_size_px=scaled_font_size,
-                        offset_px=scale_burnin_offset_px(
-                            subtitle_offset_px,
-                            subtitle_display_height_px,
-                            _probe_video_height(probe_payload),
-                        ),
-                        background_enabled=subtitle_background_enabled,
-                    )
-                    burnin_mode = "text_subtitles_filter"
-                    burnin_srt_name = srt_path.name
+                    # The HLS encode seeks with -ss while the SRT was extracted
+                    # in full; rebase cue timings so they match the segment
+                    # timeline on mid-playback restarts.
+                    rebase_srt_file(srt_path, start_time_seconds)
+                    if not _srt_file_has_cues(srt_path):
+                        # Seeking past the last cue end drops every cue; an
+                        # empty SRT makes ffmpeg's subtitles filter fail to
+                        # init. Prefer a clean session with no burned-in cues
+                        # (this is not an extraction failure, so no 503).
+                        srt_path.unlink(missing_ok=True)
+                        text_burnin_dropped = True
+                        force_burnin_requested = False
+                        log_video_debug(
+                            self.app,
+                            "session_create_burnin_no_cues_after_rebase",
+                            path=rel_path,
+                            start_time_seconds=start_time_seconds,
+                            subtitle_stream_index=subtitle_stream_index,
+                        )
+                    else:
+                        extra_video_filter = build_text_subtitle_burnin_filter(
+                            srt_path.name,
+                            stroke_enabled=subtitle_stroke_enabled,
+                            shadow_enabled=subtitle_shadow_enabled,
+                            font_size_px=scaled_font_size,
+                            offset_px=scale_burnin_offset_px(
+                                subtitle_offset_px,
+                                subtitle_display_height_px,
+                                _probe_video_height(probe_payload),
+                            ),
+                            background_enabled=subtitle_background_enabled,
+                        )
+                        burnin_mode = "text_subtitles_filter"
+                        burnin_srt_name = srt_path.name
                 except RuntimeError:
                     shutil.rmtree(session_dir, ignore_errors=True)
                     raise BrowserError(
@@ -2138,6 +2215,7 @@ class VideoSessionManager:
                 copy_video=video_mode == "video_copy",
                 copy_audio=audio_mode == "audio_copy",
                 extra_video_filter=extra_video_filter,
+                burn_in_subtitles=not text_burnin_dropped,
             )
             process_priority = str(getattr(video_config, "ffmpeg_process_priority", "below_normal") or "below_normal")
             priority_popen_kwargs = ffmpeg_popen_kwargs_for_priority(process_priority)
@@ -2161,9 +2239,13 @@ class VideoSessionManager:
                 playlist=str(playlist_path),
                 command=command,
                 ffmpeg_process_priority=process_priority,
-                force_subtitle_burn_in=bool(force_subtitle_burn_in and extra_video_filter is not None),
-                burnin_mode=burnin_mode,
-                burnin_subtitle_file=burnin_srt_name,
+                **log_fields_for_session(
+                    force_subtitle_burn_in=bool(
+                        force_subtitle_burn_in and extra_video_filter is not None
+                    ),
+                    burnin_mode=burnin_mode,
+                    srt_name=burnin_srt_name,
+                ),
             )
             try:
                 process: subprocess.Popen[bytes] = subprocess.Popen(  # type: ignore[type-var]

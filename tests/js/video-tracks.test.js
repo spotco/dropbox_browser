@@ -221,7 +221,7 @@ test("subtitle style Apply skips burned-in restart for size and offset only chan
   assert.equal(ctx.state.pendingSubtitleStyleApply, false);
   assert.equal(
     ctx.lastStatus,
-    "Subtitle style applied. Burned-in subtitles restart only for shadow or stroke changes."
+    "Subtitle style applied. Burned-in subtitles restart when style options they consume change."
   );
 });
 
@@ -244,6 +244,63 @@ test("subtitle style Apply restarts burned-in playback for shadow changes", asyn
     { forceSessionRestart: true },
   ]);
   assert.equal(ctx.lastStatus, "Applying subtitle style to burned-in subtitles.");
+});
+
+function makeStreamCtx(overrides = {}) {
+  const ctx = createCtx({
+    compatibilitySessionHasBurnedInSubtitles: true,
+    ...overrides,
+  });
+  const activeItem = { path: "Videos/text.mkv" };
+  const probePayload = {};
+  ctx.activeQueueItem = () => activeItem;
+  ctx.state.probeCache[activeItem.path] = probePayload;
+  const selectedStream = overrides.selectedStream || {
+    index: 3,
+    codec_name: "subrip",
+    webvtt_compatible: true,
+  };
+  ctx.selectedSubtitleStream = () => selectedStream;
+  ctx.subtitleStreamRequiresBurnIn = (stream) => Boolean(stream && stream.webvtt_compatible === false);
+  return ctx;
+}
+
+test("force burn-in + text stream: background-only change still restarts", async () => {
+  const { initTracks } = await importModuleFromWorkspace("dropbox_browser/assets/js/video/tracks.js");
+  // Persisted applied state has force on; the checkbox stays on.
+  const ctx = makeStreamCtx();
+  initTracks(ctx);
+  ctx.state.subtitleStyleApplied.forceBurnIn = true;
+
+  ctx.els.subtitleBackgroundEl.checked = true;
+  ctx.els.subtitleBackgroundEl.listeners.change();
+
+  await ctx.handleSubtitleStyleApply();
+
+  assert.equal(ctx.restartCalls.length, 1);
+});
+
+test("force burn-in + bitmap stream: background/size/offset changes do not restart", async () => {
+  const { initTracks } = await importModuleFromWorkspace("dropbox_browser/assets/js/video/tracks.js");
+  const ctx = makeStreamCtx({
+    selectedStream: { index: 3, codec_name: "hdmv_pgs_subtitle", webvtt_compatible: false },
+  });
+  initTracks(ctx);
+  ctx.state.subtitleStyleApplied.forceBurnIn = true;
+  ctx.els.subtitleForceBurnInEl.checked = true;
+
+  // Background-only change.
+  ctx.els.subtitleBackgroundEl.checked = true;
+  ctx.els.subtitleBackgroundEl.listeners.change();
+  await ctx.handleSubtitleStyleApply();
+
+  // Size and offset change too.
+  ctx.els.subtitleFontSizeInputEl.value = "44";
+  ctx.els.subtitleOffsetInputEl.value = "-22";
+  await ctx.handleSubtitleStyleApply();
+
+  assert.equal(ctx.restartCalls.length, 0);
+  assert.equal(ctx.lastStatus, "Subtitle style applied. Burned-in subtitles restart when style options they consume change.");
 });
 
 test("subtitle style Apply accepts values outside the old input limits", async () => {
@@ -335,7 +392,7 @@ test("force burn-in toggle persists and restarts burned-in playback when applied
   assert.equal(ctx.lastStatus, "Applying subtitle style to burned-in subtitles.");
 });
 
-test("force burn-in restarts on any style change while enabled (size and offset apply to burn-in)", async () => {
+test("force burn-in restarts on any style change while enabled for a text stream", async () => {
   const { initTracks } = await importModuleFromWorkspace("dropbox_browser/assets/js/video/tracks.js");
   const settingsStore = {
     shadowEnabled: true,
@@ -344,10 +401,7 @@ test("force burn-in restarts on any style change while enabled (size and offset 
     offsetPx: 0,
     forceBurnIn: true,
   };
-  const ctx = createCtx({
-    settingsStore,
-    compatibilitySessionHasBurnedInSubtitles: true,
-  });
+  const ctx = makeStreamCtx({ settingsStore });
 
   initTracks(ctx);
   assert.equal(ctx.els.subtitleForceBurnInEl.checked, true);

@@ -9,13 +9,15 @@ from unittest.mock import patch
 
 from dropbox_browser.video_burnin import (
     SUBTITLE_BURNIN_PLAYRES_Y,
-    sanitize_srt_file,
-    sanitize_srt_text,
     build_force_style_arg,
     build_srt_extraction_command,
     build_text_subtitle_burnin_filter,
     extract_subtitle_stream_to_srt,
     forced_burnin_requested,
+    rebase_srt_file,
+    rebase_srt_text,
+    sanitize_srt_file,
+    sanitize_srt_text,
     scale_burnin_font_size,
     scale_burnin_offset_px,
 )
@@ -120,7 +122,7 @@ class BuildTextSubtitleBurninFilterTests(unittest.TestCase):
 
 
 class ExtractionCommandTests(unittest.TestCase):
-    def test_command_shape_without_start_time(self) -> None:
+    def test_command_shape_extracts_full_stream(self) -> None:
         command = build_srt_extraction_command(
             Path("ffmpeg.exe"),
             "http://127.0.0.1:8000/file?path=a.mkv",
@@ -129,32 +131,22 @@ class ExtractionCommandTests(unittest.TestCase):
         )
         self.assertEqual(command[0], str(Path("ffmpeg.exe")))
         self.assertEqual(command[-1], str(Path("session/burnin.srt")))
+        # No -ss: the full stream is extracted; rebase_srt_file handles seeks.
         self.assertNotIn("-ss", command)
         map_index = command.index("-map")
         self.assertEqual(command[map_index + 1], "0:3")
         self.assertEqual(["-f", "srt"], command[command.index("-f"):command.index("-f") + 2])
 
-    def test_command_shape_with_start_time(self) -> None:
-        command = build_srt_extraction_command(
-            "ffmpeg",
-            "http://x/file",
-            "out.srt",
-            subtitle_stream_index=2,
-            start_time_seconds=7.5,
-        )
-        ss_index = command.index("-ss")
-        self.assertEqual(command[ss_index + 1], "7.500")
-
 
 class ExtractSubtitleStreamToSrtTests(unittest.TestCase):
-    def run_extract(self, returncode: int, stderr: bytes, write_file: bool):
+    def run_extract(self, returncode: int, stderr: bytes, write_file: bool, file_size: int = 10):
         completed = subprocess.CompletedProcess([], returncode, b"", stderr)
         with (
             patch("dropbox_browser.video_burnin.subprocess.run", return_value=completed) as mock_run,
             patch("pathlib.Path.exists", return_value=write_file),
             patch("pathlib.Path.stat") as mock_stat,
         ):
-            mock_stat.return_value.st_size = 10 if write_file else 0
+            mock_stat.return_value.st_size = file_size
             result = None
             error = None
             try:
@@ -180,9 +172,80 @@ class ExtractSubtitleStreamToSrtTests(unittest.TestCase):
         self.assertIn("Subtitle burn-in extraction failed", str(error))
         self.assertIn("bad stream", str(error))
 
+    def test_empty_output_returns_false(self) -> None:
+        # Exit code 0 but no usable SRT file must be a False, not a silent pass.
+        result, error, _mock_run = self.run_extract(0, b"", True, file_size=0)
+        self.assertIsNone(error)
+        self.assertFalse(result)
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_missing_output_returns_false(self) -> None:
+        result, error, _mock_run = self.run_extract(0, b"", False)
+        self.assertIsNone(error)
+        self.assertFalse(result)
+
+
+class RebaseSrtTextTests(unittest.TestCase):
+    def test_nonpositive_start_is_identity(self) -> None:
+        body = "1\n00:00:05,000 --> 00:00:06,000\nHi\n"
+        self.assertEqual(rebase_srt_text(body, 0), body.replace("\n", "\n"))
+
+    def test_cues_shift_back_by_start_time(self) -> None:
+        rebased = rebase_srt_text(
+            "1\n00:01:05,000 --> 00:01:06,500\nHello\n\n"
+            "2\n00:02:10,000 --> 00:02:12,000\nWorld\n",
+            60.0,
+        )
+        self.assertIn("00:00:05,000 --> 00:00:06,500", rebased)
+        self.assertIn("Hello", rebased)
+        self.assertIn("00:01:10,000 --> 00:01:12,000", rebased)
+        self.assertIn("World", rebased)
+
+    def test_cues_ending_before_seek_are_dropped(self) -> None:
+        rebased = rebase_srt_text(
+            "1\n00:00:10,000 --> 00:00:20,000\nGone\n\n"
+            "2\n00:00:30,000 --> 00:01:00,000\nKept\n",
+            25.0,
+        )
+        self.assertNotIn("Gone", rebased)
+        self.assertIn("00:00:05,000 --> 00:00:35,000", rebased)
+        self.assertIn("Kept", rebased)
+
+    def test_all_dropped_yields_empty_body(self) -> None:
+        rebased = rebase_srt_text(
+            "1\n00:00:01,000 --> 00:00:02,000\nEarly\n",
+            60.0,
+        )
+        self.assertEqual(rebased.strip(), "")
+
+
+class RebaseSrtFileTests(unittest.TestCase):
+    def test_rewrites_file_in_place(self) -> None:
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            srt = Path(tmp) / "burnin.srt"
+            srt.write_text(
+                "1\n00:01:05,000 --> 00:01:06,000\nShifted\n",
+                encoding="utf-8",
+            )
+            changed = rebase_srt_file(srt, 60.0)
+            text = srt.read_text(encoding="utf-8")
+        self.assertTrue(changed)
+        self.assertIn("00:00:05,000 --> 00:00:06,000", text)
+        self.assertIn("Shifted", text)
+
+    def test_zero_start_makes_no_changes(self) -> None:
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            srt = Path(tmp) / "burnin.srt"
+            original = "1\n00:00:05,000 --> 00:00:06,000\nSame\n"
+            srt.write_text(original, encoding="utf-8")
+            changed = rebase_srt_file(srt, 0.0)
+            text = srt.read_text(encoding="utf-8")
+        self.assertFalse(changed)
+        self.assertEqual(text, original)
+
+    def test_missing_file_returns_false(self) -> None:
+        self.assertFalse(rebase_srt_file(Path("Z:/nope/missing.srt"), 5.0))
 
 
 class ScaleBurninFontSizeTests(unittest.TestCase):
@@ -270,3 +333,7 @@ class SanitizeSrtFileTests(unittest.TestCase):
     def test_missing_file_returns_false(self) -> None:
         from pathlib import Path
         self.assertFalse(sanitize_srt_file(Path("Z:/nope/missing.srt")))
+
+
+if __name__ == "__main__":
+    unittest.main()

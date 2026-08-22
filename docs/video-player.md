@@ -537,17 +537,22 @@ extracted to an SRT file in the session directory using an untagged `/file`
 input (the session is not yet registered, so tagged input would be cancelled),
 and the main command's filter graph becomes
 `[0:v:0]subtitles=filename='burnin.srt':force_style='...'[vout]`. The
-`force_style` string maps every subtitle style option: stroke toggles
-(`BorderStyle=3`, `Outline=1`), shadow toggle (`Shadow=2`), text size
-(`Fontsize`), and height offset (`MarginV`, positive moves up like the
-overlay).
+`force_style` string maps every subtitle style option for text streams:
+stroke toggle (`BorderStyle=1` with `Outline=2`, or `Outline=0` when
+disabled), shadow toggle (`Shadow=2`/`Shadow=0`), text size (`Fontsize`), and
+height offset (`MarginV`, positive moves up like the overlay; negative values
+clamp to the bottom edge). Bitmap (PGS) streams cannot be extracted to SRT, so
+with Force checked they keep the legacy bitmap overlay graph, which consumes
+only the stroke and shadow toggles.
 
 A "Enable background box" subtitle-style toggle (default off, persisted with
 the other style options) controls an opaque black box behind burned-in
-subtitles (`BorderStyle=3` + opaque `BackColour`) and the matching
-`background` on the WebVTT overlay/`::cue` via the
-`--video-subtitle-background` CSS variable. Toggling it restarts burn-in
-sessions and is covered by the size-parity e2e.
+subtitles. On the forced text path it becomes `BorderStyle=3` + opaque
+`BackColour`; on the overlay it maps to the `background` on the WebVTT
+overlay/`::cue` via the `--video-subtitle-background` CSS variable.
+Toggling it restarts a forced text burn-in session; plain bitmap burn-in
+sessions do not restart for background-only changes (the box has no effect
+there). Covered by the size-parity e2e.
 
 Size parity with the WebVTT overlay is exact by construction. libass sizes
 text in PlayResY (288) units of the video frame for headerless SRT, while the

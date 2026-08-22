@@ -64,14 +64,30 @@ function burnedInSubtitleStyleOptionsEqual(left, right) {
   var leftNormalized = cloneSubtitleStyleOptions(left);
   var rightNormalized = cloneSubtitleStyleOptions(right);
   if (leftNormalized.forceBurnIn !== rightNormalized.forceBurnIn) return false;
-  if (leftNormalized.forceBurnIn) {
-    // Forced text burn-in consumes every style option (force_style args).
+  // Forced text burn-in consumes every style option (force_style args), but
+  // only when the selected stream is actually text-capable: bitmap streams
+  // keep the legacy overlay even with Force checked, so they compare on
+  // shadow/stroke only.
+  if (leftNormalized.forceBurnIn && selectedSubtitleStreamIsTextCapable()) {
     return subtitleStyleOptionsEqual(leftNormalized, rightNormalized);
   }
-  // Bitmap burn-in consumes shadow/stroke and the background box toggle.
   return leftNormalized.shadowEnabled === rightNormalized.shadowEnabled
-    && leftNormalized.strokeEnabled === rightNormalized.strokeEnabled
-    && leftNormalized.backgroundEnabled === rightNormalized.backgroundEnabled;
+    && leftNormalized.strokeEnabled === rightNormalized.strokeEnabled;
+}
+
+// True when the currently selected subtitle track is WebVTT-capable (text).
+// Unknown when no probe/selection exists yet.
+function selectedSubtitleStreamIsTextCapable() {
+  if (typeof ctx.selectedSubtitleStream !== 'function'
+    || typeof ctx.activeQueueItem !== 'function') return false;
+  var active = ctx.activeQueueItem();
+  if (!active) return false;
+  var probePayload = ctx.state.probeCache[active.path || ''] || null;
+  if (!probePayload) return false;
+  var selectedStream = ctx.selectedSubtitleStream(active, probePayload);
+  if (!selectedStream) return false;
+  if (typeof ctx.subtitleStreamRequiresBurnIn !== 'function') return false;
+  return !ctx.subtitleStreamRequiresBurnIn(selectedStream);
 }
 
 function readBackgroundCheckbox() {
@@ -269,7 +285,7 @@ async function handleSubtitleStyleApply() {
     ctx.state.pendingSubtitleStyleApply = false;
     ctx.setStatus(
       hasBurnedInContext
-        ? 'Subtitle style applied. Burned-in subtitles restart only for shadow or stroke changes.'
+        ? 'Subtitle style applied. Burned-in subtitles restart when style options they consume change.'
         : 'Subtitle style applied.'
     );
     return;
