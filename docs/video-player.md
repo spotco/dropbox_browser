@@ -542,6 +542,13 @@ and the main command's filter graph becomes
 (`Fontsize`), and height offset (`MarginV`, positive moves up like the
 overlay).
 
+A "Enable background box" subtitle-style toggle (default off, persisted with
+the other style options) controls an opaque black box behind burned-in
+subtitles (`BorderStyle=3` + opaque `BackColour`) and the matching
+`background` on the WebVTT overlay/`::cue` via the
+`--video-subtitle-background` CSS variable. Toggling it restarts burn-in
+sessions and is covered by the size-parity e2e.
+
 Size parity with the WebVTT overlay is exact by construction. libass sizes
 text in PlayResY (288) units of the video frame for headerless SRT, while the
 overlay's CSS font size is in pixels of the displayed video box. The client

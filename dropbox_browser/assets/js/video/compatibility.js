@@ -1224,6 +1224,7 @@ async function createCompatibilitySession(item, audioStreamIndex, startSeconds, 
           effectiveFontSize = subtitleStyleOptions.fontSizePx;
         }
         body += '&force_subtitle_burn_in=1';
+        body += '&subtitle_background_enabled=' + (subtitleStyleOptions.backgroundEnabled ? '1' : '0');
         body += '&subtitle_font_size_px=' + encodeURIComponent(String(effectiveFontSize));
         body += '&subtitle_offset_px=' + encodeURIComponent(String(effectiveOffset));
         if (displayHeight > 0) {

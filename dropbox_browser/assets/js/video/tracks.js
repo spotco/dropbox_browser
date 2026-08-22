@@ -4,6 +4,7 @@ var SUBTITLE_STYLE_DEFAULTS = {
   strokeEnabled: true,
   fontSizePx: 28,
   offsetPx: 0,
+  backgroundEnabled: false,
   forceBurnIn: false,
 };
 var SUBTITLE_STYLE_SETTING_KEY = 'video-subtitle-style';
@@ -40,6 +41,7 @@ function cloneSubtitleStyleOptions(options) {
     strokeEnabled: source.strokeEnabled !== false,
     fontSizePx: parseSubtitleStyleNumber(source.fontSizePx, SUBTITLE_STYLE_DEFAULTS.fontSizePx),
     offsetPx: parseSubtitleStyleNumber(source.offsetPx, SUBTITLE_STYLE_DEFAULTS.offsetPx),
+    backgroundEnabled: source.backgroundEnabled === true,
     forceBurnIn: source.forceBurnIn === true,
   };
 }
@@ -51,6 +53,7 @@ function subtitleStyleOptionsEqual(left, right) {
     && leftNormalized.strokeEnabled === rightNormalized.strokeEnabled
     && leftNormalized.fontSizePx === rightNormalized.fontSizePx
     && leftNormalized.offsetPx === rightNormalized.offsetPx
+    && leftNormalized.backgroundEnabled === rightNormalized.backgroundEnabled
     && leftNormalized.forceBurnIn === rightNormalized.forceBurnIn;
 }
 
@@ -65,8 +68,15 @@ function burnedInSubtitleStyleOptionsEqual(left, right) {
     // Forced text burn-in consumes every style option (force_style args).
     return subtitleStyleOptionsEqual(leftNormalized, rightNormalized);
   }
+  // Bitmap burn-in consumes shadow/stroke and the background box toggle.
   return leftNormalized.shadowEnabled === rightNormalized.shadowEnabled
-    && leftNormalized.strokeEnabled === rightNormalized.strokeEnabled;
+    && leftNormalized.strokeEnabled === rightNormalized.strokeEnabled
+    && leftNormalized.backgroundEnabled === rightNormalized.backgroundEnabled;
+}
+
+function readBackgroundCheckbox() {
+  var input = ctx.els.subtitleBackgroundEl;
+  return Boolean(input && input.checked);
 }
 
 function readForceBurnInCheckbox() {
@@ -88,6 +98,7 @@ function readSubtitleStyleCheckboxOptions() {
   return {
     shadowEnabled: !shadowInput || shadowInput.checked !== false,
     strokeEnabled: !strokeInput || strokeInput.checked !== false,
+    backgroundEnabled: readBackgroundCheckbox(),
     forceBurnIn: readForceBurnInCheckbox(),
   };
 }
@@ -100,6 +111,7 @@ function currentSubtitleStyleOptions() {
   return cloneSubtitleStyleOptions({
     shadowEnabled: checkboxOptions.shadowEnabled,
     strokeEnabled: checkboxOptions.strokeEnabled,
+    backgroundEnabled: checkboxOptions.backgroundEnabled,
     forceBurnIn: checkboxOptions.forceBurnIn,
     fontSizePx: parseSubtitleStyleNumber(
       fontSizeInput ? fontSizeInput.value : appliedOptions.fontSizePx,
@@ -132,6 +144,7 @@ function persistSubtitleStyleOptions(options) {
 
 function syncSubtitleStyleInputs(options) {
   var nextOptions = options || SUBTITLE_STYLE_DEFAULTS;
+  if (ctx.els.subtitleBackgroundEl) ctx.els.subtitleBackgroundEl.checked = nextOptions.backgroundEnabled === true;
   if (ctx.els.subtitleForceBurnInEl) ctx.els.subtitleForceBurnInEl.checked = nextOptions.forceBurnIn === true;
   if (ctx.els.subtitleShadowEnabledEl) ctx.els.subtitleShadowEnabledEl.checked = nextOptions.shadowEnabled !== false;
   if (ctx.els.subtitleStrokeEnabledEl) ctx.els.subtitleStrokeEnabledEl.checked = nextOptions.strokeEnabled !== false;
@@ -149,6 +162,10 @@ function applySubtitleStylePreview(options) {
   bodyStyle.setProperty(
     '--video-subtitle-shadow',
     buildSubtitleShadowValue(nextOptions.strokeEnabled, nextOptions.shadowEnabled)
+  );
+  bodyStyle.setProperty(
+    '--video-subtitle-background',
+    nextOptions.backgroundEnabled ? 'rgba(0, 0, 0, 0.75)' : 'transparent'
   );
   return nextOptions;
 }
@@ -792,6 +809,9 @@ async function handleSubtitleTrackChange() {
   }
   if (ctx.els.subtitleStrokeEnabledEl) {
     ctx.els.subtitleStrokeEnabledEl.addEventListener('change', handleSubtitleStyleCheckboxPreviewChange);
+  }
+  if (ctx.els.subtitleBackgroundEl) {
+    ctx.els.subtitleBackgroundEl.addEventListener('change', handleSubtitleStyleCheckboxPreviewChange);
   }
   if (ctx.els.subtitleForceBurnInEl) {
     ctx.els.subtitleForceBurnInEl.addEventListener('change', handleSubtitleStyleCheckboxPreviewChange);

@@ -416,3 +416,166 @@ test("styled-font ASS burn-in matches overlay size (sanitizer strips font markup
     .toBeGreaterThan(0.75);
   expect(ratio).toBeLessThan(1.33);
 });
+
+
+test("subtitle background box toggle applies to both WebVTT overlay and forced burn-in", async ({ page }) => {
+  test.setTimeout(240000);
+
+  const clearResponse = await page.request.post("/video/endpoints/cache/clear");
+  expect(clearResponse.ok()).toBe(true);
+
+  await page.goto("/?path=Videos");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await page.locator("#bottom-pane-mode").selectOption("video-player");
+  await expect(page.locator("#video-player-pane")).toBeVisible();
+  await waitForCompatibilityReady(page);
+
+  // Known starting state: background off, force burn-in off.
+  const panel = page.locator("#video-track-panel");
+  await panel.waitFor({ state: "visible", timeout: 10000 });
+  if (!(await panel.evaluate((el) => el.open))) {
+    await panel.locator("summary").click();
+  }
+  const bgSwitch = page.locator("#video-subtitle-background-enabled");
+  const forceSwitch = page.locator("#video-subtitle-force-burnin");
+  let needsApply = false;
+  if (await bgSwitch.isChecked()) { await bgSwitch.uncheck(); needsApply = true; }
+  if (await forceSwitch.isChecked()) { await forceSwitch.uncheck(); needsApply = true; }
+  if (needsApply) await page.locator("#video-subtitle-style-apply").click();
+
+  // Default: background box unchecked.
+  await expect(bgSwitch).not.toBeChecked();
+
+  // --- WebVTT overlay mode ---
+  await playLibraryFile(page, "styled-font-box.mkv");
+  await waitForVisibleVideo(page);
+  // Persisted track preferences may have subtitles off; select the ASS track.
+  await expect(page.locator("#video-subtitle-track")).toBeEnabled({ timeout: 15000 });
+  if (String(await page.locator("#video-subtitle-track").inputValue()) !== "3") {
+    await page.locator("#video-subtitle-track").selectOption("3");
+  }
+  await expect
+    .poll(async () => page.evaluate(() => {
+      const video = document.getElementById("video-player-media");
+      if (!video) return false;
+      if (video.paused && !video.ended) video.play().catch(() => {});
+      return !video.paused && video.currentTime > 0.2;
+    }), { timeout: 30000 })
+    .toBe(true);
+
+  const overlayBgBefore = await page.evaluate(() => (
+    getComputedStyle(document.getElementById("video-subtitle-overlay")).backgroundColor
+  ));
+  expect(overlayBgBefore).toBe("rgba(0, 0, 0, 0)");
+
+  // Toggle the box on: preview updates immediately, no restart needed.
+  await bgSwitch.check();
+  await page.locator("#video-subtitle-style-apply").click();
+  await expect
+    .poll(async () => page.evaluate(() => (
+      getComputedStyle(document.getElementById("video-subtitle-overlay")).backgroundColor
+    )), { timeout: 10000 })
+    .toBe("rgba(0, 0, 0, 0.75)");
+
+  // --- Forced burn-in mode with the box enabled ---
+  const forcedRestartWithBox = page.waitForRequest((request) => {
+    if (request.method() !== "POST") return false;
+    if (new URL(request.url()).pathname !== "/video/endpoints/session") return false;
+    const body = String(request.postData() || "");
+    return (
+      body.includes("path=Videos%2Fstyled-font-box.mkv")
+      && body.includes("force_subtitle_burn_in=1")
+      && body.includes("subtitle_background_enabled=1")
+    );
+  }, { timeout: 15000 });
+  await forceSwitch.check();
+  await page.locator("#video-subtitle-style-apply").click();
+  await forcedRestartWithBox;
+  await waitForVisibleVideo(page);
+  await captureInCue(page, null, "bg-on-burnin");
+
+  async function countBoxRows(page) {
+    // Detect the opaque background box as a WIDE CONTIGUOUS black run in the
+    // subtitle zone (the fixture renders a bright scene, so box-on shows a
+    // long black bar; box-off leaves only thin outline/shadow strokes).
+    return page.evaluate(() => {
+      const video = document.getElementById("video-player-media");
+      const w = video.videoWidth;
+      const h = video.videoHeight;
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx2d = canvas.getContext("2d", { willReadFrequently: true });
+      ctx2d.drawImage(video, 0, 0, w, h);
+      const data = ctx2d.getImageData(0, 0, w, h).data;
+      const minY = Math.floor(h * 0.55);
+      const maxY = Math.floor(h * 0.97);
+      let bestRunPx = 0;
+      let bandRows = 0;
+      for (let y = minY; y < maxY; y += 1) {
+        let run = 0;
+        let bestInRow = 0;
+        for (let x = 0; x < w; x += 1) {
+          const i = (y * w + x) * 4;
+          if (data[i] < 45 && data[i + 1] < 45 && data[i + 2] < 45) {
+            run += 1;
+            if (run > bestInRow) bestInRow = run;
+          } else {
+            run = 0;
+          }
+        }
+        if (bestInRow > w * 0.1) bandRows += 1;
+        if (bestInRow > bestRunPx) bestRunPx = bestInRow;
+      }
+      return { widestBlackRunPx: bestRunPx, widthFraction: bestRunPx / w, bandRows };
+    });
+  }
+
+  const boxOn = await countBoxRows(page);
+  expect(boxOn.widthFraction).toBeGreaterThan(0.35);
+
+  // --- Toggle the box off: restart carries subtitle_background_enabled=0 ---
+  if (!(await panel.evaluate((el) => el.open))) {
+    await panel.locator("summary").click();
+  }
+  const restartNoBox = page.waitForRequest((request) => {
+    if (request.method() !== "POST") return false;
+    if (new URL(request.url()).pathname !== "/video/endpoints/session") return false;
+    const body = String(request.postData() || "");
+    return (
+      body.includes("path=Videos%2Fstyled-font-box.mkv")
+      && body.includes("force_subtitle_burn_in=1")
+      && body.includes("subtitle_background_enabled=0")
+    );
+  }, { timeout: 15000 });
+  await bgSwitch.uncheck();
+  await page.locator("#video-subtitle-style-apply").click();
+  await restartNoBox;
+  await waitForVisibleVideo(page);
+  await captureInCue(page, null, "bg-off-burnin");
+  const boxOff = await countBoxRows(page);
+  try {
+    const dataUrl = await page.evaluate(() => window.__sizeParityFrameDataUrl || null);
+    if (dataUrl) {
+      require("fs").writeFileSync(
+        path.join(__dirname, "..", "..", ".dropbox-browser-temp", "size-parity-bgoff-frame.png"),
+        Buffer.from(String(dataUrl).split(",")[1], "base64"),
+      );
+    }
+  } catch (_dumpError) {}
+  expect(boxOff.widthFraction).toBeLessThan(0.25);
+
+  // Persisted across reload.
+  await page.reload();
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await ensurePanelOpenForBackgroundCheck(page);
+  await expect(bgSwitch).not.toBeChecked();
+});
+
+async function ensurePanelOpenForBackgroundCheck(page) {
+  const panel = page.locator("#video-track-panel");
+  await panel.waitFor({ state: "visible", timeout: 10000 });
+  if (!(await panel.evaluate((el) => el.open))) {
+    await panel.locator("summary").click();
+  }
+}

@@ -223,3 +223,15 @@ fixture video with real HLS in both modes and asserts the burned-in glyph
 band measured from live frames matches the WebVTT overlay's expected on-screen
 ink (ratio within 0.8-1.25; observed ~0.85, residual is font metric
 differences between libass and browser Arial).
+
+### Background box toggle (follow-up)
+
+Manual testing showed burn-in subtitles rendering with an opaque black
+background box (BorderStyle=3 + opaque BackColour). Added an "Enable
+background box" subtitle-style toggle (default off, persisted with the other
+style options): burn-in maps it to BorderStyle=3/BackColour, the WebVTT
+overlay/::cue map it to the --video-subtitle-background CSS variable, and
+toggling it restarts burn-in sessions. Covered by
+video-subtitle-size-parity.integration.spec.js (box detected as a wide black
+run over the bright styled-font-box.mkv scene, in both on and off states, in
+burn-in mode; computed style asserted in WebVTT mode).

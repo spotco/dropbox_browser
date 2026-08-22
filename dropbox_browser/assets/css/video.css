@@ -375,6 +375,7 @@
 }
 
 .video-player-media::cue {
+  background: var(--video-subtitle-background, transparent);
   color: #f8fbff;
   font-family: var(--video-subtitle-font-family, Arial, Helvetica, sans-serif);
   font-size: var(--video-subtitle-font-size, 28px);
@@ -427,6 +428,7 @@
 }
 
 .video-subtitle-overlay {
+  background: var(--video-subtitle-background, transparent);
   bottom: calc(8% + var(--video-subtitle-offset, 0px));
   color: #f8fbff;
   font-family: var(--video-subtitle-font-family, Arial, Helvetica, sans-serif);

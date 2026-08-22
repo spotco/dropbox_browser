@@ -23,6 +23,8 @@ function makeEl() {
 function createCtx(overrides = {}) {
   const shadowEl = makeEl();
   const strokeEl = makeEl();
+  const backgroundEl = makeEl();
+  backgroundEl.checked = false;
   const forceBurnInEl = makeEl();
   forceBurnInEl.checked = false;
   const fontSizeEl = makeEl();
@@ -41,6 +43,7 @@ function createCtx(overrides = {}) {
     els: {
       subtitleShadowEnabledEl: shadowEl,
       subtitleStrokeEnabledEl: strokeEl,
+      subtitleBackgroundEl: backgroundEl,
       subtitleForceBurnInEl: forceBurnInEl,
       subtitleFontSizeInputEl: fontSizeEl,
       subtitleOffsetInputEl: offsetEl,
@@ -124,6 +127,7 @@ test("initTracks restores persisted subtitle style options on startup", async ()
     strokeEnabled: false,
     fontSizePx: 36,
     offsetPx: -14,
+    backgroundEnabled: false,
     forceBurnIn: false,
   });
   assert.deepEqual(ctx.state.subtitleStyleDraft, ctx.state.subtitleStyleApplied);
@@ -146,6 +150,7 @@ test("subtitle style number inputs stay local until Apply is pressed", async () 
     strokeEnabled: false,
     fontSizePx: 36,
     offsetPx: -14,
+    backgroundEnabled: false,
     forceBurnIn: false,
   });
   assert.equal(ctx.bodyStyleValues["--video-subtitle-font-size"], "36px");
@@ -161,7 +166,8 @@ test("subtitle style number inputs stay local until Apply is pressed", async () 
       strokeEnabled: false,
       fontSizePx: 42,
       offsetPx: -20,
-      forceBurnIn: false,
+      backgroundEnabled: false,
+    forceBurnIn: false,
     },
   ]);
   assert.deepEqual(ctx.state.subtitleStyleApplied, ctx.state.subtitleStyleDraft);
@@ -184,6 +190,7 @@ test("subtitle style checkbox preview uses applied size and offset values", asyn
     strokeEnabled: true,
     fontSizePx: 42,
     offsetPx: -20,
+    backgroundEnabled: false,
     forceBurnIn: false,
   });
   assert.equal(ctx.bodyStyleValues["--video-subtitle-font-size"], "36px");
@@ -254,6 +261,7 @@ test("subtitle style Apply accepts values outside the old input limits", async (
     strokeEnabled: false,
     fontSizePx: 120,
     offsetPx: -240,
+    backgroundEnabled: false,
     forceBurnIn: false,
   });
   assert.equal(ctx.bodyStyleValues["--video-subtitle-font-size"], "120px");
@@ -282,6 +290,7 @@ test("subtitle style Reset restores defaults and applies them", async () => {
     strokeEnabled: true,
     fontSizePx: 28,
     offsetPx: 0,
+    backgroundEnabled: false,
     forceBurnIn: false,
   });
   assert.equal(ctx.bodyStyleValues["--video-subtitle-font-size"], "28px");
@@ -413,4 +422,45 @@ test("subtitle track change during seek restart defers replay until playback see
   assert.equal(ctx.state.pendingSubtitleTrackChange, true);
   assert.equal(ctx.restartCalls.length, 0);
   assert.equal(ctx.lastStatus, "Subtitle track will load when playback seek completes.");
+});
+
+
+test("background box toggle persists and applies the CSS variable", async () => {
+  const { initTracks } = await importModuleFromWorkspace("dropbox_browser/assets/js/video/tracks.js");
+  const ctx = createCtx({ disallowRestart: true });
+
+  initTracks(ctx);
+  ctx.els.subtitleBackgroundEl.checked = true;
+  ctx.els.subtitleBackgroundEl.listeners.change();
+
+  assert.equal(ctx.writes.length, 0);
+  await ctx.handleSubtitleStyleApply();
+
+  assert.equal(ctx.writes.length, 1);
+  assert.equal(ctx.writes[0][1].backgroundEnabled, true);
+});
+
+test("background box defaults to off on fresh state", async () => {
+  const { initTracks } = await importModuleFromWorkspace("dropbox_browser/assets/js/video/tracks.js");
+  const ctx = createCtx({ disallowRestart: true });
+
+  initTracks(ctx);
+  assert.equal(ctx.els.subtitleBackgroundEl.checked, false);
+  assert.equal(ctx.state.subtitleStyleApplied.backgroundEnabled, false);
+});
+
+test("background box toggle persists across restore", async () => {
+  const { initTracks } = await importModuleFromWorkspace("dropbox_browser/assets/js/video/tracks.js");
+  const settingsStore = {
+    shadowEnabled: true,
+    strokeEnabled: true,
+    fontSizePx: 28,
+    offsetPx: 0,
+    backgroundEnabled: true,
+    forceBurnIn: false,
+  };
+  const ctx = createCtx({ settingsStore, disallowRestart: true });
+
+  initTracks(ctx);
+  assert.equal(ctx.els.subtitleBackgroundEl.checked, true);
 });

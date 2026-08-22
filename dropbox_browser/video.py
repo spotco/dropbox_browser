@@ -1969,6 +1969,7 @@ class VideoSessionManager:
         subtitle_font_size_px: int | None = None,
         subtitle_offset_px: int | None = None,
         subtitle_display_height_px: int | None = None,
+        subtitle_background_enabled: bool = False,
         force_subtitle_burn_in: bool = False,
         start_time_seconds: float = 0.0,
         force_video_transcode: bool = False,
@@ -2107,6 +2108,7 @@ class VideoSessionManager:
                             subtitle_display_height_px,
                             _probe_video_height(probe_payload),
                         ),
+                        background_enabled=subtitle_background_enabled,
                     )
                     burnin_mode = "text_subtitles_filter"
                     burnin_srt_name = srt_path.name

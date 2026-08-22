@@ -147,8 +147,7 @@ def generate_video_file(
             "-f",
             "lavfi",
             "-i",
-            f"color=c=black:s=640x360:d={duration_seconds}",
-            "-f",
+                        f"color=c=black:s=640x360:d={duration_seconds}", "-f",
             "lavfi",
             "-i",
             f"sine=frequency={english_frequency}:duration={duration_seconds}",
@@ -233,6 +232,7 @@ def generate_ass_video_file(
     japanese_frequency: str,
     ass_cues: list[tuple[str, str, str]],
     duration_seconds: str = "10",
+    background_color: str = "black",
 ) -> None:
     work_dir = output_path.parent
     ass_path = work_dir / f"{output_path.stem}.eng.ass"
@@ -244,7 +244,7 @@ def generate_ass_video_file(
             "-f",
             "lavfi",
             "-i",
-            f"color=c=black:s=640x360:d={duration_seconds}",
+            f"color=c={background_color}:s=640x360:d={duration_seconds}",
             "-f",
             "lavfi",
             "-i",
@@ -576,6 +576,26 @@ def main() -> int:
     )
     validate_generated_file(styled_font_output_path, ["h264", "aac", "aac", "ass"])
 
+    # Bright-background variant: the background-box toggle is verified by
+    # detecting the opaque black box against this bright scene in pixels.
+    styled_box_output_path = videos_dir / "styled-font-box.mkv"
+    generate_ass_video_file(
+        styled_box_output_path,
+        english_audio_title="Styled Box English Audio",
+        japanese_audio_title="Styled Box Japanese Audio",
+        ass_subtitle_title="Styled Box Text",
+        english_frequency="545",
+        japanese_frequency="765",
+        duration_seconds="10",
+        background_color="white",
+        ass_cues=[
+            ("0:00:00.40", "0:00:02.40", "STYLED-BOX-SUBTITLE-ONE"),
+            ("0:00:03.00", "0:00:05.00", "STYLED-BOX-SUBTITLE-TWO"),
+            ("0:00:05.50", "0:00:08.00", "STYLED-BOX-SUBTITLE-THREE-LONG"),
+        ],
+    )
+    validate_generated_file(styled_box_output_path, ["h264", "aac", "aac", "ass"])
+
     ass_output_path = videos_dir / "ass-fruits.mkv"
     generate_ass_video_file(
         ass_output_path,
@@ -612,6 +632,12 @@ def main() -> int:
                 }
                 for spec in video_specs
             ],
+            {
+                "path": "Videos/styled-font-box.mkv",
+                "type": "file",
+                "file_path": str(styled_box_output_path.resolve()),
+                "mod_time": "2024-01-01T12:00:01Z",
+            },
             {
                 "path": "Videos/styled-font.mkv",
                 "type": "file",

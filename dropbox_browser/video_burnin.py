@@ -104,6 +104,7 @@ def build_force_style_arg(
     shadow_enabled: bool = True,
     font_size_px: int | None = None,
     offset_px: int | None = None,
+    background_enabled: bool = False,
 ) -> str:
     """Map the shared subtitle style options onto an ASS ``force_style`` string.
 
@@ -114,20 +115,26 @@ def build_force_style_arg(
     - positive ``offset_px`` moves subtitles up like the overlay does.
     """
     parts: list[str] = []
-    if stroke_enabled:
-        # BorderStyle=3 renders an opaque background box; combined with a
-        # matching BackColour alpha of 0 the box disappears and only the
-        # heavier Outline remains visible, approximating the overlay stroke.
+    if background_enabled:
+        # Opaque black box behind the text (ASS BorderStyle=3 with an opaque
+        # BackColour). The outline doubles as the box padding.
         parts.extend([
             "BorderStyle=3",
-            # Thin outline approximating the overlay's ~1.25px text-shadow
-            # stroke without visibly fattening the glyphs.
             "Outline=1",
             "BackColour=&H00000000",
         ])
+    elif stroke_enabled:
+        # Plain glyph outline approximating the overlay's ~1.25px
+        # text-shadow stroke.
+        parts.extend([
+            "BorderStyle=1",
+            "Outline=2",
+        ])
     else:
-        parts.append("BorderStyle=1")
-        parts.append("Outline=0")
+        parts.extend([
+            "BorderStyle=1",
+            "Outline=0",
+        ])
     if shadow_enabled:
         parts.append("Shadow=2")
     else:
@@ -148,6 +155,7 @@ def build_text_subtitle_burnin_filter(
     shadow_enabled: bool = True,
     font_size_px: int | None = None,
     offset_px: int | None = None,
+    background_enabled: bool = False,
 ) -> str:
     """Build the ``subtitles`` filter fragment for burned-in text subtitles."""
     if isinstance(subtitle_path, Path):
@@ -161,6 +169,7 @@ def build_text_subtitle_burnin_filter(
         shadow_enabled=shadow_enabled,
         font_size_px=font_size_px,
         offset_px=offset_px,
+        background_enabled=background_enabled,
     )
     escaped = _escape_subtitles_filter_path(path_text)
     return f"subtitles=filename='{escaped}':force_style='{force_style}'"

@@ -38,10 +38,23 @@ class ForcedBurninRequestedTests(unittest.TestCase):
 
 class BuildForceStyleArgTests(unittest.TestCase):
     def test_defaults_enable_stroke_and_shadow(self) -> None:
+        # Background box defaults off; stroke renders as a plain outline.
         style = build_force_style_arg()
-        self.assertIn("BorderStyle=3", style)
-        self.assertIn("Outline=1", style)
+        self.assertIn("BorderStyle=1", style)
+        self.assertIn("Outline=2", style)
+        self.assertNotIn("BorderStyle=3", style)
         self.assertIn("Shadow=2", style)
+
+    def test_background_enabled_uses_opaque_box(self) -> None:
+        style = build_force_style_arg(background_enabled=True)
+        self.assertIn("BorderStyle=3", style)
+        self.assertIn("BackColour=&H00000000", style)
+        self.assertIn("Outline=1", style)
+
+    def test_background_overrides_stroke_borderstyle(self) -> None:
+        style = build_force_style_arg(background_enabled=True, stroke_enabled=False)
+        self.assertIn("BorderStyle=3", style)
+        self.assertIn("BackColour=&H00000000", style)
 
     def test_stroke_disabled_removes_outline(self) -> None:
         style = build_force_style_arg(stroke_enabled=False)
