@@ -14,6 +14,7 @@ short ffmpeg extraction; no session state lives here.
 from __future__ import annotations
 
 import subprocess
+import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -253,3 +254,40 @@ def log_fields_for_session(
     if srt_name is not None:
         fields["burnin_subtitle_file"] = str(srt_name)
     return fields
+
+_FONT_TAG_PATTERN = re.compile(r"</?font\b[^>]*>", re.IGNORECASE)
+_OTHER_TAG_PATTERN = re.compile(r"</?(?![biu]>)[a-zA-Z][a-zA-Z0-9]*\b[^>]*>", re.IGNORECASE)
+
+
+def sanitize_srt_text(text: str) -> str:
+    """Strip ASS-to-SRT markup tags that override burn-in styling.
+
+    ffmpeg's ASS/SRT conversion emits tags like
+    ``<font face="Cabin" size="75">``; libass honors them and they would
+    override the ``force_style`` sizing this feature depends on. Inner text
+    is kept; italic/bold/underline markers are preserved.
+    """
+    cleaned = _FONT_TAG_PATTERN.sub("", text)
+    cleaned = _OTHER_TAG_PATTERN.sub("", cleaned)
+    return cleaned
+
+
+def sanitize_srt_file(path):
+    """Rewrite an extracted SRT in place without font/size markup.
+
+    Returns True when any line changed.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    out = []
+    changed = False
+    for line in raw.splitlines(keepends=True):
+        cleaned = sanitize_srt_text(line)
+        if cleaned != line:
+            changed = True
+        out.append(cleaned)
+    if changed:
+        path.write_text("".join(out), encoding="utf-8", newline="")
+    return changed

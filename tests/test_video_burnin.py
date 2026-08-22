@@ -9,6 +9,8 @@ from unittest.mock import patch
 
 from dropbox_browser.video_burnin import (
     SUBTITLE_BURNIN_PLAYRES_Y,
+    sanitize_srt_file,
+    sanitize_srt_text,
     build_force_style_arg,
     build_srt_extraction_command,
     build_text_subtitle_burnin_filter,
@@ -216,3 +218,42 @@ class ScaleBurninOffsetPxTests(unittest.TestCase):
 
     def test_none_passthrough(self) -> None:
         self.assertIsNone(scale_burnin_offset_px(None, 480, 1080))
+
+
+class SanitizeSrtTextTests(unittest.TestCase):
+    def test_strips_font_size_tags(self) -> None:
+        self.assertEqual(
+            sanitize_srt_text('<font face="Cabin" size="75"><b>Hi</b></font>'),
+            "<b>Hi</b>",
+        )
+
+    def test_plain_text_untouched(self) -> None:
+        self.assertEqual(sanitize_srt_text("Hello, world."), "Hello, world.")
+
+    def test_preserves_bold_italic_underline(self) -> None:
+        self.assertEqual(
+            sanitize_srt_text("<i>a</i><b>b</b><u>c</u>"),
+            "<i>a</i><b>b</b><u>c</u>",
+        )
+
+
+class SanitizeSrtFileTests(unittest.TestCase):
+    def test_rewrites_font_tags_in_place(self) -> None:
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            srt = Path(tmp) / "burnin.srt"
+            srt.write_text(
+                "1\n00:00:00,000 --> 00:00:01,000\n"
+                '<font face="Cabin" size="75"><b>Then, the culprit.</b></font>\n',
+                encoding="utf-8",
+            )
+            changed = sanitize_srt_file(srt)
+            text = srt.read_text(encoding="utf-8")
+        self.assertTrue(changed)
+        self.assertNotIn("<font", text)
+        self.assertIn("<b>Then, the culprit.</b>", text)
+
+    def test_missing_file_returns_false(self) -> None:
+        from pathlib import Path
+        self.assertFalse(sanitize_srt_file(Path("Z:/nope/missing.srt")))

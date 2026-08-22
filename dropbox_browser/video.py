@@ -2068,6 +2068,7 @@ class VideoSessionManager:
                     from .video_burnin import (
                         build_text_subtitle_burnin_filter,
                         extract_subtitle_stream_to_srt,
+                        sanitize_srt_file,
                         scale_burnin_font_size,
                         scale_burnin_offset_px,
                     )
@@ -2092,6 +2093,10 @@ class VideoSessionManager:
                         subtitle_stream_index=int(subtitle_stream_index),
                         start_time_seconds=start_time_seconds,
                     )
+                    # ASS-to-SRT conversion bakes <font size=...> markup into
+                    # cue text; libass honors it and would override the
+                    # force_style sizing, so strip it before rendering.
+                    sanitize_srt_file(srt_path)
                     extra_video_filter = build_text_subtitle_burnin_filter(
                         srt_path.name,
                         stroke_enabled=subtitle_stroke_enabled,
