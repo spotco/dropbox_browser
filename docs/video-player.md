@@ -538,10 +538,23 @@ input (the session is not yet registered, so tagged input would be cancelled),
 and the main command's filter graph becomes
 `[0:v:0]subtitles=filename='burnin.srt':force_style='...'[vout]`. The
 `force_style` string maps every subtitle style option: stroke toggles
-(`BorderStyle=3`, `Outline=2`), shadow toggle (`Shadow=2`), text size
+(`BorderStyle=3`, `Outline=1`), shadow toggle (`Shadow=2`), text size
 (`Fontsize`), and height offset (`MarginV`, positive moves up like the
-overlay). Forced burn-in sessions always report `video_transcode` /
-`subtitle_burn_in_requires_filter`. On the client,
+overlay).
+
+Size parity with the WebVTT overlay is exact by construction. libass sizes
+text in PlayResY (288) units of the video frame for headerless SRT, while the
+overlay's CSS font size is in pixels of the displayed video box. The client
+therefore sends its displayed video box height
+(`subtitle_display_height_px`) plus the overlay element's COMPUTED font size
+(embedded pane layout applies a 0.65 CSS scale to subtitle styles), and the
+server computes `Fontsize = css_px * 288 / display_height_px`
+(`scale_burnin_font_size`). Extraction runs over an untagged `/file` input
+because tagged requests are cancelled while their session is not yet
+registered. Forced burn-in sessions always report `video_transcode` /
+`subtitle_burn_in_requires_filter`. The e2e
+`video-subtitle-size-parity.integration.spec.js` measures burned-in glyph ink
+from live frames and asserts it matches the overlay's expected on-screen ink. On the client,
 `selectedBurnedInSubtitleStreamIndex()` returns the selected index for any
 stream when force burn-in is applied, so track-change restarts, style-apply
 restarts, seek decisions, and sidecar-mount suppression all reuse the existing

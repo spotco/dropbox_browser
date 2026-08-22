@@ -1191,9 +1191,38 @@ async function createCompatibilitySession(item, audioStreamIndex, startSeconds, 
       // Forced text burn-in maps the overlay size/offset onto ffmpeg
       // force_style args; bitmap burn-in sessions ignore them server-side.
       if (subtitleStyleOptions.forceBurnIn) {
+        // Burn-in Fontsize is relative to the frame; the server scales the
+        // overlay's on-screen size using the displayed video box height so
+        // burned-in text matches the WebVTT overlay's rendered size.
+        // Embedded pane layout applies a CSS scale to subtitle sizes, so use
+        // the overlay element's COMPUTED font size rather than the raw style
+        // value, and scale the offset by the same factor.
+        var videoEl = ctx.els.videoEl;
+        var displayHeight = videoEl ? Math.round(Number(videoEl.clientHeight) || 0) : 0;
+        var effectiveFontSize = 0;
+        var effectiveOffset = subtitleStyleOptions.offsetPx;
+        if (ctx.els.subtitleOverlayEl && ctx.els.subtitleOverlayEl.textContent !== undefined) {
+          var computedSize = Number(
+            parseFloat(window.getComputedStyle(ctx.els.subtitleOverlayEl).fontSize)
+          );
+          if (Number.isFinite(computedSize) && computedSize > 0
+            && subtitleStyleOptions.fontSizePx > 0) {
+            effectiveFontSize = Math.round(computedSize);
+            var factor = computedSize / subtitleStyleOptions.fontSizePx;
+            if (Number.isFinite(factor)) {
+              effectiveOffset = Math.round(subtitleStyleOptions.offsetPx * factor);
+            }
+          }
+        }
+        if (!effectiveFontSize) {
+          effectiveFontSize = subtitleStyleOptions.fontSizePx;
+        }
         body += '&force_subtitle_burn_in=1';
-        body += '&subtitle_font_size_px=' + encodeURIComponent(String(subtitleStyleOptions.fontSizePx));
-        body += '&subtitle_offset_px=' + encodeURIComponent(String(subtitleStyleOptions.offsetPx));
+        body += '&subtitle_font_size_px=' + encodeURIComponent(String(effectiveFontSize));
+        body += '&subtitle_offset_px=' + encodeURIComponent(String(effectiveOffset));
+        if (displayHeight > 0) {
+          body += '&subtitle_display_height_px=' + encodeURIComponent(String(displayHeight));
+        }
       }
     }
   }

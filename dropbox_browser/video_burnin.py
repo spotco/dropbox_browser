@@ -45,6 +45,58 @@ def _escape_subtitles_filter_path(path_text: str) -> str:
     return escaped
 
 
+# Headerless SRT files get an implicit libass script with PlayResY=288, so a
+# Fontsize value is expressed in 288ths of the video frame height. The WebVTT
+# overlay's CSS font size is expressed in CSS pixels of the displayed video
+# box. Converting between the two:
+#   Fontsize = css_font_size_px * SUBTITLE_BURNIN_PLAYRES_Y / display_height_px
+SUBTITLE_BURNIN_PLAYRES_Y = 288
+
+
+def scale_burnin_font_size(
+    font_size_px: int | None,
+    display_height_px: int | None,
+    video_height_px: int | None,
+) -> int | None:
+    """Convert the overlay CSS font size into libass Fontsize units.
+
+    ``display_height_px`` is the client's rendered video box height in CSS
+    pixels. When it is unknown, fall back to the video's own pixel height so
+    the burned-in text occupies the same fraction of the frame as
+    ``font_size_px`` pixels would of a video shown at native resolution.
+    """
+    if font_size_px is None or int(font_size_px) <= 0:
+        return None
+    reference_height = display_height_px or video_height_px
+    if not reference_height or int(reference_height) <= 0:
+        return int(font_size_px)
+    scaled = (
+        float(font_size_px)
+        * SUBTITLE_BURNIN_PLAYRES_Y
+        / float(reference_height)
+    )
+    return max(1, int(round(scaled)))
+
+
+def scale_burnin_offset_px(
+    offset_px: int | None,
+    display_height_px: int | None,
+    video_height_px: int | None,
+) -> int | None:
+    """Scale an overlay CSS pixel offset into burned-in frame pixels.
+
+    MarginV is expressed in PlayResY (288) units like Fontsize, so the same
+    conversion applies. Returns the offset clamped to >= 0; None passes
+    through so no MarginV is emitted.
+    """
+    if offset_px is None:
+        return None
+    scaled = float(offset_px) * SUBTITLE_BURNIN_PLAYRES_Y / float(
+        display_height_px or video_height_px or SUBTITLE_BURNIN_PLAYRES_Y
+    )
+    return max(0, int(round(scaled)))
+
+
 def build_force_style_arg(
     *,
     stroke_enabled: bool = True,
@@ -67,7 +119,9 @@ def build_force_style_arg(
         # heavier Outline remains visible, approximating the overlay stroke.
         parts.extend([
             "BorderStyle=3",
-            "Outline=2",
+            # Thin outline approximating the overlay's ~1.25px text-shadow
+            # stroke without visibly fattening the glyphs.
+            "Outline=1",
             "BackColour=&H00000000",
         ])
     else:

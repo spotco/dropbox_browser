@@ -8,11 +8,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dropbox_browser.video_burnin import (
+    SUBTITLE_BURNIN_PLAYRES_Y,
     build_force_style_arg,
     build_srt_extraction_command,
     build_text_subtitle_burnin_filter,
     extract_subtitle_stream_to_srt,
     forced_burnin_requested,
+    scale_burnin_font_size,
+    scale_burnin_offset_px,
 )
 
 
@@ -35,7 +38,7 @@ class BuildForceStyleArgTests(unittest.TestCase):
     def test_defaults_enable_stroke_and_shadow(self) -> None:
         style = build_force_style_arg()
         self.assertIn("BorderStyle=3", style)
-        self.assertIn("Outline=2", style)
+        self.assertIn("Outline=1", style)
         self.assertIn("Shadow=2", style)
 
     def test_stroke_disabled_removes_outline(self) -> None:
@@ -165,3 +168,51 @@ class ExtractSubtitleStreamToSrtTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScaleBurninFontSizeTests(unittest.TestCase):
+    def test_scales_by_playres_y_over_display_height(self) -> None:
+        # 28 CSS px on a 720px-tall displayed video -> 28*288/720 = 11.2 -> 11
+        self.assertEqual(
+            scale_burnin_font_size(28, 720, 1080),
+            round(28 * SUBTITLE_BURNIN_PLAYRES_Y / 720),
+        )
+
+    def test_falls_back_to_video_height_without_display_height(self) -> None:
+        # Native-resolution playback: 28 px of a 360p video -> 28*288/360 = 22.4
+        self.assertEqual(scale_burnin_font_size(28, None, 360), 22)
+
+    def test_falls_back_to_identity_when_no_heights(self) -> None:
+        self.assertEqual(scale_burnin_font_size(28, None, None), 28)
+
+    def test_zero_or_negative_size_returns_none(self) -> None:
+        self.assertIsNone(scale_burnin_font_size(0, 720, 1080))
+        self.assertIsNone(scale_burnin_font_size(None, 720, 1080))
+
+    def test_result_clamped_to_one(self) -> None:
+        # Tiny font on a huge display still yields >= 1
+        self.assertEqual(scale_burnin_font_size(1, 5000, 1080), 1)
+
+    def test_same_display_and_video_fraction_matches_overlay_fraction(self) -> None:
+        # Fraction-of-height parity: burned-in fraction (Fontsize/288) must
+        # equal overlay fraction (css_px/display_height).
+        css_px = 42.0
+        display_h = 481.0
+        fontsize = scale_burnin_font_size(int(css_px), int(display_h), 1080)
+        burnin_fraction = fontsize / SUBTITLE_BURNIN_PLAYRES_Y
+        overlay_fraction = css_px / display_h
+        self.assertLess(abs(burnin_fraction - overlay_fraction), 0.005)
+
+
+class ScaleBurninOffsetPxTests(unittest.TestCase):
+    def test_scales_like_font_size(self) -> None:
+        self.assertEqual(
+            scale_burnin_offset_px(12, 480, 1080),
+            round(12 * SUBTITLE_BURNIN_PLAYRES_Y / 480),
+        )
+
+    def test_negative_clamps_to_zero(self) -> None:
+        self.assertEqual(scale_burnin_offset_px(-5, 480, 1080), 0)
+
+    def test_none_passthrough(self) -> None:
+        self.assertIsNone(scale_burnin_offset_px(None, 480, 1080))

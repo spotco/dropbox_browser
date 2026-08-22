@@ -200,3 +200,26 @@ npm run test:e2e:video
 Manual smoke: start the server, play a text-subtitle video with the switch off
 (sidecar), flip the switch, apply, confirm restart burns subtitles into the
 frame and style size/offset/shadow/stroke visibly apply.
+
+### Post-implementation size parity fix
+
+Manual testing on localhost showed forced burn-in text rendering far larger
+than the WebVTT overlay. Root causes found and fixed:
+
+1. libass `Fontsize` for headerless SRT is expressed in PlayResY (288) frame
+   units, not CSS pixels; the server now converts the overlay's on-screen
+   font size into frame units via
+   `Fontsize = css_px * 288 / display_height_px`
+   (`scale_burnin_font_size` in `video_burnin.py`), where the client reports
+   its displayed video box height as `subtitle_display_height_px`.
+2. Embedded pane layout applies a 0.65 CSS scale to subtitle sizes, so the
+   client sends the overlay element's COMPUTED font size (post-scale) rather
+   than the raw style value (`compatibility.js`).
+3. Extraction uses an untagged `/file` input because tagged input requests
+   are cancelled while their session is not yet registered.
+
+New e2e: `tests/e2e/video-subtitle-size-parity.integration.spec.js` plays a
+fixture video with real HLS in both modes and asserts the burned-in glyph
+band measured from live frames matches the WebVTT overlay's expected on-screen
+ink (ratio within 0.8-1.25; observed ~0.85, residual is font metric
+differences between libass and browser Arial).

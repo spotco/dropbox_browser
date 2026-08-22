@@ -388,6 +388,23 @@ def audio_stream_supports_aac_copy(stream_data: dict[str, object]) -> tuple[bool
     return True, "selected_aac_stream_copy_safe"
 
 
+def _probe_video_height(probe_payload: dict[str, object] | None) -> int | None:
+    """Best-effort video frame height from probe metadata."""
+    if not isinstance(probe_payload, dict):
+        return None
+    video_streams = probe_payload.get("video_streams")
+    if not isinstance(video_streams, list) or not video_streams:
+        return None
+    first = video_streams[0]
+    if not isinstance(first, dict):
+        return None
+    try:
+        height = int(first.get("height") or 0)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return height or None
+
+
 def compatibility_video_mode_for_probe(
     probe_payload: dict[str, object] | None,
     *,
@@ -1951,6 +1968,7 @@ class VideoSessionManager:
         subtitle_shadow_enabled: bool = True,
         subtitle_font_size_px: int | None = None,
         subtitle_offset_px: int | None = None,
+        subtitle_display_height_px: int | None = None,
         force_subtitle_burn_in: bool = False,
         start_time_seconds: float = 0.0,
         force_video_transcode: bool = False,
@@ -2050,6 +2068,8 @@ class VideoSessionManager:
                     from .video_burnin import (
                         build_text_subtitle_burnin_filter,
                         extract_subtitle_stream_to_srt,
+                        scale_burnin_font_size,
+                        scale_burnin_offset_px,
                     )
 
                     # The extraction runs before this session is registered, so
@@ -2059,6 +2079,11 @@ class VideoSessionManager:
                         "path": rel_path,
                         "source": "remote",
                     })
+                    scaled_font_size = scale_burnin_font_size(
+                        subtitle_font_size_px,
+                        subtitle_display_height_px,
+                        _probe_video_height(probe_payload),
+                    )
                     srt_path = session_dir / "burnin.srt"
                     extract_subtitle_stream_to_srt(
                         ffmpeg_exe,
@@ -2071,8 +2096,12 @@ class VideoSessionManager:
                         srt_path.name,
                         stroke_enabled=subtitle_stroke_enabled,
                         shadow_enabled=subtitle_shadow_enabled,
-                        font_size_px=subtitle_font_size_px,
-                        offset_px=subtitle_offset_px,
+                        font_size_px=scaled_font_size,
+                        offset_px=scale_burnin_offset_px(
+                            subtitle_offset_px,
+                            subtitle_display_height_px,
+                            _probe_video_height(probe_payload),
+                        ),
                     )
                     burnin_mode = "text_subtitles_filter"
                     burnin_srt_name = srt_path.name
