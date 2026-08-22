@@ -555,6 +555,27 @@ def main() -> int:
         ["hevc", "opus", "opus", "hdmv_pgs_subtitle", "hdmv_pgs_subtitle"],
     )
 
+    # Styled-font ASS video: its ASS style uses a large Fontsize so the
+    # ASS-to-SRT conversion bakes <font size="48"> markup into cue text -
+    # the forced burn-in sanitizer must strip it or burned-in subtitles
+    # render at that raw size instead of the configured overlay size.
+    styled_font_output_path = videos_dir / "styled-font.mkv"
+    generate_ass_video_file(
+        styled_font_output_path,
+        english_audio_title="Styled Font English Audio",
+        japanese_audio_title="Styled Font Japanese Audio",
+        ass_subtitle_title="Styled Font Text",
+        english_frequency="540",
+        japanese_frequency="760",
+        duration_seconds="10",
+        ass_cues=[
+            ("0:00:00.40", "0:00:02.40", "STYLED-FONT-SUBTITLE-ONE"),
+            ("0:00:03.00", "0:00:05.00", "STYLED-FONT-SUBTITLE-TWO"),
+            ("0:00:05.50", "0:00:08.00", "STYLED-FONT-SUBTITLE-THREE-LONG"),
+        ],
+    )
+    validate_generated_file(styled_font_output_path, ["h264", "aac", "aac", "ass"])
+
     ass_output_path = videos_dir / "ass-fruits.mkv"
     generate_ass_video_file(
         ass_output_path,
@@ -591,6 +612,12 @@ def main() -> int:
                 }
                 for spec in video_specs
             ],
+            {
+                "path": "Videos/styled-font.mkv",
+                "type": "file",
+                "file_path": str(styled_font_output_path.resolve()),
+                "mod_time": "2024-01-01T12:00:01Z",
+            },
             {
                 "path": "Videos/ass-fruits.mkv",
                 "type": "file",

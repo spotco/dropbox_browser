@@ -1199,6 +1199,12 @@ async function createCompatibilitySession(item, audioStreamIndex, startSeconds, 
         // value, and scale the offset by the same factor.
         var videoEl = ctx.els.videoEl;
         var displayHeight = videoEl ? Math.round(Number(videoEl.clientHeight) || 0) : 0;
+        if (!displayHeight && ctx.els.playbackStageEl) {
+          // Before the first frame attaches, the video box is zero-sized;
+          // the stage shares the video's displayed area (object-fit contain
+          // with matching aspect), so its height is the right reference.
+          displayHeight = Math.round(Number(ctx.els.playbackStageEl.clientHeight) || 0);
+        }
         var effectiveFontSize = 0;
         var effectiveOffset = subtitleStyleOptions.offsetPx;
         if (ctx.els.subtitleOverlayEl && ctx.els.subtitleOverlayEl.textContent !== undefined) {

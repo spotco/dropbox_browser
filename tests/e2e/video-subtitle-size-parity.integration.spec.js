@@ -342,3 +342,77 @@ test("forced burn-in subtitle size matches the WebVTT overlay size on screen", a
     .toBeGreaterThan(0.8);
   expect(ratio).toBeLessThan(1.25);
 });
+
+
+test("styled-font ASS burn-in matches overlay size (sanitizer strips font markup)", async ({ page }) => {
+  test.setTimeout(240000);
+
+  const clearResponse = await page.request.post("/video/endpoints/cache/clear");
+  expect(clearResponse.ok()).toBe(true);
+
+  await page.goto("/?path=Videos");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await page.locator("#bottom-pane-mode").selectOption("video-player");
+  await expect(page.locator("#video-player-pane")).toBeVisible();
+  await waitForCompatibilityReady(page);
+  const t0 = Date.now();
+  mark(t0, "ready-styled");
+
+  const sessionBodies = [];
+  page.on("request", (request) => {
+    if (request.method() !== "POST") return;
+    if (new URL(request.url()).pathname !== "/video/endpoints/session") return;
+    sessionBodies.push(String(request.postData() || ""));
+  });
+
+  // Enable force burn-in before playing so the styled ASS track burns in.
+  const panel = page.locator("#video-track-panel");
+  await panel.waitFor({ state: "visible", timeout: 10000 });
+  if (!(await panel.evaluate((el) => el.open))) {
+    await panel.locator("summary").click();
+  }
+  await page.locator("#video-subtitle-force-burnin").check();
+  await page.locator("#video-subtitle-style-apply").click();
+
+  // Play with force burn-in on; the styled ASS track converts to SRT with
+  // <font size="48"> tags that must be sanitized away.
+  await playLibraryFile(page, "styled-font.mkv");
+  await waitForVisibleVideo(page);
+  mark(t0, "playing-styled");
+  await captureInCue(page, t0, "styled-burnin");
+
+  // The client must report the displayed video box height.
+  const forcedBody = sessionBodies.find((body) => (
+    body.includes("path=Videos%2Fstyled-font.mkv") && body.includes("force_subtitle_burn_in=1")
+  )) || "";
+  expect(forcedBody).toContain("subtitle_display_height_px=");
+
+  const burninMetric = await measureBurnInFrameFraction(page);
+  mark(t0, `burnin styled measured ${JSON.stringify(burninMetric)}`);
+  try {
+    const dataUrl = await page.evaluate(() => window.__sizeParityFrameDataUrl || null);
+    if (dataUrl) {
+      require("fs").writeFileSync(
+        path.join(__dirname, "..", "..", ".dropbox-browser-temp", "size-parity-styled-frame.png"),
+        Buffer.from(String(dataUrl).split(",")[1], "base64"),
+      );
+    }
+  } catch (_dumpError) {}
+  expect(burninMetric.fraction).toBeGreaterThan(0.01);
+
+  const overlayFraction = await expectedOverlayFraction(page);
+  mark(t0, `overlay expected ${overlayFraction.toFixed(4)}`);
+
+  // Without the sanitizer the baked size="48" makes burned text ~16.7% of
+  // frame height vs the overlay's ~4.5% - a ratio near 3.7. With it the
+  // sizes match within font-metric tolerance.
+  const ratio = burninMetric.fraction / overlayFraction;
+  fs.writeFileSync(METRICS_FILE + ".styled", JSON.stringify({
+    overlayExpectedFraction: overlayFraction,
+    burninMeasured: burninMetric,
+    ratio,
+  }), "utf8");
+  expect(ratio, `burnin=${JSON.stringify(burninMetric)} overlayExpected=${overlayFraction}`)
+    .toBeGreaterThan(0.75);
+  expect(ratio).toBeLessThan(1.33);
+});
