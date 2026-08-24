@@ -565,8 +565,10 @@ server computes `Fontsize = css_px * 288 / display_height_px`
 because tagged requests are cancelled while their session is not yet
 registered. Forced burn-in sessions always report `video_transcode` /
 `subtitle_burn_in_requires_filter`. The e2e
-`video-subtitle-size-parity.integration.spec.js` measures burned-in glyph ink
-from live frames and asserts it matches the overlay's expected on-screen ink. On the client,
+`video-subtitle-size-parity.integration.spec.js` samples several decoded frames
+inside the active cue before measuring burned-in glyph ink; this avoids making
+the result depend on one HLS decode tick and allows the small cross-platform
+font-rasterization difference. On the client,
 `selectedBurnedInSubtitleStreamIndex()` returns the selected index for any
 stream when force burn-in is applied, so track-change restarts, style-apply
 restarts, seek decisions, and sidecar-mount suppression all reuse the existing

@@ -2,9 +2,9 @@
 """Run Dropbox Browser E2E specs locally and, when configured, on remotes.
 
 Normal operation is automatic: reachable compatible Windows, Linux, and macOS Intel
-workers receive scheduled specs, while the current Windows machine remains a
-local lane. Before a remote run, workers which are dirty or not at the local
-``HEAD`` are reset to that commit. The normal path fetches from ``origin``;
+workers receive scheduled specs, while the current machine remains a local lane.
+Before a remote run, workers which are dirty, on another branch, or not at the
+local ``HEAD`` are reset to the local branch and commit. The normal path fetches from ``origin``;
 when that is unavailable the runner transfers a Git bundle directly over SSH.
 Both paths keep the worker checkout clean before tests begin unless
 ``--include-worktree`` is set. ``--publish-source local`` never talks to
@@ -414,6 +414,7 @@ def check_remote(
     worker: RemoteWorker,
     *,
     require_clean: bool = True,
+    expected_branch: str | None = None,
 ) -> tuple[bool, str]:
     target = worker.target(shared.ssh)
     repo_path = remote_shell_path(worker, worker.repo)
@@ -437,8 +438,9 @@ def check_remote(
         if result.returncode != 0:
             return False, (result.stderr or result.stdout or "branch check failed").strip()[-500:]
         branch = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
-        if worker.branch and worker.branch not in {"auto", branch}:
-            return False, f"checked out branch {branch or '(detached)'!r}, expected {worker.branch!r}"
+        branch_target = expected_branch or worker.branch
+        if branch_target and branch_target not in {"auto", branch}:
+            return False, f"checked out branch {branch or '(detached)'!r}, expected {branch_target!r}"
         command_check = (
             f"{_path_export(worker.path_prefix)}"
             "command -v npx >/dev/null 2>&1 || command -v npx.cmd >/dev/null 2>&1"
@@ -460,7 +462,15 @@ def check_remote(
 
 
 def inspect_remote_git(shared: Any, ssh: Any, worker: RemoteWorker) -> Any:
-    """Return HEAD/cleanliness without rejecting a stale worker checkout."""
+    """Return HEAD, branch, and cleanliness without rejecting stale workers."""
+
+    quote = shared.ssh.shell_quote
+    git_q = quote(worker.git)
+    repo_q = quote(remote_shell_path(worker, worker.repo))
+    branch_check = (
+        f"printf 'BRANCH='; {git_q} -C {repo_q} symbolic-ref --short -q HEAD || "
+        f"{git_q} -C {repo_q} rev-parse --abbrev-ref HEAD; printf '\\n'"
+    )
 
     return shared.git_ops.preflight(
         ssh,
@@ -469,14 +479,33 @@ def inspect_remote_git(shared: Any, ssh: Any, worker: RemoteWorker) -> Any:
         git=worker.git,
         expected_head=None,
         require_clean=False,
+        extra_checks=branch_check,
         timeout=45,
     )
 
 
-def worker_needs_publish(report: Any, expected_head: str) -> bool:
+def remote_report_branch(report: Any) -> str:
+    branch = str(getattr(report, "branch", "") or "").strip()
+    if branch:
+        return branch
+    raw = getattr(report, "raw", {})
+    if isinstance(raw, dict):
+        return str(raw.get("BRANCH", "") or "").strip()
+    return ""
+
+
+def worker_needs_publish(
+    report: Any,
+    expected_head: str,
+    expected_branch: str | None = None,
+) -> bool:
     return (
         not bool(getattr(report, "clean", False))
         or str(getattr(report, "head", "") or "") != expected_head
+        or (
+            expected_branch is not None
+            and remote_report_branch(report) != expected_branch
+        )
     )
 
 
@@ -488,6 +517,19 @@ def _git_result(args: list[str]) -> subprocess.CompletedProcess[str]:
         text=True,
         check=False,
     )
+
+
+def local_branch_name() -> str:
+    """Return the local branch that remote workers must check out."""
+
+    result = _git_result(["git", "symbolic-ref", "--quiet", "--short", "HEAD"])
+    branch = result.stdout.strip()
+    if result.returncode != 0 or not branch:
+        raise RunnerError(
+            "remote E2E publication requires the local checkout to be on a branch; "
+            "detached HEAD cannot be synchronized safely"
+        )
+    return branch
 
 
 def origin_has_commit(commit: str, *, branch: str) -> bool:
@@ -606,29 +648,25 @@ def create_sync_bundle(commit: str, prerequisite_heads: Iterable[str]) -> Path:
     return bundle
 
 
-def _worker_branch(worker: RemoteWorker) -> str:
-    return worker.branch if worker.branch and worker.branch != "auto" else "master"
-
-
 def publish_worker_to_head(
     shared: Any,
     ssh: Any,
     worker: RemoteWorker,
     expected_head: str,
     *,
+    target_branch: str,
     bundle: Path | None,
     worktree_patch: Path | None = None,
 ) -> None:
-    """Reset one worker to ``expected_head`` through origin or a direct bundle."""
+    """Reset one worker to the local branch and ``expected_head``."""
 
     quote = shared.ssh.shell_quote
     target = worker.target(shared.ssh)
     repo = remote_shell_path(worker, worker.repo)
-    branch = _worker_branch(worker)
     git_q = quote(worker.git)
     repo_q = quote(repo)
     head_q = quote(expected_head)
-    branch_q = quote(branch)
+    branch_q = quote(target_branch)
     remote_bundle = ""
     remote_patch = ""
     if bundle is not None:
@@ -670,7 +708,7 @@ def publish_worker_to_head(
             f"{git_q} -C {repo_q} stash push -u -m dropbox-browser-runner-preserve-before-sync >/dev/null 2>&1 || true",
             fetch,
             f"{git_q} -C {repo_q} rev-parse --verify {head_q}^{{commit}} >/dev/null",
-            f"{git_q} -C {repo_q} checkout {branch_q}",
+            f"{git_q} -C {repo_q} checkout -B {branch_q} {head_q}",
             f"{git_q} -C {repo_q} reset --hard {head_q}",
             f"{git_q} -C {repo_q} clean -fd",
             *apply_lines,
@@ -699,6 +737,7 @@ def prepare_workers_for_run(
     ssh: Any,
     workers: list[RemoteWorker],
     *,
+    target_branch: str,
     expected_head: str,
     publish_mode: str,
     force_sync_clean: bool,
@@ -724,7 +763,7 @@ def prepare_workers_for_run(
         if force_sync_clean
         or mode == "always"
         or worktree_patch is not None
-        or worker_needs_publish(report, expected_head)
+        or worker_needs_publish(report, expected_head, target_branch)
     ]
     if needing and mode == "never" and not force_sync_clean:
         raise RunnerError(
@@ -732,17 +771,13 @@ def prepare_workers_for_run(
             + ", ".join(worker.label for worker in needing)
         )
     if needing:
-        branches = {_worker_branch(worker) for worker in needing}
-        if len(branches) != 1:
-            raise RunnerError("workers needing publish must use one configured branch")
-        branch = branches.pop()
         bundle: Path | None = None
-        origin_contains = origin_has_commit(expected_head, branch=branch)
+        origin_contains = origin_has_commit(expected_head, branch=target_branch)
         transport = resolve_publish_transport(publish_source, origin_contains_head=origin_contains)
         if transport == "origin":
             try:
                 if publish_source.strip().lower() == "origin" and not origin_contains:
-                    ensure_origin_has_head(expected_head, branch=branch)
+                    ensure_origin_has_head(expected_head, branch=target_branch)
             except RunnerError as exc:
                 bundle = create_sync_bundle(
                     expected_head,
@@ -765,10 +800,19 @@ def prepare_workers_for_run(
                 ssh,
                 worker,
                 expected_head,
+                target_branch=target_branch,
                 bundle=bundle,
                 worktree_patch=worktree_patch,
             )
     for worker in workers:
+        quote = shared.ssh.shell_quote
+        git_q = quote(worker.git)
+        repo_q = quote(remote_shell_path(worker, worker.repo))
+        branch_check = (
+            f"branch=$({git_q} -C {repo_q} symbolic-ref --short -q HEAD || "
+            f"{git_q} -C {repo_q} rev-parse --abbrev-ref HEAD); "
+            f"test \"$branch\" = {quote(target_branch)}"
+        )
         report = shared.git_ops.preflight(
             ssh,
             worker.target(shared.ssh),
@@ -776,10 +820,14 @@ def prepare_workers_for_run(
             git=worker.git,
             expected_head=expected_head,
             require_clean=worktree_patch is None,
+            extra_checks=branch_check,
             timeout=45,
         )
         cleanliness = "clean" if report.clean else "with local worktree"
-        print(f"preflight {worker.label}: HEAD {report.head[:12]} {cleanliness}", flush=True)
+        print(
+            f"preflight {worker.label}: {target_branch}@{report.head[:12]} {cleanliness}",
+            flush=True,
+        )
 
 
 def coordination_owner(settings: dict[str, Any], args: argparse.Namespace) -> str:
@@ -1056,12 +1104,14 @@ def run(args: argparse.Namespace) -> int:
     expected_head = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True, check=True
     ).stdout.strip()
+    expected_branch = local_branch_name()
     if ssh is not None and coordination_leases and not args.dry_run:
         try:
             prepare_workers_for_run(
                 shared,
                 ssh,
                 workers,
+                target_branch=expected_branch,
                 expected_head=expected_head,
                 publish_mode=args.publish_workers,
                 force_sync_clean=args.sync_clean,
@@ -1085,6 +1135,7 @@ def run(args: argparse.Namespace) -> int:
                 ssh,
                 worker,
                 require_clean=not args.include_worktree,
+                expected_branch=expected_branch,
             )
             if ready:
                 ready_workers.append(worker)

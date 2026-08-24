@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import shlex
 import tempfile
 import unittest
 from types import SimpleNamespace
 from pathlib import Path
+from unittest import mock
 
 from tools import network_workers_bootstrap as bootstrap
 from tools import run_distributed_e2e as runner
@@ -190,6 +192,142 @@ class DistributedE2ETests(unittest.TestCase):
         self.assertFalse(runner.worker_needs_publish(SimpleNamespace(head=expected, clean=True), expected))
         self.assertTrue(runner.worker_needs_publish(SimpleNamespace(head="b" * 40, clean=True), expected))
         self.assertTrue(runner.worker_needs_publish(SimpleNamespace(head=expected, clean=False), expected))
+        self.assertTrue(
+            runner.worker_needs_publish(
+                SimpleNamespace(head=expected, clean=True, raw={"BRANCH": "osx-intel"}),
+                expected,
+                "master",
+            )
+        )
+        self.assertFalse(
+            runner.worker_needs_publish(
+                SimpleNamespace(head=expected, clean=True, raw={"BRANCH": "master"}),
+                expected,
+                "master",
+            )
+        )
+
+    def test_publish_uses_one_target_branch_even_when_worker_config_differs(self) -> None:
+        expected = "a" * 40
+        worker = runner.RemoteWorker(
+            id="worker",
+            nickname="worker",
+            label="Worker",
+            host="worker.example",
+            user="spotco",
+            repo="/home/spotco/dev/dropbox_browser",
+            git="git",
+            path_prefix="",
+            platform="linux",
+            remote_os="Linux",
+            branch="osx-intel",
+            schedule_weight=1.0,
+        )
+
+        class FakeSsh:
+            def __init__(self) -> None:
+                self.commands: list[str] = []
+
+            def run(self, target, command, **kwargs):  # noqa: ANN001
+                self.commands.append(command)
+                return SimpleNamespace(returncode=0, stdout=f"PUBLISHED_HEAD={expected}\n", stderr="")
+
+        ssh = FakeSsh()
+        shared = SimpleNamespace(
+            ssh=SimpleNamespace(
+                shell_quote=shlex.quote,
+                SshTarget=lambda **kwargs: SimpleNamespace(**kwargs),
+            )
+        )
+
+        runner.publish_worker_to_head(
+            shared,
+            ssh,
+            worker,
+            expected,
+            target_branch="master",
+            bundle=None,
+        )
+
+        self.assertIn("checkout -B master", ssh.commands[0])
+        self.assertNotIn("checkout osx-intel", ssh.commands[0])
+
+    def test_prepare_workers_accepts_mixed_configured_branches_and_forwards_worktree(self) -> None:
+        expected = "a" * 40
+        workers = [
+            runner.RemoteWorker(
+                id="mac",
+                nickname="mac",
+                label="Mac",
+                host="mac.example",
+                user="spotco",
+                repo="/home/spotco/dev/dropbox_browser",
+                git="git",
+                path_prefix="",
+                platform="linux",
+                remote_os="Linux",
+                branch="osx-intel",
+                schedule_weight=1.0,
+            ),
+            runner.RemoteWorker(
+                id="linux",
+                nickname="linux",
+                label="Linux",
+                host="linux.example",
+                user="spotco",
+                repo="/home/spotco/dev/dropbox_browser",
+                git="git",
+                path_prefix="",
+                platform="linux",
+                remote_os="Linux",
+                branch="master",
+                schedule_weight=1.0,
+            ),
+        ]
+        reports = {
+            "mac": SimpleNamespace(head="b" * 40, clean=True, raw={"BRANCH": "osx-intel"}),
+            "linux": SimpleNamespace(head=expected, clean=True, raw={"BRANCH": "master"}),
+        }
+        published: list[dict[str, object]] = []
+        shared = SimpleNamespace(
+            ssh=SimpleNamespace(
+                shell_quote=shlex.quote,
+                SshTarget=lambda **kwargs: SimpleNamespace(**kwargs),
+            ),
+            git_ops=SimpleNamespace(
+                preflight=lambda *args, **kwargs: SimpleNamespace(
+                    head=expected,
+                    clean=False,
+                )
+            ),
+        )
+
+        def capture_publish(*args, **kwargs):  # noqa: ANN001
+            published.append(kwargs)
+
+        with tempfile.NamedTemporaryFile() as patch_file:
+            fake_patch = Path(patch_file.name)
+            with (
+                mock.patch.object(runner, "inspect_remote_git", side_effect=lambda _shared, _ssh, worker: reports[worker.id]),
+                mock.patch.object(runner, "local_worktree_is_dirty", return_value=True),
+                mock.patch.object(runner, "create_local_worktree_patch", return_value=fake_patch),
+                mock.patch.object(runner, "origin_has_commit", return_value=True),
+                mock.patch.object(runner, "publish_worker_to_head", side_effect=capture_publish),
+            ):
+                runner.prepare_workers_for_run(
+                    shared,
+                    SimpleNamespace(),
+                    workers,
+                    target_branch="master",
+                    expected_head=expected,
+                    publish_mode="auto",
+                    force_sync_clean=False,
+                    include_worktree=True,
+                )
+
+        self.assertEqual(len(published), 2)
+        self.assertTrue(all(item["target_branch"] == "master" for item in published))
+        self.assertTrue(all(item["worktree_patch"] == fake_patch for item in published))
 
     def test_publish_arguments_default_to_auto(self) -> None:
         args = runner.parse_args([])
