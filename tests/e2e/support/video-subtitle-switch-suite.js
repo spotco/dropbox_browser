@@ -1266,8 +1266,20 @@ async function waitForScrubberReady(page) {
     .poll(async () => page.evaluate(() => {
       const slider = document.getElementById("video-progress-slider");
       const video = document.getElementById("video-player-media");
-      return Boolean(slider && video && !slider.disabled && Number(slider.max) > 0);
-    }), { timeout: 15000 })
+      const duration = video ? Number(video.duration) : Number.NaN;
+      const sliderMax = slider ? Number(slider.max) : Number.NaN;
+      return Boolean(
+        slider
+        && video
+        && !slider.disabled
+        && Number.isFinite(sliderMax)
+        && sliderMax > 0
+        // Unknown-duration playback uses 100 as a percent placeholder.
+        // A non-placeholder max means probe metadata supplied an absolute
+        // duration even if the media element has not reported one yet.
+        && ((Number.isFinite(duration) && duration > 0) || sliderMax !== 100)
+      );
+    }), { timeout: 30000 })
     .toBe(true);
 }
 

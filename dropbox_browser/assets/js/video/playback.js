@@ -6,7 +6,7 @@ function exitExpandedLayoutWhenPlaybackIsUnavailable() {
   }
 }
 
-function resetPlaybackSurface() {
+function resetPlaybackSurface(preservePendingProgress) {
   if (!ctx.els.videoEl) return;
   exitExpandedLayoutWhenPlaybackIsUnavailable();
   ctx.clearCompatibilityRecoveryTimer();
@@ -24,6 +24,7 @@ function resetPlaybackSurface() {
   ctx.state.compatibilitySessionAudioModeReason = '';
   ctx.state.requestedSeekSeconds = null;
   ctx.state.seekRestartInProgress = false;
+  if (!preservePendingProgress) ctx.state.pendingProgressPercent = null;
   ctx.state.pendingSubtitleTrackChange = false;
   ctx.state.compatibilitySessionProgressPendingImmediate = false;
   ctx.state.compatibilityProgressBurstUntilMs = 0;
@@ -31,7 +32,7 @@ function resetPlaybackSurface() {
 }
 
 function clearVideoSource() {
-  resetPlaybackSurface();
+  resetPlaybackSurface(true);
 }
 
 var SUBTITLE_PREVIEW_MAX_CHARS = 120;

@@ -26,6 +26,7 @@ import json
 import threading
 import time
 import traceback
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -389,8 +390,8 @@ class FolderCacheManager:
             now=time.time(),
         )
 
-    def _write_cache_record(self, remote_path: str, data: dict) -> None:
-        write_json_atomic(self._cache_path(remote_path), data)
+    def _write_cache_record(self, remote_path: str, data: dict, target_path: Path | None = None) -> None:
+        write_json_atomic(target_path or self._cache_path(remote_path), data)
 
     def _write_cache(self, remote_path: str, complete: bool) -> None:
         """Flush one cache record to disk immediately."""
@@ -442,6 +443,10 @@ class FolderCacheManager:
                     for remote_path, (complete, epoch) in pending.items()
                 ]
             for remote_path, data, epoch in snapshots:
+                target_path = self._cache_path(remote_path)
+                temporary_path = target_path.with_name(
+                    f".{target_path.name}.{epoch}.{uuid.uuid4().hex}.tmp"
+                )
                 with self._lock:
                     if self._cache_write_epoch.get(remote_path, 0) != epoch:
                         self._trace_locked(
@@ -451,21 +456,35 @@ class FolderCacheManager:
                             current_epoch=self._cache_write_epoch.get(remote_path, 0),
                         )
                         continue
-                self._write_cache_record(remote_path, data)
-                with self._lock:
-                    if self._cache_write_epoch.get(remote_path, 0) != epoch:
-                        # Lost the race between the pre-write check and the
-                        # disk write. Force a fresh snapshot of current state.
-                        self._mark_cache_dirty_locked(
-                            remote_path,
-                            self._is_disk_complete_locked(remote_path),
-                        )
-                        self._trace_locked(
-                            "cache_write_repaired_stale",
-                            remote_path,
-                            write_epoch=epoch,
-                            current_epoch=self._cache_write_epoch.get(remote_path, 0),
-                        )
+                try:
+                    # Write the snapshot to a private path first.  A newer
+                    # worker can finish while this I/O is in progress; the
+                    # stale snapshot must never replace the newer final file.
+                    self._write_cache_record(remote_path, data, temporary_path)
+                    with self._lock:
+                        current_epoch = self._cache_write_epoch.get(remote_path, 0)
+                        if current_epoch != epoch:
+                            self._mark_cache_dirty_locked(
+                                remote_path,
+                                self._is_disk_complete_locked(remote_path),
+                            )
+                            self._trace_locked(
+                                "cache_write_skipped_stale",
+                                remote_path,
+                                write_epoch=epoch,
+                                current_epoch=current_epoch,
+                            )
+                            continue
+                        try:
+                            temporary_path.replace(target_path)
+                        except FileNotFoundError:
+                            # Cache state is disposable during teardown.
+                            pass
+                finally:
+                    try:
+                        temporary_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
 
     def prime_direct_listing(self, remote_path: str, items: list[dict], page_time: float | None = None) -> None:
         """Seed direct child metadata from a foreground listing.

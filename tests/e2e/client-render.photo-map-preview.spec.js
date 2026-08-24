@@ -1,7 +1,8 @@
 const { test, expect } = require("@playwright/test");
 
-process.env.PLAYWRIGHT_PORT = "8028";
-test.use({baseURL: "http://127.0.0.1:8028"});
+const workerPortOffset = Number(process.env.DROPBOX_BROWSER_E2E_LANE_INDEX || "0") * 100;
+process.env.PLAYWRIGHT_PORT = String(8028 + workerPortOffset);
+test.use({baseURL: `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT}`});
 // Preview-gate and map-layout checks need headroom beyond the global 10s
 // default when Leaflet/full-window layout is still settling.
 test.describe.configure({timeout: 30000});

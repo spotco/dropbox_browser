@@ -183,6 +183,10 @@ def _save_state(state: FakeRemoteState) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(add_help=False)
+    # Rclone places global options before the subcommand.  The browser always
+    # supplies --config, so accept it even though this fake backend does not
+    # need to read the config file.
+    parser.add_argument("--config")
     parser.add_argument("command")
     parser.add_argument("rest", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)

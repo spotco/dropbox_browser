@@ -12,6 +12,17 @@ function libraryConfig(ctx) {
   return (ctx && ctx.mediaLibraryConfig) || {};
 }
 
+function readCurrentFolderPath(ctx, state) {
+  if (ctx && typeof ctx.currentFolderPath === 'function') {
+    var contextPath = ctx.currentFolderPath();
+    if (typeof contextPath === 'string') return contextPath;
+  }
+  if (typeof document !== 'undefined' && document.body && document.body.dataset) {
+    return document.body.dataset.currentFolderPath || '';
+  }
+  return state.currentFolder || '';
+}
+
 export function initLibrary(ctx) {
   var els = ctx.els;
   var state = ctx.state;
@@ -641,7 +652,16 @@ export function initLibrary(ctx) {
   updateSortButtons();
 
   els.loadButton.addEventListener('click', function () {
-    state.libraryRoot = state.currentFolder;
+    // The browse client and media modules load independently. A folder
+    // navigation event can occur before this module registers its listener,
+    // so read the browse shell's current path when the user starts a load.
+    var currentFolder = readCurrentFolderPath(ctx, state);
+    if (currentFolder !== state.currentFolder) {
+      if (typeof ctx.updateCurrentFolder === 'function') ctx.updateCurrentFolder(currentFolder);
+      else state.currentFolder = currentFolder;
+      resetLibraryForCurrentFolder();
+    }
+    state.libraryRoot = currentFolder;
     state.libraryRequested = true;
     state.librarySnapshot = null;
     state.libraryPollSequence = 0;

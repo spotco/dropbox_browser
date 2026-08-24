@@ -3,6 +3,7 @@ const { spawn } = require("node:child_process");
 const { resolvePython } = require("./resolve_python");
 
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
+const INTEGRATION_SERVER_STARTUP_TIMEOUT_MS = 120000;
 
 function resolvePort() {
   return String(process.env.PLAYWRIGHT_PORT || "8011");
@@ -71,7 +72,10 @@ async function startIntegrationServer({ port: requestedPort, fixturePath: reques
   });
 
   await Promise.race([
-    waitForServer(`${baseURL}/__integration/status`, 30000),
+    waitForServer(
+      `${baseURL}/__integration/status`,
+      INTEGRATION_SERVER_STARTUP_TIMEOUT_MS,
+    ),
     exitPromise.then(({ code, signal }) => {
       throw new Error(`Integration server exited before becoming ready (code=${code}, signal=${signal})`);
     }),

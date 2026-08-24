@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import threading
 import time
 from pathlib import Path
@@ -76,8 +77,12 @@ class ListingCacheManager:
 
     def set(self, remote_path: str, items: list[dict]) -> None:
         """Write items to cache."""
-        data = {"remote_path": remote_path, "items": items, "cached_at": time.time()}
         with self._lock:
+            cached_at = time.time()
+            invalidated_at = self._tree_invalidated_at_locked(remote_path)
+            if invalidated_at is not None and cached_at <= invalidated_at:
+                cached_at = math.nextafter(invalidated_at, math.inf)
+            data = {"remote_path": remote_path, "items": items, "cached_at": cached_at}
             write_json_atomic(self._cache_path(remote_path), data)
 
     def invalidate(self, remote_path: str) -> None:
@@ -102,11 +107,14 @@ class ListingCacheManager:
 
     def _tree_invalidated_at(self, remote_path: str) -> float | None:
         with self._lock:
-            invalidated_at: float | None = None
-            for root, cutoff in self._tree_invalidations.items():
-                if _same_or_child_path(remote_path, root):
-                    invalidated_at = cutoff if invalidated_at is None else max(invalidated_at, cutoff)
-            return invalidated_at
+            return self._tree_invalidated_at_locked(remote_path)
+
+    def _tree_invalidated_at_locked(self, remote_path: str) -> float | None:
+        invalidated_at: float | None = None
+        for root, cutoff in self._tree_invalidations.items():
+            if _same_or_child_path(remote_path, root):
+                invalidated_at = cutoff if invalidated_at is None else max(invalidated_at, cutoff)
+        return invalidated_at
 
     def _start_tree_cleanup(self, remote_path: str, invalidated_at: float) -> None:
         thread = threading.Thread(
@@ -118,19 +126,23 @@ class ListingCacheManager:
         thread.start()
 
     def _cleanup_tree(self, remote_path: str, invalidated_at: float) -> None:
-        for cache_file in list(CACHE_DIR.glob("*.json")):
-            try:
-                data = json.loads(cache_file.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            cached_path = data.get("remote_path")
-            cached_at = data.get("cached_at", 0)
-            if (
-                isinstance(cached_path, str)
-                and _same_or_child_path(cached_path, remote_path)
-                and cached_at <= invalidated_at
-            ):
+        # Hold the same lock as set() while inspecting and deleting entries.
+        # Otherwise cleanup can read an old record, set() can atomically write a
+        # fresh record, and cleanup can then unlink that fresh record by path.
+        with self._lock:
+            for cache_file in list(CACHE_DIR.glob("*.json")):
                 try:
-                    cache_file.unlink(missing_ok=True)
+                    data = json.loads(cache_file.read_text(encoding="utf-8"))
                 except Exception:
-                    pass
+                    continue
+                cached_path = data.get("remote_path")
+                cached_at = data.get("cached_at", 0)
+                if (
+                    isinstance(cached_path, str)
+                    and _same_or_child_path(cached_path, remote_path)
+                    and cached_at <= invalidated_at
+                ):
+                    try:
+                        cache_file.unlink(missing_ok=True)
+                    except Exception:
+                        pass

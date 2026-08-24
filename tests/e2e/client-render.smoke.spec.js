@@ -1,7 +1,8 @@
 const { test, expect } = require("@playwright/test");
 
-process.env.PLAYWRIGHT_PORT = "8022";
-const clientRenderBaseURL = "http://127.0.0.1:8022";
+const workerPortOffset = Number(process.env.DROPBOX_BROWSER_E2E_LANE_INDEX || "0") * 100;
+process.env.PLAYWRIGHT_PORT = String(8022 + workerPortOffset);
+const clientRenderBaseURL = `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT}`;
 test.use({ baseURL: clientRenderBaseURL });
 // Shared default is 10s; several navigations need more headroom after long suites.
 test.describe.configure({timeout: 30000});

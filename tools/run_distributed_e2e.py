@@ -46,6 +46,7 @@ REPO = Path(__file__).resolve().parents[1]
 E2E_DIR = REPO / "tests" / "e2e"
 TIMING_PATH = REPO / "Temp" / "remote-e2e" / "spec-timing.json"
 DEFAULT_LOCAL_WEIGHT = 1.0
+DEFAULT_LOCAL_LANES = 1
 DEFAULT_POLL_SECONDS = 2.0
 SUPPORTED_PLATFORMS = frozenset({"windows", "linux", "macos-intel"})
 
@@ -292,15 +293,30 @@ def save_timings(values: dict[str, float]) -> None:
     TIMING_PATH.write_text(json.dumps(dict(sorted(values.items())), indent=2) + "\n", encoding="utf-8")
 
 
-def choose_assignments(shared: Any, specs: list[Path], workers: list[RemoteWorker], *, local_enabled: bool) -> list[Assignment]:
-    if not workers and local_enabled:
-        return [Assignment("local", tuple(specs), "local")]
+def choose_assignments(
+    shared: Any,
+    specs: list[Path],
+    workers: list[RemoteWorker],
+    *,
+    local_enabled: bool,
+    local_weight: float = DEFAULT_LOCAL_WEIGHT,
+    local_lanes: int = DEFAULT_LOCAL_LANES,
+) -> list[Assignment]:
     if not workers and not local_enabled:
         fail("remote mode has no compatible workers")
 
     bins: list[Any] = []
     if local_enabled:
-        bins.append(shared.schedule.LaneBin("local", weight=DEFAULT_LOCAL_WEIGHT, execution="local", label="local"))
+        for index in range(max(1, int(local_lanes))):
+            lane_id = "local" if local_lanes == 1 else f"local-{index + 1}"
+            bins.append(
+                shared.schedule.LaneBin(
+                    lane_id,
+                    weight=max(0.01, float(local_weight)),
+                    execution="local",
+                    label="local" if local_lanes == 1 else f"local lane {index + 1}",
+                )
+            )
     for worker in workers:
         bins.append(shared.schedule.LaneBin(worker.id, weight=worker.schedule_weight, execution="remote", label=worker.label))
     timings = load_timings()
@@ -388,7 +404,11 @@ def _npx_command() -> str:
     return shutil.which("npx.cmd") or shutil.which("npx") or ("npx.cmd" if os.name == "nt" else "npx")
 
 
-def run_local_specs(specs: tuple[Path, ...], output_dir: Path) -> tuple[bool, float]:
+def run_local_specs(
+    specs: tuple[Path, ...],
+    output_dir: Path,
+    worker_index: int = 0,
+) -> tuple[bool, float]:
     output_dir.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
     passed = True
@@ -398,7 +418,11 @@ def run_local_specs(specs: tuple[Path, ...], output_dir: Path) -> tuple[bool, fl
             result = subprocess.run(
                 [_npx_command(), "playwright", "test", relative_spec(spec), "--reporter=line"],
                 cwd=REPO,
-                env={**os.environ, "DROPBOX_BROWSER_E2E_DISTRIBUTED": "1"},
+                env={
+                    **os.environ,
+                    "DROPBOX_BROWSER_E2E_DISTRIBUTED": "1",
+                    "DROPBOX_BROWSER_E2E_LANE_INDEX": str(max(0, int(worker_index))),
+                },
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 check=False,
@@ -846,6 +870,8 @@ def claim_coordination_workers(
     owner: str,
     duration_seconds: float,
     grace_seconds: float,
+    wait_for_release: bool = False,
+    poll_seconds: float = DEFAULT_POLL_SECONDS,
 ) -> tuple[list[RemoteWorker], list[tuple[RemoteWorker, str]]]:
     """Claim workers before remote preflight/test execution."""
 
@@ -853,28 +879,83 @@ def claim_coordination_workers(
     claimed: list[RemoteWorker] = []
     leases: list[tuple[RemoteWorker, str]] = []
     for worker in workers:
-        try:
-            lease = store.claim(
-                [worker.nickname],
-                owner=owner,
-                duration_seconds=duration_seconds,
-                grace_seconds=grace_seconds,
-                reason="Dropbox Browser distributed E2E",
-            )
-            leases.append((worker, str(lease["lease_id"])))
-            claimed.append(worker)
-            print(
-                f"coordination: claimed {worker.nickname} for {duration_seconds:.0f}s "
-                f"(lease {lease['lease_id']})",
-                flush=True,
-            )
-        except Exception as exc:  # noqa: BLE001 - another project may own it
-            print(
-                f"remote worker skipped: {worker.label}: coordination claim failed: {exc}",
-                file=sys.stderr,
-                flush=True,
-            )
+        while True:
+            try:
+                lease = store.claim(
+                    [worker.nickname],
+                    owner=owner,
+                    duration_seconds=duration_seconds,
+                    grace_seconds=grace_seconds,
+                    reason="Dropbox Browser distributed E2E",
+                )
+                leases.append((worker, str(lease["lease_id"])))
+                claimed.append(worker)
+                print(
+                    f"coordination: claimed {worker.nickname} for {duration_seconds:.0f}s "
+                    f"(lease {lease['lease_id']})",
+                    flush=True,
+                )
+                break
+            except Exception as exc:  # noqa: BLE001 - another project may own it
+                conflicts = getattr(exc, "conflicts", None)
+                if not wait_for_release or not conflicts:
+                    print(
+                        f"remote worker skipped: {worker.label}: coordination claim failed: {exc}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    break
+                resources = sorted({
+                    str(resource)
+                    for conflict in conflicts
+                    if isinstance(conflict, dict)
+                    for resource in conflict.get("resources", [])
+                })
+                resource_text = ", ".join(resources) or worker.nickname
+                print(
+                    f"coordination: waiting for {resource_text} to be released "
+                    f"before running {worker.label}…",
+                    flush=True,
+                )
+                time.sleep(max(0.1, float(poll_seconds)))
     return claimed, leases
+
+
+def local_lane_settings(shared: Any, hosts: Any, workers: list[RemoteWorker]) -> tuple[float, int]:
+    """Return the current machine's configured local scheduling capacity."""
+
+    if hosts is None:
+        return DEFAULT_LOCAL_WEIGHT, DEFAULT_LOCAL_LANES
+    current_entry = None
+    for worker in workers:
+        try:
+            entry = hosts.get(worker.nickname)
+        except Exception:  # noqa: BLE001 - a malformed optional entry is skipped
+            continue
+        if shared.locality.is_this_machine_host(entry.host):
+            current_entry = entry
+            break
+    if current_entry is None:
+        try:
+            policy = shared.package.load_local_policy(root=shared.root, hosts=hosts)
+            if policy.machine:
+                current_entry = hosts.get(policy.machine)
+        except Exception:  # noqa: BLE001 - retain the safe single local lane
+            current_entry = None
+    if current_entry is None:
+        return DEFAULT_LOCAL_WEIGHT, DEFAULT_LOCAL_LANES
+    defaults = getattr(current_entry, "defaults", None)
+    weight = getattr(defaults, "schedule_weight", None)
+    lanes = getattr(defaults, "parallel_slots", None)
+    try:
+        resolved_weight = max(0.01, float(weight)) if weight is not None else DEFAULT_LOCAL_WEIGHT
+    except (TypeError, ValueError):
+        resolved_weight = DEFAULT_LOCAL_WEIGHT
+    try:
+        resolved_lanes = max(1, int(lanes)) if lanes is not None else DEFAULT_LOCAL_LANES
+    except (TypeError, ValueError):
+        resolved_lanes = DEFAULT_LOCAL_LANES
+    return resolved_weight, resolved_lanes
 
 
 def release_coordination_leases(
@@ -999,8 +1080,8 @@ def run(args: argparse.Namespace) -> int:
     specs = collect_specs(args.spec)
     settings = remote_notes()
     local_config = settings.get("local") if isinstance(settings.get("local"), dict) else {}
-    local_enabled = bool(local_config.get("enabled", True)) and args.mode != "remote"
-    require_remote = bool(args.require_remote or args.mode == "remote")
+    local_enabled = bool(local_config.get("enabled", True))
+    require_remote = bool(args.require_remote)
 
     shared_loaded: tuple[Path, Any] | None = None
     if args.mode != "local":
@@ -1041,6 +1122,7 @@ def run(args: argparse.Namespace) -> int:
             "auth": __import__("network_computers.auth", fromlist=["resolve_auth"]),
             "availability": __import__("network_computers.availability", fromlist=["select_available_workers"]),
             "coordination": __import__("network_computers.coordination", fromlist=["coordination_store"]),
+            "locality": __import__("network_computers.locality", fromlist=["is_this_machine_host"]),
             "git_ops": __import__("network_computers.git_ops", fromlist=["preflight"]),
             "jobs": __import__("network_computers.jobs", fromlist=["JobClient"]),
             "schedule": __import__("network_computers.schedule", fromlist=["optimize_assignment"]),
@@ -1070,6 +1152,7 @@ def run(args: argparse.Namespace) -> int:
         print(f"local E2E {'passed' if passed else 'failed'} in {duration:.1f}s", flush=True)
         return 0 if passed else 1
 
+    hosts = None
     try:
         auth = shared.auth.resolve_auth(root=root, required=True)
         ssh = shared.ssh.SshClient(auth, connect_timeout=5)
@@ -1099,6 +1182,8 @@ def run(args: argparse.Namespace) -> int:
             owner=coord_owner,
             duration_seconds=args.coord_duration_seconds,
             grace_seconds=args.coord_grace_seconds,
+            wait_for_release=args.coord_wait_for_release,
+            poll_seconds=args.coord_poll_seconds,
         )
 
     expected_head = subprocess.run(
@@ -1173,7 +1258,20 @@ def run(args: argparse.Namespace) -> int:
         fail("no remote E2E workers passed preflight and local lane is disabled")
 
     try:
-        assignments = choose_assignments(shared, specs, ready_workers, local_enabled=local_enabled)
+        local_weight, local_lanes = local_lane_settings(shared, hosts, workers)
+        if local_enabled:
+            print(
+                f"local capacity: {local_lanes} lane(s), schedule weight {local_weight:g}",
+                flush=True,
+            )
+        assignments = choose_assignments(
+            shared,
+            specs,
+            ready_workers,
+            local_enabled=local_enabled,
+            local_weight=local_weight,
+            local_lanes=local_lanes,
+        )
         for item in assignments:
             print(f"plan: {item.execution} {item.lane_id}: {len(item.specs)} spec(s)", flush=True)
         if args.dry_run:
@@ -1200,7 +1298,18 @@ def run(args: argparse.Namespace) -> int:
                     REPO / "Temp" / "remote-e2e" / run_id / worker.id,
                 )] = item
             for item in local_assignments:
-                futures[pool.submit(run_local_specs, item.specs, REPO / "Temp" / "remote-e2e" / run_id / "local")] = item
+                local_index = 0
+                if item.lane_id.startswith("local-"):
+                    try:
+                        local_index = max(0, int(item.lane_id.rsplit("-", 1)[-1]) - 1)
+                    except ValueError:
+                        local_index = 0
+                futures[pool.submit(
+                    run_local_specs,
+                    item.specs,
+                    REPO / "Temp" / "remote-e2e" / run_id / item.lane_id,
+                    local_index,
+                )] = item
             for future in as_completed(futures):
                 item = futures[future]
                 try:
@@ -1232,7 +1341,7 @@ def run(args: argparse.Namespace) -> int:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("auto", "local", "remote"), default="auto")
+    parser.add_argument("--mode", choices=("auto", "local"), default="auto")
     parser.add_argument("--require-remote", action="store_true", help="fail instead of falling back when remote execution is unavailable")
     parser.add_argument("--shared-root", help="override the optional shared worker SDK root")
     parser.add_argument("--spec", action="append", default=[], help="run one tests/e2e spec; repeatable (default: all specs)")
@@ -1267,6 +1376,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--coord-owner", help="coordination-board owner; defaults to SPTMP2_COORD_OWNER or LOCAL_NOTES")
     parser.add_argument("--coord-duration-seconds", type=float, default=1800.0, help="worker lease duration for a remote run (default: 1800)")
     parser.add_argument("--coord-grace-seconds", type=float, default=30.0, help="worker lease grace period (default: 30)")
+    parser.add_argument(
+        "--coord-wait-for-release",
+        action="store_true",
+        help="wait for coordination lease/offline conflicts instead of skipping those workers",
+    )
+    parser.add_argument(
+        "--coord-poll-seconds",
+        type=float,
+        default=DEFAULT_POLL_SECONDS,
+        help="seconds between coordination release checks (default: 2)",
+    )
     return parser.parse_args(argv)
 
 

@@ -1,7 +1,7 @@
 const { test, expect } = require("@playwright/test");
 const { registerVideoSubtitleSwitchSuite } = require("./support/video-subtitle-switch-suite");
 
-const workerPortOffset = Number(process.env.TEST_WORKER_INDEX || "0") * 100;
+const workerPortOffset = Number(process.env.DROPBOX_BROWSER_E2E_LANE_INDEX || "0") * 100;
 
 registerVideoSubtitleSwitchSuite({
   test,

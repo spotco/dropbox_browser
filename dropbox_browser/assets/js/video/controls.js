@@ -84,43 +84,52 @@ function revealControlsOverlay(event) {
 }
 
 function resetPlaybackProgress() {
+  var canControl = videoControlsAvailable();
+  var progressSliderActive = Boolean(ctx.state.progressSliderActive);
+  var pendingProgressPercent = ctx.state.pendingProgressPercent == null
+    ? Number.NaN
+    : Number(ctx.state.pendingProgressPercent);
+  if (!Number.isFinite(pendingProgressPercent) || pendingProgressPercent < 0 || pendingProgressPercent > 1) {
+    pendingProgressPercent = 0;
+  }
   if (ctx.els.playToggleButton) {
     ctx.setControlButtonState(ctx.els.playToggleButton, 'Play', VIDEO_ICONS.play);
-    ctx.els.playToggleButton.disabled = true;
+    ctx.els.playToggleButton.disabled = !canControl;
   }
   if (ctx.els.muteToggleButton) {
     ctx.setControlButtonState(ctx.els.muteToggleButton, 'Mute', VIDEO_ICONS.volume);
-    ctx.els.muteToggleButton.disabled = true;
+    ctx.els.muteToggleButton.disabled = !canControl;
   }
   if (ctx.els.volumeSliderEl) {
-    ctx.els.volumeSliderEl.disabled = true;
+    ctx.els.volumeSliderEl.disabled = !canControl;
   }
   if (ctx.els.fullscreenButton) {
     ctx.setControlButtonState(ctx.els.fullscreenButton, 'Fullscreen', VIDEO_ICONS.fullscreen);
-    ctx.els.fullscreenButton.disabled = true;
+    ctx.els.fullscreenButton.disabled = !canControl;
   }
   if (ctx.els.fullWindowButton) {
     ctx.setControlButtonState(ctx.els.fullWindowButton, 'Full window', VIDEO_ICONS.fullWindowEnter);
     ctx.els.fullWindowButton.setAttribute('aria-pressed', 'false');
     ctx.els.fullWindowButton.classList.remove('is-active');
-    ctx.els.fullWindowButton.disabled = true;
+    ctx.els.fullWindowButton.disabled = !canControl;
   }
   syncLoopQueueButton();
-  syncQueueNavigationButtons(false);
+  syncQueueNavigationButtons(canControl);
   syncSeekStepButtons(false, 0);
   if (ctx.els.progressSliderEl) {
     ctx.els.progressSliderEl.min = '0';
-    ctx.els.progressSliderEl.max = '0';
-    ctx.els.progressSliderEl.value = '0';
-    ctx.els.progressSliderEl.disabled = true;
+    ctx.els.progressSliderEl.max = canControl ? '100' : '0';
+    ctx.els.progressSliderEl.value = canControl ? String(pendingProgressPercent * 100) : '0';
+    ctx.els.progressSliderEl.disabled = !canControl;
   }
   ctx.resetProcessedProgressTrack();
   if (ctx.els.elapsedTimeEl) ctx.els.elapsedTimeEl.textContent = '0:00';
   if (ctx.els.totalTimeEl) ctx.els.totalTimeEl.textContent = '0:00';
-  ctx.state.progressSliderActive = false;
+  ctx.state.progressSliderActive = progressSliderActive;
   if (!ctx.state.loadingOverlayVisible && !ctx.state.seekRestartInProgress && !ctx.state.controlsScrubReveal) {
     hideControlsOverlay();
   }
+  if (canControl) syncTransportControls();
 }
 
 function videoControlsAvailable() {
@@ -199,7 +208,28 @@ function syncTransportControls() {
   }
   syncLoopQueueButton();
   syncQueueNavigationButtons(canControl);
+  syncUnknownDurationProgress(canControl, duration);
   syncSeekStepButtons(canControl, duration);
+}
+
+function syncUnknownDurationProgress(canControl, duration) {
+  if (
+    !ctx.els.progressSliderEl
+    || !canControl
+    || (Number.isFinite(Number(duration)) && Number(duration) > 0)
+  ) return;
+  var pendingProgressPercent = ctx.state.pendingProgressPercent == null
+    ? Number.NaN
+    : Number(ctx.state.pendingProgressPercent);
+  if (!Number.isFinite(pendingProgressPercent) || pendingProgressPercent < 0 || pendingProgressPercent > 1) {
+    pendingProgressPercent = 0;
+  }
+  ctx.els.progressSliderEl.min = '0';
+  ctx.els.progressSliderEl.max = '100';
+  ctx.els.progressSliderEl.disabled = false;
+  if (!ctx.state.progressSliderActive) {
+    ctx.els.progressSliderEl.value = String(pendingProgressPercent * 100);
+  }
 }
 
 function syncLoopQueueButton() {
@@ -396,15 +426,40 @@ function syncPlaybackProgress() {
     resetPlaybackProgress();
     return;
   }
+  var pendingProgressPercent = ctx.state.pendingProgressPercent == null
+    ? Number.NaN
+    : Number(ctx.state.pendingProgressPercent);
+  var pendingProgressTarget = Number.NaN;
+  if (Number.isFinite(pendingProgressPercent) && pendingProgressPercent >= 0 && pendingProgressPercent <= 1) {
+    pendingProgressTarget = Math.min(duration, duration * pendingProgressPercent);
+  }
   syncTransportControls();
   ctx.els.progressSliderEl.max = String(duration);
   ctx.els.progressSliderEl.disabled = false;
-  if (!ctx.state.progressSliderActive) {
+  if (Number.isFinite(pendingProgressTarget)) {
+    ctx.els.progressSliderEl.value = String(pendingProgressTarget);
+    if (ctx.els.elapsedTimeEl) {
+      ctx.els.elapsedTimeEl.textContent = ctx.formatNativePlaybackTime(pendingProgressTarget);
+    }
+    if (!ctx.state.loadingOverlayVisible && !ctx.state.seekRestartInProgress) {
+      ctx.state.pendingProgressPercent = null;
+      ctx.state.progressSliderActive = false;
+      ctx.reportCompatibilitySeekTiming('scrub_deferred_until_duration', {
+        target_seconds: pendingProgressTarget,
+        duration_seconds: duration,
+        percent: pendingProgressPercent * 100,
+      });
+      void ctx.restartCompatibilityAt(pendingProgressTarget, 'scrub-deferred');
+    }
+  }
+  else if (!ctx.state.progressSliderActive) {
     var value = Number.isFinite(currentTime) && currentTime >= 0 ? currentTime : 0;
     ctx.els.progressSliderEl.value = String(Math.min(duration, value));
   }
   if (ctx.els.elapsedTimeEl) {
-    var elapsedValue = ctx.state.progressSliderActive
+    var elapsedValue = Number.isFinite(pendingProgressTarget)
+      ? pendingProgressTarget
+      : ctx.state.progressSliderActive
       ? Number(ctx.els.progressSliderEl.value)
       : currentTime;
     ctx.els.elapsedTimeEl.textContent = ctx.formatNativePlaybackTime(elapsedValue);
@@ -816,6 +871,14 @@ async function toggleFullWindowMode() {
     ctx.els.progressSliderEl.addEventListener('input', function () {
       ctx.state.progressSliderActive = true;
       ctx.state.controlsScrubReveal = true;
+      var duration = currentPlaybackDurationSeconds();
+      if (!Number.isFinite(duration) || duration <= 0) {
+        var percentValue = Number(ctx.els.progressSliderEl.value);
+        var percentMax = Number(ctx.els.progressSliderEl.max);
+        if (Number.isFinite(percentValue) && Number.isFinite(percentMax) && percentMax > 0) {
+          ctx.state.pendingProgressPercent = Math.max(0, Math.min(1, percentValue / percentMax));
+        }
+      }
       syncPlaybackProgress();
       revealControlsOverlay();
     });
@@ -826,6 +889,19 @@ async function toggleFullWindowMode() {
       }
       var nextTime = Number(ctx.els.progressSliderEl.value);
       if (Number.isFinite(nextTime) && nextTime >= 0) {
+        var duration = currentPlaybackDurationSeconds();
+        if (!Number.isFinite(duration) || duration <= 0) {
+          var percentMax = Number(ctx.els.progressSliderEl.max);
+          var percent = Number.isFinite(percentMax) && percentMax > 0
+            ? Math.max(0, Math.min(1, nextTime / percentMax))
+            : 0;
+          ctx.state.pendingProgressPercent = percent;
+          ctx.state.progressSliderActive = false;
+          ctx.state.controlsScrubReveal = true;
+          revealControlsOverlay();
+          syncPlaybackProgress();
+          return;
+        }
         ctx.state.progressSliderActive = false;
         ctx.state.controlsScrubReveal = true;
         revealControlsOverlay();

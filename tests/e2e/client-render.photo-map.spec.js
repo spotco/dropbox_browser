@@ -1,7 +1,8 @@
 const { test, expect } = require("@playwright/test");
 
-process.env.PLAYWRIGHT_PORT = "8026";
-test.use({baseURL: "http://127.0.0.1:8026"});
+const workerPortOffset = Number(process.env.DROPBOX_BROWSER_E2E_LANE_INDEX || "0") * 100;
+process.env.PLAYWRIGHT_PORT = String(8026 + workerPortOffset);
+test.use({baseURL: `http://127.0.0.1:${process.env.PLAYWRIGHT_PORT}`});
 const { startServer, stopServer } = require("./support/server");
 
 let server = null;

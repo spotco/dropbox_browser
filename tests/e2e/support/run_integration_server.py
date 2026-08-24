@@ -58,6 +58,12 @@ DEFAULT_MUSIC_LIBRARY_POLL_DELAY_MS = 150
 E2E_TEMP_ROOT = REPO_ROOT / ".dropbox-browser-temp" / "e2e-integration"
 
 
+class ReusableThreadingHTTPServer(ThreadingHTTPServer):
+    """Allow sequential integration specs to reuse their fixed port."""
+
+    allow_reuse_address = True
+
+
 def _decode_content(entry: dict[str, Any]) -> bytes:
     if "file_path" in entry:
         return Path(str(entry["file_path"])).read_bytes()
@@ -581,7 +587,9 @@ def main() -> int:
     port = int(os.environ.get("PLAYWRIGHT_PORT", "8011"))
     app, integration_state = _build_app(fixture_path, port)
     video_mock_patches = build_video_mock_patches(integration_state.fixture, integration_state.temp_root)
-    server = ThreadingHTTPServer(("127.0.0.1", port), IntegrationRequestHandler)
+    server = ReusableThreadingHTTPServer(("127.0.0.1", port), IntegrationRequestHandler)
+    server.daemon_threads = True
+    server.block_on_close = False
     server.app = app  # type: ignore[attr-defined]
     server.integration_state = integration_state  # type: ignore[attr-defined]
     server.log_requests = False  # type: ignore[attr-defined]

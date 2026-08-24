@@ -177,6 +177,55 @@ class DistributedE2ETests(unittest.TestCase):
         self.assertEqual(store.claims[0]["duration_seconds"], 1800)
         self.assertEqual(store.releases[0]["lease_id"], "lease-test")
 
+    def test_coordination_claim_waits_for_a_conflicting_lease_when_requested(self) -> None:
+        worker = runner.RemoteWorker(
+            id="worker",
+            nickname="worker",
+            label="Worker",
+            host="worker.example",
+            user="user",
+            repo="/home/spotco/dev/dropbox_browser",
+            git="git",
+            path_prefix="",
+            platform="linux",
+            remote_os="Linux",
+            branch="master",
+            schedule_weight=1.0,
+        )
+
+        class Conflict(RuntimeError):
+            conflicts = [{"kind": "lease", "resources": ["worker"], "owner": "other"}]
+
+        class Store:
+            def __init__(self) -> None:
+                self.attempts = 0
+
+            def claim(self, resources, **kwargs):  # noqa: ANN001
+                self.attempts += 1
+                if self.attempts == 1:
+                    raise Conflict("requested resources are protected")
+                return {"lease_id": "lease-after-wait"}
+
+        store = Store()
+        shared = SimpleNamespace(
+            root=Path("."),
+            coordination=SimpleNamespace(coordination_store=lambda root: store),
+        )
+        with mock.patch.object(runner.time, "sleep") as sleep:
+            claimed, leases = runner.claim_coordination_workers(
+                shared,
+                [worker],
+                owner="dropbox_browser",
+                duration_seconds=1800,
+                grace_seconds=30,
+                wait_for_release=True,
+                poll_seconds=2,
+            )
+
+        self.assertEqual(claimed, [worker])
+        self.assertEqual(leases, [(worker, "lease-after-wait")])
+        sleep.assert_called_once_with(2.0)
+
     def test_local_job_result_is_normalized_for_distributed_result_loop(self) -> None:
         self.assertEqual(
             runner.normalize_job_result("local", (True, 12.5)),

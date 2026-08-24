@@ -1,7 +1,8 @@
 const path = require("node:path");
 const { test, expect } = require("@playwright/test");
 
-process.env.PLAYWRIGHT_PORT = "8013";
+const workerPortOffset = Number(process.env.DROPBOX_BROWSER_E2E_LANE_INDEX || "0") * 100;
+process.env.PLAYWRIGHT_PORT = String(8013 + workerPortOffset);
 process.env.DROPBOX_BROWSER_E2E_FIXTURE = path.join(
   __dirname,
   "fixtures",

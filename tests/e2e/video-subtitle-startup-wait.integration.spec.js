@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { test, expect } = require("@playwright/test");
 
-const workerPortOffset = Number(process.env.TEST_WORKER_INDEX || "0") * 100;
+const workerPortOffset = Number(process.env.DROPBOX_BROWSER_E2E_LANE_INDEX || "0") * 100;
 process.env.PLAYWRIGHT_PORT = String(8014 + workerPortOffset);
 process.env.DROPBOX_BROWSER_E2E_FIXTURE = path.join(
   __dirname,

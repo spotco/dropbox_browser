@@ -132,6 +132,7 @@ class Hls {
       "__HLS_STUB_PLAYLIST_FRAGMENT_COUNT",
       availableFragmentCount,
     );
+    const manifestLoadDelayMs = configuredDelayMs("__HLS_STUB_MANIFEST_LOAD_DELAY_MS");
     const fragmentLoadDelayMs = configuredDelayMs("__HLS_STUB_FRAGMENT_LOAD_DELAY_MS");
     const fragmentLoadIntervalMs = configuredDelayMs("__HLS_STUB_FRAGMENT_LOAD_INTERVAL_MS");
     const playlistDurationSeconds = playlistFragmentCount * 6;
@@ -164,7 +165,7 @@ class Hls {
         this._media.dispatchEvent(new Event("canplay"));
         this._media.dispatchEvent(new Event("playing"));
       }
-    }, 0);
+    }, manifestLoadDelayMs);
   }
 
   startLoad() {}

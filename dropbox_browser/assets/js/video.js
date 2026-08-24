@@ -362,6 +362,7 @@ import {initPane} from './video/pane.js';
       lastControlsRevealPointerKey: '',
       controlsScrubReveal: false,
       subtitleFailureState: 'idle',
+      pendingProgressPercent: null,
       // Full-window layout mode (CSS viewport takeover; not native fullscreen).
       // See docs/video-player.md "Playback Layout Modes".
       fullWindowActive: false,
