@@ -96,6 +96,11 @@ npx playwright test tests/e2e/client-render.photo-map.spec.js --project=client-r
 Use the full suite before checkin/commit, before handoff of broad cross-module
 changes, or when a shared helper used by multiple groups changes.
 
+## Branch Naming
+
+For this project, “main” means the `master` branch. The canonical project
+branch is `master`; when a task or conversation refers to “main”, use `master`.
+
 ## Client-Rendered Browse Assumption
 
 The suite treats client-rendered browse as the only maintained UI mode.
