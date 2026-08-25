@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shlex
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -13,6 +12,14 @@ from tools import run_distributed_e2e as runner
 
 
 class DistributedE2ETests(unittest.TestCase):
+    def test_runner_has_no_origin_publication_or_git_push_path(self) -> None:
+        source = Path(runner.__file__).read_text(encoding="utf-8")
+        self.assertNotIn('["git", "push"', source)
+        self.assertNotIn('["git", "fetch", "origin"', source)
+        self.assertNotIn("def origin_has_commit", source)
+        self.assertNotIn("def ensure_origin_has_head", source)
+        self.assertNotIn("def create_local_worktree_patch", source)
+
     def test_supported_platforms_include_linux_and_exclude_non_intel_macos(self) -> None:
         self.assertTrue(runner.is_supported_platform("windows"))
         self.assertTrue(runner.is_supported_platform("linux"))
@@ -30,7 +37,7 @@ class DistributedE2ETests(unittest.TestCase):
             )
             self.assertEqual(bootstrap.remote_notes(path)["local"]["enabled"], True)
 
-    def test_missing_shared_sdk_is_a_local_fallback_unless_required(self) -> None:
+    def test_shared_sdk_bootstrap_can_be_optional_for_explicit_local_mode(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             missing = Path(temp_dir) / "missing"
             self.assertIsNone(bootstrap.load_shared(missing, required=False))
@@ -236,28 +243,7 @@ class DistributedE2ETests(unittest.TestCase):
             (False, 8.25, "exit 1"),
         )
 
-    def test_worker_needs_publish_for_dirty_or_stale_checkout(self) -> None:
-        expected = "a" * 40
-        self.assertFalse(runner.worker_needs_publish(SimpleNamespace(head=expected, clean=True), expected))
-        self.assertTrue(runner.worker_needs_publish(SimpleNamespace(head="b" * 40, clean=True), expected))
-        self.assertTrue(runner.worker_needs_publish(SimpleNamespace(head=expected, clean=False), expected))
-        self.assertTrue(
-            runner.worker_needs_publish(
-                SimpleNamespace(head=expected, clean=True, raw={"BRANCH": "osx-intel"}),
-                expected,
-                "master",
-            )
-        )
-        self.assertFalse(
-            runner.worker_needs_publish(
-                SimpleNamespace(head=expected, clean=True, raw={"BRANCH": "master"}),
-                expected,
-                "master",
-            )
-        )
-
-    def test_publish_uses_one_target_branch_even_when_worker_config_differs(self) -> None:
-        expected = "a" * 40
+    def test_shared_target_uses_runner_branch_not_worker_configuration(self) -> None:
         worker = runner.RemoteWorker(
             id="worker",
             nickname="worker",
@@ -273,35 +259,20 @@ class DistributedE2ETests(unittest.TestCase):
             schedule_weight=1.0,
         )
 
-        class FakeSsh:
-            def __init__(self) -> None:
-                self.commands: list[str] = []
-
-            def run(self, target, command, **kwargs):  # noqa: ANN001
-                self.commands.append(command)
-                return SimpleNamespace(returncode=0, stdout=f"PUBLISHED_HEAD={expected}\n", stderr="")
-
-        ssh = FakeSsh()
         shared = SimpleNamespace(
             ssh=SimpleNamespace(
-                shell_quote=shlex.quote,
                 SshTarget=lambda **kwargs: SimpleNamespace(**kwargs),
-            )
+            ),
+            direct_sync=SimpleNamespace(
+                WorkerSyncTarget=lambda **kwargs: SimpleNamespace(**kwargs),
+            ),
         )
+        adapted = runner.worker_sync_target(shared, worker)
+        self.assertEqual(adapted.name, "Worker")
+        self.assertEqual(adapted.remote_repo, "/home/spotco/dev/dropbox_browser")
+        self.assertNotEqual(worker.branch, "master")
 
-        runner.publish_worker_to_head(
-            shared,
-            ssh,
-            worker,
-            expected,
-            target_branch="master",
-            bundle=None,
-        )
-
-        self.assertIn("checkout -B master", ssh.commands[0])
-        self.assertNotIn("checkout osx-intel", ssh.commands[0])
-
-    def test_prepare_workers_accepts_mixed_configured_branches_and_forwards_worktree(self) -> None:
+    def test_prepare_workers_delegates_mixed_workers_to_shared_direct_sync(self) -> None:
         expected = "a" * 40
         workers = [
             runner.RemoteWorker(
@@ -333,79 +304,60 @@ class DistributedE2ETests(unittest.TestCase):
                 schedule_weight=1.0,
             ),
         ]
-        reports = {
-            "mac": SimpleNamespace(head="b" * 40, clean=True, raw={"BRANCH": "osx-intel"}),
-            "linux": SimpleNamespace(head=expected, clean=True, raw={"BRANCH": "master"}),
-        }
-        published: list[dict[str, object]] = []
+        captured: dict[str, object] = {}
         shared = SimpleNamespace(
             ssh=SimpleNamespace(
-                shell_quote=shlex.quote,
                 SshTarget=lambda **kwargs: SimpleNamespace(**kwargs),
             ),
-            git_ops=SimpleNamespace(
-                preflight=lambda *args, **kwargs: SimpleNamespace(
-                    head=expected,
-                    clean=False,
-                )
+            direct_sync=SimpleNamespace(
+                WorkerSyncTarget=lambda **kwargs: SimpleNamespace(**kwargs),
             ),
         )
 
-        def capture_publish(*args, **kwargs):  # noqa: ANN001
-            published.append(kwargs)
+        def synchronize(*args, **kwargs):  # noqa: ANN001
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return SimpleNamespace(source=SimpleNamespace(head=expected, branch="master"))
 
-        with tempfile.NamedTemporaryFile() as patch_file:
-            fake_patch = Path(patch_file.name)
-            with (
-                mock.patch.object(runner, "inspect_remote_git", side_effect=lambda _shared, _ssh, worker: reports[worker.id]),
-                mock.patch.object(runner, "local_worktree_is_dirty", return_value=True),
-                mock.patch.object(runner, "create_local_worktree_patch", return_value=fake_patch),
-                mock.patch.object(runner, "origin_has_commit", return_value=True),
-                mock.patch.object(runner, "publish_worker_to_head", side_effect=capture_publish),
-            ):
-                runner.prepare_workers_for_run(
-                    shared,
-                    SimpleNamespace(),
-                    workers,
-                    target_branch="master",
-                    expected_head=expected,
-                    publish_mode="auto",
-                    force_sync_clean=False,
-                    include_worktree=True,
-                )
+        shared.direct_sync.synchronize_workers = synchronize
+        runner.prepare_workers_for_run(
+            shared,
+            SimpleNamespace(),
+            workers,
+            target_branch="master",
+            expected_head=expected,
+            publish_mode="auto",
+            force_sync_clean=False,
+            include_worktree=True,
+        )
 
-        self.assertEqual(len(published), 2)
-        self.assertTrue(all(item["target_branch"] == "master" for item in published))
-        self.assertTrue(all(item["worktree_patch"] == fake_patch for item in published))
+        kwargs = captured["kwargs"]
+        self.assertEqual(kwargs["branch_override"], "master")
+        self.assertEqual(kwargs["publish_mode"], "auto")
+        self.assertEqual(len(captured["args"][2]), 2)
+        self.assertEqual([item.remote_repo for item in captured["args"][2]], [worker.repo for worker in workers])
 
     def test_publish_arguments_default_to_auto(self) -> None:
         args = runner.parse_args([])
+        self.assertEqual(args.mode, "auto")
         self.assertEqual(args.publish_workers, "auto")
         self.assertEqual(args.publish_source, "auto")
         self.assertFalse(args.sync_clean)
-        self.assertFalse(args.include_worktree)
+        self.assertTrue(args.include_worktree)
+        self.assertIsNone(args.worker_branch)
 
-    def test_publish_source_local_uses_bundle_without_origin(self) -> None:
-        self.assertEqual(
-            runner.resolve_publish_transport("local", origin_contains_head=True),
-            "bundle",
-        )
-        self.assertEqual(
-            runner.resolve_publish_transport("local", origin_contains_head=False),
-            "bundle",
-        )
-        self.assertEqual(
-            runner.resolve_publish_transport("auto", origin_contains_head=True),
-            "origin",
-        )
-        self.assertEqual(
-            runner.resolve_publish_transport("auto", origin_contains_head=False),
-            "bundle",
-        )
-        self.assertEqual(
-            runner.resolve_publish_transport("origin", origin_contains_head=False),
-            "origin",
-        )
+    def test_publish_source_origin_fails_closed_without_touching_git(self) -> None:
+        with self.assertRaisesRegex(runner.RunnerError, "never fetches or publishes origin"):
+            runner.prepare_workers_for_run(
+                SimpleNamespace(),
+                SimpleNamespace(),
+                [],
+                target_branch="master",
+                expected_head="a" * 40,
+                publish_mode="auto",
+                force_sync_clean=False,
+                publish_source="origin",
+            )
 
     def test_remote_script_exports_worker_browser(self) -> None:
         worker = runner.RemoteWorker(
@@ -433,6 +385,49 @@ class DistributedE2ETests(unittest.TestCase):
         )
         self.assertIn("DROPBOX_BROWSER_BROWSER_EXECUTABLE", script)
         self.assertIn("Brave Browser.app", script)
+
+    def test_assignment_uses_shared_adaptive_planner(self) -> None:
+        spec = runner.E2E_DIR / "client-render.smoke.spec.js"
+        planner = mock.Mock(return_value=([0], [[1.0]]))
+
+        class FakeBin:
+            def __init__(self, lane_id, **kwargs):  # noqa: ANN001
+                self.lane_id = lane_id
+                self.execution = kwargs["execution"]
+                self.label = kwargs.get("label", "")
+                self.units = []
+
+        class FakeUnit:
+            def __init__(self, unit_id, size=1.0):  # noqa: ANN001
+                self.id = unit_id
+                self.size = size
+
+        def apply_assignment(units, bins, assignment, estimates):  # noqa: ANN001
+            for lane in bins:
+                lane.units = []
+            for index, lane_index in enumerate(assignment):
+                bins[lane_index].units.append(units[index])
+            return bins
+
+        shared = SimpleNamespace(
+            schedule=SimpleNamespace(
+                LaneBin=FakeBin,
+                WorkUnit=FakeUnit,
+                apply_assignment=apply_assignment,
+            ),
+            adaptive=SimpleNamespace(plan_assignments=planner),
+        )
+        assignments = runner.choose_assignments(
+            shared,
+            [spec],
+            [],
+            local_enabled=True,
+            local_weight=1.0,
+            local_lanes=1,
+            learning={"lanes": {}, "units": {}},
+        )
+        self.assertEqual([(item.lane_id, item.execution) for item in assignments], [("local", "local")])
+        planner.assert_called_once()
 
 
 if __name__ == "__main__":

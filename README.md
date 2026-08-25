@@ -9,6 +9,34 @@ The supported browse shell is client-rendered by default. The page also
 contains optional bottom panes for recursive file search, music playback, video
 playback, and a GPS Photo Map.
 
+## Distributed E2E worker synchronization
+
+`npm run test:e2e` is distributed by default through
+`tools/run_distributed_e2e.py`. Worker synchronization is owned by the shared
+`sptmp2_network_computers/python/network_computers/direct_worktree_sync.py`
+module. It pins each selected worker to the local current branch and committed
+`HEAD`, discards remote non-ignored dirt with a visible intentional warning,
+and applies the complete local non-ignored Git-visible worktree by default:
+staged, unstaged, untracked, deleted, and renamed files. Spaces, Unicode,
+exact bytes, symlinks, hashes, and deletions are verified; ignored files are
+excluded. The protocol uses only a local SCP'd Git bundle and direct file
+transfer. It never fetches or pushes `origin`, changes `origin/*`, stashes
+remote work, or uses `git clean -fdx`.
+
+`--publish-workers auto|always|never` and `--sync-clean` retain their shared
+destructive-sync meanings. `--include-worktree` and `--publish-source` remain
+compatibility flags; local dirt is not opt-in, and `--publish-source origin`
+fails closed. Automatic distributed mode fails instead of silently falling
+back to a local-only success; use `npm run test:e2e:local` or `--mode local`
+for an explicit local diagnostic.
+
+Assignment is also shared: `network_computers.adaptive_e2e` starts with the
+currently available topology when `sptmp2/e2e/adaptive-schedule.json`
+is absent, then learns bounded lane duration/size rates from successful local
+and remote jobs. The learning file is gitignored and never becomes tracked
+source. A matching worker is hash-checked so repeat runs transfer only a
+changed branch or overlay.
+
 ## Requirements
 
 - POSIX launchers use the local python3/python interpreter (Python 3.9 or

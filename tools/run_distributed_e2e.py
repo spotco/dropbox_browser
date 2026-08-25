@@ -3,21 +3,17 @@
 
 Normal operation is automatic: reachable compatible Windows, Linux, and macOS Intel
 workers receive scheduled specs, while the current machine remains a local lane.
-Before a remote run, workers which are dirty, on another branch, or not at the
-local ``HEAD`` are reset to the local branch and commit. The normal path fetches from ``origin``;
-when that is unavailable the runner transfers a Git bundle directly over SSH.
-Both paths keep the worker checkout clean before tests begin unless
-``--include-worktree`` is set. ``--publish-source local`` never talks to
-GitHub and always ships unpublished local commits over SSH. ``auto`` uses
-origin only when it already has local ``HEAD``; otherwise it falls back to
-the same SSH bundle. If the optional
-shared worker SDK, local notes, credentials, coordination owner, or remote
-checkouts are absent, the runner reports the reason and runs locally. Actual
-remote runs claim each selected worker on the shared coordination board and
-release the lease afterward.
-Use ``--require-remote`` when a distributed run must fail instead of falling
-back. Linux workers use the configured browser path when present, otherwise
-Playwright's bundled browser.
+The shared direct-worker synchronizer pins every worker to the local committed
+``HEAD`` and current branch, discards remote non-ignored dirt with a warning,
+and overlays every non-ignored local staged, unstaged, untracked, deleted, and
+renamed path. It uses only a local SCP'd Git bundle and direct file transfer;
+it never fetches or publishes ``origin``. ``--include-worktree`` and
+``--publish-source`` remain compatibility flags, but local dirt is no longer
+opt-in and ``--publish-source origin`` fails closed. Automatic mode fails if
+distributed setup is unavailable; use ``--mode local`` for an explicit
+local-only diagnostic. Actual remote runs claim each selected worker on the
+shared coordination board and release the lease afterward. Linux workers use
+the configured browser path when present, otherwise Playwright's bundled browser.
 """
 
 from __future__ import annotations
@@ -45,6 +41,7 @@ except ModuleNotFoundError:  # package import from the repository test suite
 REPO = Path(__file__).resolve().parents[1]
 E2E_DIR = REPO / "tests" / "e2e"
 TIMING_PATH = REPO / "Temp" / "remote-e2e" / "spec-timing.json"
+ADAPTIVE_LEARNING_PATH = REPO / "Temp" / "remote-e2e" / "adaptive-schedule.json"
 DEFAULT_LOCAL_WEIGHT = 1.0
 DEFAULT_LOCAL_LANES = 1
 DEFAULT_POLL_SECONDS = 2.0
@@ -301,6 +298,7 @@ def choose_assignments(
     local_enabled: bool,
     local_weight: float = DEFAULT_LOCAL_WEIGHT,
     local_lanes: int = DEFAULT_LOCAL_LANES,
+    learning: dict[str, Any] | None = None,
 ) -> list[Assignment]:
     if not workers and not local_enabled:
         fail("remote mode has no compatible workers")
@@ -312,19 +310,39 @@ def choose_assignments(
             bins.append(
                 shared.schedule.LaneBin(
                     lane_id,
-                    weight=max(0.01, float(local_weight)),
+                    weight=1.0,
                     execution="local",
                     label="local" if local_lanes == 1 else f"local lane {index + 1}",
+                    meta={
+                        "capacity": max(0.01, float(local_weight)),
+                        "topology_key": f"local:{local_lanes}",
+                    },
                 )
             )
     for worker in workers:
-        bins.append(shared.schedule.LaneBin(worker.id, weight=worker.schedule_weight, execution="remote", label=worker.label))
+        bins.append(
+            shared.schedule.LaneBin(
+                worker.id,
+                weight=1.0,
+                execution="remote",
+                label=worker.label,
+                meta={
+                    "capacity": worker.schedule_weight,
+                    "topology_key": f"{worker.platform}:{worker.schedule_weight:g}",
+                },
+            )
+        )
     timings = load_timings()
     units = [
         shared.schedule.WorkUnit(relative_spec(spec), size=timings.get(relative_spec(spec), 1.0))
         for spec in specs
     ]
-    assignment, estimates = shared.schedule.optimize_assignment(units, bins, exact_limit=12)
+    assignment, estimates = shared.adaptive.plan_assignments(
+        units,
+        bins,
+        learning if learning is not None else shared.adaptive.load_learning(ADAPTIVE_LEARNING_PATH),
+        exact_limit=12,
+    )
     shared.schedule.apply_assignment(units, bins, assignment, estimates)
     result: list[Assignment] = []
     for lane in bins:
@@ -437,21 +455,11 @@ def check_remote(
     ssh: Any,
     worker: RemoteWorker,
     *,
-    require_clean: bool = True,
     expected_branch: str | None = None,
 ) -> tuple[bool, str]:
     target = worker.target(shared.ssh)
     repo_path = remote_shell_path(worker, worker.repo)
     try:
-        shared.git_ops.preflight(
-            ssh,
-            target,
-            repo=repo_path,
-            git=worker.git,
-            expected_head=None,
-            require_clean=require_clean,
-            timeout=45,
-        )
         branch_check = (
             f"{_path_export(worker.path_prefix)}"
             f"{shared.ssh.shell_quote(worker.git)} -C {shared.ssh.shell_quote(repo_path)} "
@@ -462,7 +470,7 @@ def check_remote(
         if result.returncode != 0:
             return False, (result.stderr or result.stdout or "branch check failed").strip()[-500:]
         branch = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
-        branch_target = expected_branch or worker.branch
+        branch_target = expected_branch
         if branch_target and branch_target not in {"auto", branch}:
             return False, f"checked out branch {branch or '(detached)'!r}, expected {branch_target!r}"
         command_check = (
@@ -480,280 +488,24 @@ def check_remote(
         result = ssh.run(target, dependency_check, timeout=30)
         if result.returncode != 0:
             return False, "Playwright dependencies are not installed in the remote checkout"
-    except Exception as exc:  # noqa: BLE001 - unavailable workers fall back locally
+    except Exception as exc:  # noqa: BLE001 - report unavailable workers to the caller
         return False, str(exc)[-800:]
     return True, "ready"
 
 
-def inspect_remote_git(shared: Any, ssh: Any, worker: RemoteWorker) -> Any:
-    """Return HEAD, branch, and cleanliness without rejecting stale workers."""
+def worker_sync_target(shared: Any, worker: RemoteWorker) -> Any:
+    """Adapt Dropbox worker path/identity settings to the shared protocol."""
 
-    quote = shared.ssh.shell_quote
-    git_q = quote(worker.git)
-    repo_q = quote(remote_shell_path(worker, worker.repo))
-    branch_check = (
-        f"printf 'BRANCH='; {git_q} -C {repo_q} symbolic-ref --short -q HEAD || "
-        f"{git_q} -C {repo_q} rev-parse --abbrev-ref HEAD; printf '\\n'"
-    )
-
-    return shared.git_ops.preflight(
-        ssh,
-        worker.target(shared.ssh),
-        repo=remote_shell_path(worker, worker.repo),
+    remote_repo = remote_shell_path(worker, worker.repo)
+    return shared.direct_sync.WorkerSyncTarget(
+        name=worker.label,
+        target=worker.target(shared.ssh),
+        remote_repo=remote_repo,
+        scp_repo=remote_scp_path(worker, remote_repo),
         git=worker.git,
-        expected_head=None,
-        require_clean=False,
-        extra_checks=branch_check,
-        timeout=45,
+        # The shared synchronizer appends its own command separator.
+        command_prefix=_path_export(worker.path_prefix).rstrip("; "),
     )
-
-
-def remote_report_branch(report: Any) -> str:
-    branch = str(getattr(report, "branch", "") or "").strip()
-    if branch:
-        return branch
-    raw = getattr(report, "raw", {})
-    if isinstance(raw, dict):
-        return str(raw.get("BRANCH", "") or "").strip()
-    return ""
-
-
-def worker_needs_publish(
-    report: Any,
-    expected_head: str,
-    expected_branch: str | None = None,
-) -> bool:
-    return (
-        not bool(getattr(report, "clean", False))
-        or str(getattr(report, "head", "") or "") != expected_head
-        or (
-            expected_branch is not None
-            and remote_report_branch(report) != expected_branch
-        )
-    )
-
-
-def _git_result(args: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        args,
-        cwd=REPO,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-
-def local_branch_name() -> str:
-    """Return the local branch that remote workers must check out."""
-
-    result = _git_result(["git", "symbolic-ref", "--quiet", "--short", "HEAD"])
-    branch = result.stdout.strip()
-    if result.returncode != 0 or not branch:
-        raise RunnerError(
-            "remote E2E publication requires the local checkout to be on a branch; "
-            "detached HEAD cannot be synchronized safely"
-        )
-    return branch
-
-
-def origin_has_commit(commit: str, *, branch: str) -> bool:
-    """Return whether origin/<branch> contains ``commit`` after a best-effort fetch."""
-
-    _git_result(["git", "fetch", "origin", branch])
-    return _git_result(
-        ["git", "merge-base", "--is-ancestor", commit, f"origin/{branch}"]
-    ).returncode == 0
-
-
-def ensure_origin_has_head(commit: str, *, branch: str) -> None:
-    """Publish HEAD only when the configured branch cannot serve it to workers."""
-
-    if origin_has_commit(commit, branch=branch):
-        return
-    print(
-        f"publish: origin/{branch} lacks {commit[:12]}; pushing HEAD so workers can fetch…",
-        flush=True,
-    )
-    pushed = _git_result(["git", "push", "origin", f"HEAD:{branch}"])
-    if pushed.returncode != 0:
-        detail = (pushed.stderr or pushed.stdout or "").strip()[-2000:]
-        raise RunnerError(
-            f"cannot push {commit[:12]} to origin/{branch}: {detail}"
-        )
-    if not origin_has_commit(commit, branch=branch):
-        raise RunnerError(
-            f"origin/{branch} still lacks {commit[:12]} after push; refusing to reset workers"
-        )
-
-
-def resolve_publish_transport(source: str, *, origin_contains_head: bool) -> str:
-    """Return ``origin`` or ``bundle`` for worker publication.
-
-    ``local`` never uses GitHub. ``auto`` uses origin only when it already
-    contains local HEAD. ``origin`` always prefers GitHub (and may push).
-    """
-
-    mode = (source or "auto").strip().lower()
-    if mode not in {"auto", "origin", "local"}:
-        raise RunnerError("--publish-source must be auto, origin, or local")
-    if mode == "local":
-        return "bundle"
-    if mode == "origin":
-        return "origin"
-    return "origin" if origin_contains_head else "bundle"
-
-
-def local_worktree_is_dirty() -> bool:
-    return bool(_git_result(["git", "status", "--porcelain=v1"]).stdout.strip())
-
-
-def create_local_worktree_patch() -> Path | None:
-    """Binary patch of tracked + untracked (non-ignored) local changes."""
-
-    patch = REPO / "Temp" / "remote-e2e" / "sync" / "local-worktree.patch"
-    patch.parent.mkdir(parents=True, exist_ok=True)
-    if patch.exists():
-        patch.unlink()
-    index_path = patch.with_suffix(patch.suffix + ".index")
-    env = os.environ.copy()
-    env["GIT_INDEX_FILE"] = str(index_path)
-    try:
-        read_tree = subprocess.run(
-            ["git", "read-tree", "HEAD"],
-            cwd=REPO,
-            capture_output=True,
-            env=env,
-            check=False,
-        )
-        if read_tree.returncode != 0:
-            raise RunnerError("could not snapshot HEAD for a local worktree patch")
-        add = subprocess.run(
-            ["git", "add", "-A"],
-            cwd=REPO,
-            capture_output=True,
-            env=env,
-            check=False,
-        )
-        if add.returncode != 0:
-            detail = (add.stderr or add.stdout or b"").decode("utf-8", errors="replace").strip()[-2000:]
-            raise RunnerError(f"could not stage local worktree for publish: {detail}")
-        with patch.open("wb") as handle:
-            diff = subprocess.run(
-                ["git", "diff", "--cached", "--binary", "--no-ext-diff", "--no-color"],
-                cwd=REPO,
-                stdout=handle,
-                stderr=subprocess.PIPE,
-                env=env,
-                check=False,
-            )
-        if diff.returncode != 0:
-            detail = (diff.stderr or b"").decode("utf-8", errors="replace").strip()[-2000:]
-            raise RunnerError(f"could not create local worktree patch: {detail}")
-    finally:
-        for leftover in (index_path, Path(str(index_path) + ".lock")):
-            if leftover.exists():
-                leftover.unlink()
-    if not patch.is_file() or patch.stat().st_size == 0:
-        return None
-    return patch
-
-
-def create_sync_bundle(commit: str, prerequisite_heads: Iterable[str]) -> Path:
-    """Create a source-pinned bundle for direct worker synchronization."""
-
-    bundle = REPO / "Temp" / "remote-e2e" / "sync" / f"{commit}.bundle"
-    bundle.parent.mkdir(parents=True, exist_ok=True)
-    heads = [head for head in prerequisite_heads if head and head != commit]
-    revision_args = ["HEAD", "--not", heads[0]] if len(heads) == 1 else ["--all"]
-    result = _git_result(["git", "bundle", "create", str(bundle), *revision_args])
-    if result.returncode != 0 or not bundle.is_file() or bundle.stat().st_size == 0:
-        detail = (result.stderr or result.stdout or "").strip()[-2000:]
-        raise RunnerError(f"could not create direct worker sync bundle for {commit[:12]}: {detail}")
-    return bundle
-
-
-def publish_worker_to_head(
-    shared: Any,
-    ssh: Any,
-    worker: RemoteWorker,
-    expected_head: str,
-    *,
-    target_branch: str,
-    bundle: Path | None,
-    worktree_patch: Path | None = None,
-) -> None:
-    """Reset one worker to the local branch and ``expected_head``."""
-
-    quote = shared.ssh.shell_quote
-    target = worker.target(shared.ssh)
-    repo = remote_shell_path(worker, worker.repo)
-    git_q = quote(worker.git)
-    repo_q = quote(repo)
-    head_q = quote(expected_head)
-    branch_q = quote(target_branch)
-    remote_bundle = ""
-    remote_patch = ""
-    if bundle is not None:
-        remote_dir = f"{repo.rstrip('/')}/Temp/remote-e2e/sync"
-        remote_bundle = f"{remote_dir}/runner-sync-{expected_head}.bundle"
-        created = ssh.run(target, f"set -eu; mkdir -p {quote(remote_dir)}", timeout=45)
-        if created.returncode != 0:
-            detail = (created.stderr or created.stdout or "").strip()[-2000:]
-            raise RunnerError(f"could not create sync directory on {worker.label}: {detail}")
-        ssh.scp_to(target, bundle, remote_scp_path(worker, remote_bundle), timeout=180, check=True)
-        fetch = f"{git_q} -C {repo_q} fetch {quote(remote_bundle)} {head_q}:refs/remotes/dropbox-browser/direct-sync"
-    else:
-        fetch = (
-            f"{git_q} -C {repo_q} fetch origin {branch_q}; "
-            f"if ! {git_q} -C {repo_q} cat-file -e {head_q}^{{commit}} 2>/dev/null; then "
-            f"{git_q} -C {repo_q} fetch origin --prune; fi"
-        )
-    if worktree_patch is not None:
-        remote_dir = f"{repo.rstrip('/')}/Temp/remote-e2e/sync"
-        remote_patch = f"{remote_dir}/runner-local-worktree.patch"
-        created = ssh.run(target, f"set -eu; mkdir -p {quote(remote_dir)}", timeout=45)
-        if created.returncode != 0:
-            detail = (created.stderr or created.stdout or "").strip()[-2000:]
-            raise RunnerError(f"could not create sync directory on {worker.label}: {detail}")
-        ssh.scp_to(target, worktree_patch, remote_scp_path(worker, remote_patch), timeout=60, check=True)
-    # Preserve a worker's local work before making its checkout testable.  The
-    # clean preflight remains strict unless a local worktree patch is applied.
-    apply_lines = (
-        [
-            f"{git_q} -C {repo_q} apply {quote(remote_patch)}",
-            f"rm -f {quote(remote_patch)}",
-        ]
-        if remote_patch
-        else []
-    )
-    command = "\n".join(
-        [
-            "set -eu",
-            f"{git_q} -C {repo_q} stash push -u -m dropbox-browser-runner-preserve-before-sync >/dev/null 2>&1 || true",
-            fetch,
-            f"{git_q} -C {repo_q} rev-parse --verify {head_q}^{{commit}} >/dev/null",
-            f"{git_q} -C {repo_q} checkout -B {branch_q} {head_q}",
-            f"{git_q} -C {repo_q} reset --hard {head_q}",
-            f"{git_q} -C {repo_q} clean -fd",
-            *apply_lines,
-            *([f"rm -f {quote(remote_bundle)}"] if remote_bundle else []),
-            f"printf 'PUBLISHED_HEAD='; {git_q} -C {repo_q} rev-parse HEAD; printf '\\n'",
-        ]
-    )
-    result = ssh.run(target, command, timeout=180)
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip()[-2000:]
-        raise RunnerError(f"publish {worker.label} failed: {detail}")
-    published = next(
-        (line.split("=", 1)[1].strip() for line in result.stdout.splitlines() if line.startswith("PUBLISHED_HEAD=")),
-        "",
-    )
-    if published != expected_head:
-        raise RunnerError(
-            f"publish {worker.label}: reset landed on {published[:12] or '?'}; expected {expected_head[:12]}"
-        )
-    extra = " + local worktree" if worktree_patch is not None else ""
-    print(f"publish {worker.label}: reset to {expected_head[:12]}{extra}", flush=True)
 
 
 def prepare_workers_for_run(
@@ -766,92 +518,40 @@ def prepare_workers_for_run(
     publish_mode: str,
     force_sync_clean: bool,
     publish_source: str = "auto",
-    include_worktree: bool = False,
-) -> None:
-    """Synchronize stale/dirty workers, then enforce a matching-HEAD preflight."""
+    include_worktree: bool = True,
+) -> Any:
+    """Delegate all branch/HEAD/overlay/reset behavior to sptmp2."""
 
-    mode = publish_mode.strip().lower()
-    if mode not in {"auto", "always", "never"}:
-        raise RunnerError("--publish-workers must be auto, always, or never")
-    worktree_patch: Path | None = None
-    if include_worktree and local_worktree_is_dirty():
-        worktree_patch = create_local_worktree_patch()
-        if worktree_patch is not None:
-            print(f"publish: including local worktree patch ({worktree_patch.stat().st_size} bytes)", flush=True)
-    reports: list[tuple[RemoteWorker, Any]] = []
-    for worker in workers:
-        reports.append((worker, inspect_remote_git(shared, ssh, worker)))
-    needing = [
-        worker
-        for worker, report in reports
-        if force_sync_clean
-        or mode == "always"
-        or worktree_patch is not None
-        or worker_needs_publish(report, expected_head, target_branch)
-    ]
-    if needing and mode == "never" and not force_sync_clean:
+    source_mode = (publish_source or "auto").strip().lower()
+    if source_mode == "origin":
         raise RunnerError(
-            "publish-workers=never but remote(s) need update: "
-            + ", ".join(worker.label for worker in needing)
+            "--publish-source origin is unsupported: direct worker synchronization "
+            "never fetches or publishes origin; use the default local bundle path"
         )
-    if needing:
-        bundle: Path | None = None
-        origin_contains = origin_has_commit(expected_head, branch=target_branch)
-        transport = resolve_publish_transport(publish_source, origin_contains_head=origin_contains)
-        if transport == "origin":
-            try:
-                if publish_source.strip().lower() == "origin" and not origin_contains:
-                    ensure_origin_has_head(expected_head, branch=target_branch)
-            except RunnerError as exc:
-                bundle = create_sync_bundle(
-                    expected_head,
-                    [str(getattr(report, "head", "") or "") for _, report in reports],
-                )
-                print(f"publish: origin unavailable ({exc}); using direct SSH bundle {bundle.name}", flush=True)
-        if transport == "bundle":
-            bundle = create_sync_bundle(
-                expected_head,
-                [str(getattr(report, "head", "") or "") for _, report in reports],
-            )
-            print(
-                f"publish: using local SSH bundle {bundle.name} "
-                f"(publish-source={publish_source.strip().lower() or 'auto'})",
-                flush=True,
-            )
-        for worker in needing:
-            publish_worker_to_head(
-                shared,
-                ssh,
-                worker,
-                expected_head,
-                target_branch=target_branch,
-                bundle=bundle,
-                worktree_patch=worktree_patch,
-            )
-    for worker in workers:
-        quote = shared.ssh.shell_quote
-        git_q = quote(worker.git)
-        repo_q = quote(remote_shell_path(worker, worker.repo))
-        branch_check = (
-            f"branch=$({git_q} -C {repo_q} symbolic-ref --short -q HEAD || "
-            f"{git_q} -C {repo_q} rev-parse --abbrev-ref HEAD); "
-            f"test \"$branch\" = {quote(target_branch)}"
-        )
-        report = shared.git_ops.preflight(
-            ssh,
-            worker.target(shared.ssh),
-            repo=remote_shell_path(worker, worker.repo),
-            git=worker.git,
-            expected_head=expected_head,
-            require_clean=worktree_patch is None,
-            extra_checks=branch_check,
-            timeout=45,
-        )
-        cleanliness = "clean" if report.clean else "with local worktree"
+    if source_mode not in {"auto", "local"}:
+        raise RunnerError("--publish-source must be auto or local; origin publication was removed")
+    if not include_worktree:
         print(
-            f"preflight {worker.label}: {target_branch}@{report.head[:12]} {cleanliness}",
+            "note: --include-worktree is now the default compatibility behavior; "
+            "all non-ignored Git-visible local dirt is synchronized",
             flush=True,
         )
+    result = shared.direct_sync.synchronize_workers(
+        ssh,
+        REPO,
+        [worker_sync_target(shared, worker) for worker in workers],
+        branch_override=target_branch,
+        publish_mode=publish_mode,
+        force_reset=force_sync_clean,
+        max_parallel=max(1, len(workers)),
+        timeout=300,
+    )
+    if result.source.head != expected_head or result.source.branch != target_branch:
+        raise RunnerError(
+            "shared worker sync returned a source state different from the runner "
+            f"pin: {result.source.branch}@{result.source.head}"
+        )
+    return result
 
 
 def coordination_owner(settings: dict[str, Any], args: argparse.Namespace) -> str:
@@ -1081,27 +781,29 @@ def run(args: argparse.Namespace) -> int:
     settings = remote_notes()
     local_config = settings.get("local") if isinstance(settings.get("local"), dict) else {}
     local_enabled = bool(local_config.get("enabled", True))
-    require_remote = bool(args.require_remote)
+    # Automatic mode is genuinely distributed.  Local-only execution is the
+    # explicit --mode local diagnostic; it is never an implicit fallback.
+    require_remote = args.mode != "local" or bool(args.require_remote)
 
     shared_loaded: tuple[Path, Any] | None = None
     if args.mode != "local":
         try:
             shared_loaded = load_shared(args.shared_root, required=require_remote)
         except BootstrapError as exc:
-            if require_remote:
-                fail(str(exc))
-            print(f"remote E2E unavailable: {exc}; using local lane", file=sys.stderr, flush=True)
+            fail(str(exc))
     coord_owner = coordination_owner(settings, args)
     if shared_loaded is not None and not args.dry_run and not coord_owner:
         message = (
             "SPTMP2_COORD_OWNER or LOCAL_NOTES coord_owner is required before "
             "using remote workers"
         )
-        if require_remote:
-            fail(message)
-        print(f"remote E2E unavailable: {message}; using local lane", file=sys.stderr, flush=True)
-        shared_loaded = None
+        fail(message)
     if shared_loaded is None:
+        if args.mode != "local":
+            fail(
+                "distributed E2E setup is unavailable; use --mode local explicitly "
+                "for a local-only diagnostic"
+            )
         if not local_enabled:
             fail("remote worker SDK is unavailable and the local lane is disabled")
         assignment = [Assignment("local", tuple(specs), "local")]
@@ -1123,34 +825,24 @@ def run(args: argparse.Namespace) -> int:
             "availability": __import__("network_computers.availability", fromlist=["select_available_workers"]),
             "coordination": __import__("network_computers.coordination", fromlist=["coordination_store"]),
             "locality": __import__("network_computers.locality", fromlist=["is_this_machine_host"]),
-            "git_ops": __import__("network_computers.git_ops", fromlist=["preflight"]),
+            "direct_sync": __import__("network_computers.direct_worktree_sync", fromlist=["synchronize_workers"]),
             "jobs": __import__("network_computers.jobs", fromlist=["JobClient"]),
             "schedule": __import__("network_computers.schedule", fromlist=["optimize_assignment"]),
+            "adaptive": __import__("network_computers.adaptive_e2e", fromlist=["plan_assignments"]),
             "ssh": __import__("network_computers.ssh", fromlist=["SshClient"]),
         },
     )
     try:
         workers, skipped = load_workers(shared, settings)
-    except Exception as exc:  # noqa: BLE001 - malformed optional config falls back locally
-        if require_remote:
-            fail(f"remote worker configuration failed: {exc}")
-        print(f"remote E2E unavailable: {exc}; using local lane", file=sys.stderr, flush=True)
-        workers = []
-        skipped = []
+    except Exception as exc:  # noqa: BLE001 - normalize configuration failures
+        fail(f"remote worker configuration failed: {exc}")
     for message in skipped:
         print(f"remote worker skipped: {message}", file=sys.stderr, flush=True)
     if not workers:
-        if require_remote:
-            fail("no compatible remote E2E workers are configured")
-        if not local_enabled:
-            fail("no compatible remote workers and local lane is disabled")
-        print("remote E2E unavailable: no compatible workers; using local lane", file=sys.stderr, flush=True)
-        if args.dry_run:
-            print(f"local plan: {len(specs)} spec(s)")
-            return 0
-        passed, duration = run_local_specs(tuple(specs), REPO / "Temp" / "remote-e2e" / "local")
-        print(f"local E2E {'passed' if passed else 'failed'} in {duration:.1f}s", flush=True)
-        return 0 if passed else 1
+        fail(
+            "no compatible remote E2E workers are configured; use --mode local "
+            "explicitly for a local-only diagnostic"
+        )
 
     hosts = None
     try:
@@ -1167,12 +859,8 @@ def run(args: argparse.Namespace) -> int:
         )
         for line in shared.availability.format_plan_lines(availability_plan):
             print(line, flush=True)
-    except Exception as exc:  # noqa: BLE001 - default is safe local fallback
-        if require_remote:
-            fail(f"remote availability setup failed: {exc}")
-        print(f"remote E2E unavailable: {exc}; using local lane", file=sys.stderr, flush=True)
-        workers = []
-        ssh = None
+    except Exception as exc:  # noqa: BLE001 - normalize availability failures
+        fail(f"remote availability setup failed: {exc}")
 
     coordination_leases: list[tuple[RemoteWorker, str]] = []
     if ssh is not None and not args.dry_run:
@@ -1186,10 +874,15 @@ def run(args: argparse.Namespace) -> int:
             poll_seconds=args.coord_poll_seconds,
         )
 
-    expected_head = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True, check=True
-    ).stdout.strip()
-    expected_branch = local_branch_name()
+    try:
+        source_state = shared.direct_sync.inspect_local_repo(
+            REPO,
+            branch_override=args.worker_branch,
+        )
+    except shared.direct_sync.DirectWorkerSyncError as exc:
+        fail(str(exc))
+    expected_head = source_state.head
+    expected_branch = source_state.branch
     if ssh is not None and coordination_leases and not args.dry_run:
         try:
             prepare_workers_for_run(
@@ -1219,7 +912,6 @@ def run(args: argparse.Namespace) -> int:
                 shared,
                 ssh,
                 worker,
-                require_clean=not args.include_worktree,
                 expected_branch=expected_branch,
             )
             if ready:
@@ -1264,6 +956,7 @@ def run(args: argparse.Namespace) -> int:
                 f"local capacity: {local_lanes} lane(s), schedule weight {local_weight:g}",
                 flush=True,
             )
+        learning = shared.adaptive.load_learning(ADAPTIVE_LEARNING_PATH)
         assignments = choose_assignments(
             shared,
             specs,
@@ -1271,6 +964,7 @@ def run(args: argparse.Namespace) -> int:
             local_enabled=local_enabled,
             local_weight=local_weight,
             local_lanes=local_lanes,
+            learning=learning,
         )
         for item in assignments:
             print(f"plan: {item.execution} {item.lane_id}: {len(item.specs)} spec(s)", flush=True)
@@ -1317,6 +1011,17 @@ def run(args: argparse.Namespace) -> int:
                 except Exception as exc:  # noqa: BLE001
                     passed, duration, detail = False, 0.001, str(exc)
                 results.append((item.lane_id, passed, duration, detail))
+                shared.adaptive.record_observation(
+                    learning,
+                    lane_id=item.lane_id,
+                    duration_seconds=duration,
+                    size=sum(
+                        timings.get(relative_spec(spec), 1.0)
+                        for spec in item.specs
+                    ),
+                    execution=item.execution,
+                    topology_key=item.lane_id,
+                )
                 for spec in item.specs:
                     timings[relative_spec(spec)] = duration / max(1, len(item.specs))
                 print(
@@ -1327,6 +1032,7 @@ def run(args: argparse.Namespace) -> int:
                 )
 
         save_timings(timings)
+        shared.adaptive.save_learning(ADAPTIVE_LEARNING_PATH, learning)
         passed = all(item[1] for item in results) and len(results) == len(assignments)
         print(f"distributed E2E {'passed' if passed else 'failed'}", flush=True)
         return 0 if passed else 1
@@ -1342,7 +1048,11 @@ def run(args: argparse.Namespace) -> int:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("auto", "local"), default="auto")
-    parser.add_argument("--require-remote", action="store_true", help="fail instead of falling back when remote execution is unavailable")
+    parser.add_argument(
+        "--require-remote",
+        action="store_true",
+        help="deprecated compatibility flag; automatic mode already requires remote execution",
+    )
     parser.add_argument("--shared-root", help="override the optional shared worker SDK root")
     parser.add_argument("--spec", action="append", default=[], help="run one tests/e2e spec; repeatable (default: all specs)")
     parser.add_argument("--dry-run", action="store_true", help="print the plan without starting Playwright")
@@ -1350,27 +1060,35 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--publish-workers",
         choices=("auto", "always", "never"),
         default="auto",
-        help="sync dirty or stale workers to local HEAD: auto (default), always, or never",
+        help=(
+            "auto=sync branch/HEAD/dirty mismatches and apply all local non-ignored "
+            "dirt (default), always=reset every worker, never=fail before changing workers"
+        ),
     )
     parser.add_argument(
         "--sync-clean",
         action="store_true",
-        help="force synchronization of every selected worker before preflight",
+        help="force the destructive shared reset path, then apply the local non-ignored overlay",
     )
     parser.add_argument(
         "--publish-source",
         choices=("auto", "origin", "local"),
         default="auto",
         help=(
-            "how to ship unpublished local HEAD: auto uses origin only if it "
-            "already has the commit, otherwise an SSH bundle; local never uses "
-            "GitHub; origin may push HEAD to origin/<branch>"
+            "deprecated compatibility flag: auto/local use the local SCP bundle; "
+            "origin is retained only to fail closed and can never fetch or push"
         ),
+    )
+    parser.add_argument(
+        "--worker-branch",
+        default=None,
+        help="explicit worker branch override; default is the current local branch",
     )
     parser.add_argument(
         "--include-worktree",
         action="store_true",
-        help="also copy uncommitted local tracked/untracked files onto workers after reset",
+        default=True,
+        help="deprecated no-op; complete non-ignored Git-visible local dirt is always synchronized",
     )
     parser.add_argument("--keep-remote", action="store_true", help="retain remote job directories for inspection")
     parser.add_argument("--coord-owner", help="coordination-board owner; defaults to SPTMP2_COORD_OWNER or LOCAL_NOTES")

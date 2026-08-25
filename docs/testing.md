@@ -131,11 +131,11 @@ npm run test:e2e:remote
 `npm run test:e2e` is the default full E2E command. It runs
 `tools/run_distributed_e2e.py` in automatic mode across the local lane and every
 reachable compatible Windows or macOS Intel worker selected by the shared
-configuration. It includes the current worktree so remote lanes test the same
-uncommitted changes as the local lane. Linux workers are supported when their
-private project-map checkout and browser dependencies pass preflight.
-If no usable remote setup is available, automatic mode falls back to the local
-Playwright run. Use `npm run test:e2e:local` to force a local-only run, or
+configuration. Linux workers are supported when their private project-map
+checkout and browser dependencies pass preflight. Automatic mode fails closed
+when distributed setup or all remote workers are unavailable; it never silently
+claims a local-only run as distributed. Use `npm run test:e2e:local` to force a
+local-only diagnostic, or
 `npm run test:e2e:remote` when remote execution is required and a missing or
 unusable remote setup should fail the command. The gitignored
 `LOCAL_NOTES.md` selects the shared root, project name, and local lane. Worker
@@ -150,18 +150,30 @@ exports it as `DROPBOX_BROWSER_BROWSER_EXECUTABLE`, and the Playwright config
 uses that executable for the lane. Linux workers with no configured browser
 path use the bundled Chromium.
 
-Before a remote run, the default `--publish-workers auto` compares each
-selected worker with the local branch and `HEAD`. Workers on another branch,
-dirty checkouts, and stale commits are preserved in a remote stash and reset to
-that same branch and commit. `--publish-source auto` (default) fetches
-from `origin` only when that remote already contains local `HEAD`. Unpublished
-local commits are shipped with a Git bundle over SSH; GitHub is not updated.
-Use `--publish-source local` to always use the SSH bundle, or
-`--publish-source origin` to push `HEAD` to `origin/<local-branch>` when needed.
-`--include-worktree` also copies uncommitted tracked and non-ignored untracked
-files onto every worker after the reset. Use `--publish-workers never` to reject
-instead of synchronizing, or `--sync-clean`/`--publish-workers always` to force a
-refresh.
+Before a remote run, the default `--publish-workers auto` calls the shared
+`network_computers.direct_worktree_sync` protocol. It resolves the local
+branch and committed `HEAD`, compares each worker's branch/HEAD/cleanliness,
+and uses an SCP'd local Git bundle plus direct file transfer. All local
+non-ignored Git-visible dirt is synchronized to every selected worker by
+default: staged, unstaged, untracked, deleted, and renamed paths, including
+spaces and Unicode. Ignored files are excluded. Remote non-ignored dirt is
+disposable: the runner emits a visible worker-specific warning, hard-resets
+tracked changes, removes non-ignored untracked files with `git clean -fd`, and
+does not stash or use `git clean -fdx`. The shared protocol verifies exact
+overlay hashes, expected deletions, branch, `HEAD`, and no unexpected
+non-ignored dirt. It never fetches `origin`, updates `origin/*`, or runs
+`git push`. `--include-worktree` is retained as a compatibility no-op;
+`--publish-source auto`/`local` are local-bundle compatibility modes and
+`--publish-source origin` fails closed. Use `--publish-workers never` to fail
+before changing workers, or `--sync-clean`/`--publish-workers always` to force
+the destructive reset path while still applying the local overlay.
+
+Scheduling is owned by the same shared `network_computers.adaptive_e2e` module
+used by OSPhoto. An empty ignored `sptmp2/e2e/adaptive-schedule.json`
+uses topology capacity; successful runs append bounded lane timing samples and
+future plans minimize predicted makespan across only the lanes available for
+that run. No product-specific hardcoded weight algorithm or tracked learning
+file is used.
 
 Before an actual remote run, set the coordination owner (the local notes may
 also provide `coord_owner`):

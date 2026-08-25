@@ -5,6 +5,9 @@ __pycache__/
 config_local.json
 .dropbox-browser-temp/
 Temp/
+
+# Shared sptmp2 scheduler learning (run artifacts remain under Temp/).
+/sptmp2/
 Cache/
 ThumbnailCache/
 DropboxLocal/
