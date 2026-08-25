@@ -357,6 +357,7 @@ def choose_assignments(
         bins,
         learning if learning is not None else shared.adaptive.load_learning(ADAPTIVE_LEARNING_PATH),
         exact_limit=12,
+        require_execution="remote" if workers and local_enabled else None,
     )
     shared.schedule.apply_assignment(units, bins, assignment, estimates)
     result: list[Assignment] = []
@@ -877,17 +878,37 @@ def run(args: argparse.Namespace) -> int:
     except Exception as exc:  # noqa: BLE001 - normalize availability failures
         fail(f"remote availability setup failed: {exc}")
 
+    # Plan against the available topology before taking leases or
+    # synchronizing repositories. Small runs must not destructively touch a
+    # worker that receives no specs.
+    local_weight, local_lanes = local_lane_settings(shared, hosts, workers)
+    learning = shared.adaptive.load_learning(ADAPTIVE_LEARNING_PATH)
+    candidate_assignments = choose_assignments(
+        shared,
+        specs,
+        workers,
+        local_enabled=local_enabled,
+        local_weight=local_weight,
+        local_lanes=local_lanes,
+        learning=learning,
+    )
+    candidate_remote_ids = {
+        item.lane_id for item in candidate_assignments if item.execution == "remote"
+    }
+    sync_workers = [worker for worker in workers if worker.id in candidate_remote_ids]
+
     coordination_leases: list[tuple[RemoteWorker, str]] = []
     if ssh is not None and not args.dry_run:
         workers, coordination_leases = claim_coordination_workers(
             shared,
-            workers,
+            sync_workers,
             owner=coord_owner,
             duration_seconds=args.coord_duration_seconds,
             grace_seconds=args.coord_grace_seconds,
             wait_for_release=args.coord_wait_for_release,
             poll_seconds=args.coord_poll_seconds,
         )
+        sync_workers = workers
 
     try:
         source_state = shared.direct_sync.inspect_local_repo(
@@ -903,7 +924,7 @@ def run(args: argparse.Namespace) -> int:
             prepare_workers_for_run(
                 shared,
                 ssh,
-                workers,
+                sync_workers,
                 target_branch=expected_branch,
                 expected_head=expected_head,
                 publish_mode=args.publish_workers,
@@ -922,7 +943,7 @@ def run(args: argparse.Namespace) -> int:
 
     ready_workers: list[RemoteWorker] = []
     if ssh is not None:
-        for worker in workers:
+        for worker in sync_workers:
             ready, detail = check_remote(
                 shared,
                 ssh,
@@ -965,13 +986,11 @@ def run(args: argparse.Namespace) -> int:
         fail("no remote E2E workers passed preflight and local lane is disabled")
 
     try:
-        local_weight, local_lanes = local_lane_settings(shared, hosts, workers)
         if local_enabled:
             print(
                 f"local capacity: {local_lanes} lane(s), schedule weight {local_weight:g}",
                 flush=True,
             )
-        learning = shared.adaptive.load_learning(ADAPTIVE_LEARNING_PATH)
         assignments = choose_assignments(
             shared,
             specs,
