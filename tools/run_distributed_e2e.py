@@ -40,8 +40,11 @@ except ModuleNotFoundError:  # package import from the repository test suite
 
 REPO = Path(__file__).resolve().parents[1]
 E2E_DIR = REPO / "tests" / "e2e"
-TIMING_PATH = REPO / "Temp" / "remote-e2e" / "spec-timing.json"
-ADAPTIVE_LEARNING_PATH = REPO / "Temp" / "remote-e2e" / "adaptive-schedule.json"
+# Run artifacts remain under Temp; reusable scheduler learning lives in the
+# ignored project-local sptmp2 state directory.
+DISTRIBUTION_STATE_ROOT = REPO / "sptmp2" / "e2e"
+TIMING_PATH = DISTRIBUTION_STATE_ROOT / "spec-timing.json"
+ADAPTIVE_LEARNING_PATH = DISTRIBUTION_STATE_ROOT / "adaptive-schedule.json"
 DEFAULT_LOCAL_WEIGHT = 1.0
 DEFAULT_LOCAL_LANES = 1
 DEFAULT_POLL_SECONDS = 2.0
