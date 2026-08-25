@@ -131,18 +131,19 @@ npm run test:e2e:remote
 `npm run test:e2e` is the default full E2E command. It runs
 `tools/run_distributed_e2e.py` in automatic mode across the local lane and every
 reachable compatible Windows or macOS Intel worker selected by the shared
-configuration. Linux workers are supported when their private project-map
-checkout and browser dependencies pass preflight. Automatic mode fails closed
+configuration. Linux workers are supported when their application adapter or
+private project-map checkout and browser dependencies pass preflight. Automatic mode fails closed
 when distributed setup or all remote workers are unavailable; it never silently
 claims a local-only run as distributed. Use `npm run test:e2e:local` to force a
 local-only diagnostic, or
 `npm run test:e2e:remote` when remote execution is required and a missing or
 unusable remote setup should fail the command. The gitignored
 `LOCAL_NOTES.md` selects the shared root, project name, and local lane. Worker
-checkout/runtime settings belong in the shared project's private
-`projects/dropbox_browser.json`; credentials remain in the shared worker
-checkout. The product source dynamically links the shared SDK when it is
-present and does not vendor or name a private inventory repository.
+checkout/runtime settings belong in the application adapter or an ignored
+local `projects/dropbox_browser.json` copy; credentials remain in the shared
+worker checkout. A clean sptmp2 clone uses Dropbox’s built-in adapter when no
+private map exists. The product source dynamically links the shared SDK when
+it is present and does not vendor or name a private inventory repository.
 
 Workers may use an installed browser instead of Playwright's bundled Chromium.
 Set the worker's private `browser` path when needed; the distributed runner

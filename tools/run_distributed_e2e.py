@@ -48,6 +48,17 @@ ADAPTIVE_LEARNING_PATH = DISTRIBUTION_STATE_ROOT / "adaptive-schedule.json"
 DEFAULT_LOCAL_WEIGHT = 1.0
 DEFAULT_LOCAL_LANES = 1
 DEFAULT_POLL_SECONDS = 2.0
+
+# A clean sptmp2 checkout intentionally has no tracked project JSON. These
+# entries are the Dropbox-specific worker adapter used when LOCAL_NOTES does
+# not provide a private map; synchronization remains in the shared API.
+DEFAULT_WORKER_CONFIGS: tuple[dict[str, Any], ...] = (
+    {"id": "mac-pro", "nickname": "MacPro2013", "label": "Mac-Pro", "repo": "/home/spotco/dev/dropbox_browser", "git": "git", "path_prefix": "/home/spotco/.local/node/bin:/home/spotco/.local/bin:/usr/local/bin:/usr/bin:/bin", "browser": "/usr/bin/google-chrome", "platform": "linux", "branch": "master", "schedule_weight": 2.1},
+    {"id": "spmba2014", "nickname": "spmba2014", "label": "spmba2014", "repo": "/home/spotco/dev/dropbox_browser", "git": "git", "path_prefix": "/home/spotco/.local/share/mise/shims:/home/spotco/.local/bin:/usr/local/bin:/usr/bin:/bin", "browser": "/usr/bin/chromium", "platform": "linux", "branch": "master", "schedule_weight": 1.1},
+    {"id": "spotcomba2016", "nickname": "SpotcoMba2016", "label": "SpotcoMba2016", "repo": "/Users/betty/dev/dropbox_browser", "git": "git", "path_prefix": "/usr/local/bin:/Users/betty/.local/bin:/usr/bin:/bin", "platform": "macos-intel", "branch": "master", "schedule_weight": 1.4},
+    {"id": "macmini2011", "nickname": "macmini2011", "label": "macmini2011", "repo": "/home/spotco/dev/dropbox_browser", "git": "git", "path_prefix": "/home/spotco/.local/node/bin:/home/spotco/.local/bin:/usr/local/bin:/usr/bin:/bin", "browser": "", "platform": "linux", "branch": "master", "schedule_weight": 2.4},
+    {"id": "surfacebook3", "nickname": "surfacebook3", "label": "surfacebook3", "repo": "E:/dev/dropbox_browser", "git": "git", "path_prefix": "", "browser": "", "platform": "windows", "branch": "master", "schedule_weight": 2.4},
+)
 SUPPORTED_PLATFORMS = frozenset({"windows", "linux", "macos-intel"})
 
 
@@ -127,11 +138,11 @@ def _host_by_nickname(hosts: Any, nickname: str) -> Any:
 
 
 def load_workers(shared: Any, settings: dict[str, Any]) -> tuple[list[RemoteWorker], list[str]]:
-    """Resolve project-map workers and exclude unsupported platforms.
+    """Resolve worker adapters and exclude unsupported platforms.
 
-    The shared project map owns worker checkout/runtime settings.  A worker
-    list in LOCAL_NOTES remains accepted as a compatibility override for
-    machines that have not migrated their private notes yet.
+    A private project map or the built-in application adapter owns worker
+    checkout/runtime settings. A worker list in LOCAL_NOTES remains accepted
+    as a compatibility override for machines with custom private notes.
     """
 
     workers_raw = settings.get("workers")
@@ -142,10 +153,6 @@ def load_workers(shared: Any, settings: dict[str, Any]) -> tuple[list[RemoteWork
         project = shared.package.load_project(project_name, root=shared.root)
     except Exception as exc:  # noqa: BLE001 - legacy notes can still work without a map
         project_error = str(exc)
-        if not isinstance(workers_raw, list):
-            raise RunnerError(
-                f"shared project map {project_name!r} could not be loaded: {exc}"
-            ) from exc
 
     if isinstance(workers_raw, list):
         worker_entries: list[dict[str, Any]] = [
@@ -157,13 +164,18 @@ def load_workers(shared: Any, settings: dict[str, Any]) -> tuple[list[RemoteWork
             for nickname in project.workers
         ]
     else:
-        return [], ["no local Remote E2E workers are configured"]
+        # A clean sptmp2 clone has no tracked project JSON. Keep the
+        # application adapter sufficient to discover hosts so the first run
+        # can start cold and learn into ignored state.
+        worker_entries = [dict(item) for item in DEFAULT_WORKER_CONFIGS]
 
     hosts = shared.package.load_hosts(root=shared.root)
     workers: list[RemoteWorker] = []
     skipped: list[str] = []
     if project_error:
-        skipped.append(f"project map unavailable; using legacy local notes: {project_error}")
+        skipped.append(
+            f"project map unavailable; using built-in Dropbox worker adapter: {project_error}"
+        )
     for index, raw in enumerate(worker_entries):
         if not isinstance(raw, dict):
             skipped.append(f"worker entry {index} is not an object")

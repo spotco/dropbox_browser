@@ -129,6 +129,39 @@ class DistributedE2ETests(unittest.TestCase):
         self.assertEqual(workers[0].branch, "master")
         self.assertEqual(workers[0].schedule_weight, 2.4)
 
+    def test_clean_shared_checkout_uses_builtin_worker_adapter(self) -> None:
+        host = SimpleNamespace(
+            nickname="surfacebook3",
+            host="DESKTOP-0DGGB1K",
+            user="spotco",
+            label="surfacebook3",
+            never_remote=False,
+            hardware=SimpleNamespace(os="Windows", model="Surface Book 3"),
+            defaults=SimpleNamespace(schedule_weight=1.0),
+        )
+
+        class Hosts:
+            def get(self, nickname):  # noqa: ANN001
+                if nickname == "surfacebook3":
+                    return host
+                raise KeyError(nickname)
+
+        def missing_project(name, root):  # noqa: ANN001
+            raise RuntimeError("project map not found")
+
+        package = SimpleNamespace(
+            load_project=missing_project,
+            load_hosts=lambda root: Hosts(),
+        )
+        shared = SimpleNamespace(root=Path("."), package=package)
+
+        workers, skipped = runner.load_workers(shared, {"project": "dropbox_browser"})
+
+        self.assertEqual(len(workers), 1)
+        self.assertEqual(workers[0].nickname, "surfacebook3")
+        self.assertEqual(workers[0].repo, "E:/dev/dropbox_browser")
+        self.assertIn("built-in Dropbox worker adapter", skipped[0])
+
     def test_coordination_claim_and_release_use_bounded_owner_lease(self) -> None:
         worker = runner.RemoteWorker(
             id="surfacebook3",
