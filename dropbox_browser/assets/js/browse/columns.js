@@ -3,14 +3,15 @@ var DEFAULT_COLUMN_MIN_WIDTH = 32;
 
 export var BROWSE_COLUMN_KEYS = ['name', 'type', 'status', 'size', 'date', 'view', 'sync'];
 
+// Keep each track slightly wider than its 14px resize handle so handles stay distinct.
 export var BROWSE_COLUMN_MIN_WIDTHS = {
-  name: 200,
-  type: 72,
-  status: 96,
-  size: 88,
-  date: 144,
-  view: 60,
-  sync: 100,
+  name: 16,
+  type: 16,
+  status: 16,
+  size: 16,
+  date: 16,
+  view: 16,
+  sync: 16,
 };
 
 var BROWSE_COLUMN_DEFAULT_WEIGHTS = {
@@ -33,6 +34,15 @@ function minWidthsForConfig(columnMinWidths) {
     : BROWSE_COLUMN_MIN_WIDTHS;
 }
 
+function minWidthForKey(key, columnMinWidths) {
+  var minWidths = minWidthsForConfig(columnMinWidths);
+  if (Object.prototype.hasOwnProperty.call(minWidths, key)) {
+    var configured = Number(minWidths[key]);
+    if (isFinite(configured) && configured >= 0) return configured;
+  }
+  return DEFAULT_COLUMN_MIN_WIDTH;
+}
+
 function readSetting(key, defaultValue) {
   if (!window.Settings || typeof window.Settings.get !== 'function') return defaultValue;
   return window.Settings.get(key, defaultValue);
@@ -44,7 +54,7 @@ function writeSetting(key, value) {
 }
 
 export function clampColumnWidth(key, value, columnMinWidths) {
-  var minWidth = minWidthsForConfig(columnMinWidths)[key] || DEFAULT_COLUMN_MIN_WIDTH;
+  var minWidth = minWidthForKey(key, columnMinWidths);
   var parsed = Number(value);
   if (!isFinite(parsed)) return minWidth;
   return Math.max(minWidth, Math.round(parsed));
@@ -57,7 +67,7 @@ export function normalizeStoredColumnWidths(value, columnKeys, columnMinWidths) 
   keys.forEach(function (key) {
     if (!Object.prototype.hasOwnProperty.call(value, key)) return;
     var parsed = Number(value[key]);
-    if (!isFinite(parsed) || parsed <= 0) return;
+    if (!isFinite(parsed) || parsed < 0) return;
     normalized[key] = clampColumnWidth(key, parsed, columnMinWidths);
   });
   return normalized;
@@ -66,7 +76,7 @@ export function normalizeStoredColumnWidths(value, columnKeys, columnMinWidths) 
 function minimumTotalWidth(keys, columnMinWidths) {
   var minWidths = minWidthsForConfig(columnMinWidths);
   return keys.reduce(function (sum, key) {
-    return sum + (minWidths[key] || DEFAULT_COLUMN_MIN_WIDTH);
+    return sum + minWidthForKey(key, minWidths);
   }, 0);
 }
 
@@ -79,7 +89,7 @@ function distributeExtraWidth(keys, extraWidth, columnMinWidths) {
   }, 0);
   var assigned = 0;
   keys.forEach(function (key, index) {
-    var minWidth = minWidths[key] || DEFAULT_COLUMN_MIN_WIDTH;
+    var minWidth = minWidthForKey(key, minWidths);
     var weight = BROWSE_COLUMN_DEFAULT_WEIGHTS[key] || 1;
     var extra = index === keys.length - 1
       ? normalizedExtra - assigned
@@ -121,7 +131,7 @@ export function fitColumnWidthsToTotal(keys, widths, totalWidth, columnMinWidths
   if (delta !== 0) {
     var adjustableKeys = delta > 0 ? columnKeys.slice() : columnKeys.slice().reverse();
     adjustableKeys.some(function (key) {
-      var minWidth = minWidthsForConfig(columnMinWidths)[key] || DEFAULT_COLUMN_MIN_WIDTH;
+      var minWidth = minWidthForKey(key, columnMinWidths);
       if (delta < 0 && scaled[key] + delta < minWidth) {
         var reduction = scaled[key] - minWidth;
         if (reduction <= 0) return false;
@@ -138,7 +148,7 @@ export function fitColumnWidthsToTotal(keys, widths, totalWidth, columnMinWidths
 }
 
 function availableShrink(width, key, columnMinWidths) {
-  var minWidth = minWidthsForConfig(columnMinWidths)[key] || DEFAULT_COLUMN_MIN_WIDTH;
+  var minWidth = minWidthForKey(key, columnMinWidths);
   return Math.max(0, width - minWidth);
 }
 
@@ -162,7 +172,7 @@ export function resizeColumnPair(widths, leftKey, rightKey, delta, columnKeys, c
   var normalized = normalizeStoredColumnWidths(widths, columnKeys, columnMinWidths);
   var leftWidth = normalized[leftKey];
   var rightWidth = normalized[rightKey];
-  if (!leftWidth || !rightWidth) return normalized;
+  if (typeof leftWidth !== 'number' || typeof rightWidth !== 'number') return normalized;
   var keys = normalizedColumnKeys(columnKeys);
   var dividerIndex = keys.indexOf(leftKey);
   if (dividerIndex < 0 || keys[dividerIndex + 1] !== rightKey) return normalized;
@@ -212,7 +222,7 @@ export function writeBrowseColumnWidths(table, widths) {
   table.querySelectorAll('col[data-browse-column]').forEach(function (column) {
     var key = column.getAttribute('data-browse-column') || '';
     var width = normalized[key];
-    if (width) {
+    if (typeof width === 'number') {
       column.style.width = String(width) + 'px';
     } else {
       column.style.removeProperty('width');
@@ -284,38 +294,52 @@ export function initBrowseColumnResizing(options) {
     activeDrag = null;
   }
 
-  table.querySelectorAll('.browse-column-resizer[data-browse-column-resizer]').forEach(function (handle) {
-    handle.addEventListener('pointerdown', function (event) {
-      var leftKey = handle.getAttribute('data-browse-column-resizer') || '';
-      var index = columnKeys.indexOf(leftKey);
-      var rightKey = index >= 0 ? columnKeys[index + 1] : '';
-      if (!leftKey || !rightKey) return;
-      event.preventDefault();
-      var startX = event.clientX;
-      var startWidths = Object.assign({}, widths);
-      stopDrag();
-      if (typeof handle.setPointerCapture === 'function' && event.pointerId !== undefined) {
-        try {
-          handle.setPointerCapture(event.pointerId);
-        } catch (_error) {}
-      }
-      handle.classList.add('dragging');
-      if (doc.body) doc.body.classList.add('browse-column-resizing');
-      activeDrag = {
-        handle: handle,
-        move: function (moveEvent) {
-          widths = resizeColumnPair(startWidths, leftKey, rightKey, moveEvent.clientX - startX);
-          writeCurrentWidths();
-        },
-        end: function () {
-          stopDrag();
-        },
-      };
-      win.addEventListener('pointermove', activeDrag.move);
-      win.addEventListener('pointerup', activeDrag.end);
-      win.addEventListener('pointercancel', activeDrag.end);
-    });
-  });
+  table.addEventListener('pointerdown', function (event) {
+    var handle = event.target && typeof event.target.closest === 'function'
+      ? event.target.closest('.browse-column-resizer[data-browse-column-resizer]')
+      : null;
+    if (!handle) {
+      var closestDistance = Infinity;
+      table.querySelectorAll('.browse-column-resizer[data-browse-column-resizer]').forEach(function (candidate) {
+        var rect = candidate.getBoundingClientRect();
+        if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) return;
+        var distance = Math.abs(event.clientX - (rect.left + rect.width / 2));
+        if (distance < closestDistance) {
+          handle = candidate;
+          closestDistance = distance;
+        }
+      });
+    }
+    if (!handle) return;
+    var leftKey = handle.getAttribute('data-browse-column-resizer') || '';
+    var index = columnKeys.indexOf(leftKey);
+    var rightKey = index >= 0 ? columnKeys[index + 1] : '';
+    if (!leftKey || !rightKey) return;
+    event.preventDefault();
+    var startX = event.clientX;
+    var startWidths = Object.assign({}, widths);
+    stopDrag();
+    if (typeof handle.setPointerCapture === 'function' && event.pointerId !== undefined) {
+      try {
+        handle.setPointerCapture(event.pointerId);
+      } catch (_error) {}
+    }
+    handle.classList.add('dragging');
+    if (doc.body) doc.body.classList.add('browse-column-resizing');
+    activeDrag = {
+      handle: handle,
+      move: function (moveEvent) {
+        widths = resizeColumnPair(startWidths, leftKey, rightKey, moveEvent.clientX - startX);
+        writeCurrentWidths();
+      },
+      end: function () {
+        stopDrag();
+      },
+    };
+    win.addEventListener('pointermove', activeDrag.move);
+    win.addEventListener('pointerup', activeDrag.end);
+    win.addEventListener('pointercancel', activeDrag.end);
+  }, true);
 
   win.addEventListener('resize', function () {
     fitWidthsToTable();

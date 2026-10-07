@@ -8,13 +8,13 @@ async function importModuleFromWorkspace(relativePath) {
   return import(pathToFileURL(absolutePath).href);
 }
 
-test("normalizeStoredColumnWidths keeps supported positive widths and clamps to the shared small minimum", async () => {
+test("normalizeStoredColumnWidths clamps browse columns to the drag-handle minimum", async () => {
   global.window = {};
 
   const columns = await importModuleFromWorkspace("dropbox_browser/assets/js/browse/columns.js");
 
   assert.deepEqual(columns.normalizeStoredColumnWidths({
-    name: 4,
+    name: 0,
     type: 101.2,
     bogus: 999,
     status: "not-a-number",
@@ -26,7 +26,7 @@ test("normalizeStoredColumnWidths keeps supported positive widths and clamps to 
   });
 });
 
-test("fitColumnWidthsToTotal keeps all columns inside the available width when the viewport can satisfy minimums", async () => {
+test("fitColumnWidthsToTotal keeps all columns inside the available width", async () => {
   global.window = {};
 
   const columns = await importModuleFromWorkspace("dropbox_browser/assets/js/browse/columns.js");
@@ -73,10 +73,10 @@ test("resizeColumnPair cascades shrink across columns to the right when the adja
   );
   assert.equal(resized.name, 380);
   assert.equal(resized.type, columns.BROWSE_COLUMN_MIN_WIDTHS.type);
-  assert.equal(resized.status, columns.BROWSE_COLUMN_MIN_WIDTHS.status);
-  assert.equal(resized.size, columns.BROWSE_COLUMN_MIN_WIDTHS.size);
-  assert.equal(resized.date, columns.BROWSE_COLUMN_MIN_WIDTHS.date);
-  assert.equal(resized.view, 70);
+  assert.equal(resized.status, 74);
+  assert.equal(resized.size, 120);
+  assert.equal(resized.date, 180);
+  assert.equal(resized.view, 80);
   assert.equal(resized.sync, 140);
 });
 
@@ -102,12 +102,12 @@ test("resizeColumnPair cascades shrink across columns to the left when dragging 
   );
   assert.equal(resized.size, 260);
   assert.equal(resized.status, columns.BROWSE_COLUMN_MIN_WIDTHS.status);
-  assert.equal(resized.type, columns.BROWSE_COLUMN_MIN_WIDTHS.type);
-  assert.equal(resized.name, 212);
+  assert.equal(resized.type, 104);
+  assert.equal(resized.name, 260);
   assert.equal(resized.date, 180);
 });
 
-test("resizeColumnPair stops growing once every column in the drag direction is at minimum width", async () => {
+test("resizeColumnPair lets a column consume all following widths down to the handle minimum", async () => {
   global.window = {};
 
   const columns = await importModuleFromWorkspace("dropbox_browser/assets/js/browse/columns.js");
@@ -129,12 +129,9 @@ test("resizeColumnPair stops growing once every column in the drag direction is 
   ), 0);
 
   assert.equal(resized.name, normalizedWidths.name + maxGain);
-  assert.equal(resized.type, columns.BROWSE_COLUMN_MIN_WIDTHS.type);
-  assert.equal(resized.status, columns.BROWSE_COLUMN_MIN_WIDTHS.status);
-  assert.equal(resized.size, columns.BROWSE_COLUMN_MIN_WIDTHS.size);
-  assert.equal(resized.date, columns.BROWSE_COLUMN_MIN_WIDTHS.date);
-  assert.equal(resized.view, columns.BROWSE_COLUMN_MIN_WIDTHS.view);
-  assert.equal(resized.sync, columns.BROWSE_COLUMN_MIN_WIDTHS.sync);
+  Object.keys(columns.BROWSE_COLUMN_MIN_WIDTHS).forEach((key) => {
+    if (key !== "name") assert.equal(resized[key], columns.BROWSE_COLUMN_MIN_WIDTHS[key]);
+  });
 });
 
 test("applyBrowseColumnWidths fits to the visible shell width instead of preserving an oversized table width", async () => {
@@ -181,10 +178,7 @@ test("applyBrowseColumnWidths fits to the visible shell width instead of preserv
     sync: 60,
   });
 
-  const minimumTotal = columns.BROWSE_COLUMN_MIN_WIDTHS.name
-    + columns.BROWSE_COLUMN_MIN_WIDTHS.type
-    + columns.BROWSE_COLUMN_MIN_WIDTHS.sync;
-  assert.equal(Object.values(normalized).reduce((sum, value) => sum + value, 0), minimumTotal);
+  assert.equal(Object.values(normalized).reduce((sum, value) => sum + value, 0), 300);
   assert.equal(nameCol.style.width, normalized.name + "px");
   assert.equal(typeCol.style.width, normalized.type + "px");
   assert.equal(syncCol.style.width, normalized.sync + "px");
@@ -226,13 +220,13 @@ test("writeBrowseColumnWidths preserves the provided widths without refitting ot
   });
 
   assert.deepEqual(widths, {
-    name: columns.BROWSE_COLUMN_MIN_WIDTHS.name,
-    type: columns.BROWSE_COLUMN_MIN_WIDTHS.type,
-    status: columns.BROWSE_COLUMN_MIN_WIDTHS.status,
+    name: 150,
+    type: 50,
+    status: 70,
   });
-  assert.equal(nameCol.style.width, columns.BROWSE_COLUMN_MIN_WIDTHS.name + "px");
-  assert.equal(typeCol.style.width, columns.BROWSE_COLUMN_MIN_WIDTHS.type + "px");
-  assert.equal(statusCol.style.width, columns.BROWSE_COLUMN_MIN_WIDTHS.status + "px");
+  assert.equal(nameCol.style.width, "150px");
+  assert.equal(typeCol.style.width, "50px");
+  assert.equal(statusCol.style.width, "70px");
 });
 
 test("fitColumnWidthsToTotal supports custom column sets and minimum widths", async () => {

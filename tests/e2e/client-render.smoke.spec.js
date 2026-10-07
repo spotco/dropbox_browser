@@ -433,7 +433,7 @@ test("client-render shrinks saved browse columns to the viewport without overwri
   expect(resetMetrics.currentWidths.name).toBeLessThan(widenedMetrics.currentWidths.name);
 });
 
-test("client-render column dragging cascades through successive columns until that direction is exhausted", async ({ page }) => {
+test("client-render column dragging cascades through successive columns until they reach the handle minimum", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 820 });
   await page.goto("/");
   await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
@@ -463,23 +463,77 @@ test("client-render column dragging cascades through successive columns until th
   expect(afterCascade.currentWidths.name).toBeGreaterThan(beforeDrag.currentWidths.name);
   expect(afterCascade.currentWidths.type).toBeLessThan(beforeDrag.currentWidths.type);
   expect(afterCascade.currentWidths.status).toBeLessThan(beforeDrag.currentWidths.status);
-  expect(afterCascade.currentWidths.size).toBeLessThan(beforeDrag.currentWidths.size);
-  expect(afterCascade.currentWidths.type).toBe(72);
-  expect(afterCascade.currentWidths.status).toBe(96);
-  expect(afterCascade.currentWidths.size).toBeGreaterThanOrEqual(88);
+  expect(afterCascade.currentWidths.type).toBe(16);
+  expect(afterCascade.currentWidths.status).toBeLessThan(beforeDrag.currentWidths.status);
+  expect(afterCascade.currentWidths.size).toBe(beforeDrag.currentWidths.size);
 
-  await dragBrowseColumnResizer(page, "name", 2000);
+  // Leave enough pointer travel to reach the full width on a wide desktop.
+  await page.setViewportSize({ width: 4000, height: 820 });
+  await dragBrowseColumnResizer(page, "name", 5000);
   const fullyExhausted = await browseColumnMetrics(page);
 
-  expect(fullyExhausted.currentWidths.type).toBe(72);
-  expect(fullyExhausted.currentWidths.status).toBe(96);
-  expect(fullyExhausted.currentWidths.size).toBe(88);
-  expect(fullyExhausted.currentWidths.date).toBe(144);
-  expect(fullyExhausted.currentWidths.view).toBe(60);
-  expect(fullyExhausted.currentWidths.sync).toBe(100);
+  expect(fullyExhausted.currentWidths.type).toBe(16);
+  expect(fullyExhausted.currentWidths.status).toBe(16);
+  expect(fullyExhausted.currentWidths.size).toBe(16);
+  expect(fullyExhausted.currentWidths.date).toBe(16);
+  expect(fullyExhausted.currentWidths.view).toBe(16);
+  expect(fullyExhausted.currentWidths.sync).toBe(16);
 
   await dragBrowseColumnResizer(page, "name", 400);
   const beyondExhausted = await browseColumnMetrics(page);
   expect(beyondExhausted.currentWidths).toEqual(fullyExhausted.currentWidths);
   expect(beyondExhausted.preferredWidths).toEqual(fullyExhausted.preferredWidths);
+});
+
+test("client-render can transfer most of the table width between Date and Name while minimum-width draggers stay usable", async ({ page }) => {
+  await page.setViewportSize({ width: 680, height: 820 });
+  await page.goto("/");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+
+  const initial = await browseColumnMetrics(page);
+  expect(initial.shellClientWidth).toBeGreaterThan(0);
+  expect(initial.shellScrollWidth).toBeLessThanOrEqual(initial.shellClientWidth + 1);
+
+  // Move the space from Name through each adjacent divider into Date.
+  for (const key of ["name", "type", "status", "size"]) {
+    await dragBrowseColumnResizer(page, key, -5000);
+  }
+  await dragBrowseColumnResizer(page, "date", 5000);
+
+  const dateFullWidth = await browseColumnMetrics(page);
+  expect(dateFullWidth.currentWidths.date).toBeGreaterThanOrEqual(dateFullWidth.shellClientWidth - (6 * 16) - 2);
+  for (const key of ["name", "type", "status", "size", "view", "sync"]) {
+    expect(dateFullWidth.currentWidths[key]).toBe(16);
+  }
+  expect(dateFullWidth.preferredWidths).toEqual(dateFullWidth.currentWidths);
+  expect(dateFullWidth.storage).toEqual({ preferred: dateFullWidth.currentWidths });
+  expect(dateFullWidth.shellScrollWidth).toBeLessThanOrEqual(dateFullWidth.shellClientWidth + 1);
+
+  await page.reload();
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  const restoredDateWidth = await browseColumnMetrics(page);
+  expect(restoredDateWidth.currentWidths).toEqual(dateFullWidth.currentWidths);
+  expect(restoredDateWidth.preferredWidths).toEqual(dateFullWidth.currentWidths);
+
+  // Type is at its minimum; its own divider remains a usable drag target.
+  await dragBrowseColumnResizer(page, "type", 20);
+  const typeGrownFromMinimum = await browseColumnMetrics(page);
+  expect(typeGrownFromMinimum.currentWidths.type).toBe(36);
+  expect(typeGrownFromMinimum.currentWidths.date).toBe(restoredDateWidth.currentWidths.date - 20);
+
+  // The Name divider remains usable while its track is at the minimum width.
+  await dragBrowseColumnResizer(page, "name", 5000);
+  const nameFullWidth = await browseColumnMetrics(page);
+  expect(nameFullWidth.currentWidths.name).toBeGreaterThanOrEqual(nameFullWidth.shellClientWidth - (6 * 16) - 2);
+  for (const key of ["type", "status", "size", "date", "view", "sync"]) {
+    expect(nameFullWidth.currentWidths[key]).toBe(16);
+  }
+  expect(nameFullWidth.preferredWidths).toEqual(nameFullWidth.currentWidths);
+  expect(nameFullWidth.storage).toEqual({ preferred: nameFullWidth.currentWidths });
+
+  await page.reload();
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  const restoredNameWidth = await browseColumnMetrics(page);
+  expect(restoredNameWidth.currentWidths).toEqual(nameFullWidth.currentWidths);
+  expect(restoredNameWidth.preferredWidths).toEqual(nameFullWidth.currentWidths);
 });

@@ -264,7 +264,7 @@ th {
   top: -10px;
   touch-action: none;
   width: 14px;
-  z-index: 2;
+  z-index: 10;
 }
 .browse-column-resizer::before {
   background: #c0c9d4;
