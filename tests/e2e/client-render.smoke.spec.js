@@ -67,6 +67,34 @@ test("client-render mode fetches and renders browse rows from the listing endpoi
   expect(pageErrors).toEqual([]);
 });
 
+test("client-render keeps bottom-panel minimize enabled after music startup expands a minimized saved height", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+
+  await page.evaluate(() => {
+    Settings.set("bottom-pane-mode", "music-player");
+    Settings.set("log-height", 42);
+    Settings.set("bottom-panel-full-window", false);
+  });
+  await page.reload();
+
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await expect(page.locator("body")).toHaveAttribute("data-bottom-panel-ready", "1");
+  await expect(page.locator("#music-player-pane")).toBeVisible();
+  await expect
+    .poll(async () => page.locator("#log-panel").evaluate((panel) => Math.round(panel.getBoundingClientRect().height)))
+    .toBeGreaterThan(42);
+
+  const minimizeButton = page.locator("#bottom-pane-minimize");
+  await expect(minimizeButton).toBeEnabled();
+  await minimizeButton.click();
+  await expect
+    .poll(async () => page.locator("#log-panel").evaluate((panel) => Math.round(panel.getBoundingClientRect().height)))
+    .toBe(42);
+  await expect(minimizeButton).toBeDisabled();
+});
+
 test("client-render filter bar toggles from the top action row and persists", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");

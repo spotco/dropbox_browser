@@ -196,7 +196,10 @@
   function ensureMusicPaneHeight() {
     if (fullWindowActive) return;
     var target = clampHeight(musicMinHeight());
-    if (currentHeight < target) applyHeight(target);
+    if (currentHeight < target) {
+      applyHeight(target);
+      syncToolbarButtons();
+    }
   }
 
   preferredHeight = Math.max(minHeight, parseHeight(Settings.get('log-height', defaultHeight)));
