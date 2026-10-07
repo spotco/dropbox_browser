@@ -19,6 +19,9 @@ test.afterAll(async () => {
 });
 
 test("client-render keeps horizontal browse scrollbar visible and synced when table overflows", async ({ page }) => {
+  // The seven column handles need 16px each; at this width the shell is still
+  // narrower than their combined minimum, so the table truly overflows.
+  await page.setViewportSize({ width: 128, height: 820 });
   await page.goto("/?path=Camera%20Uploads");
 
   await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
