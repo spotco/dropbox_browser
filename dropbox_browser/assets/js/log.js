@@ -2,11 +2,13 @@
   var panel = document.getElementById('log-panel');
   var entries = document.getElementById('log-entries');
   var resizer = document.getElementById('log-resizer');
+  var toolbar = document.getElementById('log-toolbar');
   var grip = document.getElementById('log-grip');
   var fullWindowButton = document.getElementById('bottom-pane-full-window-toggle');
   var minimizeButton = document.getElementById('bottom-pane-minimize');
   var defaultHeight = 240;
   var minHeight = 42;
+  var minPlaylistModalContentHeight = 96;
   var normalPanelMaxHeightOffset = 80;
   var fullWindowSettingKey = 'bottom-panel-full-window';
   var modeSelect = document.getElementById('bottom-pane-mode');
@@ -15,6 +17,25 @@
   var fullWindowActive = false;
   var heightBeforeFullWindow = null;
   var activeResize = null;
+
+  function syncPlaylistModalGeometry() {
+    var panelRect;
+    var toolbarRect;
+    var topInset;
+    var availableHeight;
+    if (!panel || !toolbar) return;
+    panelRect = panel.getBoundingClientRect();
+    toolbarRect = toolbar.getBoundingClientRect();
+    topInset = Math.max(0, Math.min(panelRect.height, toolbarRect.bottom - panelRect.top));
+    availableHeight = Math.max(0, panelRect.bottom - toolbarRect.bottom);
+    document.documentElement.style.setProperty('--log-panel-modal-top-inset', topInset + 'px');
+    // Keep enough room for a dialog heading and actions; its open state is
+    // preserved so it returns when the panel grows again.
+    panel.setAttribute(
+      'data-playlist-modal-content-collapsed',
+      availableHeight < minPlaylistModalContentHeight ? 'true' : 'false'
+    );
+  }
 
   function scrollLogToBottom() {
     entries.scrollTop = entries.scrollHeight;
@@ -41,6 +62,7 @@
     var clamped = clampHeight(height);
     currentHeight = clamped;
     document.documentElement.style.setProperty('--log-panel-height', clamped + 'px');
+    syncPlaylistModalGeometry();
     if (persist !== false) {
       preferredHeight = clamped;
       Settings.set('log-height', clamped);
@@ -63,6 +85,7 @@
     // Do not persist the viewport height as the normal panel setting.
     var fill = Math.max(minHeight, window.innerHeight || minHeight);
     document.documentElement.style.setProperty('--log-panel-height', fill + 'px');
+    syncPlaylistModalGeometry();
     return fill;
   }
 
@@ -212,6 +235,12 @@
       savedHeight: preferredHeight,
     });
   }
+  syncPlaylistModalGeometry();
+  if (typeof window.ResizeObserver === 'function' && panel && toolbar) {
+    var modalGeometryObserver = new window.ResizeObserver(syncPlaylistModalGeometry);
+    modalGeometryObserver.observe(panel);
+    modalGeometryObserver.observe(toolbar);
+  }
 
   function startResize(ev) {
     if (fullWindowActive) {
@@ -255,6 +284,7 @@
     });
   }
   window.addEventListener('resize', function () {
+    syncPlaylistModalGeometry();
     if (fullWindowActive) {
       applyFullWindowHeight();
       syncToolbarButtons();

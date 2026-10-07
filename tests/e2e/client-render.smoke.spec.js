@@ -38,6 +38,39 @@ async function dragBrowseColumnResizer(page, columnKey, deltaX) {
   await page.mouse.up();
 }
 
+async function expectPlaylistDialogCoversBottomPanelContent(page, dialog) {
+  const metrics = await page.locator(dialog).evaluate((dialogElement) => {
+    const panel = document.getElementById("log-panel");
+    const toolbar = document.getElementById("log-toolbar");
+    const dialogRect = dialogElement.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    const toolbarRect = toolbar.getBoundingClientRect();
+    const contentTop = Math.min(toolbarRect.bottom, panelRect.bottom);
+    const contentHeight = Math.max(0, panelRect.bottom - toolbarRect.bottom);
+    return {
+      delta: Math.max(
+        Math.abs(dialogRect.left - panelRect.left),
+        Math.abs(dialogRect.top - contentTop),
+        Math.abs(dialogRect.width - panelRect.width),
+        Math.abs(dialogRect.height - contentHeight),
+      ),
+      dialog: {
+        x: dialogRect.left,
+        y: dialogRect.top,
+        width: dialogRect.width,
+        height: dialogRect.height,
+      },
+      panel: {
+        x: panelRect.left,
+        y: panelRect.top,
+        width: panelRect.width,
+        height: panelRect.height,
+      },
+    };
+  });
+  expect(metrics.delta, JSON.stringify(metrics)).toBeLessThan(1);
+}
+
 test.beforeAll(async () => {
   server = await startServer({ clientRender: true });
 });
@@ -93,6 +126,157 @@ test("client-render keeps bottom-panel minimize enabled after music startup expa
     .poll(async () => page.locator("#log-panel").evaluate((panel) => Math.round(panel.getBoundingClientRect().height)))
     .toBe(42);
   await expect(minimizeButton).toBeDisabled();
+});
+
+test("music and video playlist dialogs cover bottom panel content below the toolbar", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await page.evaluate(() => {
+    Settings.set("bottom-panel-full-window", false);
+    window.DropboxBrowserLogPanel.applyHeight(420);
+  });
+
+  for (const player of [
+    { mode: "music-player", prefix: "music" },
+    { mode: "video-player", prefix: "video" },
+  ]) {
+    const selector = (name) => `#${player.prefix}-playlist-${name}`;
+    const loadDialog = selector("load-dialog");
+    const renameDialog = selector("rename-dialog");
+    const confirmDialog = selector("overwrite-dialog");
+
+    await page.selectOption("#bottom-pane-mode", player.mode);
+    await expect(page.locator(`#${player.prefix}-player-pane`)).toBeVisible();
+
+    await page.locator(selector("load")).click();
+    await expect(page.locator(loadDialog)).toBeVisible();
+    await expectPlaylistDialogCoversBottomPanelContent(page, loadDialog);
+    await page.locator(selector("load-cancel")).click();
+
+    await page.locator(selector("rename")).click();
+    await expect(page.locator(renameDialog)).toBeVisible();
+    await expectPlaylistDialogCoversBottomPanelContent(page, renameDialog);
+    await page.locator(selector("rename-cancel")).click();
+
+    await page.locator(selector("rename")).click();
+    await page.locator(selector("rename-input")).fill(`${player.prefix} Overlay A`);
+    await page.locator(selector("rename-confirm")).click();
+
+    await page.locator(selector("load")).click();
+    await expect(page.locator(loadDialog)).toBeVisible();
+    await page.locator(selector("load-new")).click();
+    await expect(page.locator(loadDialog)).toBeHidden();
+    await page.locator(selector("rename")).click();
+    await page.locator(selector("rename-input")).fill(`${player.prefix} Overlay B`);
+    await page.locator(selector("rename-confirm")).click();
+
+    await page.locator(selector("rename")).click();
+    await page.locator(selector("rename-input")).fill(`${player.prefix} Overlay A`);
+    await page.locator(selector("rename-confirm")).click();
+    await expect(page.locator(confirmDialog)).toBeVisible();
+    await expectPlaylistDialogCoversBottomPanelContent(page, confirmDialog);
+    await page.locator(selector("overwrite-cancel")).click();
+  }
+});
+
+test("recent dialogs stay below panel controls, track resizing, and keep the scroll list visible when short", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 420 });
+  await page.goto("/");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+
+  const recentRecords = Array.from({ length: 36 }, (_, index) => {
+    const filename = `Recent Track ${String(index + 1).padStart(2, "0")}.mp3`;
+    const path = `music/recent-track-${index + 1}.mp3`;
+    return {
+      id: index + 1,
+      item: {
+        display_name: filename,
+        extension: ".mp3",
+        filename,
+        rel_path: path,
+        remote_path: `dropbox:${path}`,
+        stream_path: path,
+      },
+      playlist_name: "Recent Test Playlist",
+      played_at: 1780000000000 + (index * 1000),
+    };
+  });
+  await page.evaluate((records) => {
+    const history = { version: 1, records };
+    Settings.set("music-recent-history", history);
+    Settings.set("video-recent-history", history);
+  }, recentRecords);
+  await page.reload();
+  await expect(page.locator("body")).toHaveAttribute("data-bottom-panel-ready", "1");
+
+  for (const player of [
+    { mode: "music-player", prefix: "music" },
+    { mode: "video-player", prefix: "video" },
+  ]) {
+    const dialog = `#${player.prefix}-playlist-recent-dialog`;
+    const list = `#${player.prefix}-playlist-recent-list`;
+
+    await page.selectOption("#bottom-pane-mode", player.mode);
+    await expect(page.locator(`#${player.prefix}-player-pane`)).toBeVisible();
+    await page.evaluate(() => window.DropboxBrowserLogPanel.applyHeight(250));
+    await page.locator(`#${player.prefix}-playlist-recent`).click();
+    await expect(page.locator(dialog)).toBeVisible();
+    await expectPlaylistDialogCoversBottomPanelContent(page, dialog);
+
+    const scrollMetrics = await page.locator(list).evaluate((listElement) => {
+      const dialogElement = listElement.closest(".music-playlist-modal");
+      const card = dialogElement.querySelector(".music-playlist-modal-card");
+      const table = listElement.parentElement;
+      const listRect = listElement.getBoundingClientRect();
+      const tableRect = table.getBoundingClientRect();
+      const cardRect = card.getBoundingClientRect();
+      const dialogRect = dialogElement.getBoundingClientRect();
+      return {
+        scrollable: listElement.scrollHeight > listElement.clientHeight,
+        listHeight: listRect.height,
+        listInsideTable: listRect.top >= tableRect.top - 1 && listRect.bottom <= tableRect.bottom + 1,
+        cardInsideDialog: cardRect.top >= dialogRect.top - 1 && cardRect.bottom <= dialogRect.bottom + 1,
+      };
+    });
+    expect(scrollMetrics.scrollable).toBe(true);
+    expect(scrollMetrics.listHeight).toBeGreaterThan(0);
+    expect(scrollMetrics.listInsideTable).toBe(true);
+    expect(scrollMetrics.cardInsideDialog).toBe(true);
+
+    const initialHeight = await page.locator("#log-panel").evaluate((panel) => panel.getBoundingClientRect().height);
+    const resizerBox = await page.locator("#log-resizer").boundingBox();
+    expect(resizerBox).not.toBeNull();
+    const resizerX = resizerBox.x + (resizerBox.width / 2);
+    const resizerY = resizerBox.y + (resizerBox.height / 2);
+    await page.mouse.move(resizerX, resizerY);
+    await page.mouse.down();
+    await page.mouse.move(resizerX, resizerY - 32, { steps: 6 });
+    await page.mouse.up();
+    await expect
+      .poll(async () => page.locator("#log-panel").evaluate((panel) => panel.getBoundingClientRect().height))
+      .toBeGreaterThan(initialHeight + 20);
+    await expectPlaylistDialogCoversBottomPanelContent(page, dialog);
+
+    await page.locator("#bottom-pane-minimize").click();
+    await expect
+      .poll(async () => page.locator("#log-panel").evaluate((panel) => Math.round(panel.getBoundingClientRect().height)))
+      .toBe(42);
+    await expect(page.locator("#log-panel")).toHaveAttribute("data-playlist-modal-content-collapsed", "true");
+    await expect(page.locator(dialog)).toBeHidden();
+
+    await page.locator("#bottom-pane-full-window-toggle").click();
+    await expect(page.locator("body")).toHaveClass(/bottom-panel-full-window-mode/);
+    await expect(page.locator(dialog)).toBeVisible();
+    await expectPlaylistDialogCoversBottomPanelContent(page, dialog);
+    await page.locator("#bottom-pane-minimize").click();
+    await expect(page.locator("body")).not.toHaveClass(/bottom-panel-full-window-mode/);
+    await expect(page.locator(dialog)).toBeHidden();
+    await page.evaluate(() => window.DropboxBrowserLogPanel.applyHeight(250));
+    await expect(page.locator(dialog)).toBeVisible();
+    await expectPlaylistDialogCoversBottomPanelContent(page, dialog);
+    await page.locator(`#${player.prefix}-playlist-recent-cancel`).click();
+  }
 });
 
 test("client-render filter bar toggles from the top action row and persists", async ({ page }) => {

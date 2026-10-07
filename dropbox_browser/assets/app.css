@@ -4,6 +4,7 @@
   background: #f7f7f4;
   color: #1f2933;
   --log-panel-height: 240px;
+  --log-panel-modal-top-inset: 42px;
 }
 body {
   box-sizing: border-box;
