@@ -458,6 +458,11 @@ function initBrowse() {
   var PREVIEW_HIDE_DELAY_MS = 360;
   var PREVIEW_DRAG_RELEASE_DELAY_MS = 140;
   var SCROLLBAR_GUTTER_PX = 30;
+  var BROWSE_ENTRY_STATE_KEY = 'browseEntryId';
+  var BROWSE_SCROLL_STORAGE_KEY = 'dropbox-browser.browse-scroll-positions';
+  var BROWSE_SCROLL_STORAGE_LIMIT = 100;
+  var currentBrowseEntryId = '';
+  var browseScrollPositions = null;
   var initialFilterState = resolveBrowseFilterState(state.path, state.filters);
   state.filters = initialFilterState.filters;
   state.filterBarVisible = initialFilterState.visible;
@@ -475,6 +480,111 @@ function initBrowse() {
       return;
     }
     window.scrollTo(0, 0);
+  }
+
+  // Scroll restoration for same-document history entries.
+  //
+  // The browse page scrolls <main> (body.has-log-panel), which the browser's
+  // native history scroll restoration does not track, and every navigation
+  // swaps the listing for a loading row before the new listing arrives. Each
+  // history entry therefore carries a browseEntryId in history.state; the
+  // offset of the entry being left is recorded (while its listing is still
+  // mounted) under that id in sessionStorage, and is re-applied after the
+  // listing for the destination entry has rendered. New entries start at the
+  // top. sessionStorage keeps offsets across reload and cross-document Back.
+  function readBrowseScrollTop() {
+    if (pageScrollEl && pageScrollEl.scrollHeight > pageScrollEl.clientHeight) {
+      return pageScrollEl.scrollTop;
+    }
+    return typeof window.scrollY === 'number' ? window.scrollY : 0;
+  }
+
+  function historyStateWith(patch) {
+    var current = window.history.state;
+    var base = current && typeof current === 'object' ? current : {};
+    return Object.assign({}, base, patch || {});
+  }
+
+  function createBrowseEntryId() {
+    return String(Date.now().toString(36)) + '-' + Math.random().toString(36).slice(2, 10);
+  }
+
+  function browseEntryState(entryId) {
+    var value = {};
+    value[BROWSE_ENTRY_STATE_KEY] = entryId;
+    return value;
+  }
+
+  function browseEntryIdFromHistoryState(historyState) {
+    if (!historyState || typeof historyState !== 'object') return '';
+    var value = historyState[BROWSE_ENTRY_STATE_KEY];
+    return typeof value === 'string' ? value : '';
+  }
+
+  function loadBrowseScrollPositions() {
+    if (browseScrollPositions) return browseScrollPositions;
+    browseScrollPositions = {order: [], offsets: {}};
+    try {
+      var parsed = JSON.parse(window.sessionStorage.getItem(BROWSE_SCROLL_STORAGE_KEY) || 'null');
+      if (parsed && Array.isArray(parsed.order) && parsed.offsets && typeof parsed.offsets === 'object') {
+        browseScrollPositions = {order: parsed.order.slice(), offsets: Object.assign({}, parsed.offsets)};
+      }
+    } catch (_error) {
+      // Storage may be unavailable or corrupt; fall back to in-memory only.
+    }
+    return browseScrollPositions;
+  }
+
+  function savedBrowseScrollTop(entryId) {
+    if (!entryId) return null;
+    var value = Number(loadBrowseScrollPositions().offsets[entryId]);
+    return isFinite(value) && value >= 0 ? value : null;
+  }
+
+  function rememberBrowseScrollPosition() {
+    // While a listing is loading the table is collapsed to a loading row, so
+    // the live offset no longer describes the current entry.
+    if (!currentBrowseEntryId || state.loading) return;
+    var positions = loadBrowseScrollPositions();
+    positions.order = positions.order.filter(function (id) { return id !== currentBrowseEntryId; });
+    positions.order.push(currentBrowseEntryId);
+    positions.offsets[currentBrowseEntryId] = Math.round(readBrowseScrollTop());
+    while (positions.order.length > BROWSE_SCROLL_STORAGE_LIMIT) {
+      delete positions.offsets[positions.order.shift()];
+    }
+    try {
+      window.sessionStorage.setItem(BROWSE_SCROLL_STORAGE_KEY, JSON.stringify(positions));
+    } catch (_error) {
+      // Best effort; the in-memory copy still serves same-document Back/Forward.
+    }
+  }
+
+  function pushBrowseHistoryEntry(href) {
+    currentBrowseEntryId = createBrowseEntryId();
+    window.history.pushState(browseEntryState(currentBrowseEntryId), '', href);
+  }
+
+  function replaceBrowseHistoryEntry(href) {
+    window.history.replaceState(historyStateWith(browseEntryState(currentBrowseEntryId)), '', href);
+  }
+
+  function adoptBrowseHistoryEntry(historyState) {
+    var entryId = browseEntryIdFromHistoryState(historyState);
+    if (!entryId) {
+      entryId = createBrowseEntryId();
+      currentBrowseEntryId = entryId;
+      replaceBrowseHistoryEntry(window.location.href);
+      return {entryId: entryId, restoreScrollTop: null};
+    }
+    currentBrowseEntryId = entryId;
+    return {entryId: entryId, restoreScrollTop: savedBrowseScrollTop(entryId)};
+  }
+
+  function restoreBrowseScrollTop(value) {
+    setBrowseScrollTop(value);
+    // Re-window virtual rows for the restored offset right away instead of
+    // waiting for the async scroll event.
+    renderAndRefresh({force: false});
   }
 
   function notifyBrowseFolderChanged(previousPath, nextPath) {
@@ -637,7 +747,7 @@ function initBrowse() {
     revealAttemptCount = 0;
     revealFrameRequested = false;
     state.reveal = '';
-    window.history.replaceState({}, '', currentBrowsePageHref(state));
+    replaceBrowseHistoryEntry(currentBrowsePageHref(state));
   }
 
   function findMountedRowByPath(relPath) {
@@ -779,9 +889,10 @@ function initBrowse() {
   function syncBrowseUrl(historyMode) {
     var href = currentBrowsePageHref(state);
     if (historyMode === 'push') {
-      window.history.pushState({}, '', href);
+      rememberBrowseScrollPosition();
+      pushBrowseHistoryEntry(href);
     } else if (historyMode === 'replace') {
-      window.history.replaceState({}, '', href);
+      replaceBrowseHistoryEntry(href);
     }
   }
 
@@ -848,6 +959,7 @@ function initBrowse() {
     };
     var historyMode = options && options.history ? options.history : 'none';
     var scrollToTop = !options || options.scroll !== false;
+    var restoreScrollTop = options && typeof options.restoreScrollTop === 'number' ? options.restoreScrollTop : null;
     var version = requestVersion + 1;
     logRevealDebug('debug', 'load browse state', {
       nextPath: normalized.path,
@@ -889,12 +1001,13 @@ function initBrowse() {
         body.dataset.browseClient = 'ready';
         notifyBrowseFolderChanged(previousPath, state.path);
         if (state.reveal) scheduleRevealAttempt();
+        else if (restoreScrollTop !== null) restoreBrowseScrollTop(restoreScrollTop);
         else if (scrollToTop) scrollPageToTop();
         var href = currentBrowsePageHref(state);
         if (historyMode === 'push') {
-          window.history.pushState({}, '', href);
+          pushBrowseHistoryEntry(href);
         } else if (historyMode === 'replace') {
-          window.history.replaceState({}, '', href);
+          replaceBrowseHistoryEntry(href);
         }
         return true;
       })
@@ -967,6 +1080,7 @@ function initBrowse() {
   }
 
   function applyFilterChange(nextFilters, historyMode) {
+    if (historyMode === 'push') rememberBrowseScrollPosition();
     state.filters = normalizeBrowseFilters(nextFilters);
     if (hasActiveBrowseFilters(state.filters)) state.filterBarVisible = true;
     writePersistedBrowseFilterState(state.path, {
@@ -987,6 +1101,7 @@ function initBrowse() {
 
   function applyFilterBarVisibility(visible) {
     cancelFilterUrlTimer();
+    rememberBrowseScrollPosition();
     state.filterBarVisible = !!visible;
     if (!state.filterBarVisible && hasActiveBrowseFilters(state.filters)) {
       state.filters = emptyBrowseFilters();
@@ -1074,13 +1189,14 @@ function initBrowse() {
     if (sortLink) {
       if (state.loading) return;
       event.preventDefault();
+      rememberBrowseScrollPosition();
       var clickedSort = sortLink.getAttribute('data-browse-sort') || 'name';
       var nextSortState = nextBrowseSortState(state.sort, state.dir, clickedSort);
       state.sort = nextSortState.sort;
       state.dir = nextSortState.dir;
       persistBrowseSortState(state.path, state.sort, state.dir);
       renderAndRefresh({force: true});
-      window.history.pushState({}, '', currentBrowsePageHref(state));
+      pushBrowseHistoryEntry(currentBrowsePageHref(state));
       return;
     }
 
@@ -1090,12 +1206,22 @@ function initBrowse() {
     var nextState = readBrowseHref(link.href || link.getAttribute('href') || '');
     if (!nextState) return;
     event.preventDefault();
+    rememberBrowseScrollPosition();
     loadBrowseState(nextState, {history: 'push', scroll: true});
   });
 
-  window.addEventListener('popstate', function () {
-    loadBrowseState(readBrowseLocation(window.location.search), {history: 'none', scroll: true});
+  window.addEventListener('popstate', function (event) {
+    // history.state already describes the destination entry, but the DOM
+    // (and its scroll offset) still belongs to the entry being left.
+    rememberBrowseScrollPosition();
+    var entry = adoptBrowseHistoryEntry(event.state);
+    loadBrowseState(readBrowseLocation(window.location.search), {
+      history: 'none',
+      scroll: true,
+      restoreScrollTop: entry.restoreScrollTop,
+    });
   });
+  window.addEventListener('pagehide', rememberBrowseScrollPosition);
   window.addEventListener('pointerdown', function (event) {
     previewScrollbarDragActive = isScrollbarGesture(event);
     if (previewScrollbarDragActive) updateScrollPreview({persistent: true});
@@ -1117,7 +1243,14 @@ function initBrowse() {
   if (pageScrollEl) pageScrollEl.addEventListener('scroll', scheduleViewportRender, {passive: true});
   window.addEventListener('resize', scheduleViewportRender);
 
-  loadBrowseState(state, {history: 'replace', scroll: false});
+  if ('scrollRestoration' in window.history) window.history.scrollRestoration = 'manual';
+  // Reload or a cross-document Back into this entry keeps history.state.
+  var initialBrowseEntry = adoptBrowseHistoryEntry(window.history.state);
+  loadBrowseState(state, {
+    history: 'replace',
+    scroll: false,
+    restoreScrollTop: initialBrowseEntry.restoreScrollTop,
+  });
   if (typeof window.Event === 'function' && typeof window.dispatchEvent === 'function') {
     window.dispatchEvent(new window.Event('dropbox-browser-browse-client-ready'));
   }
