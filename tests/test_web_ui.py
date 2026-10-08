@@ -557,7 +557,9 @@ class WebUiTests(AppTestCase):
         self.assertIn("function musicMinHeight()", js)
         self.assertIn("getPropertyValue('--music-min-pane-height')", js)
         self.assertIn("function ensureMusicPaneHeight()", js)
-        self.assertIn("if (currentHeight < target) applyHeight(target);", js)
+        # ensureMusicPaneHeight grows the pane to the music minimum; tolerate
+        # either a one-line or braced multi-line body.
+        self.assertRegex(js, r"if \(currentHeight < target\)\s*\{?\s*applyHeight\(target\);")
         self.assertIn("if (ev.detail.mode === 'music-player') ensureMusicPaneHeight();", js)
         self.assertIn("var defaultMode = 'server-log'", js)
         self.assertIn("Settings.get('bottom-pane-mode', defaultMode)", js)
@@ -641,7 +643,12 @@ class WebUiTests(AppTestCase):
         self.assertIn(".music-playlist-load-heading", media_library_css)
         self.assertIn(".music-playlist-sort-button", media_library_css)
         self.assertIn(".music-playlist-load-list", media_library_css)
-        self.assertIn("min-height: 280px", media_library_css)
+        # The load list flexes inside the size-capped dialog card (7eb70f0) so it
+        # can shrink while the bottom panel is resized instead of forcing 280px.
+        self.assertRegex(
+            media_library_css,
+            r"\.music-playlist-load-list\s*\{[^}]*flex:\s*1 1 auto;[^}]*min-height:\s*0;[^}]*overflow:\s*auto;",
+        )
         self.assertIn(".music-playback-surface", music_css)
         self.assertIn("border-radius: 8px", music_css)
         self.assertIn(".music-art-shell", music_css)
