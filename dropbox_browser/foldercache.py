@@ -50,7 +50,7 @@ from .folderdiff import (
 from .foldercache_compute import parse_direct_listing
 from .listingcache import ListingCacheManager
 from .priorityqueue import PriorityQueue
-from .rclone import RcloneCancelled, RcloneCancelToken
+from .rclone import RcloneCancelled, RcloneCancelToken, is_directory_not_found_message
 from .windows_names import resolve_matching_local_path
 from . import workertrace
 
@@ -62,6 +62,14 @@ CACHE_DIR = PROJECT_ROOT / "Cache" / "FolderInfo"
 # same effective priority after this point.  Do not change this to DFS unless
 # the progress strategy changes too.
 BREADTH_FIRST_DEPTH_CAP = 3
+
+# Background lsjson retry schedule (seconds slept before each extra attempt)
+# for failures other than "directory not found".  A failed listing is never
+# recorded as an empty folder; after the last attempt the job aborts, keeps any
+# previous record, and further requests for that folder are deferred for the
+# cooldown so folder-info polling does not hammer a throttled Dropbox.
+DEFAULT_LISTING_RETRY_DELAYS: tuple[float, ...] = (0.5, 1.5)
+DEFAULT_LISTING_FAILURE_COOLDOWN_SECONDS = 10.0
 
 
 def _same_or_child_path(path: str, root: str) -> bool:
@@ -121,9 +129,27 @@ class FolderCacheManager:
         listing_cache: ListingCacheManager | None = None,
         local_root: Path | None = None,
         remote: str | None = None,
+        *,
+        listing_retry_delays: tuple[float, ...] | list[float] | None = None,
+        listing_failure_cooldown_seconds: float | None = None,
     ):
         self.rclone = rclone
         self.ttl_seconds = ttl_seconds
+        self.listing_retry_delays: tuple[float, ...] = tuple(
+            max(0.0, float(delay))
+            for delay in (DEFAULT_LISTING_RETRY_DELAYS if listing_retry_delays is None else listing_retry_delays)
+        )
+        self.listing_failure_cooldown_seconds = max(
+            0.0,
+            float(
+                DEFAULT_LISTING_FAILURE_COOLDOWN_SECONDS
+                if listing_failure_cooldown_seconds is None
+                else listing_failure_cooldown_seconds
+            ),
+        )
+        # remote_path -> time.monotonic() deadline before which new requests
+        # for a folder whose listing just failed are deferred.
+        self._listing_failures: dict[str, float] = {}
         self.listing_cache = listing_cache
         self.local_root = local_root.resolve() if local_root else None
         self.remote = (remote or "").rstrip("/")
@@ -312,6 +338,7 @@ class FolderCacheManager:
             self._parent.pop(remote_path, None)
             self._abandoned.discard(remote_path)
             self._reschedule_after_cancel.pop(remote_path, None)
+            self._listing_failures.pop(remote_path, None)
             for pending in self._pending_children.values():
                 pending.discard(remote_path)
             stale_children = [child for child, parent in self._parent.items() if parent == remote_path]
@@ -698,6 +725,13 @@ class FolderCacheManager:
         with self._lock:
             if self._shutdown:
                 return False
+            failure_deadline = self._listing_failures.get(remote_path)
+            if failure_deadline is not None:
+                if time.monotonic() < failure_deadline:
+                    if trace_dedup:
+                        self._trace_locked("request_deferred_listing_failure", remote_path, page_epoch=page_time)
+                    return False
+                self._listing_failures.pop(remote_path, None)
             if remote_path in self._direct_done:
                 # Its direct listing has already been fetched in this process.
                 # If child work is still finishing, try to attach already-complete
@@ -988,6 +1022,93 @@ class FolderCacheManager:
                 if reschedule_epoch is not None:
                     self._queue_job(FolderJob.create(remote_path, reschedule_epoch, job.breadth_depth), "reschedule_after_cancel")
 
+    def _run_lsjson(self, remote_path: str, page_time: float, cancel_token: RcloneCancelToken):
+        context_factory = getattr(self.rclone, "progress_context", None)
+        if context_factory is None:
+            return self.rclone.run("lsjson", "--", remote_path, cancel_token=cancel_token)
+        with context_factory(lambda: self._progress_text_for_epoch(page_time)):
+            return self.rclone.run("lsjson", "--", remote_path, cancel_token=cancel_token)
+
+    def _sleep_before_listing_retry(self, delay: float, cancel_token: RcloneCancelToken) -> None:
+        deadline = time.monotonic() + delay
+        while True:
+            if cancel_token.cancelled or self._shutdown:
+                raise RcloneCancelled()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.05, remaining))
+
+    def _fetch_direct_listing(
+        self,
+        remote_path: str,
+        page_time: float,
+        generation: int,
+        cancel_token: RcloneCancelToken,
+    ) -> tuple[list[dict] | None, str]:
+        """Run a live lsjson with bounded retries.
+
+        Returns ``(items, source)``.  ``items`` is None when the listing could
+        not be obtained; callers must then leave existing records untouched.
+        Only rclone's "directory not found" is treated as a real empty folder.
+        """
+        delays = self.listing_retry_delays
+        attempts = len(delays) + 1
+        last_error = ""
+        for attempt in range(1, attempts + 1):
+            if attempt > 1:
+                self._sleep_before_listing_retry(delays[attempt - 2], cancel_token)
+                with self._lock:
+                    if self._generation.get(remote_path, 0) != generation:
+                        # Invalidated while waiting; a newer job owns this folder.
+                        return None, "superseded"
+            proc = self._run_lsjson(remote_path, page_time, cancel_token)
+            stderr = (proc.stderr or b"").decode("utf-8", "replace").strip()
+            if proc.returncode == 0:
+                raw = (proc.stdout or b"").strip()
+                if not raw:
+                    items: object = []
+                else:
+                    try:
+                        items = json.loads(raw.decode("utf-8"))
+                    except (UnicodeDecodeError, ValueError) as exc:
+                        last_error = f"invalid lsjson output: {exc}"
+                        items = None
+                if isinstance(items, list):
+                    if self.listing_cache:
+                        self.listing_cache.set(remote_path, items)
+                    with self._lock:
+                        self._listing_failures.pop(remote_path, None)
+                    return items, "rclone" if attempt == 1 else "rclone_retry"
+                if items is not None:
+                    last_error = "invalid lsjson output: expected a JSON list"
+            elif is_directory_not_found_message(stderr):
+                with self._lock:
+                    self._listing_failures.pop(remote_path, None)
+                return [], "rclone_not_found"
+            else:
+                last_error = stderr or f"rclone lsjson exited with code {proc.returncode}"
+            self._trace(
+                "folder_listing_attempt_failed",
+                remote_path,
+                page_epoch=page_time,
+                attempt=attempt,
+                max_attempts=attempts,
+                returncode=proc.returncode,
+                error=last_error[:500],
+            )
+        with self._lock:
+            self._listing_failures[remote_path] = time.monotonic() + self.listing_failure_cooldown_seconds
+            self._trace_locked(
+                "folder_listing_failed",
+                remote_path,
+                page_epoch=page_time,
+                attempts=attempts,
+                error=last_error[:500],
+                cooldown_seconds=self.listing_failure_cooldown_seconds,
+            )
+        return None, "failed"
+
     def _compute(
         self,
         remote_path: str,
@@ -996,28 +1117,19 @@ class FolderCacheManager:
         generation: int,
         cancel_token: RcloneCancelToken,
     ) -> bool:
-        """Fetch direct children via lsjson (or listing cache), update state, queue subfolders."""
+        """Fetch direct children via lsjson (or listing cache), update state, queue subfolders.
+
+        Returns False without touching any recorded state when the listing
+        could not be fetched (see ``_fetch_direct_listing``).
+        """
         items = None
         listing_source = "cache"
         if self.listing_cache:
             items = self.listing_cache.get(remote_path)
         if items is None:
-            listing_source = "rclone"
-            context_factory = getattr(self.rclone, "progress_context", None)
-            if context_factory is None:
-                proc = self.rclone.run("lsjson", "--", remote_path, cancel_token=cancel_token)
-            else:
-                with context_factory(lambda: self._progress_text_for_epoch(page_time)):
-                    proc = self.rclone.run("lsjson", "--", remote_path, cancel_token=cancel_token)
-            if proc.returncode == 0 and proc.stdout.strip():
-                try:
-                    items = json.loads(proc.stdout.decode("utf-8"))
-                    if self.listing_cache:
-                        self.listing_cache.set(remote_path, items)
-                except Exception:
-                    items = []
-            else:
-                items = []
+            items, listing_source = self._fetch_direct_listing(remote_path, page_time, generation, cancel_token)
+            if items is None:
+                return False
         self._trace("folder_listing_loaded", remote_path, page_epoch=page_time, source=listing_source, item_count=len(items))
 
         direct_listing = parse_direct_listing(items, remote_path)

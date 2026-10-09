@@ -1,0 +1,17 @@
+{
+  "entries": [
+    { "path": "upload-test", "type": "dir", "mod_time": "2024-05-01T12:00:00Z" },
+    { "path": "upload-test/dropbox-only.txt", "type": "file", "content": "dropbox only\n", "mod_time": "2024-05-01T12:01:00Z" },
+    { "path": "broken-test", "type": "dir", "mod_time": "2024-05-01T12:00:00Z" },
+    { "path": "broken-test/remote-file.txt", "type": "file", "content": "remote file\n", "mod_time": "2024-05-01T12:01:00Z" },
+    { "path": "stale-test", "type": "dir", "mod_time": "2024-05-01T12:00:00Z" },
+    { "path": "stale-test/dropbox-only.txt", "type": "file", "content": "dropbox only\n", "mod_time": "2024-05-01T12:01:00Z" }
+  ],
+  "local_files": [
+    { "path": "upload-test/local-only.txt", "content": "local only\n" },
+    { "path": "upload-test/upload-a.txt", "content": "upload me (a)\n" },
+    { "path": "upload-test/upload-b.txt", "content": "upload me (b)\n" },
+    { "path": "broken-test/local-file.txt", "content": "local file\n" },
+    { "path": "stale-test/upload-c.txt", "content": "upload me (c)\n" }
+  ]
+}

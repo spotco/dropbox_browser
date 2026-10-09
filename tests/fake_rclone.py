@@ -6,6 +6,7 @@ import base64
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -164,6 +165,69 @@ def _append_call(args: list[str]) -> None:
         handle.write(json.dumps({"args": args}) + "\n")
 
 
+# Optional fault injection for E2E tests. DROPBOX_BROWSER_FAKE_RCLONE_FAULTS
+# names a JSON file such as:
+#   {"lsjson_target": "dropbox:folder", "remaining": 2, "after_write": true,
+#    "stderr": "too_many_requests"}
+# While "after_write" is true the faults are dormant; the next successful remote
+# write (rcat, or copyto into dropbox:) arms them. Each armed directory lsjson
+# of lsjson_target then exits 1 with stderr until "remaining" reaches 0.
+def _faults_path() -> Path | None:
+    value = os.environ.get("DROPBOX_BROWSER_FAKE_RCLONE_FAULTS")
+    return Path(value) if value else None
+
+
+def _with_faults_lock(callback):
+    path = _faults_path()
+    if path is None or not path.exists():
+        return None
+    lock_path = path.with_name(path.name + ".lock")
+    deadline = time.monotonic() + 5.0
+    while True:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.01)
+    try:
+        faults = json.loads(path.read_text(encoding="utf-8"))
+        result, changed = callback(faults)
+        if changed:
+            path.write_text(json.dumps(faults), encoding="utf-8")
+        return result
+    except (OSError, ValueError):
+        return None
+    finally:
+        os.close(fd)
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+
+
+def _arm_faults_after_write() -> None:
+    def arm(faults):
+        if faults.get("after_write"):
+            faults["after_write"] = False
+            return None, True
+        return None, False
+    _with_faults_lock(arm)
+
+
+def _consume_lsjson_fault(target: str) -> str | None:
+    def consume(faults):
+        if faults.get("after_write") or int(faults.get("remaining") or 0) <= 0:
+            return None, False
+        if str(faults.get("lsjson_target", "")).rstrip("/") != target.rstrip("/"):
+            return None, False
+        faults["remaining"] = int(faults["remaining"]) - 1
+        faults.setdefault("consumed", []).append(target)
+        return str(faults.get("stderr") or "fake rclone injected lsjson failure"), True
+    return _with_faults_lock(consume)
+
+
 def _load_state() -> FakeRemoteState:
     state_path = _state_path()
     if state_path.exists():
@@ -210,6 +274,10 @@ def main(argv: list[str] | None = None) -> int:
                 "ModTime": entry.get("mod_time", DEFAULT_MOD_TIME),
             }))
             return 0
+        fault = _consume_lsjson_fault(target)
+        if fault is not None:
+            sys.stderr.write(fault + "\n")
+            return 1
         sys.stdout.write(json.dumps(state.list_dir(target)))
         return 0
 
@@ -255,12 +323,15 @@ def main(argv: list[str] | None = None) -> int:
         destination = rest[-1]
         state.copyto(source, destination)
         _save_state(state)
+        if _is_remote_target(destination):
+            _arm_faults_after_write()
         return 0
 
     if command == "rcat":
         destination = rest[-1]
         state.rcat(destination, sys.stdin.buffer.read())
         _save_state(state)
+        _arm_faults_after_write()
         return 0
 
     if command == "mkdir":

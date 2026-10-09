@@ -3,6 +3,7 @@ import {initBrowseColumnResizing} from './columns.js';
 import {startFolderInfoPolling} from './folder-info.js';
 import {initBrowseHorizontalScrollbar} from './horizontal-scrollbar.js';
 import {initImageHoverPreview} from './image-hover-preview.js';
+import {listingWarningMessage} from './listing-warning.js';
 import {readBrowseHref, readBrowseLocation, shouldInterceptBrowseLink} from './navigation.js';
 import {
   createBrowseRow,
@@ -85,6 +86,73 @@ function updatePageShell(payload) {
     dropboxLink.setAttribute('rel', 'noopener noreferrer');
     dropboxLink.textContent = 'Go to Dropbox';
   }
+  updateListingWarning(payload);
+}
+
+var LISTING_WARNING_ID = 'browse-listing-warning';
+
+function listingWarningElement(create) {
+  var existing = document.getElementById(LISTING_WARNING_ID);
+  if (existing || !create) return existing;
+  var shell = document.querySelector('.browse-table-shell');
+  if (!shell || !shell.parentNode) return null;
+  var banner = document.createElement('div');
+  banner.id = LISTING_WARNING_ID;
+  banner.className = 'browse-listing-warning';
+  banner.setAttribute('role', 'status');
+  banner.hidden = true;
+  var text = document.createElement('span');
+  text.className = 'browse-listing-warning-text';
+  var button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'browse-listing-warning-refresh';
+  button.textContent = 'Refresh';
+  button.addEventListener('click', function () {
+    var client = window.DropboxBrowseClient;
+    if (!client || typeof client.reloadCurrentFolder !== 'function') {
+      window.location.reload();
+      return;
+    }
+    button.disabled = true;
+    button.textContent = 'Refreshing...';
+    // The failed listing was never cached, so a normal reload asks Dropbox
+    // again without discarding the folder metadata caches.
+    Promise.resolve(client.reloadCurrentFolder({refresh: false, history: 'replace'})).then(
+      function () { resetListingWarningButton(button); },
+      function () { resetListingWarningButton(button); },
+    );
+  });
+  banner.appendChild(text);
+  banner.appendChild(button);
+  shell.parentNode.insertBefore(banner, shell);
+  return banner;
+}
+
+function resetListingWarningButton(button) {
+  button.disabled = false;
+  button.textContent = 'Refresh';
+}
+
+
+function updateListingWarning(payload) {
+  var listing = (payload && payload.listing) || {};
+  var message = listingWarningMessage(listing);
+  var banner = listingWarningElement(!!message);
+  if (!banner) return;
+  if (!message) {
+    banner.hidden = true;
+    banner.removeAttribute('data-listing-state');
+    return;
+  }
+  banner.querySelector('.browse-listing-warning-text').textContent = message;
+  banner.setAttribute('title', 'Dropbox error: ' + String(listing.remote_error));
+  banner.setAttribute('data-listing-state', listing.stale ? 'stale' : 'local-only');
+  banner.hidden = false;
+}
+
+function hideListingWarning() {
+  var banner = listingWarningElement(false);
+  if (banner) banner.hidden = true;
 }
 
 function readSetting(key, defaultValue) {
@@ -970,6 +1038,7 @@ function initBrowse() {
     });
     requestVersion = version;
     var previousPath = state.path;
+    if (normalized.path !== previousPath) hideListingWarning();
     stopActiveWork();
     renderLoading(normalized);
     currentController = typeof AbortController === 'function' ? new AbortController() : null;

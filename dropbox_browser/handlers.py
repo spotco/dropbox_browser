@@ -934,6 +934,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                 "force_refresh": snapshot.force_refresh,
                 "row_count": len(snapshot.entries),
                 "remote_folder_count": snapshot.remote_folder_count,
+                "remote_error": snapshot.remote_error,
+                "stale": bool(snapshot.listing_stale),
+                "stale_cached_at": snapshot.stale_cached_at,
+                "stale_cached_display": display_date(snapshot.stale_cached_at) if snapshot.stale_cached_at else None,
             },
             "timings_ms": dict(snapshot.timings_ms),
         }

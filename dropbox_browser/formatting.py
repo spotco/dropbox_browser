@@ -46,4 +46,5 @@ def status_class(status: str) -> str:
         "Synced": "both",
         "Has Diffs": "diff",
         "Loading": "loading",
+        "Unknown": "unknown",
     }.get(status, "")

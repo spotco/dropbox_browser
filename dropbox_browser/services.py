@@ -31,7 +31,7 @@ from .listingcache import ListingCacheManager
 from .namekeys import filename_compare_key
 from .photo_map_cache import PhotoMapCache
 from .paths import remote_target, safe_join_local
-from .rclone import RcloneClient
+from .rclone import RcloneClient, is_directory_not_found_message
 from .thumbnails import ThumbnailService
 from .video_thumbnails import VideoThumbnailService
 from .windows_names import (
@@ -132,6 +132,32 @@ class BrowseSnapshot:
     folder_cache_missing: int
     folder_cache_requests: int
     timings_ms: dict[str, float]
+    # Set when the live Dropbox listing failed.  ``listing_stale`` means the
+    # rows come from the last good listing; otherwise remote state is unknown
+    # and only local rows are shown.
+    remote_error: str | None = None
+    listing_stale: bool = False
+    stale_cached_at: float | None = None
+
+
+# Listing sources for which the Dropbox side is unknown (live listing failed and
+# no previous listing was available).  Rows are local-only and every status is
+# reported as UNKNOWN_STATUS_LABEL rather than "Local Only".
+REMOTE_UNKNOWN_LISTING_SOURCES = frozenset({"local_only_after_remote_error"})
+UNKNOWN_STATUS_LABEL = "Unknown"
+
+
+@dataclass
+class DirectListingResult:
+    entries: list[dict[str, Any]]
+    source: str
+    remote_error: str | None = None
+    stale: bool = False
+    stale_cached_at: float | None = None
+
+    @property
+    def remote_unknown(self) -> bool:
+        return self.source in REMOTE_UNKNOWN_LISTING_SOURCES
 
 
 @dataclass
@@ -398,6 +424,8 @@ class SearchSnapshotCache:
 
 class DropboxBrowser:
     BATCH_PLAN_TTL_SECONDS = 15 * 60
+    # Pause before the single retry of a failed foreground lsjson (page load).
+    LISTING_RETRY_DELAY_SECONDS = 0.5
 
     def __init__(
         self,
@@ -421,6 +449,7 @@ class DropboxBrowser:
         self.thumbnail_config = thumbnail_config
         self.video_tools_config = video_tools_config
         self.photo_map_cache = photo_map_cache or PhotoMapCache()
+        self.listing_retry_delay_seconds = self.LISTING_RETRY_DELAY_SECONDS
         self.video_debug_logs = False
         self.music_waveform_cache_entry_limit = MUSIC_WAVEFORM_CACHE_ENTRY_LIMIT_DEFAULT
         self.music_waveform_max_resolution = MUSIC_WAVEFORM_MAX_RESOLUTION_DEFAULT
@@ -635,6 +664,40 @@ class DropboxBrowser:
         }
         return candidate_remote_names, candidate_local_names
 
+    def _live_lsjson_with_retry(self, remote: str, rel_path: str) -> list[dict[str, Any]]:
+        """Foreground lsjson with one retry for transient/throttle failures.
+
+        "directory not found" is final and raised immediately.  Unparseable
+        output is converted to a BAD_GATEWAY BrowserError so it is handled like
+        any other listing failure (never as an empty folder).
+        """
+        attempts = 2
+        for attempt in range(1, attempts + 1):
+            try:
+                items = self.rclone.lsjson(remote)
+                if not isinstance(items, list):
+                    raise BrowserError(HTTPStatus.BAD_GATEWAY, "Dropbox listing returned unexpected data.")
+                return items
+            except ValueError as exc:
+                error = BrowserError(HTTPStatus.BAD_GATEWAY, f"Dropbox listing returned invalid JSON: {exc}")
+            except BrowserError as exc:
+                if is_directory_not_found_message(exc.message):
+                    raise
+                error = exc
+            workertrace.append(
+                "navigation_listing_attempt_failed",
+                rel_path=rel_path,
+                remote_path=remote,
+                attempt=attempt,
+                max_attempts=attempts,
+                error=str(error.message)[:500],
+            )
+            if attempt < attempts:
+                delay = max(0.0, float(self.listing_retry_delay_seconds or 0.0))
+                if delay:
+                    time.sleep(delay)
+        raise error
+
     def _list_entries_with_metadata(
         self,
         rel_path: str,
@@ -642,12 +705,25 @@ class DropboxBrowser:
         force_refresh: bool = False,
         page_time: float | None = None,
     ) -> tuple[list[dict[str, Any]], str]:
+        result = self._list_entries_with_state(rel_path, force_refresh=force_refresh, page_time=page_time)
+        return result.entries, result.source
+
+    def _list_entries_with_state(
+        self,
+        rel_path: str,
+        *,
+        force_refresh: bool = False,
+        page_time: float | None = None,
+    ) -> DirectListingResult:
         started = time.perf_counter()
         remote = remote_target(self.remote, rel_path)
         local_folder = resolve_matching_local_path(self.local_root, rel_path) if self.local_root else None
 
         remote_items = None
         source = "rclone"
+        remote_error: str | None = None
+        stale = False
+        stale_cached_at: float | None = None
         if self.listing_cache and not force_refresh:
             remote_items = self.listing_cache.get(remote)
             if remote_items is not None:
@@ -660,12 +736,32 @@ class DropboxBrowser:
                     source = "folder_cache_direct"
         if remote_items is None:
             try:
-                remote_items = self.rclone.lsjson(remote)
-            except BrowserError:
-                if not (local_folder and local_folder.exists() and local_folder.is_dir()):
-                    raise
-                remote_items = []
-                source = "local_only_after_remote_error"
+                remote_items = self._live_lsjson_with_retry(remote, rel_path)
+            except BrowserError as exc:
+                local_available = bool(local_folder and local_folder.exists() and local_folder.is_dir())
+                if is_directory_not_found_message(exc.message):
+                    # A real missing Dropbox folder: local rows are genuinely
+                    # "Local Only".
+                    if not local_available:
+                        raise
+                    remote_items = []
+                    source = "local_only_remote_missing"
+                else:
+                    get_last_good = getattr(self.listing_cache, "get_last_good", None)
+                    last_good = get_last_good(remote) if get_last_good is not None else None
+                    if last_good is not None:
+                        remote_items, stale_cached_at = last_good
+                        source = "stale_after_remote_error"
+                        stale = True
+                        remote_error = exc.message
+                    elif local_available:
+                        # Remote state unknown: show local rows, labelled
+                        # Unknown by the snapshot builder.  Never cached.
+                        remote_items = []
+                        source = "local_only_after_remote_error"
+                        remote_error = exc.message
+                    else:
+                        raise
             else:
                 if self.listing_cache:
                     self.listing_cache.set(remote, remote_items)
@@ -682,9 +778,17 @@ class DropboxBrowser:
             force_refresh=force_refresh,
             item_count=len(remote_items),
             row_count=len(entries),
+            remote_error=(remote_error or "")[:500] or None,
+            stale=stale,
             elapsed_ms=round((time.perf_counter() - started) * 1000, 3),
         )
-        return entries, source
+        return DirectListingResult(
+            entries=entries,
+            source=source,
+            remote_error=remote_error,
+            stale=stale,
+            stale_cached_at=stale_cached_at,
+        )
 
     def list_entries(self, rel_path: str, force_refresh: bool = False, page_time: float | None = None) -> list[dict[str, Any]]:
         entries, _source = self._list_entries_with_metadata(
@@ -719,11 +823,13 @@ class DropboxBrowser:
         notify_elapsed_ms = round((time.perf_counter() - notify_started) * 1000, 3)
 
         list_started = time.perf_counter()
-        entries, listing_source = self._list_entries_with_metadata(
+        listing = self._list_entries_with_state(
             rel_path,
             force_refresh=force_refresh,
             page_time=page_time_value,
         )
+        entries = listing.entries
+        listing_source = listing.source
         list_elapsed_ms = round((time.perf_counter() - list_started) * 1000, 3)
 
         current_cache_started = time.perf_counter()
@@ -768,7 +874,10 @@ class DropboxBrowser:
 
         status_started = time.perf_counter()
         for entry in entries:
-            entry["status_label"] = self.status_label_for_entry(entry, folder_cache_map, current_folder_cache)
+            if listing.remote_unknown:
+                entry["status_label"] = UNKNOWN_STATUS_LABEL
+            else:
+                entry["status_label"] = self.status_label_for_entry(entry, folder_cache_map, current_folder_cache)
         status_elapsed_ms = round((time.perf_counter() - status_started) * 1000, 3)
 
         sort_started = time.perf_counter()
@@ -798,6 +907,9 @@ class DropboxBrowser:
                 "status": status_elapsed_ms,
                 "sort": sort_elapsed_ms,
             },
+            remote_error=listing.remote_error,
+            listing_stale=listing.stale,
+            stale_cached_at=listing.stale_cached_at,
         )
 
     def _cached_direct_items_for_search(

@@ -122,6 +122,14 @@ Useful event names:
 - `manager_started`, `worker_started` - worker pool startup.
 - `page_load`, `page_load_reused` - page epoch changes.
 - `navigation_listing_source` - foreground page listing source and row count.
+  Sources include `rclone`, `listing_cache`, `folder_cache_direct`,
+  `local_only_remote_missing` (rclone said "directory not found"),
+  `stale_after_remote_error` (live listing failed; last good listing shown,
+  marked stale) and `local_only_after_remote_error` (live listing failed and
+  no previous listing; local rows shown with status `Unknown`). The last two
+  carry `remote_error` and are never cached.
+- `navigation_listing_attempt_failed` - a foreground `lsjson` attempt failed;
+  the page load retries once before falling back.
 - `navigation_render_complete` - foreground page render phase timings.
 - `folder_info_poll` - `/folder-info` batch size, queued request count,
   status counts, and `stuck_parent_reenqueued` when the partial-current
@@ -136,6 +144,12 @@ Useful event names:
 - `job_queued`, `job_started`, `job_finished`, `job_aborted`,
   `job_canceled_running`, `job_failed` - worker lifecycle.
 - `folder_listing_loaded` - direct `lsjson` result loaded from rclone or cache.
+- `folder_listing_attempt_failed`, `folder_listing_failed` - a background
+  `lsjson` attempt failed / all retries failed. A failed listing is never
+  recorded as an empty folder: the job aborts, any previous record is kept,
+  parents are not marked as different, and new requests for that folder are
+  deferred (`request_deferred_listing_failure`) for a short cooldown. Only
+  rclone's "directory not found" is treated as an empty Dropbox folder.
 - `direct_diff_found`, `subtree_diff_marked` - diff status determined.
 - `subtree_complete` - recursive metadata is complete for that path.
 

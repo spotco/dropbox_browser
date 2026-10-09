@@ -3,6 +3,12 @@
 Cache files live in Cache/ListingCache/<sha256(remote_path)>.json.
 TTL is enforced strictly — an expired entry is treated as a miss.
 The cache is invalidated immediately after operations that can change a folder.
+
+Separately, the manager keeps a small in-memory "last good" copy of each
+recently seen listing.  It survives invalidation and TTL expiry so a page load
+whose live ``rclone lsjson`` fails (for example Dropbox throttling right after
+an upload) can show the previous listing marked as stale instead of nothing.
+It is never returned by ``get()`` and never treated as fresh.
 """
 from __future__ import annotations
 
@@ -11,6 +17,7 @@ import json
 import math
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 
 from .cacheio import write_json_atomic
@@ -18,6 +25,7 @@ from .config import PROJECT_ROOT
 from . import workertrace
 
 CACHE_DIR = PROJECT_ROOT / "Cache" / "ListingCache"
+LAST_GOOD_LIMIT = 256
 
 
 def _same_or_child_path(path: str, root: str) -> bool:
@@ -30,11 +38,57 @@ def _same_or_child_path(path: str, root: str) -> bool:
 
 
 class ListingCacheManager:
-    def __init__(self, ttl_seconds: float = 1800):
+    def __init__(self, ttl_seconds: float = 1800, last_good_limit: int = LAST_GOOD_LIMIT):
         self.ttl_seconds = ttl_seconds
         self._lock = threading.Lock()
         self._tree_invalidations: dict[str, float] = {}
+        self._last_good_limit = max(0, int(last_good_limit))
+        self._last_good_lock = threading.Lock()
+        # remote_path -> (items, cached_at); most recently used last.
+        self._last_good: OrderedDict[str, tuple[list[dict], float]] = OrderedDict()
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _remember_last_good(self, remote_path: str, items: object, cached_at: float) -> None:
+        if self._last_good_limit <= 0 or not isinstance(items, list):
+            return
+        with self._last_good_lock:
+            previous = self._last_good.get(remote_path)
+            if previous is not None and previous[1] > cached_at:
+                self._last_good.move_to_end(remote_path)
+                return
+            self._last_good[remote_path] = (items, cached_at)
+            self._last_good.move_to_end(remote_path)
+            while len(self._last_good) > self._last_good_limit:
+                self._last_good.popitem(last=False)
+
+    def _remember_last_good_from_disk(self, remote_path: str) -> None:
+        try:
+            data = json.loads(self._cache_path(remote_path).read_text(encoding="utf-8"))
+        except Exception:
+            return
+        if isinstance(data, dict) and data.get("remote_path", remote_path) == remote_path:
+            self._remember_last_good(remote_path, data.get("items"), float(data.get("cached_at", 0) or 0))
+
+    def get_last_good(self, remote_path: str) -> tuple[list[dict], float] | None:
+        """Return ``(items, cached_at)`` of the last successful listing, if known.
+
+        This ignores TTL and invalidation on purpose: it is only for showing a
+        clearly-labelled stale fallback when a live listing fails.
+        """
+        with self._last_good_lock:
+            entry = self._last_good.get(remote_path)
+        if entry is None:
+            p = self._cache_path(remote_path)
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                return None
+            items = data.get("items") if isinstance(data, dict) else None
+            if not isinstance(items, list) or data.get("remote_path", remote_path) != remote_path:
+                return None
+            entry = (items, float(data.get("cached_at", 0) or 0))
+        items, cached_at = entry
+        return [dict(item) if isinstance(item, dict) else item for item in items], cached_at
 
     def _cache_path(self, remote_path: str) -> Path:
         key = hashlib.sha256(remote_path.encode()).hexdigest()
@@ -55,6 +109,7 @@ class ListingCacheManager:
             if time.time() - data.get("cached_at", 0) > self.ttl_seconds:
                 return None
             result = data["items"]
+            self._remember_last_good(remote_path, result, float(data.get("cached_at", 0) or 0))
             return result
         except Exception:
             return None
@@ -84,10 +139,12 @@ class ListingCacheManager:
                 cached_at = math.nextafter(invalidated_at, math.inf)
             data = {"remote_path": remote_path, "items": items, "cached_at": cached_at}
             write_json_atomic(self._cache_path(remote_path), data)
+        self._remember_last_good(remote_path, items, cached_at)
 
     def invalidate(self, remote_path: str) -> None:
         """Delete the cached listing after an operation changes a folder."""
         with self._lock:
+            self._remember_last_good_from_disk(remote_path)
             try:
                 self._cache_path(remote_path).unlink(missing_ok=True)
             except Exception:
@@ -98,6 +155,7 @@ class ListingCacheManager:
         invalidated_at = time.time()
         with self._lock:
             self._tree_invalidations[remote_path.rstrip("/")] = invalidated_at
+            self._remember_last_good_from_disk(remote_path)
             try:
                 self._cache_path(remote_path).unlink(missing_ok=True)
             except Exception:

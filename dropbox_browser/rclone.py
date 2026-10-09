@@ -190,6 +190,16 @@ def is_retryable_dropbox_throttle_error(exc: BaseException) -> bool:
     return is_retryable_dropbox_throttle_message(str(exc))
 
 
+def is_directory_not_found_message(message: str) -> bool:
+    """True when rclone reported that the listed directory does not exist.
+
+    ``rclone lsjson`` exits with code 3 and logs ``directory not found`` for a
+    missing folder.  That is the only listing failure that may be treated as a
+    real, empty Dropbox folder; every other failure is transient or unknown.
+    """
+    return "directory not found" in (message or "").casefold()
+
+
 class RcloneClient:
     def __init__(self, executable: str, config: str | None, log_commands: bool = True):
         self.executable = executable
