@@ -11,6 +11,29 @@
   <link rel="stylesheet" href="/assets/css/photo-map.css">
   <link rel="stylesheet" href="/assets/css/photo-map-preview.css">
   <link rel="stylesheet" href="/assets/css/video.css">
+  <script>
+    // Apply the saved bottom-panel height before first paint (log.js owns the
+    // full restore logic; this only avoids a flash of the CSS default).
+    (function () {
+      try {
+        var read = function (key) {
+          var raw = window.localStorage.getItem('dropbox-browser.' + key);
+          return raw === null ? null : JSON.parse(raw);
+        };
+        var height = read('log-height');
+        var minimized = read('log-panel-minimized');
+        if (minimized === null) minimized = typeof height === 'number' && height <= 42;
+        var value = null;
+        if (minimized === true) value = 42;
+        else if (typeof height === 'number' && height > 42) {
+          value = Math.min(height, Math.max(42, (window.innerHeight || 0) - 80));
+        }
+        if (value !== null && read('bottom-panel-full-window') !== true) {
+          document.documentElement.style.setProperty('--log-panel-height', Math.round(value) + 'px');
+        }
+      } catch (error) {}
+    }());
+  </script>
   <title>$page_title</title>
 </head>
 <body class="has-log-panel bottom-panel-bootstrapping" data-bottom-panel-ready="0" style="$subtitle_style_attr" data-current-folder-path="$current_folder_attr" data-current-sort-key="$current_sort_key_attr" data-current-sort-direction="$current_sort_direction_attr" data-music-library-poll-delay-ms="$music_library_poll_delay_ms_attr" data-client-render="$client_render_attr" data-client-log-enabled="$client_log_enabled_attr" data-client-log-subsystems="$client_log_subsystems_attr">

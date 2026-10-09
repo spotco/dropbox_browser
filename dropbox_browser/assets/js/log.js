@@ -11,6 +11,11 @@
   var minPlaylistModalContentHeight = 96;
   var normalPanelMaxHeightOffset = 80;
   var fullWindowSettingKey = 'bottom-panel-full-window';
+  // 'log-height' is the last expanded (user-chosen) height. Minimizing is a
+  // separate persisted flag so it never overwrites that height and the panel
+  // can be restored to it, also after a reload.
+  var minimizedSettingKey = 'log-panel-minimized';
+  var minimized = false;
   var modeSelect = document.getElementById('bottom-pane-mode');
   var currentHeight = defaultHeight;
   var preferredHeight = defaultHeight;
@@ -58,16 +63,35 @@
     return Math.min(Math.max(parsed, minHeight), maxHeight());
   }
 
+  function setMinimized(next, persist) {
+    minimized = Boolean(next);
+    if (panel && typeof panel.setAttribute === 'function') {
+      panel.setAttribute('data-minimized', minimized ? 'true' : 'false');
+    }
+    if (persist !== false) Settings.set(minimizedSettingKey, minimized);
+  }
+
   function applyHeight(height, persist) {
     var clamped = clampHeight(height);
     currentHeight = clamped;
     document.documentElement.style.setProperty('--log-panel-height', clamped + 'px');
     syncPlaylistModalGeometry();
     if (persist !== false) {
-      preferredHeight = clamped;
-      Settings.set('log-height', clamped);
+      // A user-driven height at the minimum (minimize button or dragging all
+      // the way down) is the minimized state; keep the expanded height.
+      if (clamped <= minHeight) {
+        setMinimized(true);
+      } else {
+        setMinimized(false);
+        preferredHeight = clamped;
+        Settings.set('log-height', clamped);
+      }
     }
     return clamped;
+  }
+
+  function expandedHeight() {
+    return preferredHeight > minHeight ? preferredHeight : defaultHeight;
   }
 
   function shouldPersistFullWindowState(source) {
@@ -108,7 +132,12 @@
       }
     }
     if (minimizeButton) {
-      minimizeButton.disabled = !fullWindowActive && currentHeight <= minHeight;
+      var restoreMode = !fullWindowActive && currentHeight <= minHeight;
+      minimizeButton.disabled = false;
+      minimizeButton.setAttribute('aria-pressed', restoreMode ? 'true' : 'false');
+      minimizeButton.title = restoreMode ? 'Restore bottom panel' : 'Minimize bottom panel';
+      minimizeButton.setAttribute('aria-label', minimizeButton.title);
+      if (minimizeButton.classList) minimizeButton.classList.toggle('is-restore', restoreMode);
     }
   }
 
@@ -203,6 +232,30 @@
     return result;
   }
 
+  // Un-minimize to the last expanded height (clamped to the viewport; an
+  // expanded height that no longer fits opens full-window like a reload does).
+  function restorePanel() {
+    if (fullWindowActive) return applyFullWindowHeight();
+    var target = expandedHeight();
+    setMinimized(false);
+    if (target > maxHeight()) {
+      enterFullWindow({source: 'restore-overflow', savedHeight: target});
+      return currentHeight;
+    }
+    var result = applyHeight(target);
+    syncToolbarButtons();
+    return result;
+  }
+
+  function toggleMinimized() {
+    if (!fullWindowActive && currentHeight <= minHeight) return restorePanel();
+    return minimizePanel();
+  }
+
+  function layoutHeight() {
+    return minimized ? minHeight : preferredHeight;
+  }
+
   function toggleFullWindow() {
     if (fullWindowActive) return exitFullWindow({source: 'toggle'});
     return enterFullWindow({source: 'toggle'});
@@ -216,20 +269,33 @@
     return isFinite(parsed) ? parsed : minHeight;
   }
 
+  // Explicitly switching to the music player grows a small panel so the
+  // player is usable (this becomes the new expanded height).
   function ensureMusicPaneHeight() {
     if (fullWindowActive) return;
     var target = clampHeight(musicMinHeight());
     if (currentHeight < target) {
-      applyHeight(target);
+      applyHeight(Math.max(target, minimized ? clampHeight(expandedHeight()) : 0));
       syncToolbarButtons();
     }
   }
 
+  // Restore the saved panel state exactly. Never write settings here: startup
+  // code must not overwrite the user's saved height or minimized state.
+  var savedHeightSetting = Settings.get('log-height', null);
+  var hasSavedHeight = savedHeightSetting !== null && savedHeightSetting !== undefined;
   preferredHeight = Math.max(minHeight, parseHeight(Settings.get('log-height', defaultHeight)));
+  var savedMinimized = Settings.get(minimizedSettingKey, null);
+  if (savedMinimized === null || savedMinimized === undefined) {
+    // Before the minimized flag existed, minimizing saved log-height = 42.
+    savedMinimized = hasSavedHeight && preferredHeight <= minHeight;
+  }
+  if (preferredHeight <= minHeight) preferredHeight = defaultHeight;
+  setMinimized(savedMinimized === true, false);
   var persistedFullWindow = Settings.get(fullWindowSettingKey, false) === true;
-  applyHeight(preferredHeight, false);
+  applyHeight(layoutHeight(), false);
   syncToolbarButtons();
-  if (persistedFullWindow || preferredHeight > maxHeight()) {
+  if (persistedFullWindow || (!minimized && preferredHeight > maxHeight())) {
     enterFullWindow({
       source: persistedFullWindow ? 'restore' : 'restore-overflow',
       savedHeight: preferredHeight,
@@ -280,7 +346,7 @@
   }
   if (minimizeButton) {
     minimizeButton.addEventListener('click', function () {
-      minimizePanel();
+      toggleMinimized();
     });
   }
   window.addEventListener('resize', function () {
@@ -290,11 +356,11 @@
       syncToolbarButtons();
       return;
     }
-    if (preferredHeight > maxHeight()) {
+    if (!minimized && preferredHeight > maxHeight()) {
       enterFullWindow({source: 'resize-overflow', savedHeight: preferredHeight});
       return;
     }
-    applyHeight(preferredHeight, false);
+    applyHeight(layoutHeight(), false);
     syncToolbarButtons();
   });
   window.addEventListener('bottom-pane-mode-changed', function (ev) {
@@ -305,8 +371,20 @@
 
   // bottom-pane.js restores the persisted mode before this classic script is
   // loaded, so the initial Music Player selection does not emit an event that
-  // the listener above can observe.
-  if (modeSelect && modeSelect.value === 'music-player') ensureMusicPaneHeight();
+  // the listener above can observe. Only a first visit (no saved height) gets
+  // the music minimum, in memory only; a saved height or minimized state is
+  // restored as-is instead of being overwritten on every load.
+  if (
+    modeSelect && modeSelect.value === 'music-player'
+    && !hasSavedHeight && !minimized && !fullWindowActive
+  ) {
+    var initialMusicHeight = clampHeight(musicMinHeight());
+    if (currentHeight < initialMusicHeight) {
+      preferredHeight = initialMusicHeight;
+      applyHeight(initialMusicHeight, false);
+      syncToolbarButtons();
+    }
+  }
 
   window.DropboxBrowserLogPanel = {
     getHeight: getHeight,
@@ -316,6 +394,8 @@
     exitFullWindow: exitFullWindow,
     toggleFullWindow: toggleFullWindow,
     minimize: minimizePanel,
+    restore: restorePanel,
+    isMinimized: function () { return minimized && !fullWindowActive; },
     isFullWindowActive: function () { return fullWindowActive; },
   };
 

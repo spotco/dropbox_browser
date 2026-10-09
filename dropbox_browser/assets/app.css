@@ -801,6 +801,9 @@ body.has-log-panel .browse-horizontal-scrollbar {
   position: relative;
   z-index: 100;
 }
+#bottom-pane-minimize.is-restore img {
+  transform: rotate(180deg);
+}
 #log-resizer {
   background: #3a4a5e;
   cursor: ns-resize;

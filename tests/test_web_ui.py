@@ -379,7 +379,11 @@ class WebUiTests(AppTestCase):
         self.assertIn("function applyFullWindowHeight", js)
         self.assertIn("if (fullWindowActive)", js)
         self.assertIn("applyFullWindowHeight();", js)
-        self.assertIn("applyHeight(preferredHeight, false);", js)
+        # Resize/startup re-apply the saved layout without persisting; a
+        # minimized panel stays minimized (separate persisted flag).
+        self.assertIn("applyHeight(layoutHeight(), false);", js)
+        self.assertIn("var minimizedSettingKey = 'log-panel-minimized'", js)
+        self.assertIn("return minimized ? minHeight : preferredHeight;", js)
         self.assertIn("Settings.get(fullWindowSettingKey, false)", js)
         self.assertIn("Settings.set(fullWindowSettingKey, true)", js)
         self.assertIn("Settings.set(fullWindowSettingKey, false)", js)
@@ -559,7 +563,11 @@ class WebUiTests(AppTestCase):
         self.assertIn("function ensureMusicPaneHeight()", js)
         # ensureMusicPaneHeight grows the pane to the music minimum; tolerate
         # either a one-line or braced multi-line body.
-        self.assertRegex(js, r"if \(currentHeight < target\)\s*\{?\s*applyHeight\(target\);")
+        # (a minimized panel is restored to max(target, last expanded height)).
+        self.assertRegex(js, r"if \(currentHeight < target\)\s*\{?\s*applyHeight\((Math\.max\()?target\b")
+        # On load the music minimum only applies when no height was saved, so a
+        # saved height / minimized state is never overwritten at startup.
+        self.assertIn("&& !hasSavedHeight && !minimized && !fullWindowActive", js)
         self.assertIn("if (ev.detail.mode === 'music-player') ensureMusicPaneHeight();", js)
         self.assertIn("var defaultMode = 'server-log'", js)
         self.assertIn("Settings.get('bottom-pane-mode', defaultMode)", js)

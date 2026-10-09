@@ -100,11 +100,13 @@ test("client-render mode fetches and renders browse rows from the listing endpoi
   expect(pageErrors).toEqual([]);
 });
 
-test("client-render keeps bottom-panel minimize enabled after music startup expands a minimized saved height", async ({ page }) => {
+test("client-render keeps a minimized music-mode bottom panel minimized on load and restores it from the toolbar", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto("/");
   await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
 
+  // Legacy saved state: before the minimized flag existed, minimizing stored
+  // log-height = 42. Music startup must not expand (and overwrite) it.
   await page.evaluate(() => {
     Settings.set("bottom-pane-mode", "music-player");
     Settings.set("log-height", 42);
@@ -114,18 +116,27 @@ test("client-render keeps bottom-panel minimize enabled after music startup expa
 
   await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
   await expect(page.locator("body")).toHaveAttribute("data-bottom-panel-ready", "1");
+  await expect
+    .poll(async () => page.locator("#log-panel").evaluate((panel) => Math.round(panel.getBoundingClientRect().height)))
+    .toBe(42);
+  expect(await page.evaluate(() => Settings.get("log-height", null))).toBe(42);
+
+  const minimizeButton = page.locator("#bottom-pane-minimize");
+  await expect(minimizeButton).toBeEnabled();
+  await expect(minimizeButton).toHaveAttribute("aria-pressed", "true");
+  await minimizeButton.click();
   await expect(page.locator("#music-player-pane")).toBeVisible();
   await expect
     .poll(async () => page.locator("#log-panel").evaluate((panel) => Math.round(panel.getBoundingClientRect().height)))
     .toBeGreaterThan(42);
+  await expect(minimizeButton).toHaveAttribute("aria-pressed", "false");
 
-  const minimizeButton = page.locator("#bottom-pane-minimize");
-  await expect(minimizeButton).toBeEnabled();
   await minimizeButton.click();
   await expect
     .poll(async () => page.locator("#log-panel").evaluate((panel) => Math.round(panel.getBoundingClientRect().height)))
     .toBe(42);
-  await expect(minimizeButton).toBeDisabled();
+  await expect(minimizeButton).toBeEnabled();
+  await expect(minimizeButton).toHaveAttribute("aria-pressed", "true");
 });
 
 test("music and video playlist dialogs cover bottom panel content below the toolbar", async ({ page }) => {

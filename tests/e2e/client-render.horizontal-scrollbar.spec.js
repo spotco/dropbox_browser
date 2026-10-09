@@ -116,9 +116,9 @@ test("bottom panel drag does not snap to full page, while the topbar button stil
     .poll(async () => page.locator("#log-panel").evaluate((node) => Math.round(node.getBoundingClientRect().height)))
     .toBe(42);
 
-  // A minimized panel must re-enable minimize as soon as dragging raises it
-  // above the minimum height.
-  await expect(minimize).toBeDisabled();
+  // While minimized the same button restores the panel; dragging the panel
+  // above the minimum height turns it back into a minimize button.
+  await expect(minimize).toHaveAttribute("aria-pressed", "true");
   const minimizedResizerBox = await resizer.boundingBox();
   expect(minimizedResizerBox).not.toBeNull();
   await page.mouse.move(
@@ -133,6 +133,7 @@ test("bottom panel drag does not snap to full page, while the topbar button stil
   );
   await page.mouse.up();
   await expect(minimize).toBeEnabled();
+  await expect(minimize).toHaveAttribute("aria-pressed", "false");
   await expect
     .poll(async () => page.locator("#log-panel").evaluate((node) => Math.round(node.getBoundingClientRect().height)))
     .toBeGreaterThan(42);
