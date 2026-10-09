@@ -111,7 +111,38 @@ class WebUiTests(AppTestCase):
 
         escaped_title = "SDB: Album &lt;One&gt; (dropbox:Music &amp; Videos/Album &lt;One&gt;)"
         self.assertIn(f"<title>{escaped_title}</title>", html)
-        self.assertIn(f'<h1><a class="site-title-link" href="/">{escaped_title}</a></h1>', html)
+        # The visible top bar has no separate "SDB: ..." title line; the
+        # breadcrumb is the only title.
+        header = html[html.index("<header"):html.index("</header>")]
+        self.assertNotIn("<h1", header)
+        self.assertNotIn("site-title-link", header)
+        self.assertNotIn("SDB:", header)
+        self.assertIn('<nav class="browse-topbar-breadcrumb" aria-label="Current folder"><span class="meta" dir="ltr">', header)
+
+    def test_column_header_row_renders_inside_the_top_bar(self) -> None:
+        local_root = self.create_local_root({"alpha.txt": b"alpha"})
+        rclone = SimulatedRclone({"dropbox:": [SimulatedLsjsonResponse(items=[])]})
+        for client_render in (True, False):
+            with self.subTest(client_render=client_render):
+                app = self._build_app(rclone, local_root=local_root, workers=1)
+                app.client_render = client_render
+                with TestServer(app) as server:
+                    html = server.get_text("/")
+                header = html[html.index("<header"):html.index("</header>")]
+                main = html[html.index("<main>"):html.index("</main>")]
+                self.assertIn('<header class="browse-topbar">', html)
+                self.assertIn('<div class="browse-topbar-columns">', header)
+                self.assertIn('<table class="browse-head-table" data-browse-head-table>', header)
+                self.assertEqual(header.count("<col data-browse-column="), 7)
+                for key in ("name", "type", "status", "size", "date", "view"):
+                    self.assertIn(f'data-browse-column-resizer="{key}"', header)
+                for key in ("name", "type", "status", "size", "date"):
+                    self.assertIn(f'data-browse-sort="{key}"', header)
+                self.assertIn('class="sync-toggles"', header)
+                self.assertNotIn("<thead>", main)
+                self.assertNotIn("data-browse-column-resizer", main)
+                self.assertIn("data-browse-table", main)
+                self.assertEqual(main.count("<col data-browse-column="), 7)
 
     def test_header_meta_includes_clickable_folder_breadcrumbs(self) -> None:
         rel_path = "music/mixes"
@@ -131,7 +162,7 @@ class WebUiTests(AppTestCase):
             local_root_prefix += os.sep
         # Breadcrumb join is always " \ " (space-backslash-space), independent of OS path sep.
         self.assertIn(
-            f'<div class="meta">{local_root_prefix} <a href="/">{local_root.name}</a> \\ <a href="/?path=music">music</a> \\ <a href="/?path=music%2Fmixes">mixes</a></div>',
+            f'<span class="meta" dir="ltr">{local_root_prefix} <a href="/">{local_root.name}</a> \\ <a href="/?path=music">music</a> \\ <a href="/?path=music%2Fmixes">mixes</a></span>',
             html,
         )
         self.assertNotIn('<nav class="breadcrumbs"><a href="/">Dropbox</a>', html)

@@ -1,3 +1,5 @@
+import {initBrowseTableHead} from './table-head.js';
+
 var STORAGE_KEY = 'browse-column-widths-v1';
 var DEFAULT_COLUMN_MIN_WIDTH = 32;
 
@@ -261,23 +263,41 @@ export function initBrowseColumnResizing(options) {
   var doc = options && options.document ? options.document : document;
   var win = options && options.window ? options.window : window;
   var table = options && options.table ? options.table : (doc ? doc.querySelector('table[data-browse-table]') : null);
+  // The column header row lives in a separate table in the fixed top bar; it
+  // shares the column widths and hosts the resize handles.
+  var headTable = options && options.headTable
+    ? options.headTable
+    : (!(options && options.table) && doc ? doc.querySelector('table[data-browse-head-table]') : null);
   var onWidthsChanged = options && typeof options.onWidthsChanged === 'function' ? options.onWidthsChanged : function () {};
   if (!doc || !win || !table) return null;
   if (table.__browseColumnResizeApi) return table.__browseColumnResizeApi;
+  if (headTable && typeof headTable.querySelectorAll !== 'function') headTable = null;
 
   var columnKeys = columnKeysFromTable(table);
   var preferredWidths = readPersistedBrowseColumnWidths();
   var widths = applyBrowseColumnWidths(table, preferredWidths);
   var activeDrag = null;
+  var tableHead = headTable
+    ? initBrowseTableHead({document: doc, window: win, headTable: headTable, bodyTable: table})
+    : null;
+
+  function syncHeadTable() {
+    if (!headTable) return;
+    writeBrowseColumnWidths(headTable, widths);
+    if (tableHead) tableHead.sync();
+  }
+  syncHeadTable();
 
   function fitWidthsToTable() {
     widths = applyBrowseColumnWidths(table, preferredWidths);
+    syncHeadTable();
     onWidthsChanged(widths);
     return widths;
   }
 
   function writeCurrentWidths() {
     widths = writeBrowseColumnWidths(table, widths);
+    syncHeadTable();
     onWidthsChanged(widths);
     return widths;
   }
@@ -294,13 +314,14 @@ export function initBrowseColumnResizing(options) {
     activeDrag = null;
   }
 
-  table.addEventListener('pointerdown', function (event) {
+  function onPointerDown(event) {
+    var host = event.currentTarget || table;
     var handle = event.target && typeof event.target.closest === 'function'
       ? event.target.closest('.browse-column-resizer[data-browse-column-resizer]')
       : null;
     if (!handle) {
       var closestDistance = Infinity;
-      table.querySelectorAll('.browse-column-resizer[data-browse-column-resizer]').forEach(function (candidate) {
+      host.querySelectorAll('.browse-column-resizer[data-browse-column-resizer]').forEach(function (candidate) {
         var rect = candidate.getBoundingClientRect();
         if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) return;
         var distance = Math.abs(event.clientX - (rect.left + rect.width / 2));
@@ -339,7 +360,12 @@ export function initBrowseColumnResizing(options) {
     win.addEventListener('pointermove', activeDrag.move);
     win.addEventListener('pointerup', activeDrag.end);
     win.addEventListener('pointercancel', activeDrag.end);
-  }, true);
+  }
+
+  table.addEventListener('pointerdown', onPointerDown, true);
+  if (headTable && typeof headTable.addEventListener === 'function') {
+    headTable.addEventListener('pointerdown', onPointerDown, true);
+  }
 
   win.addEventListener('resize', function () {
     fitWidthsToTable();

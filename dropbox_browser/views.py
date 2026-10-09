@@ -219,20 +219,32 @@ def client_browse_rows_html() -> str:
     return '<tr><td colspan="7" class="empty">Loading folder listing...</td></tr>'
 
 
-def browse_table_html(*, rows_html: str, tbody_attrs: str = "") -> str:
+_BROWSE_COLGROUP_HTML = (
+    "        <colgroup>\n"
+    '          <col data-browse-column="name">\n'
+    '          <col data-browse-column="type">\n'
+    '          <col data-browse-column="status">\n'
+    '          <col data-browse-column="size">\n'
+    '          <col data-browse-column="date">\n'
+    '          <col data-browse-column="view">\n'
+    '          <col data-browse-column="sync">\n'
+    "        </colgroup>\n"
+)
+
+
+def browse_head_html() -> str:
+    """Column header row shown inside the fixed top bar.
+
+    It is a separate table with the same colgroup as the browse table so it
+    stays visible while <main> scrolls. columns.js writes widths to both tables
+    and table-head.js keeps it aligned with the body table's left edge, width
+    and horizontal scroll offset. Contains $sort_* placeholders.
+    """
     return (
-        '<div class="browse-table-shell">\n'
-        '      <table class="browse-table" data-browse-table>\n'
-        "        <colgroup>\n"
-        '          <col data-browse-column="name">\n'
-        '          <col data-browse-column="type">\n'
-        '          <col data-browse-column="status">\n'
-        '          <col data-browse-column="size">\n'
-        '          <col data-browse-column="date">\n'
-        '          <col data-browse-column="view">\n'
-        '          <col data-browse-column="sync">\n'
-        "        </colgroup>\n"
-        "        <thead>\n"
+        '<div class="browse-head-clip" data-browse-head-clip>\n'
+        '      <table class="browse-head-table" data-browse-head-table>\n'
+        + _BROWSE_COLGROUP_HTML
+        + "        <thead>\n"
         "          <tr>\n"
         '            <th data-browse-column-key="name"><div class="browse-header-cell">$sort_name<button type="button" class="browse-column-resizer" data-browse-column-resizer="name" aria-label="Resize Name column" title="Drag to resize Name column"></button></div></th>\n'
         '            <th data-browse-column-key="type"><div class="browse-header-cell">$sort_type<button type="button" class="browse-column-resizer" data-browse-column-resizer="type" aria-label="Resize Type column" title="Drag to resize Type column"></button></div></th>\n'
@@ -243,7 +255,19 @@ def browse_table_html(*, rows_html: str, tbody_attrs: str = "") -> str:
         '            <th data-browse-column-key="sync"><div class="browse-header-cell"><span>Sync</span></div></th>\n'
         "          </tr>\n"
         "        </thead>\n"
-        f"        <tbody{tbody_attrs}>{rows_html}</tbody>\n"
+        "      </table>\n"
+        "    </div>"
+    )
+
+
+def browse_table_html(*, rows_html: str, tbody_attrs: str = "") -> str:
+    # The column headers live in the top bar (browse_head_html); this table
+    # only carries the colgroup that defines the shared column widths.
+    return (
+        '<div class="browse-table-shell">\n'
+        '      <table class="browse-table" data-browse-table>\n'
+        + _BROWSE_COLGROUP_HTML
+        + f"        <tbody{tbody_attrs}>{rows_html}</tbody>\n"
         "      </table>\n"
         "    </div>"
     )
@@ -349,9 +373,14 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
     if app.local_root:
         current_local_folder = str(app.local_display_path(rel_path) or app.local_root)
     sync_toggles = (
-        '<div class="sync-toggles">'
-        '<label class="sync-toggle"><input type="checkbox" id="enable-to-local"> Enable sync to local</label>'
-        '<label class="sync-toggle"><input type="checkbox" id="enable-write-dropbox"> Enable sync to Dropbox</label>'
+        '<div class="sync-toggles" role="group" aria-label="Sync permissions">'
+        '<span class="sync-toggles-caption" aria-hidden="true">Sync</span>'
+        '<label class="sync-toggle sync-toggle-local" title="Enable sync to local">'
+        '<input type="checkbox" id="enable-to-local" aria-label="Enable sync to local">'
+        '<span class="sync-toggle-text" aria-hidden="true">To local</span></label>'
+        '<label class="sync-toggle sync-toggle-dropbox" title="Enable sync to Dropbox">'
+        '<input type="checkbox" id="enable-write-dropbox" aria-label="Enable sync to Dropbox">'
+        '<span class="sync-toggle-text" aria-hidden="true">To Dropbox</span></label>'
         '</div>'
         if app.local_root
         else ""
@@ -381,7 +410,8 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
             f'href="{href}">{label}{indicator}</a>'
         )
 
-    table_html = Template(browse_table_html(rows_html=rows_html, tbody_attrs=tbody_attrs)).substitute(
+    table_html = browse_table_html(rows_html=rows_html, tbody_attrs=tbody_attrs)
+    head_html = Template(browse_head_html()).substitute(
         sort_name=sort_link("Name", "name"),
         sort_type=sort_link("Type", "type"),
         sort_status=sort_link("Status", "status"),
@@ -400,6 +430,7 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         topbar_actions=topbar_actions,
         msg_html=msg_html,
         browse_filter_html=browse_filter_html,
+        browse_head_html=head_html,
         browse_table_html=table_html,
         file_search_html=_render_static_template("file_search.html"),
         music_player_html=_render_template(

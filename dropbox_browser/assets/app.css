@@ -20,29 +20,145 @@ body.has-log-panel {
   height: 100vh;
   overflow: hidden;
 }
-header {
-  align-items: center;
-  background: #ffffff;
-  border-bottom: 1px solid #d8dde3;
-  display: flex;
-  gap: 16px;
-  justify-content: space-between;
-  padding: 18px 28px;
-}
 h1 {
   font-size: 22px;
   margin: 0 0 6px;
 }
-.site-title-link {
-  color: inherit;
-  text-decoration: none;
-}
-.site-title-link:hover {
-  text-decoration: underline;
-}
 .meta {
   color: #607080;
   font-size: 14px;
+}
+/* Fixed top bar: a breadcrumb title row (with the sync toggles) above the
+   browse table's column header row. The total height is pinned to the
+   original 85px (including the bottom border) so the layout below is
+   unchanged at every width. */
+header.browse-topbar {
+  background: #ffffff;
+  border-bottom: 1px solid #d8dde3;
+  box-shadow: 0 1px 3px rgba(31, 41, 51, 0.06);
+  box-sizing: border-box;
+  display: flex;
+  flex: 0 0 85px;
+  flex-direction: column;
+  height: 85px;
+  min-width: 0;
+  position: relative;
+  z-index: 5;
+}
+.browse-topbar-title-row {
+  align-items: center;
+  border-bottom: 1px solid #e8ecf0;
+  box-sizing: border-box;
+  display: flex;
+  flex: 0 0 45px;
+  gap: 24px;
+  min-width: 0;
+  padding: 0 16px 0 18px;
+}
+/* direction: rtl makes a too-long path clip (with the ellipsis) on the left,
+   so the current folder name stays visible; the inner .meta is dir="ltr". */
+.browse-topbar-breadcrumb {
+  color: #8593a1;
+  direction: rtl;
+  flex: 1 1 auto;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  line-height: 24px;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browse-topbar-breadcrumb .meta {
+  color: inherit;
+  font-size: inherit;
+  unicode-bidi: isolate;
+}
+.browse-topbar-breadcrumb a {
+  border-radius: 4px;
+  color: #174a7c;
+  padding: 2px 4px;
+}
+.browse-topbar-breadcrumb a:hover {
+  background: #eef3f8;
+  text-decoration: none;
+}
+.browse-topbar-breadcrumb a:last-child {
+  color: #1f2933;
+}
+.browse-topbar-columns {
+  background: #f4f6f8;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+/* table-head.js sets left/width to match the browse table shell; the CSS
+   values are only the pre-script fallback (main's 16px side padding). */
+.browse-head-clip {
+  bottom: 0;
+  left: 16px;
+  overflow: hidden;
+  position: absolute;
+  right: 16px;
+  top: 0;
+}
+table.browse-head-table {
+  background: transparent;
+  border-bottom: 0;
+  border-top: 0;
+  height: 100%;
+  table-layout: fixed;
+  width: 100%;
+}
+.browse-head-table th {
+  background: transparent;
+  border-bottom: 0;
+  color: #52606d;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  line-height: 1.25;
+  overflow: hidden;
+  padding: 0 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browse-head-table th a {
+  color: #174a7c;
+}
+.browse-head-table th a:hover {
+  color: #0b63b6;
+}
+/* Resize handles are anchored to the th itself (not to the padded label box)
+   so each handle always sits inside its own column, flush with the column's
+   right edge. With the 16px column minimum and 14px handles, a collapsed
+   column still shows its full handle and marker instead of overhanging into
+   (and being clipped by) the neighbouring cell. */
+.browse-head-table th {
+  position: relative;
+}
+.browse-head-table .browse-header-cell {
+  height: 38px;
+  position: static;
+}
+.browse-head-table .browse-header-cell > a,
+.browse-head-table .browse-header-cell > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browse-head-table .browse-column-resizer {
+  bottom: 0;
+  right: 0;
+  top: 0;
+}
+.browse-head-table .browse-column-resizer::before {
+  height: 18px;
+  right: 1px;
+  top: calc(50% - 9px);
 }
 main {
   box-sizing: border-box;
@@ -97,20 +213,87 @@ body.bottom-panel-full-window-mode #log-resizer {
 .breadcrumbs {
   font-size: 15px;
 }
-.sync-toggle {
-  align-items: center;
-  display: flex;
-  gap: 6px;
-  font-size: 13px;
-  font-weight: 600;
-  white-space: nowrap;
-}
 .sync-toggles {
   align-items: center;
   display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
+  flex: 0 0 auto;
+  gap: 8px;
   justify-content: flex-end;
+}
+.sync-toggles-caption {
+  color: #8593a1;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin-right: 2px;
+  text-transform: uppercase;
+}
+.sync-toggle {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #d8dde3;
+  border-radius: 999px;
+  box-sizing: border-box;
+  color: #3e4c59;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 600;
+  gap: 7px;
+  height: 28px;
+  padding: 0 11px 0 6px;
+  transition: background-color 0.15s, border-color 0.15s;
+  user-select: none;
+  white-space: nowrap;
+}
+.sync-toggle:hover {
+  background: #f7f9fb;
+  border-color: #b9c4cf;
+}
+.sync-toggle input {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: #c5ced8;
+  background-image: radial-gradient(circle, #ffffff 0 5px, transparent 5.5px);
+  background-position: 0 50%;
+  background-repeat: no-repeat;
+  background-size: 16px 16px;
+  border-radius: 999px;
+  cursor: pointer;
+  flex: 0 0 auto;
+  height: 16px;
+  margin: 0;
+  transition: background-color 0.15s, background-position 0.15s;
+  width: 28px;
+}
+.sync-toggle input:checked {
+  background-color: #1f6fb2;
+  background-position: 12px 50%;
+}
+.sync-toggle-dropbox input:checked {
+  background-color: #c2410c;
+}
+.sync-toggle input:focus-visible {
+  outline: 2px solid #174a7c;
+  outline-offset: 2px;
+}
+.sync-toggle-local:has(input:checked) {
+  background: #eef5fc;
+  border-color: #9cc1e4;
+  color: #174a7c;
+}
+.sync-toggle-dropbox:has(input:checked) {
+  background: #fff4ed;
+  border-color: #f0b089;
+  color: #9a3412;
+}
+@media (max-width: 760px) {
+  .sync-toggles-caption {
+    display: none;
+  }
+  .browse-topbar-title-row {
+    gap: 12px;
+  }
 }
 .topbar-actions {
   align-items: center;

@@ -56,7 +56,6 @@ function renderHeaderMetaHtml(page, breadcrumbs) {
 
 function updatePageShell(payload) {
   var page = payload.page || {};
-  var headingLink = document.querySelector('header h1 a.site-title-link');
   var meta = document.querySelector('header .meta');
   var breadcrumbNav = document.querySelector('.breadcrumbs');
   var refreshLink = document.getElementById('refresh-cache');
@@ -64,7 +63,6 @@ function updatePageShell(payload) {
   var dropboxLink = document.querySelector('.topbar-actions .dropbox-link');
   if (page.title) {
     document.title = page.title;
-    if (headingLink) headingLink.textContent = page.title;
   }
   if (meta) {
     meta.innerHTML = renderHeaderMetaHtml(page, payload.breadcrumbs || []);
