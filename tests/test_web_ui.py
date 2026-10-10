@@ -1524,11 +1524,17 @@ class WebUiTests(AppTestCase):
         self.assertIn("fetch('/refresh-cache'", js)
         self.assertIn("recursive: recursive ? '1' : '0'", js)
         self.assertIn("clientBrowseReloadAvailable()", js)
-        self.assertIn("DropboxBrowseClient.reloadCurrentFolder", js)
+        self.assertIn("client.refreshCurrentFolderInPlace({refresh: true})", js)
+        # Finished syncs refresh the folder in place; only server-rendered
+        # pages (no client listing) still reload.
+        self.assertIn("refreshAfterSync(context, ok);", js)
+        self.assertIn("DropboxBrowseClient.refreshCurrentFolderInPlace({", js)
+        self.assertNotIn("setTimeout(function () { window.location.reload(); }, 700);", js)
         self.assertIn("Cache invalidated. Reloading folder listing...", js)
         self.assertIn("Cache invalidated. Reloading page", js)
         self.assertIn("window.location.reload();", js)
         self.assertIn("reloadCurrentFolder: function", browse_main_js)
+        self.assertIn("refreshCurrentFolderInPlace: function", browse_main_js)
         self.assertNotIn("pollUntilReady", js)
         self.assertIn("event.key === 'Shift'", js)
         self.assertNotIn('<span class="entry-name">folder</span>', html)

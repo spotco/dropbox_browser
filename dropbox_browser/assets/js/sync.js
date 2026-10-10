@@ -16,6 +16,9 @@
   var pendingBatch = null;
   var syncBusyCount = 0;
   var activeSyncForm = null;
+  var popupGeneration = 0;
+  var POPUP_SUCCESS_HIDE_MS = 1800;
+  var SERVER_RENDER_RELOAD_DELAY_MS = 700;
 
   function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -110,6 +113,7 @@
   }
 
   function showPopup(text, cmd) {
+    popupGeneration += 1;
     if (!popup) return;
     popup.classList.remove('hidden');
     message.textContent = text;
@@ -137,6 +141,66 @@
       if (!popup) return;
       popup.classList.add('hidden');
     }, 1800);
+  }
+
+  // Hide a finished popup after a moment unless another sync reused it.
+  function hidePopupLater(delayMs) {
+    var generation = popupGeneration;
+    setTimeout(function () {
+      if (!popup || generation !== popupGeneration) return;
+      popup.classList.add('hidden');
+    }, delayMs);
+  }
+
+  function clientBrowseRefreshAvailable() {
+    var client = window.DropboxBrowseClient;
+    return !!(
+      document.body &&
+      document.body.dataset.clientRender === '1' &&
+      client &&
+      typeof client.refreshCurrentFolderInPlace === 'function'
+    );
+  }
+
+  // After a sync finishes, show the new statuses. The client-rendered browse
+  // view re-fetches the current folder in place (rows, scroll position,
+  // filters, sort, column widths, sync toggles and the bottom panel with any
+  // playing music/video stay as they are). The server already invalidated
+  // the listing/folder caches of the synced paths' parents, so a normal
+  // (non-?refresh=1) listing returns fresh statuses. Server-rendered pages
+  // have no client-side listing to update, so they still reload.
+  //   context.folderPath: folder shown when the sync started; if the user has
+  //                       navigated elsewhere since, that view is left alone.
+  //   context.path:       the synced row, kept visible after the re-render.
+  function refreshAfterSync(context, ok) {
+    if (!clientBrowseRefreshAvailable()) {
+      setTimeout(function () { window.location.reload(); }, SERVER_RENDER_RELOAD_DELAY_MS);
+      return;
+    }
+    var refresh;
+    try {
+      refresh = window.DropboxBrowseClient.refreshCurrentFolderInPlace({
+        expectedPath: context && typeof context.folderPath === 'string' ? context.folderPath : undefined,
+        revealPath: context && context.path ? context.path : '',
+      });
+    } catch (_error) {
+      // Last resort: the client refresh is broken, fall back to a reload.
+      window.location.reload();
+      return;
+    }
+    // A failed refresh keeps the old rows and shows the listing warning
+    // banner above the table (handled by the browse client). That banner may
+    // be scrolled out of view, so the popup says so too and stays open.
+    var generation = popupGeneration;
+    Promise.resolve(refresh).then(function () {
+      if (document.body.dataset.browseInPlaceRefresh === 'error') {
+        if (message && generation === popupGeneration) {
+          message.textContent += ' (the folder listing could not be refreshed; statuses shown may be out of date)';
+        }
+        return;
+      }
+      if (ok) hidePopupLater(POPUP_SUCCESS_HIDE_MS);
+    }, function () {});
   }
 
   function gateParams() {
@@ -247,7 +311,7 @@
       });
   }
 
-  function pollStatus(id) {
+  function pollStatus(id, context) {
     fetch('/sync-status?id=' + encodeURIComponent(id))
       .then(function (r) { return r.json(); })
       .then(function (data) {
@@ -256,9 +320,10 @@
           clearActiveSyncForm();
           setSyncBusy(false);
           var msg = data.message || 'Sync complete';
-          if (data.errors && data.errors.length) msg += ': ' + data.errors.join('; ');
-          finishPopup(msg, data.command || data.label || '', data.errors && data.errors.length ? false : true);
-          setTimeout(function () { window.location.reload(); }, 700);
+          var ok = !(data.errors && data.errors.length);
+          if (!ok) msg += ': ' + data.errors.join('; ');
+          finishPopup(msg, data.command || data.label || '', ok);
+          refreshAfterSync(context, ok);
           return;
         }
         if (data.status === 'error') {
@@ -269,9 +334,9 @@
         }
         var progressText = data.current && data.total ? '[' + data.current + '/' + data.total + '] ' : '';
         message.textContent = progressText + (data.message || 'Sync running');
-        setTimeout(function () { pollStatus(id); }, 800);
+        setTimeout(function () { pollStatus(id, context); }, 800);
       })
-      .catch(function () { setTimeout(function () { pollStatus(id); }, 1500); });
+      .catch(function () { setTimeout(function () { pollStatus(id, context); }, 1500); });
   }
 
   document.addEventListener('submit', function (event) {
@@ -289,6 +354,7 @@
     setSyncBusy(true);
     var data = new FormData(form);
     var cmd = labelForDirection(data.get('direction')) + ': ' + data.get('path');
+    var context = {folderPath: pageState.currentFolderPath || '', path: String(data.get('path') || '')};
     showPopup('Sync running', cmd);
     fetch('/sync', {
       method: 'POST',
@@ -298,7 +364,7 @@
         if (!r.ok) throw new Error('Sync request failed');
         return r.json();
       })
-      .then(function (payload) { pollStatus(payload.id); })
+      .then(function (payload) { pollStatus(payload.id, context); })
       .catch(function (err) {
         clearActiveSyncForm();
         setSyncBusy(false);
@@ -340,12 +406,13 @@
       setSyncBusy(true);
       batchConfirm.classList.add('hidden');
       showPopup('Batch sync starting', '');
+      var batchContext = {folderPath: pendingBatch.path || '', path: ''};
       fetch('/sync-batch', { method: 'POST', body: formBody(pendingBatch) })
         .then(function (r) {
           if (!r.ok) throw new Error('Batch sync request failed');
           return r.json();
         })
-        .then(function (payload) { pollStatus(payload.id); })
+        .then(function (payload) { pollStatus(payload.id, batchContext); })
         .catch(function (err) {
           setSyncBusy(false);
           finishPopup(err.message || 'Batch sync failed', '', false);

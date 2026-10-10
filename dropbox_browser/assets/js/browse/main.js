@@ -114,8 +114,12 @@ function listingWarningElement(create) {
     button.disabled = true;
     button.textContent = 'Refreshing...';
     // The failed listing was never cached, so a normal reload asks Dropbox
-    // again without discarding the folder metadata caches.
-    Promise.resolve(client.reloadCurrentFolder({refresh: false, history: 'replace'})).then(
+    // again without discarding the folder metadata caches. Refresh in place
+    // (keeping the rows and scroll position) when the client supports it.
+    var reload = typeof client.refreshCurrentFolderInPlace === 'function'
+      ? client.refreshCurrentFolderInPlace({refresh: false})
+      : client.reloadCurrentFolder({refresh: false, history: 'replace'});
+    Promise.resolve(reload).then(
       function () { resetListingWarningButton(button); },
       function () { resetListingWarningButton(button); },
     );
@@ -151,6 +155,18 @@ function updateListingWarning(payload) {
 function hideListingWarning() {
   var banner = listingWarningElement(false);
   if (banner) banner.hidden = true;
+}
+
+// Banner for a failed in-place refresh: the rows shown are kept but may be
+// out of date; its Refresh button retries.
+function showListingRefreshFailedWarning(errorMessage) {
+  var banner = listingWarningElement(true);
+  if (!banner) return;
+  banner.querySelector('.browse-listing-warning-text').textContent =
+    'Could not refresh the folder listing. The rows shown may be out of date.';
+  banner.setAttribute('title', String(errorMessage || 'Could not load folder listing.'));
+  banner.setAttribute('data-listing-state', 'refresh-failed');
+  banner.hidden = false;
 }
 
 function readSetting(key, defaultValue) {
@@ -452,10 +468,12 @@ function renderRows(mount, state, virtualState, options) {
   updateSortControls(state);
 }
 
-function renderSnapshot(mount, state, payload, virtualState, onRendered) {
+function renderSnapshot(mount, state, payload, virtualState, onRendered, options) {
   applyBrowseSnapshot(state, payload);
   updatePageShell(payload);
-  resetVirtualMeasurement(virtualState);
+  // An in-place refresh keeps the measured row height: resetting it to the
+  // default would shift the virtual spacers and with them the visible rows.
+  if (!(options && options.keepMeasurement)) resetVirtualMeasurement(virtualState);
   renderRows(mount, state, virtualState, {force: true, reason: 'snapshot'});
   if (typeof onRendered === 'function') onRendered();
   return startFolderInfoPolling(state, {
@@ -1026,6 +1044,14 @@ function initBrowse() {
     var historyMode = options && options.history ? options.history : 'none';
     var scrollToTop = !options || options.scroll !== false;
     var restoreScrollTop = options && typeof options.restoreScrollTop === 'number' ? options.restoreScrollTop : null;
+    // In-place refresh (after a sync, cache refresh or banner Refresh): keep
+    // the current rows on screen while the listing is re-fetched, then
+    // re-render them at the same scroll offset. Nothing outside the table is
+    // rebuilt, so the bottom panel and its media players are untouched.
+    var inPlace = !!(options && options.inPlace);
+    var revealPath = inPlace && options && typeof options.revealPath === 'string' ? options.revealPath : '';
+    var preservedScrollTop = inPlace ? readBrowseScrollTop() : null;
+    var scrollAnchor = null;
     var version = requestVersion + 1;
     logRevealDebug('debug', 'load browse state', {
       nextPath: normalized.path,
@@ -1037,8 +1063,18 @@ function initBrowse() {
     requestVersion = version;
     var previousPath = state.path;
     if (normalized.path !== previousPath) hideListingWarning();
-    stopActiveWork();
-    renderLoading(normalized);
+    if (inPlace) {
+      // Supersede any in-flight load, but keep folder-info polling for the
+      // rows still shown until the new listing arrives.
+      if (currentController) {
+        currentController.abort();
+        currentController = null;
+      }
+      body.dataset.browseInPlaceRefresh = 'running';
+    } else {
+      stopActiveWork();
+      renderLoading(normalized);
+    }
     currentController = typeof AbortController === 'function' ? new AbortController() : null;
     var listingPromise = fetch(
       buildBrowseListingEndpoint(normalized),
@@ -1051,6 +1087,14 @@ function initBrowse() {
       .then(function (payload) {
         if (version !== requestVersion) return false;
         currentController = null;
+        if (inPlace) {
+          stopFolderPolling();
+          stopFolderPolling = function () {};
+          // Measured right before the re-render so scrolling during the fetch
+          // counts.
+          preservedScrollTop = readBrowseScrollTop();
+          scrollAnchor = captureBrowseScrollAnchor(revealPath);
+        }
         stopFolderPolling = renderSnapshot(mount, state, payload, virtualState, function () {
           thumbnailLoader.refresh();
           horizontalScrollbar.refresh();
@@ -1064,10 +1108,16 @@ function initBrowse() {
             return;
           }
           hideScrollPreview();
-        });
+        }, {keepMeasurement: inPlace});
         body.dataset.browseClient = 'ready';
         notifyBrowseFolderChanged(previousPath, state.path);
-        if (state.reveal) scheduleRevealAttempt();
+        if (inPlace) {
+          restoreBrowseScrollTop(preservedScrollTop);
+          restoreBrowseScrollAnchor(scrollAnchor);
+          if (revealPath) keepBrowseRowVisible(revealPath);
+          body.dataset.browseInPlaceRefresh = 'done';
+          body.dataset.browseInPlaceRefreshCount = String((Number(body.dataset.browseInPlaceRefreshCount) || 0) + 1);
+        } else if (state.reveal) scheduleRevealAttempt();
         else if (restoreScrollTop !== null) restoreBrowseScrollTop(restoreScrollTop);
         else if (scrollToTop) scrollPageToTop();
         var href = currentBrowsePageHref(state);
@@ -1082,6 +1132,12 @@ function initBrowse() {
         if (error && error.name === 'AbortError') return false;
         if (version !== requestVersion) return false;
         currentController = null;
+        if (inPlace) {
+          // Keep the rows already on screen and say they may be stale.
+          showListingRefreshFailedWarning(error && error.message ? error.message : '');
+          body.dataset.browseInPlaceRefresh = 'error';
+          return false;
+        }
         setBrowseError(state, error && error.message ? error.message : 'Could not load folder listing.');
         destroyBrowseVirtualRecycler(virtualState);
         mount.innerHTML = errorRowHtml(state.error);
@@ -1120,7 +1176,83 @@ function initBrowse() {
         scroll: settings.scroll === true,
       });
     },
+    // Re-fetch the current folder and update its rows without a page reload
+    // and without clearing the table: scroll position, filters, sort, column
+    // widths and everything outside the table stay as they are.
+    //   expectedPath: only refresh if the browser still shows this folder
+    //                 (resolves false when the user navigated elsewhere).
+    //   revealPath:   keep this row visible after the re-render.
+    //   refresh:      true to bypass the server listing cache (?refresh=1).
+    // Resolves true on success; false when skipped or when the listing could
+    // not be loaded (the old rows stay and a warning banner is shown).
+    refreshCurrentFolderInPlace: function (options) {
+      var settings = options || {};
+      if (typeof settings.expectedPath === 'string' && settings.expectedPath !== state.path) {
+        return Promise.resolve(false);
+      }
+      return loadBrowseState({
+        path: state.path,
+        filters: state.filters,
+        refresh: settings.refresh === true,
+      }, {
+        history: 'none',
+        inPlace: true,
+        revealPath: typeof settings.revealPath === 'string' ? settings.revealPath : '',
+      });
+    },
   };
+
+  // The row the user is looking at (the synced row when given, else the
+  // first row at the top of the viewport) and its offset from the top of the
+  // scroll viewport, so a re-render can put it back at the same place even if
+  // rows above it were added or removed.
+  function captureBrowseScrollAnchor(preferredPath) {
+    if (!pageScrollEl || typeof mount.querySelectorAll !== 'function') return null;
+    var viewTop = pageScrollEl.getBoundingClientRect().top;
+    var viewBottom = viewTop + pageScrollEl.clientHeight;
+    var preferred = preferredPath ? findMountedRowByPath(preferredPath) : null;
+    if (preferred) {
+      var preferredRect = preferred.getBoundingClientRect();
+      if (preferredRect.bottom > viewTop && preferredRect.top < viewBottom) {
+        return {path: preferredPath, offset: preferredRect.top - viewTop};
+      }
+    }
+    var rows = mount.querySelectorAll('tr[data-row-path]');
+    for (var index = 0; index < rows.length; index += 1) {
+      var rect = rows[index].getBoundingClientRect();
+      if (rect.bottom > viewTop && rect.top < viewBottom) {
+        return {path: rows[index].getAttribute('data-row-path'), offset: rect.top - viewTop};
+      }
+    }
+    return null;
+  }
+
+  function restoreBrowseScrollAnchor(anchor) {
+    if (!anchor || !pageScrollEl) return;
+    var row = findMountedRowByPath(anchor.path);
+    if (!row) return;
+    var delta = (row.getBoundingClientRect().top - pageScrollEl.getBoundingClientRect().top) - anchor.offset;
+    if (Math.abs(delta) < 1) return;
+    setBrowseScrollTop(readBrowseScrollTop() + delta);
+    renderAndRefresh({force: false});
+  }
+
+  function keepBrowseRowVisible(relPath) {
+    var mountedRow = findMountedRowByPath(relPath);
+    if (mountedRow && typeof mountedRow.scrollIntoView === 'function') {
+      // 'nearest' does nothing when the row is already fully visible.
+      mountedRow.scrollIntoView({block: 'nearest'});
+      return;
+    }
+    if (!virtualState.enabled) return;
+    var rows = getSortedFilteredRows(state);
+    var rowIndex = rows.findIndex(function (row) {
+      return row && row.path === relPath;
+    });
+    if (rowIndex < 0) return;
+    scrollVirtualRowIntoViewport(rowIndex);
+    renderAndRefresh({force: false});
+  }
 
   function scheduleViewportRender() {
     if (state.loading || !virtualState.enabled) return;

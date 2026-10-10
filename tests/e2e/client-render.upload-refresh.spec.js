@@ -60,6 +60,10 @@ let previousFaultsEnv;
 test.beforeAll(async () => {
   previousFaultsEnv = process.env.DROPBOX_BROWSER_FAKE_RCLONE_FAULTS;
   process.env.DROPBOX_BROWSER_FAKE_RCLONE_FAULTS = faultsPath;
+  // Arm the first test's faults before the server starts: the readiness probe
+  // (GET /) kicks off a background folder-cache pass that lists broken-test,
+  // and a successful listing there would be cached before the test runs.
+  failLsjsonNow("broken-test");
   server = await startServer({ clientRender: true, fixtureName: "upload-refresh.json" });
 });
 
@@ -92,8 +96,13 @@ async function describeRows(page) {
   return JSON.stringify(rows);
 }
 
+function inPlaceRefreshCount(page) {
+  return page.evaluate(() => Number(document.body.dataset.browseInPlaceRefreshCount || 0));
+}
+
 // Open the folder, upload one Local Only file through the row sync button and
-// wait for sync.js's automatic full-page reload after /sync-status completes.
+// wait for sync.js's automatic in-place folder refresh after /sync-status
+// completes (no page reload: a window marker must survive).
 async function uploadThroughUi(page, relPath, folder = FOLDER) {
   await page.goto(`/?path=${encodeURIComponent(folder)}`);
   await waitForFolderReady(page, folder);
@@ -104,10 +113,14 @@ async function uploadThroughUi(page, relPath, folder = FOLDER) {
   await page.locator("#enable-write-dropbox").check();
   const uploadButton = row(page, relPath).locator('form.sync-form[data-sync-direction="local_to_dropbox"] button');
   await expect(uploadButton).toBeEnabled();
-  const reloaded = page.waitForEvent("load", { timeout: 20000 });
+  const refreshesBefore = await inPlaceRefreshCount(page);
+  await page.evaluate(() => { window.__uploadRefreshMarker = "same-document"; });
   await uploadButton.click();
-  await reloaded;
+  await expect
+    .poll(() => inPlaceRefreshCount(page), { timeout: 20000, message: "the folder should refresh in place after the upload" })
+    .toBeGreaterThan(refreshesBefore);
   await waitForFolderReady(page, folder);
+  expect(await page.evaluate(() => window.__uploadRefreshMarker)).toBe("same-document");
 }
 
 // Runs first on purpose: later tests trigger recursive folder-cache passes that
@@ -141,7 +154,7 @@ test("a persistently failing Dropbox listing shows local rows as Unknown with a 
   await expect(page).toHaveURL(new RegExp(`path=${folder}`));
 });
 
-test("the reload right after an upload keeps Dropbox-only files when the first listing is throttled", async ({ page }) => {
+test("the in-place refresh right after an upload keeps Dropbox-only files when the first listing is throttled", async ({ page }) => {
   test.setTimeout(30000);
   const uploaded = `${FOLDER}/upload-a.txt`;
   armLsjsonFaultsAfterNextUpload(1);
@@ -151,7 +164,7 @@ test("the reload right after an upload keeps Dropbox-only files when the first l
   await expect.poll(consumedFaultCount, { message: "the post-upload lsjson failure should be hit" }).toBe(1);
   await expect(
     row(page, DROPBOX_ONLY),
-    `rows after the post-upload reload: ${await describeRows(page)}`,
+    `rows after the post-upload refresh: ${await describeRows(page)}`,
   ).toHaveCount(1);
   await expect(row(page, uploaded).locator(".status")).toHaveText("Synced");
   await expect(row(page, LOCAL_ONLY).locator(".status")).toHaveText("Local Only");

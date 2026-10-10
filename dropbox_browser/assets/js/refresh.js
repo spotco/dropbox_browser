@@ -42,20 +42,24 @@
 
   function clientBrowseReloadAvailable() {
     var body = document.body;
+    var client = window.DropboxBrowseClient;
     return !!(
       body &&
       body.dataset.clientRender === '1' &&
-      window.DropboxBrowseClient &&
-      typeof window.DropboxBrowseClient.reloadCurrentFolder === 'function'
+      client &&
+      (typeof client.refreshCurrentFolderInPlace === 'function' || typeof client.reloadCurrentFolder === 'function')
     );
   }
 
+  // Re-list the current folder without a page reload. The in-place refresh
+  // keeps the rows on screen (and the scroll position) until the new listing
+  // arrives; the bottom panel and its media players are never touched.
   function reloadBrowseListing(recursive) {
-    return window.DropboxBrowseClient.reloadCurrentFolder({
-      refresh: true,
-      history: 'replace',
-      scroll: false,
-    }).then(function (loaded) {
+    var client = window.DropboxBrowseClient;
+    var reload = typeof client.refreshCurrentFolderInPlace === 'function'
+      ? client.refreshCurrentFolderInPlace({refresh: true})
+      : client.reloadCurrentFolder({refresh: true, history: 'replace', scroll: false});
+    return Promise.resolve(reload).then(function (loaded) {
       if (!loaded) throw new Error('Could not reload folder listing.');
     });
   }
@@ -100,6 +104,7 @@
             hideBlocker();
           });
         }
+        // Server-rendered pages have no client listing to update.
         message.textContent = 'Cache invalidated. Reloading page';
         window.location.reload();
         return undefined;
