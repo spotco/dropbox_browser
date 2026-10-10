@@ -545,8 +545,13 @@ function initBrowse() {
   var BROWSE_ENTRY_STATE_KEY = 'browseEntryId';
   var BROWSE_SCROLL_STORAGE_KEY = 'dropbox-browser.browse-scroll-positions';
   var BROWSE_SCROLL_STORAGE_LIMIT = 100;
+  // Last scroll offset per folder path, so a forward navigation into a folder
+  // visited earlier in this tab (breadcrumb, folder row, any folder link)
+  // comes back where the user left it. Same cap and LRU order as above.
+  var BROWSE_PATH_SCROLL_STORAGE_KEY = 'dropbox-browser.browse-scroll-positions-by-path';
   var currentBrowseEntryId = '';
   var browseScrollPositions = null;
+  var browsePathScrollPositions = null;
   var initialFilterState = resolveBrowseFilterState(state.path, state.filters);
   state.filters = initialFilterState.filters;
   state.filterBarVisible = initialFilterState.visible;
@@ -605,42 +610,68 @@ function initBrowse() {
     return typeof value === 'string' ? value : '';
   }
 
-  function loadBrowseScrollPositions() {
-    if (browseScrollPositions) return browseScrollPositions;
-    browseScrollPositions = {order: [], offsets: {}};
+  function readScrollPositionStore(storageKey) {
+    var positions = {order: [], offsets: {}};
     try {
-      var parsed = JSON.parse(window.sessionStorage.getItem(BROWSE_SCROLL_STORAGE_KEY) || 'null');
+      var parsed = JSON.parse(window.sessionStorage.getItem(storageKey) || 'null');
       if (parsed && Array.isArray(parsed.order) && parsed.offsets && typeof parsed.offsets === 'object') {
-        browseScrollPositions = {order: parsed.order.slice(), offsets: Object.assign({}, parsed.offsets)};
+        positions = {order: parsed.order.slice(), offsets: Object.assign({}, parsed.offsets)};
       }
     } catch (_error) {
       // Storage may be unavailable or corrupt; fall back to in-memory only.
     }
+    return positions;
+  }
+
+  function writeScrollPositionStore(storageKey, positions, key, value) {
+    positions.order = positions.order.filter(function (id) { return id !== key; });
+    positions.order.push(key);
+    positions.offsets[key] = value;
+    while (positions.order.length > BROWSE_SCROLL_STORAGE_LIMIT) {
+      delete positions.offsets[positions.order.shift()];
+    }
+    try {
+      window.sessionStorage.setItem(storageKey, JSON.stringify(positions));
+    } catch (_error) {
+      // Best effort; the in-memory copy still serves this document.
+    }
+  }
+
+  function loadBrowseScrollPositions() {
+    if (!browseScrollPositions) browseScrollPositions = readScrollPositionStore(BROWSE_SCROLL_STORAGE_KEY);
     return browseScrollPositions;
+  }
+
+  function loadBrowsePathScrollPositions() {
+    if (!browsePathScrollPositions) browsePathScrollPositions = readScrollPositionStore(BROWSE_PATH_SCROLL_STORAGE_KEY);
+    return browsePathScrollPositions;
+  }
+
+  function validScrollOffset(value) {
+    var number = Number(value);
+    return value !== undefined && value !== null && isFinite(number) && number >= 0 ? number : null;
   }
 
   function savedBrowseScrollTop(entryId) {
     if (!entryId) return null;
-    var value = Number(loadBrowseScrollPositions().offsets[entryId]);
-    return isFinite(value) && value >= 0 ? value : null;
+    return validScrollOffset(loadBrowseScrollPositions().offsets[entryId]);
+  }
+
+  // Keyed by the normalized folder path ('' is the Dropbox root).
+  function savedBrowsePathScrollTop(path) {
+    if (typeof path !== 'string') return null;
+    var offsets = loadBrowsePathScrollPositions().offsets;
+    if (!Object.prototype.hasOwnProperty.call(offsets, path)) return null;
+    return validScrollOffset(offsets[path]);
   }
 
   function rememberBrowseScrollPosition() {
     // While a listing is loading the table is collapsed to a loading row, so
     // the live offset no longer describes the current entry.
     if (!currentBrowseEntryId || state.loading) return;
-    var positions = loadBrowseScrollPositions();
-    positions.order = positions.order.filter(function (id) { return id !== currentBrowseEntryId; });
-    positions.order.push(currentBrowseEntryId);
-    positions.offsets[currentBrowseEntryId] = Math.round(readBrowseScrollTop());
-    while (positions.order.length > BROWSE_SCROLL_STORAGE_LIMIT) {
-      delete positions.offsets[positions.order.shift()];
-    }
-    try {
-      window.sessionStorage.setItem(BROWSE_SCROLL_STORAGE_KEY, JSON.stringify(positions));
-    } catch (_error) {
-      // Best effort; the in-memory copy still serves same-document Back/Forward.
-    }
+    var offset = Math.round(readBrowseScrollTop());
+    writeScrollPositionStore(BROWSE_SCROLL_STORAGE_KEY, loadBrowseScrollPositions(), currentBrowseEntryId, offset);
+    writeScrollPositionStore(BROWSE_PATH_SCROLL_STORAGE_KEY, loadBrowsePathScrollPositions(), state.path || '', offset);
   }
 
   function pushBrowseHistoryEntry(href) {
@@ -654,14 +685,21 @@ function initBrowse() {
 
   function adoptBrowseHistoryEntry(historyState) {
     var entryId = browseEntryIdFromHistoryState(historyState);
+    // An entry without its own record (new tab, typed URL, an entry pushed by
+    // another script) falls back to the folder's last offset in this tab.
+    var path = readBrowseLocation(window.location.search).path;
     if (!entryId) {
       entryId = createBrowseEntryId();
       currentBrowseEntryId = entryId;
       replaceBrowseHistoryEntry(window.location.href);
-      return {entryId: entryId, restoreScrollTop: null};
+      return {entryId: entryId, restoreScrollTop: savedBrowsePathScrollTop(path)};
     }
     currentBrowseEntryId = entryId;
-    return {entryId: entryId, restoreScrollTop: savedBrowseScrollTop(entryId)};
+    var entryScrollTop = savedBrowseScrollTop(entryId);
+    return {
+      entryId: entryId,
+      restoreScrollTop: entryScrollTop !== null ? entryScrollTop : savedBrowsePathScrollTop(path),
+    };
   }
 
   function restoreBrowseScrollTop(value) {
@@ -1190,6 +1228,14 @@ function initBrowse() {
       if (typeof settings.expectedPath === 'string' && settings.expectedPath !== state.path) {
         return Promise.resolve(false);
       }
+      // A folder navigation (click, Back/Forward) is still loading: never
+      // supersede it. Aborting it would drop its history push (the URL would
+      // keep the old folder and Back would skip it, losing its saved scroll
+      // offset). The navigation fetches a fresh listing anyway, so its result
+      // stands in for this refresh.
+      if (state.loading && currentListingPromise) {
+        return Promise.resolve(currentListingPromise).then(function (loaded) { return !!loaded; });
+      }
       return loadBrowseState({
         path: state.path,
         filters: state.filters,
@@ -1406,7 +1452,13 @@ function initBrowse() {
     if (!nextState) return;
     event.preventDefault();
     rememberBrowseScrollPosition();
-    loadBrowseState(nextState, {history: 'push', scroll: true});
+    // A folder visited before in this tab comes back at its last offset
+    // (reveal targets still take precedence in loadBrowseState); a folder
+    // never visited starts at the top.
+    var pathScrollTop = savedBrowsePathScrollTop(nextState.path);
+    loadBrowseState(nextState, pathScrollTop !== null
+      ? {history: 'push', scroll: true, restoreScrollTop: pathScrollTop}
+      : {history: 'push', scroll: true});
   });
 
   window.addEventListener('popstate', function (event) {

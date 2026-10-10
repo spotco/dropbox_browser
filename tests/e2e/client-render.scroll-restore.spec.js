@@ -151,3 +151,160 @@ test("client-render keeps the folder scroll position across a page reload", asyn
   await waitForFolderReady(page, ROOT_PATH, 41);
   await expectScrollTopNear(page, savedScrollTop);
 });
+test("client-render an in-place refresh during a pending folder navigation keeps the history entry and Back restores the scroll", async ({ page }) => {
+  // The refresh-cache link and the listing-warning Refresh button refresh the
+  // current folder in place when their job finishes. If that lands while a
+  // click into a child folder is still loading, it must not supersede the
+  // navigation: otherwise the child entry is never pushed, the URL keeps the
+  // parent path and Back skips the parent (its saved scroll offset is lost).
+  await page.goto(`/?path=${encodeURIComponent(ROOT_PATH)}`);
+  await waitForFolderReady(page, ROOT_PATH, 41);
+  const savedScrollTop = await setBrowseScrollTop(page, 900);
+  expect(savedScrollTop).toBeGreaterThan(800);
+  await expect
+    .poll(async () => await page.locator("body").getAttribute("data-browse-visible-range"))
+    .not.toMatch(/^0:/);
+  const targetPath = await pickVisibleFolderRowPath(page);
+  expect(targetPath).toMatch(/^Scroll Root\/Folder \d\d$/);
+
+  let releaseChild = null;
+  const childHeld = new Promise((resolve) => { releaseChild = resolve; });
+  let childRequested = false;
+  await page.route("**/browse/endpoints/listing**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("path") === targetPath && !childRequested) {
+      childRequested = true;
+      await childHeld;
+    }
+    await route.continue();
+  });
+
+  await page.locator(`tr[data-row-path="${targetPath}"] a.name`).click();
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "loading");
+  await expect.poll(() => childRequested).toBe(true);
+  const refreshResult = page.evaluate(() => window.DropboxBrowseClient.refreshCurrentFolderInPlace({ refresh: false }));
+  releaseChild();
+  await refreshResult;
+  await waitForFolderReady(page, targetPath, 1);
+  await expect(page).toHaveURL(new RegExp(`path=${encodeURIComponent(targetPath).replace(/%20/g, "(%20|\\+)")}`));
+  await page.unroute("**/browse/endpoints/listing**");
+
+  await page.goBack();
+  await waitForFolderReady(page, ROOT_PATH, 41);
+  await expectScrollTopNear(page, savedScrollTop);
+});
+test("client-render restores the folder scroll position on Back and reload when the listing is slow", async ({ page }) => {
+  // Large real folders (e.g. music) can take seconds to list; the restore
+  // must wait for the destination rows instead of applying to the loading row.
+  await page.goto(`/?path=${encodeURIComponent(ROOT_PATH)}`);
+  await waitForFolderReady(page, ROOT_PATH, 41);
+  const savedScrollTop = await setBrowseScrollTop(page, 900);
+  expect(savedScrollTop).toBeGreaterThan(800);
+  await expect
+    .poll(async () => await page.locator("body").getAttribute("data-browse-visible-range"))
+    .not.toMatch(/^0:/);
+  const targetPath = await pickVisibleFolderRowPath(page);
+  expect(targetPath).toMatch(/^Scroll Root\/Folder \d\d$/);
+
+  await page.route("**/browse/endpoints/listing**", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await route.continue();
+  });
+  await page.locator(`tr[data-row-path="${targetPath}"] a.name`).click();
+  await waitForFolderReady(page, targetPath, 1);
+
+  await page.goBack();
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "loading");
+  await waitForFolderReady(page, ROOT_PATH, 41);
+  await expectScrollTopNear(page, savedScrollTop);
+
+  await page.reload();
+  await waitForFolderReady(page, ROOT_PATH, 41);
+  await expectScrollTopNear(page, savedScrollTop);
+  await page.unroute("**/browse/endpoints/listing**");
+});
+// Forward navigation (breadcrumb, folder row, any folder link) into a folder
+// visited before in this tab restores that folder's last scroll offset; a
+// folder never visited starts at the top, and a reveal target still wins.
+async function clickBreadcrumb(page, label) {
+  await page.locator("header .meta a", { hasText: new RegExp(`^${label}$`) }).first().click();
+}
+
+async function scrollRootAndPickFolder(page) {
+  await page.goto(`/?path=${encodeURIComponent(ROOT_PATH)}`);
+  await waitForFolderReady(page, ROOT_PATH, 41);
+  const savedScrollTop = await setBrowseScrollTop(page, 900);
+  expect(savedScrollTop).toBeGreaterThan(800);
+  await expect
+    .poll(async () => await page.locator("body").getAttribute("data-browse-visible-range"))
+    .not.toMatch(/^0:/);
+  const targetPath = await pickVisibleFolderRowPath(page);
+  expect(targetPath).toMatch(/^Scroll Root\/Folder \d\d$/);
+  return { savedScrollTop, targetPath };
+}
+
+test("client-render clicking the parent breadcrumb restores the parent folder scroll position", async ({ page }) => {
+  const { savedScrollTop, targetPath } = await scrollRootAndPickFolder(page);
+  await page.locator(`tr[data-row-path="${targetPath}"] a.name`).click();
+  await waitForFolderReady(page, targetPath, 1);
+  expect(await readBrowseScrollTop(page)).toBe(0);
+  const historyLength = await page.evaluate(() => window.history.length);
+
+  await clickBreadcrumb(page, ROOT_PATH);
+  await waitForFolderReady(page, ROOT_PATH, 41);
+  // A breadcrumb click is a new (pushed) history entry, not Back.
+  expect(await page.evaluate(() => window.history.length)).toBe(historyLength + 1);
+  await expectScrollTopNear(page, savedScrollTop);
+  await expect(page.locator(`tr[data-row-path="${targetPath}"] .entry-name`)).toBeInViewport();
+});
+
+test("client-render re-entering a visited child folder restores it and a never-visited folder starts at the top", async ({ page }) => {
+  await page.goto(`/?path=${encodeURIComponent(ROOT_PATH)}`);
+  await waitForFolderReady(page, ROOT_PATH, 41);
+  await page.locator(`tr[data-row-path="${BIG_CHILD_PATH}"] a.name`).click();
+  await waitForFolderReady(page, BIG_CHILD_PATH, 40);
+  expect(await readBrowseScrollTop(page)).toBe(0);
+  const childScrollTop = await setBrowseScrollTop(page, 700);
+  expect(childScrollTop).toBeGreaterThan(600);
+
+  await clickBreadcrumb(page, ROOT_PATH);
+  await waitForFolderReady(page, ROOT_PATH, 41);
+  await expectScrollTopNear(page, 0);
+
+  await page.locator(`tr[data-row-path="${BIG_CHILD_PATH}"] a.name`).click();
+  await waitForFolderReady(page, BIG_CHILD_PATH, 40);
+  await expectScrollTopNear(page, childScrollTop);
+
+  await clickBreadcrumb(page, ROOT_PATH);
+  await waitForFolderReady(page, ROOT_PATH, 41);
+  const rootScrollTop = await setBrowseScrollTop(page, 900);
+  await expect
+    .poll(async () => await page.locator("body").getAttribute("data-browse-visible-range"))
+    .not.toMatch(/^0:/);
+  const freshPath = await pickVisibleFolderRowPath(page);
+  expect(freshPath).toMatch(/^Scroll Root\/Folder \d\d$/);
+  await page.locator(`tr[data-row-path="${freshPath}"] a.name`).click();
+  await waitForFolderReady(page, freshPath, 1);
+  // Never visited: starts at the top (the root's offset must not leak in).
+  expect(await readBrowseScrollTop(page)).toBe(0);
+  expect(rootScrollTop).toBeGreaterThan(800);
+});
+
+test("client-render a reveal target wins over the folder's saved scroll position", async ({ page }) => {
+  const { savedScrollTop, targetPath } = await scrollRootAndPickFolder(page);
+  await page.locator(`tr[data-row-path="${targetPath}"] a.name`).click();
+  await waitForFolderReady(page, targetPath, 1);
+
+  const revealPath = "Scroll Root/Folder 01";
+  await page.evaluate((reveal) => {
+    const link = document.createElement("a");
+    link.id = "scroll-restore-reveal-link";
+    link.href = `/?path=${encodeURIComponent("Scroll Root")}&reveal=${encodeURIComponent(reveal)}`;
+    link.textContent = "reveal";
+    document.querySelector("main").prepend(link);
+  }, revealPath);
+  await page.locator("#scroll-restore-reveal-link").click();
+  await waitForFolderReady(page, ROOT_PATH, 41);
+  await expect(page.locator(`tr[data-row-path="${revealPath}"] .entry-name`)).toBeInViewport();
+  expect(Math.abs((await readBrowseScrollTop(page)) - savedScrollTop)).toBeGreaterThan(200);
+});
