@@ -33,8 +33,12 @@
 }
 
 .video-player-shell.music-player-shell {
-  /* Shared media-library pane chrome (music.css / media-library.css) */
-  min-height: var(--music-min-pane-height, 320px);
+  /* Shared media-library pane chrome (music.css / media-library.css). The
+     shell fills the bottom panel exactly (no 320px floor): a taller shell
+     pushed the stacked layout's playback divider below the panel, out of
+     reach. Switching to the player still grows a short panel (log.js uses
+     --music-min-pane-height for that). */
+  min-height: 0;
 }
 
 .video-subpane {

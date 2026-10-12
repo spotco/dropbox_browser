@@ -23,6 +23,10 @@ async function importModuleFromWorkspace(relativePath) {
     source = source.replace("'./playlist-store.js'", `'${storeUrl}'`);
     source = source.replace("'./media-kind.js'", `'${mediaKindUrl}'`);
     source = source.replace("'../browse/virtual-list.js'", `'${virtualListUrl}'`);
+    const menuPositionPath = path.resolve(path.dirname(absolutePath), "context-menu-position.js");
+    const menuPositionSource = await fs.readFile(menuPositionPath, "utf8");
+    const menuPositionUrl = `data:text/javascript;base64,${Buffer.from(menuPositionSource, "utf8").toString("base64")}`;
+    source = source.replace("'./context-menu-position.js'", `'${menuPositionUrl}'`);
   }
   return import(`data:text/javascript;base64,${Buffer.from(source, "utf8").toString("base64")}`);
 }

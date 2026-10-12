@@ -1,4 +1,5 @@
 import {clearObject, formatShortDateTime, itemCount, plural} from './shared.js';
+import {showContextMenuAt} from './context-menu-position.js';
 import {mediaKindPresentation} from './media-kind.js';
 import {
   compareLibraryNames,
@@ -423,10 +424,7 @@ export function initLibrary(ctx) {
     }
     state.contextNodeId = nodeId;
     if (!els.libraryMenu) return;
-    els.libraryMenu.style.left = ev.clientX + 'px';
-    els.libraryMenu.style.top = ev.clientY + 'px';
-    els.libraryMenu.hidden = false;
-    els.libraryMenu.classList.remove('hidden');
+    showContextMenuAt(els.libraryMenu, ev.clientX, ev.clientY);
   }
 
   function songsUnderFolder(folderId) {

@@ -77,6 +77,14 @@
   overflow: hidden;
 }
 
+/* Set by layout.js when a pane is dragged below ~24px: drop the pane's own
+   padding/border so it stays inside its (possibly 1px) grid track and never
+   covers a divider. */
+.music-subpane.music-subpane-tiny {
+  border-width: 0 !important;
+  padding: 0 !important;
+}
+
 .music-playlist-pane {
   container-name: music-playlist;
   container-type: inline-size;
@@ -1089,6 +1097,13 @@ body.music-playlist-column-resizing {
   position: absolute;
   top: -5px;
   z-index: 301;
+}
+
+/* Set by context-menu-position.js when the submenu would run past the right
+   edge: open it to the left of its parent row instead. */
+.music-context-submenu.music-context-submenu-left {
+  left: auto;
+  right: calc(100% - 2px);
 }
 
 .music-context-menu-group:hover > .music-context-submenu,

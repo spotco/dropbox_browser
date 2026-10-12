@@ -212,6 +212,11 @@ export function initLayout(ctx) {
       widthPixels[0] + 'px ' + state.musicPaneResizerWidth + 'px ' + widthPixels[1] + 'px';
     els.playerShell.style.gridTemplateRows =
       heightPixels[0] + 'px ' + state.musicPaneResizerWidth + 'px ' + heightPixels[1] + 'px';
+    syncTinyMusicPanes([
+      Math.min(widthPixels[0], heightPixels[0]),
+      Math.min(widthPixels[1], heightPixels[0]),
+      heightPixels[1]
+    ]);
     syncMusicPaneResizerOrientation();
     if (persist !== false) persistNarrowMusicPaneSizes();
     return {
@@ -238,6 +243,22 @@ export function initLayout(ctx) {
       ),
       state.defaultNarrowMusicPaneHeightPercents
     );
+  }
+
+  // Panes can be dragged down to 1px. Below this size a pane drops its own
+  // padding/border (music-subpane-tiny) so it cannot spill out of its grid
+  // track over the neighbouring divider; its content is clipped.
+  var TINY_MUSIC_PANE_PX = 24;
+
+  function syncTinyMusicPanes(sizes) {
+    var panes;
+    if (!els.playerShell || typeof els.playerShell.querySelectorAll !== 'function') return;
+    panes = els.playerShell.querySelectorAll(':scope > .music-subpane');
+    Array.prototype.forEach.call(panes, function (pane, index) {
+      var size = Array.isArray(sizes) ? Number(sizes[index]) : NaN;
+      if (!pane.classList) return;
+      pane.classList.toggle('music-subpane-tiny', Number.isFinite(size) && size < TINY_MUSIC_PANE_PX);
+    });
   }
 
   function adjustedMusicPanePixels(rawWidths, totalWidth) {
@@ -293,6 +314,7 @@ export function initLayout(ctx) {
       pixels[1] + 'px ' + state.musicPaneResizerWidth + 'px ' +
       pixels[2] + 'px';
     els.playerShell.style.removeProperty('grid-template-rows');
+    syncTinyMusicPanes(pixels);
     syncMusicPaneResizerOrientation();
     if (persist !== false) persistMusicPanePercents(normalized);
     return normalized;

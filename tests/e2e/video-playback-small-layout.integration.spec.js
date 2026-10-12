@@ -561,3 +561,47 @@ test("video full-window expands a partial bottom pane and restores it on exit", 
     .poll(async () => page.evaluate(() => localStorage.getItem("dropbox-browser.bottom-panel-full-window")))
     .toBe(null);
 });
+
+const {
+  checkRowContextMenuNearEdges,
+  checkWidePaneDividerExtremes,
+  checkNarrowPaneDividerExtremes,
+} = require("./support/media-pane-ui");
+const { queueLibraryFile } = require("./support/video_library");
+
+test("video context menus near the bottom-right edge flip so every item and submenu stays visible", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await openVideoPane(page);
+  await queueLibraryFile(page, "multiline.mkv");
+  await expect(page.locator("#video-playlist-list .music-playlist-entry").first()).toBeVisible();
+  await setBottomPaneHeight(page, 230);
+
+  await checkRowContextMenuNearEdges(page, {
+    rowSelector: "#video-playlist-list .music-playlist-entry",
+    menuSelector: "#video-playlist-context-menu",
+    submenuParentLabel: "Copy",
+    label: "video playlist",
+  });
+  await checkRowContextMenuNearEdges(page, {
+    rowSelector: "#video-library-tree .music-tree-row",
+    menuSelector: "#video-library-context-menu",
+    submenuParentLabel: "Select",
+    label: "video library",
+  });
+});
+
+test("video pane dividers collapse each pane to ~1px, stay grabbable and persist", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await openVideoPane(page);
+  await checkWidePaneDividerExtremes(page, {
+    prefix: "video",
+    reopen: openVideoPane,
+    widthsSettingKey: "video-media-library-pane-widths",
+  });
+});
+
+test("narrow video pane dividers collapse each pane to ~1px and stay grabbable", async ({ page }) => {
+  await page.setViewportSize({ width: 560, height: 760 });
+  await openVideoPane(page);
+  await checkNarrowPaneDividerExtremes(page, { prefix: "video" });
+});

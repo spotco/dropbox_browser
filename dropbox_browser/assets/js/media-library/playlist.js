@@ -1,4 +1,5 @@
 import {clearObject, formatShortDateTime} from './shared.js';
+import {showContextMenuAt} from './context-menu-position.js';
 import {formatMediaItemCount, mediaKindPresentation} from './media-kind.js';
 import {
   createVirtualRowRecycler,
@@ -806,10 +807,7 @@ export function initPlaylist(ctx) {
     renderPlaylistLoadList();
     state.playlistLoadContextName = playlistName;
     if (!els.playlistLoadMenu) return;
-    els.playlistLoadMenu.style.left = ev.clientX + 'px';
-    els.playlistLoadMenu.style.top = ev.clientY + 'px';
-    els.playlistLoadMenu.hidden = false;
-    els.playlistLoadMenu.classList.remove('hidden');
+    showContextMenuAt(els.playlistLoadMenu, ev.clientX, ev.clientY);
   }
 
   function deletePersistedPlaylist(name) {
@@ -1750,10 +1748,7 @@ export function initPlaylist(ctx) {
     }
     state.playlistContextRemotePath = remotePath;
     if (!els.playlistMenu) return;
-    els.playlistMenu.style.left = ev.clientX + 'px';
-    els.playlistMenu.style.top = ev.clientY + 'px';
-    els.playlistMenu.hidden = false;
-    els.playlistMenu.classList.remove('hidden');
+    showContextMenuAt(els.playlistMenu, ev.clientX, ev.clientY);
   }
 
   function removeSelectedPlaylistSongs() {

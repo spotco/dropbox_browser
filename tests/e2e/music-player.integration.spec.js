@@ -1302,3 +1302,50 @@ test("json import and music settings survive reload", async ({ page }) => {
     // best-effort cleanup
   }
 });
+
+const {
+  checkRowContextMenuNearEdges,
+  checkWidePaneDividerExtremes,
+  checkNarrowPaneDividerExtremes,
+} = require("./support/media-pane-ui");
+
+test("music context menus near the bottom-right edge flip so every item and submenu stays visible", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await openMusicPlayer(page);
+  await loadCompleteLibrary(page);
+  await songRow(page, "TrackA.wav").click();
+  await songRow(page, "TrackB.wav").click({ modifiers: ["Shift"] });
+  await addSelectedSongsViaContextMenu(page);
+  await expect.poll(async () => (await playlistEntryNames(page)).length).toBeGreaterThan(1);
+  // A short bottom panel puts the last playlist row near the window bottom.
+  await page.evaluate(() => document.documentElement.style.setProperty("--log-panel-height", "190px"));
+
+  await checkRowContextMenuNearEdges(page, {
+    rowSelector: "#music-playlist-list .music-playlist-entry",
+    menuSelector: "#music-playlist-context-menu",
+    submenuParentLabel: "Copy",
+    label: "music playlist",
+  });
+  await checkRowContextMenuNearEdges(page, {
+    rowSelector: "#music-library-tree .music-tree-row",
+    menuSelector: "#music-library-context-menu",
+    submenuParentLabel: "Select",
+    label: "music library",
+  });
+});
+
+test("music pane dividers collapse each pane to ~1px, stay grabbable and persist", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await openMusicPlayer(page);
+  await checkWidePaneDividerExtremes(page, {
+    prefix: "music",
+    reopen: openMusicPlayer,
+    widthsSettingKey: "music-pane-widths",
+  });
+});
+
+test("narrow music pane dividers collapse each pane to ~1px and stay grabbable", async ({ page }) => {
+  await page.setViewportSize({ width: 374, height: 749 });
+  await openMusicPlayer(page);
+  await checkNarrowPaneDividerExtremes(page, { prefix: "music" });
+});
