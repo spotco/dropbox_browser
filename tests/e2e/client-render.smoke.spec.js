@@ -26,6 +26,16 @@ async function browseColumnMetrics(page) {
   });
 }
 
+// Columns are fitted to the table when their widths add up to the shell's
+// width (the resize handler has run for the current viewport).
+async function waitForBrowseColumnsFitted(page, minShellWidth = 0) {
+  await expect.poll(async () => {
+    const metrics = await browseColumnMetrics(page);
+    const total = Object.values(metrics.currentWidths).reduce((sum, width) => sum + Number(width || 0), 0);
+    return metrics.shellClientWidth >= minShellWidth && Math.abs(total - metrics.shellClientWidth) <= 2;
+  }, { message: "browse columns refitted to the table width" }).toBe(true);
+}
+
 async function dragBrowseColumnResizer(page, columnKey, deltaX) {
   const handle = page.locator(`th[data-browse-column-key="${columnKey}"] .browse-column-resizer`);
   const box = await handle.boundingBox();
@@ -691,7 +701,12 @@ test("client-render column dragging cascades through successive columns until th
   expect(afterCascade.currentWidths.size).toBe(beforeDrag.currentWidths.size);
 
   // Leave enough pointer travel to reach the full width on a wide desktop.
+  // The window 'resize' event (which refits the columns to the wider table)
+  // fires asynchronously after setViewportSize; wait for that refit before
+  // dragging, otherwise a late refit spreads the extra width back over the
+  // squeezed columns (16px -> ~40px) after the drag.
   await page.setViewportSize({ width: 4000, height: 820 });
+  await waitForBrowseColumnsFitted(page, 3000);
   await dragBrowseColumnResizer(page, "name", 5000);
   const fullyExhausted = await browseColumnMetrics(page);
 

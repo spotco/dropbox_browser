@@ -312,6 +312,10 @@ export function initBrowseColumnResizing(options) {
     preferredWidths = normalizeStoredColumnWidths(widths, columnKeys);
     writePersistedBrowseColumnWidths(preferredWidths);
     activeDrag = null;
+    if (fitPendingAfterDrag) {
+      fitPendingAfterDrag = false;
+      fitWidthsToTable();
+    }
   }
 
   function onPointerDown(event) {
@@ -367,7 +371,15 @@ export function initBrowseColumnResizing(options) {
     headTable.addEventListener('pointerdown', onPointerDown, true);
   }
 
+  // A resize that lands mid-drag must not refit from the pre-drag preferred
+  // widths (that would snap the columns back under the pointer); refit once
+  // the drag has committed its widths instead.
+  var fitPendingAfterDrag = false;
   win.addEventListener('resize', function () {
+    if (activeDrag) {
+      fitPendingAfterDrag = true;
+      return;
+    }
     fitWidthsToTable();
   });
 
