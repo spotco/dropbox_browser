@@ -6,6 +6,15 @@
   --log-panel-height: 240px;
   --log-panel-modal-top-inset: 42px;
 }
+/* Never chain an overscroll to the document: on touch browsers a vertical
+   overscroll of the root (e.g. a pinch at minimum zoom that drifts down)
+   starts pull-to-refresh, which reloads the page and stops the players.
+   Only the vertical axis is blocked so horizontal history swipes still work.
+   Pinch zoom is unaffected (the viewport meta allows scaling). */
+html,
+body {
+  overscroll-behavior-y: none;
+}
 body {
   box-sizing: border-box;
   margin: 0;
@@ -19,6 +28,14 @@ body.has-log-panel {
   flex-direction: column;
   height: 100vh;
   overflow: hidden;
+}
+/* On mobile 100vh is the viewport with the browser toolbars collapsed, so
+   the body overflows the visible area and the document itself becomes
+   scrollable (and pullable). The dynamic viewport height always fits. */
+@supports (height: 100dvh) {
+  body.has-log-panel {
+    height: 100dvh;
+  }
 }
 h1 {
   font-size: 22px;
