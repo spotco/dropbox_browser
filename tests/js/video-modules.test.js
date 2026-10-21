@@ -311,6 +311,7 @@ async function createMediaSessionVideoHarness() {
     compatibilityAvailable: true,
     transportWantsPlay: true,
     compatibilityStartSeconds: 0,
+    paneActive: true,
   });
   Object.assign(ctx, {
     activeQueueItem() {
@@ -482,16 +483,271 @@ test("video pane deactivation releases only a video-owned media session", async 
     assert.equal(session.playbackState, "playing");
     assert.deepEqual(musicCalls, []);
 
+    // Late events from the element left behind never reclaim from music.
+    videoEl.dispatch("playing");
+    videoEl.dispatch("play");
+    assert.equal(mediaSession.mediaSessionOwner(), "music");
+    assert.equal(session.metadata.title, "Song");
+
     // Video takes over on play; leaving the pane now clears the card.
+    ctx.state.paneActive = true;
     videoEl.dispatch("playing");
     assert.equal(mediaSession.mediaSessionOwner(), "video");
     assert.equal(session.metadata.title, "Episode A.mkv");
     ctx.syncPaneMode("music-player");
+    assert.equal(ctx.state.paneActive, false);
     assert.equal(mediaSession.mediaSessionOwner(), null);
     assert.equal(session.metadata, null);
     assert.equal(session.playbackState, "none");
     assert.equal(session.handlers.size, 0);
     assert.deepEqual(musicCalls, []);
+
+    // A late "playing" / "play" / progress tick from the old HLS element after
+    // deactivation keeps the session released.
+    const positionWrites = session.positionCalls.length;
+    videoEl.dispatch("playing");
+    videoEl.dispatch("play");
+    videoEl.dispatch("timeupdate");
+    assert.equal(mediaSession.mediaSessionOwner(), null);
+    assert.equal(session.metadata, null);
+    assert.equal(session.playbackState, "none");
+    assert.equal(session.handlers.size, 0);
+    assert.equal(session.positionCalls.length, positionWrites);
+  } finally {
+    global.window = originalWindow;
+    if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
+  }
+});
+test("OS seeks during a pending compatibility restart keep one restart in flight plus the latest target", async () => {
+  const originalWindow = global.window;
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  try {
+    const {ctx, session, videoEl, restarts} = await createMediaSessionVideoHarness();
+    const queued = [];
+    ctx.reportCompatibilitySeekTiming = (name, payload) => queued.push([name, payload.queued_requested_time]);
+    // Like restartCompatibilityAt: mark the restart in flight, then wait on stream creation.
+    let finishStreamCreation;
+    ctx.restartCompatibilityAt = (target, reason) => {
+      restarts.push([target, reason]);
+      ctx.state.requestedSeekSeconds = target;
+      ctx.state.seekRestartInProgress = true;
+      return new Promise((resolve) => {
+        finishStreamCreation = resolve;
+      });
+    };
+    videoEl.dispatch("playing");
+
+    session.handlers.get("seekforward")({action: "seekforward"});
+    session.handlers.get("seekforward")({action: "seekforward"});
+    session.handlers.get("seekforward")({action: "seekforward", seekOffset: 30});
+    session.handlers.get("seekto")({action: "seekto", seekTime: 400});
+    session.handlers.get("seekbackward")({action: "seekbackward"});
+    session.handlers.get("seekto")({action: "seekto", seekTime: 250});
+
+    // One in-flight restart; every later seek only replaced the deferred target.
+    assert.deepEqual(restarts, [[115, "step-forward-15"]]);
+    assert.equal(ctx.state.requestedSeekSeconds, 250);
+    assert.deepEqual(queued.map((entry) => entry[1]), [130, 160, 400, 385, 250]);
+    assert.deepEqual(videoEl.currentTimeWrites, []);
+    // The card shows the latest target, not the stale element time.
+    assert.equal(session.positionCalls.at(-1).position, 250);
+
+    // After the restart completes, the next OS seek starts a new restart again.
+    ctx.state.seekRestartInProgress = false;
+    ctx.state.requestedSeekSeconds = null;
+    finishStreamCreation();
+    session.handlers.get("seekto")({action: "seekto", seekTime: 50});
+    assert.deepEqual(restarts, [[115, "step-forward-15"], [50, "media-session-seek"]]);
+  } finally {
+    global.window = originalWindow;
+    if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
+  }
+});
+
+function installArtworkDom() {
+  const canvases = [];
+  const urls = {created: [], revoked: []};
+  const originalDocument = global.document;
+  const originalCreate = URL.createObjectURL;
+  const originalRevoke = URL.revokeObjectURL;
+  global.document = {
+    addEventListener() {},
+    createElement(tag) {
+      assert.equal(tag, "canvas");
+      const canvas = {
+        width: 0,
+        height: 0,
+        blobCallbacks: [],
+        getContext() {
+          return {drawImage() {}};
+        },
+        toBlob(callback) {
+          canvas.blobCallbacks.push(callback);
+        },
+      };
+      canvases.push(canvas);
+      return canvas;
+    },
+  };
+  URL.createObjectURL = () => {
+    const url = `blob:frame-${urls.created.length + 1}`;
+    urls.created.push(url);
+    return url;
+  };
+  URL.revokeObjectURL = (url) => urls.revoked.push(url);
+  return {
+    canvases,
+    urls,
+    restore() {
+      if (originalDocument === undefined) delete global.document;
+      else global.document = originalDocument;
+      URL.createObjectURL = originalCreate;
+      URL.revokeObjectURL = originalRevoke;
+    },
+  };
+}
+
+test("video artwork capture waits for a decodable frame before spending attempts", async () => {
+  const originalWindow = global.window;
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const dom = installArtworkDom();
+  try {
+    const {ctx, session, videoEl} = await createMediaSessionVideoHarness();
+    // Metadata only (no requestVideoFrameCallback, no frame yet).
+    videoEl.readyState = 1;
+    videoEl.dispatch("playing");
+    for (let i = 0; i < 5; i += 1) ctx.syncPlaybackProgress();
+    assert.equal(dom.canvases.length, 0);
+
+    // First frame: one capture starts and stays in flight until toBlob settles.
+    videoEl.readyState = 4;
+    videoEl.videoWidth = 1280;
+    videoEl.videoHeight = 720;
+    ctx.syncPlaybackProgress();
+    ctx.syncPlaybackProgress();
+    ctx.syncPlaybackProgress();
+    assert.equal(dom.canvases.length, 1);
+    assert.equal(dom.canvases[0].width, 512);
+    assert.equal(dom.canvases[0].height, 288);
+
+    // An empty blob spends that attempt; the next tick tries once more.
+    dom.canvases[0].blobCallbacks[0](null);
+    ctx.syncPlaybackProgress();
+    assert.equal(dom.canvases.length, 2);
+    dom.canvases[1].blobCallbacks[0]({size: 2048});
+    assert.deepEqual(dom.urls.created, ["blob:frame-1"]);
+    assert.deepEqual(session.metadata.artwork, [{src: "blob:frame-1", type: "image/jpeg"}]);
+    ctx.syncPlaybackProgress();
+    assert.equal(dom.canvases.length, 2);
+  } finally {
+    dom.restore();
+    global.window = originalWindow;
+    if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
+  }
+});
+
+test("video artwork capture runs one at a time per item and never leaks a stale object URL", async () => {
+  const originalWindow = global.window;
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const dom = installArtworkDom();
+  try {
+    const {ctx, session, videoEl} = await createMediaSessionVideoHarness();
+    ctx.state.queue.push({path: "videos/Episode B.mkv", display_name: "Episode B.mkv"});
+    videoEl.videoWidth = 320;
+    videoEl.videoHeight = 240;
+    videoEl.dispatch("playing");
+    assert.equal(dom.canvases.length, 1);
+    ctx.syncPlaybackProgress();
+    assert.equal(dom.canvases.length, 1);
+
+    // The item changes while the first capture is still encoding.
+    ctx.state.activeQueueIndex = 1;
+    ctx.syncPlaybackProgress();
+    assert.equal(dom.canvases.length, 2);
+    assert.equal(session.metadata.title, "Episode B.mkv");
+
+    // The stale callback for Episode A creates no URL and does not touch B.
+    dom.canvases[0].blobCallbacks[0]({size: 1024});
+    assert.deepEqual(dom.urls.created, []);
+    assert.deepEqual(session.metadata.artwork, []);
+
+    dom.canvases[1].blobCallbacks[0]({size: 1024});
+    assert.deepEqual(dom.urls.created, ["blob:frame-1"]);
+    assert.deepEqual(session.metadata.artwork, [{src: "blob:frame-1", type: "image/jpeg"}]);
+    assert.deepEqual(dom.urls.revoked, []);
+
+    // Changing item again revokes the superseded frame; release revokes the next.
+    ctx.state.activeQueueIndex = 0;
+    ctx.syncPlaybackProgress();
+    assert.deepEqual(dom.urls.revoked, ["blob:frame-1"]);
+    dom.canvases[2].blobCallbacks[0]({size: 1024});
+    assert.deepEqual(dom.urls.created, ["blob:frame-1", "blob:frame-2"]);
+    ctx.releaseVideoMediaSession();
+    assert.deepEqual(dom.urls.revoked, ["blob:frame-1", "blob:frame-2"]);
+  } finally {
+    dom.restore();
+    global.window = originalWindow;
+    if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
+  }
+});
+
+test("a rejected video play() (autoplay block) publishes paused unless a newer request took over", async () => {
+  const originalWindow = global.window;
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  try {
+    const {ctx, session, videoEl, mediaSession} = await createMediaSessionVideoHarness();
+    const plays = [];
+    videoEl.play = function () {
+      this.playCalls += 1;
+      let resolvePlay;
+      let rejectPlay;
+      const promise = new Promise((resolve, reject) => {
+        resolvePlay = resolve;
+        rejectPlay = reject;
+      });
+      plays.push({
+        resolve: () => {
+          this.paused = false;
+          resolvePlay();
+        },
+        reject: () => rejectPlay(new Error("NotAllowedError")),
+      });
+      return promise;
+    };
+    const flushMicrotasks = () => new Promise((resolve) => setImmediate(resolve));
+    videoEl.dispatch("playing");
+    videoEl.paused = true;
+    ctx.state.transportWantsPlay = false;
+
+    session.handlers.get("play")();
+    assert.equal(mediaSession.mediaSessionOwner(), "video");
+    assert.equal(session.playbackState, "playing");
+    plays[0].reject();
+    await flushMicrotasks();
+    assert.equal(session.playbackState, "paused");
+    assert.equal(ctx.state.transportWantsPlay, false);
+    assert.equal(mediaSession.mediaSessionOwner(), "video");
+
+    // Request A is still pending when request B starts; A's rejection is stale.
+    session.handlers.get("play")();
+    session.handlers.get("play")();
+    assert.equal(plays.length, 3);
+    plays[1].reject();
+    await flushMicrotasks();
+    assert.equal(session.playbackState, "playing");
+    plays[2].resolve();
+    await flushMicrotasks();
+    assert.equal(session.playbackState, "playing");
+
+    // A rejection after the item changed does not clobber the new item.
+    videoEl.paused = true;
+    ctx.state.transportWantsPlay = false;
+    ctx.state.queue.push({path: "videos/Episode B.mkv", display_name: "Episode B.mkv"});
+    session.handlers.get("play")();
+    ctx.state.activeQueueIndex = 1;
+    plays[3].reject();
+    await flushMicrotasks();
+    assert.equal(session.playbackState, "playing");
   } finally {
     global.window = originalWindow;
     if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);

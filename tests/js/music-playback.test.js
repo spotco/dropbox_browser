@@ -495,3 +495,87 @@ test("initPlayback publishes media-session claim, pause, seek and release from p
     global.window = originalWindow;
   }
 });
+test("a rejected play() (autoplay block) publishes paused unless a newer request or song took over", async () => {
+  const playbackModule = await importPlaybackModuleFromWorkspace();
+  const audio = createFakeAudio();
+  const ctx = createPlaybackContext(audio, [song("music/alpha.mp3"), song("music/bravo.mp3")], [], []);
+  const originalSettings = global.Settings;
+  const originalWindow = global.window;
+  const log = mediaSessionLog();
+  log.calls.length = 0;
+  log.actions = null;
+  const plays = [];
+  audio.play = function () {
+    this.playCalls += 1;
+    let resolvePlay;
+    let rejectPlay;
+    const promise = new Promise((resolve, reject) => {
+      resolvePlay = resolve;
+      rejectPlay = reject;
+    });
+    plays.push({
+      resolve: () => {
+        this.paused = false;
+        resolvePlay();
+      },
+      reject: () => rejectPlay(new Error("NotAllowedError: play() blocked")),
+    });
+    return promise;
+  };
+  const flushMicrotasks = () => new Promise((resolve) => setImmediate(resolve));
+  const updates = () => log.calls.filter((call) => call[0] === "update").map((call) => ({...call[2], flush: call[3].flush}));
+  const lastUpdate = () => updates().at(-1);
+
+  global.Settings = {
+    get(_key, fallback) {
+      return fallback;
+    },
+    set() {},
+  };
+  global.window = {
+    clearTimeout() {},
+    setTimeout() {
+      return 1;
+    },
+    addEventListener() {},
+  };
+
+  try {
+    playbackModule.initPlayback(ctx);
+    ctx.playbackApi.playPlaylistIndex(0);
+    assert.equal(lastUpdate().playbackState, "playing");
+    plays[0].reject();
+    await flushMicrotasks();
+    assert.equal(lastUpdate().playbackState, "paused");
+    assert.equal(lastUpdate().title, "alpha.mp3");
+    assert.equal(lastUpdate().flush, true);
+
+    // A stale rejection (a newer song request is pending) does not clobber it.
+    ctx.playbackApi.playPlaylistIndex(1);
+    ctx.playbackApi.playPlaylistIndex(0);
+    const before = updates().length;
+    plays[1].reject();
+    await flushMicrotasks();
+    assert.equal(updates().length, before);
+    assert.equal(lastUpdate().playbackState, "playing");
+
+    // The newer request resolves and keeps "playing".
+    plays[2].resolve();
+    await flushMicrotasks();
+    audio.dispatch("playing");
+    assert.equal(lastUpdate().playbackState, "playing");
+
+    // A rejection for a song that is no longer current is ignored too.
+    audio.paused = true;
+    ctx.playbackApi.playCurrentOrFirst();
+    ctx.state.currentPlaylistIndex = 1;
+    const beforeSongChange = updates().length;
+    plays[3].reject();
+    await flushMicrotasks();
+    assert.equal(updates().length, beforeSongChange);
+  }
+  finally {
+    global.Settings = originalSettings;
+    global.window = originalWindow;
+  }
+});

@@ -36,8 +36,20 @@ function freshWrittenState() {
     metadataKey: null,
     playbackState: null,
     seekHandlersInstalled: null,
-    positionWrittenAtMs: null
+    positionWrittenAtMs: null,
+    // True while the browser may still show a position (ours or a previous
+    // owner's); a later unknown duration clears it explicitly.
+    positionShown: false
   };
+}
+
+function clearPosition(session) {
+  written.positionShown = false;
+  written.positionWrittenAtMs = null;
+  if (typeof session.setPositionState !== 'function') return;
+  try {
+    session.setPositionState();
+  } catch (_error) {}
 }
 
 function mediaSession() {
@@ -192,12 +204,18 @@ function writePosition(session, snapshot, flush) {
   var position = snapshot.position;
   var rate = snapshot.playbackRate;
   var at = now();
-  if (!isFiniteNumber(duration) || duration < 0 || !isFiniteNumber(position)) return false;
+  if (!isFiniteNumber(duration) || duration < 0 || !isFiniteNumber(position)) {
+    // Known -> unknown (new item without metadata yet): never leave the old
+    // duration and progress on the card.
+    if (written.positionShown) clearPosition(session);
+    return false;
+  }
   if (typeof session.setPositionState !== 'function') return false;
   if (!flush && written.positionWrittenAtMs !== null && at - written.positionWrittenAtMs < MEDIA_SESSION_POSITION_THROTTLE_MS) {
     return false;
   }
   written.positionWrittenAtMs = at;
+  written.positionShown = true;
   try {
     session.setPositionState({
       duration: duration,
@@ -242,8 +260,11 @@ export function claimMediaSession(kind) {
         session.metadata = null;
       } catch (_error) {}
     }
+    var replacedOwner = owner !== null;
     owner = kind;
     written = freshWrittenState();
+    // The previous owner's position may still be on the card.
+    written.positionShown = replacedOwner;
     installTransportHandlers(session, kind);
     publishOwner(session, kind, true, true);
     return true;

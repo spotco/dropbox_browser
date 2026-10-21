@@ -371,11 +371,25 @@ export function initPlayback(ctx) {
     return '/file?path=' + encodeURIComponent(song.stream_path) + '&source=remote';
   }
 
+  var musicPlayRequestToken = 0;
+
   function handlePlayPromise(playPromise) {
+    var playRequestToken = ++musicPlayRequestToken;
+    var requestedSong = currentSong();
+    var requestedRemotePath = requestedSong ? requestedSong.remote_path : null;
     if (playPromise && typeof playPromise.catch === 'function') {
       playPromise.catch(function (err) {
+        var song;
         setPlayPauseVisualState(false);
         setPlaybackStatus((err && err.message) || 'Browser blocked playback until user interaction.');
+        // The card went to "playing" optimistically; a rejected play()
+        // (autoplay block) puts it back to "paused" unless a newer play
+        // request or song has taken over since.
+        if (playRequestToken !== musicPlayRequestToken) return;
+        song = currentSong();
+        if (!song || song.remote_path !== requestedRemotePath) return;
+        if (audioIsPlaying()) return;
+        publishMusicMediaSession('paused', true);
       });
     }
   }

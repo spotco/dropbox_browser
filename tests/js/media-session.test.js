@@ -348,3 +348,41 @@ test("position updates are throttled to about once per second; a seek flush bypa
   assert.equal(session.positionCalls.length, 4);
   assert.equal(session.metadata.title, "Next Song");
 });
+test("a known -> unknown duration clears the published position instead of keeping the old one", async () => {
+  const {mod, session} = await setup();
+  const {actions} = recorder();
+  mod.bindMediaSession("video", actions);
+  mod.updateMediaSession("video", musicSnapshot({title: "Episode A", position: 40, duration: 600}));
+  assert.deepEqual(session.positionCalls.at(-1), {duration: 600, playbackRate: 1, position: 40});
+
+  // The next item has no metadata yet: the old 600s bar must not stay up.
+  clockMs += 5000;
+  mod.updateMediaSession("video", {title: "Episode B", position: 0, duration: null, canSeek: false}, {flush: true});
+  assert.equal(session.positionCalls.length, 2);
+  assert.equal(session.positionCalls.at(-1), undefined);
+  assert.equal(session.handlers.has("seekto"), false);
+
+  // Further unknown updates do not clear again.
+  clockMs += 5000;
+  mod.updateMediaSession("video", {position: 1, duration: Number.NaN}, {flush: true});
+  assert.equal(session.positionCalls.length, 2);
+
+  // Once the duration is known the position is written again at once.
+  mod.updateMediaSession("video", {position: 2, duration: 300, canSeek: true});
+  assert.deepEqual(session.positionCalls.at(-1), {duration: 300, playbackRate: 1, position: 2});
+
+  // A new owner without a duration clears the previous owner's position.
+  mod.bindMediaSession("music", recorder().actions);
+  mod.updateMediaSession("music", musicSnapshot({duration: null, canSeek: false}));
+  assert.equal(mod.mediaSessionOwner(), "music");
+  assert.equal(session.positionCalls.length, 4);
+  assert.equal(session.positionCalls.at(-1), undefined);
+});
+
+test("clearing the position is guarded when setPositionState throws", async () => {
+  const {mod, session} = await setup({throwOnPosition: true});
+  mod.bindMediaSession("music", recorder().actions);
+  mod.updateMediaSession("music", musicSnapshot());
+  assert.doesNotThrow(() => mod.updateMediaSession("music", {duration: null}, {flush: true}));
+  assert.equal(session.positionCalls.length, 2);
+});
