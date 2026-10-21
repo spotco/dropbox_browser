@@ -1,4 +1,11 @@
 import {formatPlaybackTime, setPlaylistPlaybackStatus} from '../media-library/shared.js';
+import {
+  bindMediaSession,
+  claimMediaSession,
+  MEDIA_SESSION_SEEK_STEP_SECONDS,
+  releaseMediaSession,
+  updateMediaSession
+} from '../media-library/media-session.js';
 import {createMetadataController} from './metadata.js';
 import {
   ensureShuffleState,
@@ -170,6 +177,83 @@ export function initPlayback(ctx) {
     targetTime = Math.max(0, Math.min(targetTime, duration));
     els.audio.currentTime = targetTime;
     syncCurrentTimeDisplay();
+    claimMusicMediaSession();
+  }
+
+  // System media controls (navigator.mediaSession via the shared owner in
+  // media-library/media-session.js). Publishing rides on the existing audio
+  // events; there is no media-session timer.
+  function audioIsPlaying() {
+    return !!(els.audio && !els.audio.paused && !els.audio.ended);
+  }
+
+  function musicMediaSessionSnapshot() {
+    var song = currentSong();
+    var duration = finiteDuration();
+    var artworkUrl = state.currentArtObjectUrl || '';
+    return {
+      title: state.mediaSessionTitle || (song ? (song.display_name || song.filename || '') : ''),
+      artist: state.mediaSessionArtist || '',
+      album: '',
+      artworkUrl: artworkUrl,
+      artworkType: artworkUrl ? (state.currentArtMime || '') : '',
+      position: finiteCurrentTime(),
+      duration: duration,
+      playbackRate: 1,
+      canSeek: duration !== null && duration > 0,
+      seekStepSeconds: MEDIA_SESSION_SEEK_STEP_SECONDS
+    };
+  }
+
+  function publishMusicMediaSession(playbackState, flush) {
+    var snapshot;
+    if (!currentSong()) return;
+    snapshot = musicMediaSessionSnapshot();
+    if (playbackState) snapshot.playbackState = playbackState;
+    updateMediaSession('music', snapshot, {flush: !!flush});
+  }
+
+  function publishMusicMediaSessionPosition(flush) {
+    // The slider drag and the element's own seeking flag share this state;
+    // the final position is flushed from 'seeked'.
+    if (state.scrubberDragging) return;
+    publishMusicMediaSession(null, flush);
+  }
+
+  function refreshMediaSessionMetadata() {
+    publishMusicMediaSession(null, true);
+  }
+
+  // A user play/pause/seek/skip in this player takes the session back even
+  // when the video pane currently owns it.
+  function claimMusicMediaSession() {
+    if (!currentSong()) return;
+    publishMusicMediaSession(audioIsPlaying() ? 'playing' : 'paused', true);
+    claimMediaSession('music');
+  }
+
+  function releaseMusicMediaSession() {
+    releaseMediaSession('music');
+  }
+
+  function seekMusicTo(seconds) {
+    var duration;
+    var targetTime;
+    if (!els.audio) return;
+    duration = finiteDuration();
+    if (duration === null) return;
+    targetTime = Number(seconds);
+    if (!Number.isFinite(targetTime)) return;
+    targetTime = Math.max(0, Math.min(targetTime, duration));
+    els.audio.currentTime = targetTime;
+    syncCurrentTimeDisplay();
+    claimMusicMediaSession();
+  }
+
+  function seekMusicBy(deltaSeconds) {
+    var delta = Number(deltaSeconds);
+    if (!Number.isFinite(delta)) return;
+    seekMusicTo(finiteCurrentTime() + delta);
   }
 
   function clampVolume(value) {
@@ -280,17 +364,32 @@ export function initPlayback(ctx) {
     metadata.resetNowPlayingForSong(null);
     setPlayPauseVisualState(false);
     setPlaybackStatus('');
+    releaseMusicMediaSession();
   }
 
   function streamUrl(song) {
     return '/file?path=' + encodeURIComponent(song.stream_path) + '&source=remote';
   }
 
+  var musicPlayRequestToken = 0;
+
   function handlePlayPromise(playPromise) {
+    var playRequestToken = ++musicPlayRequestToken;
+    var requestedSong = currentSong();
+    var requestedRemotePath = requestedSong ? requestedSong.remote_path : null;
     if (playPromise && typeof playPromise.catch === 'function') {
       playPromise.catch(function (err) {
+        var song;
         setPlayPauseVisualState(false);
         setPlaybackStatus((err && err.message) || 'Browser blocked playback until user interaction.');
+        // The card went to "playing" optimistically; a rejected play()
+        // (autoplay block) puts it back to "paused" unless a newer play
+        // request or song has taken over since.
+        if (playRequestToken !== musicPlayRequestToken) return;
+        song = currentSong();
+        if (!song || song.remote_path !== requestedRemotePath) return;
+        if (audioIsPlaying()) return;
+        publishMusicMediaSession('paused', true);
       });
     }
   }
@@ -375,6 +474,8 @@ export function initPlayback(ctx) {
     restoreVolume();
     loadSongIntoAudio(song, false);
     ctx.playlistApi.renderPlaylist();
+    // Claim with the playlist display name; metadata replaces it later.
+    publishMusicMediaSession('playing', true);
   }
 
   function playCurrentOrFirst() {
@@ -393,6 +494,7 @@ export function initPlayback(ctx) {
     clearPlaybackRetryTimer();
     if (els.audio) els.audio.pause();
     else setPlayPauseVisualState(false);
+    claimMusicMediaSession();
   }
 
   function togglePlayPause() {
@@ -470,6 +572,7 @@ export function initPlayback(ctx) {
     playPlaylistIndex: playPlaylistIndex,
     playPlaylistRemotePath: playPlaylistRemotePath,
     playPreviousSong: playPreviousSong,
+    refreshMediaSessionMetadata: refreshMediaSessionMetadata,
     repaintPlaybackDisplay: repaintPlaybackDisplay,
     resetShuffleSequence: resetShuffleSequence,
     resetProgressDisplay: resetProgressDisplay,
@@ -489,6 +592,20 @@ export function initPlayback(ctx) {
     updateModeButtons: updateModeButtons
   };
 
+  bindMediaSession('music', {
+    play: playCurrentOrFirst,
+    pause: pausePlayback,
+    next: playNextSong,
+    previous: playPreviousSong,
+    seekBy: seekMusicBy,
+    seekTo: seekMusicTo
+  });
+  if (typeof window !== 'undefined' && window && typeof window.addEventListener === 'function') {
+    // Hiding the pane, blurring the window or pausing library polling keep the
+    // session; only leaving the page releases it.
+    window.addEventListener('pagehide', releaseMusicMediaSession);
+    window.addEventListener('beforeunload', releaseMusicMediaSession);
+  }
   if (els.playButton) els.playButton.addEventListener('click', togglePlayPause);
   if (els.pauseButton) els.pauseButton.addEventListener('click', pausePlayback);
   if (els.nextButton) els.nextButton.addEventListener('click', playNextSong);
@@ -522,13 +639,16 @@ export function initPlayback(ctx) {
       resetPlaybackLoadRetries(currentSong() && currentSong().remote_path);
       syncDurationDisplay();
       syncCurrentTimeDisplay();
+      publishMusicMediaSessionPosition(true);
     });
     els.audio.addEventListener('durationchange', function () {
       syncDurationDisplay();
       syncCurrentTimeDisplay();
+      publishMusicMediaSessionPosition(true);
     });
     els.audio.addEventListener('timeupdate', function () {
       syncCurrentTimeDisplay();
+      publishMusicMediaSessionPosition(false);
     });
     els.audio.addEventListener('seeking', function () {
       state.scrubberDragging = true;
@@ -537,21 +657,25 @@ export function initPlayback(ctx) {
     els.audio.addEventListener('seeked', function () {
       state.scrubberDragging = false;
       syncCurrentTimeDisplay();
+      publishMusicMediaSessionPosition(true);
     });
     els.audio.addEventListener('play', function () {
       setPlayPauseVisualState(true);
       syncDurationDisplay();
       syncCurrentTimeDisplay();
+      publishMusicMediaSession('playing', true);
     });
     els.audio.addEventListener('playing', function () {
       var song = currentSong();
       resetPlaybackLoadRetries(currentSong() && currentSong().remote_path);
       metadata.maybeStartCurrentSongMetadataLoad();
       if (song) setPlaylistPlaybackStatus(ctx, song);
+      publishMusicMediaSession('playing', true);
     });
     els.audio.addEventListener('pause', function () {
       setPlayPauseVisualState(false);
       syncCurrentTimeDisplay();
+      publishMusicMediaSession('paused', true);
     });
     els.audio.addEventListener('ended', playNextSong);
     els.audio.addEventListener('ended', function () {

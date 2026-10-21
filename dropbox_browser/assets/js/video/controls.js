@@ -8,6 +8,13 @@ import {
   CONTROLS_IDLE_HIDE_MS,
   VIDEO_ICONS,
 } from './constants.js';
+import {
+  bindMediaSession,
+  claimMediaSession,
+  MEDIA_SESSION_SEEK_STEP_SECONDS,
+  releaseMediaSession,
+  updateMediaSession,
+} from '../media-library/media-session.js';
 
 export function initControls(ctx) {
 function clearControlsIdleTimer() {
@@ -342,18 +349,265 @@ function playNextVideo() {
   ));
 }
 
+// Step and system-media-control seeks share the progress slider's restart
+// queue: while a compatibility restart is in flight only the latest target is
+// kept in requestedSeekSeconds, and the completing restart replays it
+// ('scrub-deferred'). Rapid seeks never stack HLS sessions or sync tokens.
+function requestVideoSeekRestart(target, reason) {
+  if (ctx.state.seekRestartInProgress) {
+    ctx.reportCompatibilitySeekTiming('seek_queued_during_restart', {
+      queued_requested_time: target,
+      prior_requested_time: ctx.state.requestedSeekSeconds,
+      seek_reason: reason,
+    });
+    ctx.state.requestedSeekSeconds = target;
+    if (ctx.els.elapsedTimeEl) {
+      ctx.els.elapsedTimeEl.textContent = ctx.formatNativePlaybackTime(target);
+    }
+    syncPlaybackProgress();
+    return;
+  }
+  void ctx.restartCompatibilityAt(target, reason);
+}
+
 function seekBySeconds(deltaSeconds) {
   if (!ctx.els.videoEl || !videoControlsAvailable()) return;
   var duration = currentPlaybackDurationSeconds();
   if (!Number.isFinite(duration) || duration <= 0) return;
-  var currentSeconds = ctx.currentGlobalPlaybackSeconds();
+  // During a restart, step from the queued target so repeated presses add up.
+  var currentSeconds = videoMediaSessionPosition();
   var target = Math.max(0, Math.min(duration, currentSeconds + deltaSeconds));
   if (deltaSeconds > 0) {
     target = clampCompatibilityRestartTargetSeconds(target, duration);
   }
   ctx.state.controlsScrubReveal = true;
   revealControlsOverlay();
-  void ctx.restartCompatibilityAt(target, deltaSeconds < 0 ? 'step-back-15' : 'step-forward-15');
+  requestVideoSeekRestart(target, deltaSeconds < 0 ? 'step-back-15' : 'step-forward-15');
+  publishVideoMediaSessionSeek(target);
+}
+
+// System media control scrub: same duration clamp and forward-seek restart
+// clamp as seekBySeconds, then the compatibility restart (never a direct
+// videoEl.currentTime write, which would seek inside the current HLS window).
+function seekVideoTo(seconds) {
+  if (!ctx.els.videoEl || !videoControlsAvailable()) return;
+  var duration = currentPlaybackDurationSeconds();
+  if (!Number.isFinite(duration) || duration <= 0) return;
+  var requested = Number(seconds);
+  if (!Number.isFinite(requested)) return;
+  var currentSeconds = videoMediaSessionPosition();
+  var target = Math.max(0, Math.min(duration, requested));
+  if (target > currentSeconds) {
+    target = clampCompatibilityRestartTargetSeconds(target, duration);
+  }
+  ctx.state.controlsScrubReveal = true;
+  revealControlsOverlay();
+  requestVideoSeekRestart(target, 'media-session-seek');
+  publishVideoMediaSessionSeek(target);
+}
+
+// ---- System media controls (shared owner in media-library/media-session.js)
+var VIDEO_ARTWORK_MAX_EDGE_PX = 512;
+var VIDEO_ARTWORK_MAX_ATTEMPTS = 2;
+var videoArtwork = {path: '', url: '', attempts: 0, pending: false, token: 0};
+var videoPlayRequestToken = 0;
+
+// Only a loaded item on the real element of the active video pane publishes;
+// probe, placeholder and "preparing HLS" states (no metadata yet) never touch
+// the session, and neither do late events from an element left behind when
+// the pane was deactivated.
+function videoMediaSessionReady() {
+  if (!ctx.state.paneActive) return false;
+  if (!ctx.els.videoEl || !ctx.activeQueueItem()) return false;
+  if (ctx.state.playbackMode !== 'compatibility') return false;
+  return Number(ctx.els.videoEl.readyState) >= 1;
+}
+
+function activeVideoArtworkKey() {
+  var active = ctx.activeQueueItem();
+  return active ? String(active.path || '') : '';
+}
+
+function videoMediaSessionPosition() {
+  if (ctx.state.seekRestartInProgress && Number.isFinite(Number(ctx.state.requestedSeekSeconds))) {
+    // Hold the requested target so the system bar does not jump backward
+    // while the HLS session restarts.
+    return Number(ctx.state.requestedSeekSeconds);
+  }
+  return ctx.currentGlobalPlaybackSeconds();
+}
+
+function videoMediaSessionSnapshot() {
+  var active = ctx.activeQueueItem();
+  var duration = currentPlaybackDurationSeconds();
+  var hasDuration = Number.isFinite(duration) && duration > 0;
+  var artworkUrl = videoArtwork.path && videoArtwork.path === activeVideoArtworkKey() ? videoArtwork.url : '';
+  return {
+    title: ctx.activeItemTitle(active),
+    artist: '',
+    album: '',
+    artworkUrl: artworkUrl,
+    artworkType: artworkUrl ? 'image/jpeg' : '',
+    position: videoMediaSessionPosition(),
+    duration: hasDuration ? duration : null,
+    playbackRate: 1,
+    canSeek: hasDuration,
+    seekStepSeconds: MEDIA_SESSION_SEEK_STEP_SECONDS,
+  };
+}
+
+function publishVideoMediaSession(playbackState, flush) {
+  if (!videoMediaSessionReady()) return;
+  var snapshot = videoMediaSessionSnapshot();
+  if (playbackState) snapshot.playbackState = playbackState;
+  updateMediaSession('video', snapshot, {flush: Boolean(flush)});
+}
+
+// A user play/pause/seek/skip in the video pane takes the session back even
+// when music currently owns it.
+function claimVideoMediaSession() {
+  if (!videoMediaSessionReady()) return;
+  publishVideoMediaSession(playbackShouldBeRunning() ? 'playing' : 'paused', true);
+  claimMediaSession('video');
+}
+
+function publishVideoMediaSessionSeek(target) {
+  if (!videoMediaSessionReady()) return;
+  var snapshot = videoMediaSessionSnapshot();
+  snapshot.position = target;
+  snapshot.playbackState = playbackShouldBeRunning() ? 'playing' : 'paused';
+  updateMediaSession('video', snapshot, {flush: true});
+  claimMediaSession('video');
+}
+
+function revokeArtworkObjectUrl(url) {
+  if (!url || typeof URL === 'undefined' || typeof URL.revokeObjectURL !== 'function') return;
+  try {
+    URL.revokeObjectURL(url);
+  } catch (_error) {}
+}
+
+function revokeVideoArtwork() {
+  revokeArtworkObjectUrl(videoArtwork.url);
+  videoArtwork = {path: '', url: '', attempts: 0, pending: false, token: videoArtwork.token + 1};
+}
+
+function videoFrameReady(videoEl) {
+  return Boolean(videoEl)
+    && Number(videoEl.videoWidth) > 0
+    && Number(videoEl.videoHeight) > 0
+    && Number(videoEl.readyState) >= 2;
+}
+
+// Ends the in-flight capture of the current item; a stale capture (the item
+// changed and videoArtwork was replaced) leaves the new state alone.
+function finishVideoArtworkCapture(token) {
+  if (token === videoArtwork.token) videoArtwork.pending = false;
+}
+
+// Artwork is one frame from the element that is already playing, drawn once
+// per item. It never requests the video thumbnail endpoint (a poster miss there
+// is a remote FFmpeg run); if the capture fails the card has no artwork.
+// pending stays true until toBlob settles, so one capture per item is in
+// flight; an attempt is only spent once a decodable frame exists.
+function captureVideoArtworkFrame(key, token) {
+  var videoEl = ctx.els.videoEl;
+  if (token !== videoArtwork.token || activeVideoArtworkKey() !== key || !videoFrameReady(videoEl)) {
+    finishVideoArtworkCapture(token);
+    return;
+  }
+  videoArtwork.attempts += 1;
+  if (typeof document === 'undefined' || typeof document.createElement !== 'function') {
+    finishVideoArtworkCapture(token);
+    return;
+  }
+  try {
+    var width = Number(videoEl.videoWidth);
+    var height = Number(videoEl.videoHeight);
+    var scale = Math.min(1, VIDEO_ARTWORK_MAX_EDGE_PX / Math.max(width, height));
+    var canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+    var context2d = canvas.getContext && canvas.getContext('2d');
+    if (!context2d || typeof canvas.toBlob !== 'function') {
+      finishVideoArtworkCapture(token);
+      return;
+    }
+    context2d.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob(function (blob) {
+      // A callback for an item that is no longer current creates no URL.
+      if (token !== videoArtwork.token || activeVideoArtworkKey() !== key) return;
+      videoArtwork.pending = false;
+      if (!blob || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return;
+      var url = URL.createObjectURL(blob);
+      if (videoArtwork.url && videoArtwork.url !== url) revokeArtworkObjectUrl(videoArtwork.url);
+      videoArtwork.url = url;
+      publishVideoMediaSession(null, true);
+    }, 'image/jpeg', 0.85);
+  } catch (_error) {
+    // Tainted canvas or no decodable frame yet: keep publishing without artwork.
+    finishVideoArtworkCapture(token);
+  }
+}
+
+function maybeCaptureVideoArtwork() {
+  var key = activeVideoArtworkKey();
+  var videoEl = ctx.els.videoEl;
+  if (!key || !videoEl || !videoMediaSessionReady()) return;
+  if (videoArtwork.path !== key) {
+    // New item: drop the previous frame before anything else publishes.
+    revokeVideoArtwork();
+    videoArtwork.path = key;
+    publishVideoMediaSession(null, true);
+  }
+  if (videoArtwork.url || videoArtwork.pending || videoArtwork.attempts >= VIDEO_ARTWORK_MAX_ATTEMPTS) return;
+  var token = videoArtwork.token;
+  if (typeof videoEl.requestVideoFrameCallback === 'function') {
+    videoArtwork.pending = true;
+    try {
+      videoEl.requestVideoFrameCallback(function () {
+        if (token !== videoArtwork.token) return;
+        captureVideoArtworkFrame(key, token);
+      });
+      return;
+    } catch (_error) {
+      videoArtwork.pending = false;
+    }
+  }
+  // Without frame callbacks, wait for a later progress tick that has a frame
+  // instead of spending an attempt.
+  if (!videoFrameReady(videoEl)) return;
+  videoArtwork.pending = true;
+  captureVideoArtworkFrame(key, token);
+}
+
+function releaseVideoMediaSession() {
+  // No-op when music owns the session; never touches the music element.
+  releaseMediaSession('video');
+  revokeVideoArtwork();
+}
+
+function playVideoFromTransport() {
+  if (!ctx.els.videoEl || ctx.els.videoEl.hidden) return;
+  if (ctx.state.loadingOverlayVisible || ctx.state.seekRestartInProgress) {
+    // Same as the space bar during loading: remember the intent; the session
+    // that is already starting autoplays. Never start a second HLS session.
+    ctx.state.transportWantsPlay = true;
+    ctx.state.pendingAutoplay = true;
+    syncTransportControls();
+    return;
+  }
+  if (playbackShouldBeRunning() && !ctx.els.videoEl.paused) return;
+  requestVideoPlay();
+}
+
+function pauseVideoFromTransport() {
+  if (!ctx.els.videoEl || ctx.els.videoEl.hidden) return;
+  ctx.state.transportWantsPlay = false;
+  ctx.state.pendingAutoplay = false;
+  ctx.els.videoEl.pause();
+  syncTransportControls();
+  claimVideoMediaSession();
 }
 
 function eventTargetIsTextEntry(target) {
@@ -466,6 +720,9 @@ function syncPlaybackProgress() {
   }
   if (ctx.els.totalTimeEl) ctx.els.totalTimeEl.textContent = ctx.formatNativePlaybackTime(duration);
   ctx.syncProcessedProgressTrack(duration);
+  // Owner-only, throttled position update (requestedSeekSeconds during a restart).
+  publishVideoMediaSession(null, false);
+  maybeCaptureVideoArtwork();
 }
 
 function requestVideoPlay() {
@@ -476,6 +733,8 @@ function requestVideoPlay() {
   }
   ctx.reportPlaybackTiming('play_requested');
   var requestedSyncToken = ctx.state.playbackSyncToken;
+  var playRequestToken = ++videoPlayRequestToken;
+  var requestedItemKey = activeVideoArtworkKey();
   ctx.state.transportWantsPlay = true;
   ctx.state.pendingAutoplay = true;
   var playPromise = ctx.els.videoEl.play();
@@ -486,27 +745,26 @@ function requestVideoPlay() {
       ctx.state.transportWantsPlay = false;
       ctx.setStatus('Playback is ready. Press play if the browser blocked autoplay.');
       syncTransportControls();
+      // The card went to "playing" optimistically; a rejected play() (autoplay
+      // block) puts it back to "paused" unless a newer play request or item
+      // has taken over since.
+      if (playRequestToken !== videoPlayRequestToken) return;
+      if (activeVideoArtworkKey() !== requestedItemKey) return;
+      if (ctx.els.videoEl && !ctx.els.videoEl.paused) return;
+      publishVideoMediaSession('paused', true);
     });
   }
   syncTransportControls();
+  publishVideoMediaSession('playing', true);
 }
 
 function toggleVideoPlayPause() {
   if (!ctx.els.videoEl || ctx.els.videoEl.hidden) return;
   if (!playbackShouldBeRunning()) {
-    if (ctx.state.loadingOverlayVisible || ctx.state.seekRestartInProgress) {
-      ctx.state.transportWantsPlay = true;
-      ctx.state.pendingAutoplay = true;
-      syncTransportControls();
-      return;
-    }
-    requestVideoPlay();
+    playVideoFromTransport();
     return;
   }
-  ctx.state.transportWantsPlay = false;
-  ctx.state.pendingAutoplay = false;
-  ctx.els.videoEl.pause();
-  syncTransportControls();
+  pauseVideoFromTransport();
 }
 
 function toggleVideoMute() {
@@ -752,6 +1010,22 @@ async function toggleFullWindowMode() {
   ctx.syncPlaybackProgress = syncPlaybackProgress;
   ctx.requestVideoPlay = requestVideoPlay;
   ctx.toggleVideoPlayPause = toggleVideoPlayPause;
+  ctx.seekVideoTo = seekVideoTo;
+  ctx.releaseVideoMediaSession = releaseVideoMediaSession;
+  ctx.publishVideoMediaSession = publishVideoMediaSession;
+
+  bindMediaSession('video', {
+    play: playVideoFromTransport,
+    pause: pauseVideoFromTransport,
+    next: playNextVideo,
+    previous: playPreviousVideo,
+    seekBy: seekBySeconds,
+    seekTo: seekVideoTo,
+  });
+  if (typeof window !== 'undefined' && window && typeof window.addEventListener === 'function') {
+    window.addEventListener('pagehide', releaseVideoMediaSession);
+    window.addEventListener('beforeunload', releaseVideoMediaSession);
+  }
   ctx.toggleVideoMute = toggleVideoMute;
   ctx.setVideoVolumeFromSlider = setVideoVolumeFromSlider;
   ctx.toggleVideoFullscreen = toggleVideoFullscreen;
@@ -940,11 +1214,14 @@ async function toggleFullWindowMode() {
       ctx.state.transportWantsPlay = true;
       ctx.state.pendingAutoplay = false;
       syncTransportControls();
+      publishVideoMediaSession('playing', true);
     });
     ctx.els.videoEl.addEventListener('pause', function () {
       if (!ctx.state.seekRestartInProgress) {
         ctx.state.pendingAutoplay = false;
         ctx.state.transportWantsPlay = false;
+        // A restart pauses the element internally; the card stays "playing".
+        publishVideoMediaSession('paused', true);
       }
       syncTransportControls();
     });
@@ -962,6 +1239,8 @@ async function toggleFullWindowMode() {
       ctx.hideLoadingOverlay();
       syncTransportControls();
       syncPlaybackProgress();
+      publishVideoMediaSession('playing', true);
+      maybeCaptureVideoArtwork();
     });
     ctx.els.videoEl.addEventListener('ended', function () {
       ctx.state.transportWantsPlay = false;

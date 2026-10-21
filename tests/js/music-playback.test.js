@@ -28,6 +28,17 @@ async function importPlaybackModuleFromWorkspace() {
   ].join("\n");
   const shufflePath = path.resolve(__dirname, "..", "..", "dropbox_browser/assets/js/music/shuffle-helpers.js");
   const shuffleSource = await fs.readFile(shufflePath, "utf8");
+  // Recording stand-in for the shared media-session owner.
+  const mediaSessionSource = [
+    "const log = globalThis.__musicMediaSessionLog || (globalThis.__musicMediaSessionLog = {calls: [], actions: null});",
+    "export const MEDIA_SESSION_SEEK_STEP_SECONDS = 15;",
+    "export function bindMediaSession(kind, actions) { log.actions = actions; log.calls.push(['bind', kind]); }",
+    "export function claimMediaSession(kind) { log.calls.push(['claim', kind]); return true; }",
+    "export function updateMediaSession(kind, snapshot, options) { log.calls.push(['update', kind, Object.assign({}, snapshot), Object.assign({}, options || {})]); }",
+    "export function releaseMediaSession(kind) { log.calls.push(['release', kind]); return true; }",
+  ].join("\n");
+  const mediaSessionUrl = `data:text/javascript;base64,${Buffer.from(mediaSessionSource, "utf8").toString("base64")}`;
+  source = source.replace("'../media-library/media-session.js'", `'${mediaSessionUrl}'`);
   const sharedUrl = `data:text/javascript;base64,${Buffer.from(sharedSource, "utf8").toString("base64")}`;
   const metadataUrl = `data:text/javascript;base64,${Buffer.from(metadataSource, "utf8").toString("base64")}`;
   const shuffleUrl = `data:text/javascript;base64,${Buffer.from(shuffleSource, "utf8").toString("base64")}`;
@@ -340,6 +351,230 @@ test("initPlayback keeps a stable shuffle order when moving next and previous", 
   }
   finally {
     Math.random = originalMathRandom;
+    global.Settings = originalSettings;
+    global.window = originalWindow;
+  }
+});
+
+function mediaSessionLog() {
+  if (!globalThis.__musicMediaSessionLog) globalThis.__musicMediaSessionLog = {calls: [], actions: null};
+  return globalThis.__musicMediaSessionLog;
+}
+
+test("initPlayback publishes media-session claim, pause, seek and release from playback events", async () => {
+  const playbackModule = await importPlaybackModuleFromWorkspace();
+  const audio = createFakeAudio();
+  const ctx = createPlaybackContext(audio, [song("music/alpha.mp3"), song("music/bravo.mp3")], [], []);
+  const originalSettings = global.Settings;
+  const originalWindow = global.window;
+  const windowListeners = new Map();
+  const log = mediaSessionLog();
+  log.calls.length = 0;
+  log.actions = null;
+
+  global.Settings = {
+    get(_key, fallback) {
+      return fallback;
+    },
+    set() {},
+  };
+  global.window = {
+    clearTimeout() {},
+    setTimeout() {
+      return 1;
+    },
+    addEventListener(name, handler) {
+      windowListeners.set(name, handler);
+    },
+  };
+
+  const updates = () => log.calls.filter((call) => call[0] === "update").map((call) => ({...call[2], flush: call[3].flush}));
+  const lastUpdate = () => updates().at(-1);
+  const claims = () => log.calls.filter((call) => call[0] === "claim").length;
+
+  try {
+    playbackModule.initPlayback(ctx);
+    assert.deepEqual(log.calls[0], ["bind", "music"]);
+    assert.deepEqual(
+      Object.keys(log.actions).sort(),
+      ["next", "pause", "play", "previous", "seekBy", "seekTo"],
+    );
+    assert.equal(typeof windowListeners.get("pagehide"), "function");
+    assert.equal(typeof windowListeners.get("beforeunload"), "function");
+
+    // Track start claims with the playlist display name, before metadata.
+    ctx.playbackApi.playPlaylistIndex(0);
+    assert.equal(lastUpdate().playbackState, "playing");
+    assert.equal(lastUpdate().title, "alpha.mp3");
+    assert.equal(lastUpdate().artist, "");
+    assert.equal(lastUpdate().canSeek, false);
+    assert.equal(lastUpdate().seekStepSeconds, 15);
+    assert.equal(lastUpdate().playbackRate, 1);
+    assert.equal(lastUpdate().flush, true);
+
+    // Duration arrives: position-only update (no playbackState => owner-only).
+    audio.duration = 200;
+    audio.dispatch("durationchange");
+    assert.equal("playbackState" in lastUpdate(), false);
+    assert.equal(lastUpdate().duration, 200);
+    assert.equal(lastUpdate().canSeek, true);
+
+    audio.currentTime = 10;
+    audio.dispatch("timeupdate");
+    assert.equal(lastUpdate().position, 10);
+    assert.equal(lastUpdate().flush, false);
+
+    // Scrubbing suppresses position writes until 'seeked' flushes.
+    const beforeSeek = updates().length;
+    audio.dispatch("seeking");
+    audio.currentTime = 50;
+    audio.dispatch("timeupdate");
+    assert.equal(updates().length, beforeSeek);
+    audio.dispatch("seeked");
+    assert.equal(lastUpdate().position, 50);
+    assert.equal(lastUpdate().flush, true);
+
+    // OS seek actions seek the audio element (clamped) and claim.
+    const claimsBefore = claims();
+    log.actions.seekBy(15);
+    assert.equal(audio.currentTime, 65);
+    log.actions.seekBy(-1000);
+    assert.equal(audio.currentTime, 0);
+    log.actions.seekTo(500);
+    assert.equal(audio.currentTime, 200);
+    log.actions.seekTo(42);
+    assert.equal(audio.currentTime, 42);
+    log.actions.seekTo(Number.NaN);
+    assert.equal(audio.currentTime, 42);
+    assert.equal(claims(), claimsBefore + 4);
+
+    // Embedded metadata and cover art replace the display name.
+    ctx.state.mediaSessionTitle = "Real Title";
+    ctx.state.mediaSessionArtist = "Real Artist";
+    ctx.state.currentArtObjectUrl = "blob:cover";
+    ctx.state.currentArtMime = "image/jpeg";
+    ctx.playbackApi.refreshMediaSessionMetadata();
+    assert.equal(lastUpdate().title, "Real Title");
+    assert.equal(lastUpdate().artist, "Real Artist");
+    assert.equal(lastUpdate().artworkUrl, "blob:cover");
+    assert.equal(lastUpdate().artworkType, "image/jpeg");
+    assert.equal("playbackState" in lastUpdate(), false);
+
+    // Pause from the OS calls the pane pause; the element event publishes "paused".
+    log.actions.pause();
+    assert.equal(audio.pauseCalls, 1);
+    assert.deepEqual(log.calls.at(-1), ["claim", "music"]);
+    audio.dispatch("pause");
+    assert.equal(lastUpdate().playbackState, "paused");
+    assert.equal(lastUpdate().flush, true);
+
+    // Next from the OS follows the playlist.
+    log.actions.next();
+    assert.equal(ctx.state.currentPlaylistIndex, 1);
+    assert.equal(lastUpdate().playbackState, "playing");
+    log.actions.previous();
+    assert.equal(ctx.state.currentPlaylistIndex, 0);
+
+    // Clearing the song releases; leaving the page releases.
+    ctx.playbackApi.clearCurrentSong();
+    assert.deepEqual(log.calls.at(-1), ["release", "music"]);
+    const updatesAfterRelease = updates().length;
+    audio.dispatch("pause");
+    assert.equal(updates().length, updatesAfterRelease);
+    windowListeners.get("pagehide")();
+    assert.deepEqual(log.calls.at(-1), ["release", "music"]);
+
+    // Advancing past the last song (no loop) releases too.
+    ctx.playbackApi.playPlaylistIndex(1);
+    ctx.playbackApi.playNextSong();
+    assert.equal(ctx.state.currentPlaylistIndex, -1);
+    assert.deepEqual(log.calls.at(-1), ["release", "music"]);
+  }
+  finally {
+    global.Settings = originalSettings;
+    global.window = originalWindow;
+  }
+});
+test("a rejected play() (autoplay block) publishes paused unless a newer request or song took over", async () => {
+  const playbackModule = await importPlaybackModuleFromWorkspace();
+  const audio = createFakeAudio();
+  const ctx = createPlaybackContext(audio, [song("music/alpha.mp3"), song("music/bravo.mp3")], [], []);
+  const originalSettings = global.Settings;
+  const originalWindow = global.window;
+  const log = mediaSessionLog();
+  log.calls.length = 0;
+  log.actions = null;
+  const plays = [];
+  audio.play = function () {
+    this.playCalls += 1;
+    let resolvePlay;
+    let rejectPlay;
+    const promise = new Promise((resolve, reject) => {
+      resolvePlay = resolve;
+      rejectPlay = reject;
+    });
+    plays.push({
+      resolve: () => {
+        this.paused = false;
+        resolvePlay();
+      },
+      reject: () => rejectPlay(new Error("NotAllowedError: play() blocked")),
+    });
+    return promise;
+  };
+  const flushMicrotasks = () => new Promise((resolve) => setImmediate(resolve));
+  const updates = () => log.calls.filter((call) => call[0] === "update").map((call) => ({...call[2], flush: call[3].flush}));
+  const lastUpdate = () => updates().at(-1);
+
+  global.Settings = {
+    get(_key, fallback) {
+      return fallback;
+    },
+    set() {},
+  };
+  global.window = {
+    clearTimeout() {},
+    setTimeout() {
+      return 1;
+    },
+    addEventListener() {},
+  };
+
+  try {
+    playbackModule.initPlayback(ctx);
+    ctx.playbackApi.playPlaylistIndex(0);
+    assert.equal(lastUpdate().playbackState, "playing");
+    plays[0].reject();
+    await flushMicrotasks();
+    assert.equal(lastUpdate().playbackState, "paused");
+    assert.equal(lastUpdate().title, "alpha.mp3");
+    assert.equal(lastUpdate().flush, true);
+
+    // A stale rejection (a newer song request is pending) does not clobber it.
+    ctx.playbackApi.playPlaylistIndex(1);
+    ctx.playbackApi.playPlaylistIndex(0);
+    const before = updates().length;
+    plays[1].reject();
+    await flushMicrotasks();
+    assert.equal(updates().length, before);
+    assert.equal(lastUpdate().playbackState, "playing");
+
+    // The newer request resolves and keeps "playing".
+    plays[2].resolve();
+    await flushMicrotasks();
+    audio.dispatch("playing");
+    assert.equal(lastUpdate().playbackState, "playing");
+
+    // A rejection for a song that is no longer current is ignored too.
+    audio.paused = true;
+    ctx.playbackApi.playCurrentOrFirst();
+    ctx.state.currentPlaylistIndex = 1;
+    const beforeSongChange = updates().length;
+    plays[3].reject();
+    await flushMicrotasks();
+    assert.equal(updates().length, beforeSongChange);
+  }
+  finally {
     global.Settings = originalSettings;
     global.window = originalWindow;
   }

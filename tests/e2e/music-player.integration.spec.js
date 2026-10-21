@@ -1283,10 +1283,12 @@ test("json import and music settings survive reload", async ({ page }) => {
     return value.split(/\s+/).map((part) => Number.parseFloat(part));
   });
   expect(appliedColumns).toHaveLength(4);
-  expect(appliedColumns[0]).toBeGreaterThanOrEqual(48);
+  // Column floors are 16px (PLAN_MEDIA_SESSION), so fitting may scale every
+  // column below its saved width; only the floor and ordering are stable.
+  expect(appliedColumns[0]).toBeGreaterThanOrEqual(16);
   expect(appliedColumns[1]).toBeGreaterThan(appliedColumns[0]);
   expect(appliedColumns[2]).toBeGreaterThan(appliedColumns[1]);
-  expect(appliedColumns[3]).toBeGreaterThanOrEqual(56);
+  expect(appliedColumns[3]).toBeGreaterThanOrEqual(16);
 
   // Load-dialog filter restored; sort UI still reflects last clicked last_modified
   await page.locator("#music-playlist-load").click();
@@ -1307,7 +1309,23 @@ const {
   checkRowContextMenuNearEdges,
   checkWidePaneDividerExtremes,
   checkNarrowPaneDividerExtremes,
+  checkPlaylistColumnFloors,
 } = require("./support/media-pane-ui");
+
+test("music playlist columns drag down to the 16px floor with grabbable handles and persist", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await openMusicPlayer(page);
+  await page.evaluate(() => Settings.set("music-playlist-column-widths", null));
+  await openMusicPlayer(page);
+  await checkPlaylistColumnFloors(page, {
+    prefix: "music",
+    reopen: openMusicPlayer,
+    settingKey: "music-playlist-column-widths",
+  });
+  // The video player's playlist widths are a separate key and are not written.
+  const videoWidths = await page.evaluate(() => Settings.get("video-playlist-column-widths", null));
+  expect(videoWidths).toBeNull();
+});
 
 test("music context menus near the bottom-right edge flip so every item and submenu stays visible", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });

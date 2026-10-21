@@ -89,6 +89,31 @@ MIME types. Artwork is held as a temporary object URL and is revoked when the
 song changes. Metadata and artwork are best-effort; playback does not depend
 on them.
 
+## System media controls
+
+The playing song is published through the browser Media Session API
+(`navigator.mediaSession`), so Windows media controls, the Chrome media popup
+and a phone lock screen show it and can send play, pause, previous, next,
+seek and scrub back to the page.
+
+- `assets/js/media-library/media-session.js` is the single writer of
+  `navigator.mediaSession` for the page; music and video bind to it with their
+  own transport callbacks. The player that most recently started, resumed,
+  paused, sought or skipped owns the session; the other player's progress
+  ticks never overwrite it. Pausing keeps the card; hiding the music pane does
+  not clear it. Clearing the current song, advancing onto no next song and
+  leaving the page release it.
+- Title is the playlist display name until embedded metadata arrives, then the
+  embedded title and artist. Artwork is the embedded cover's object URL
+  (`state.currentArtObjectUrl`); no new request is made for it, and revoking
+  that URL on a song change republishes without it.
+- Previous and next call the pane buttons' functions (shuffle and loop apply).
+  Seek back/forward use the browser's `seekOffset`, otherwise 15 seconds;
+  scrubbing sets `audio.currentTime` like the progress slider.
+- Updates ride on the existing audio events (no timer); position writes are
+  throttled to about once per second except on claim, seek, pause or track
+  change.
+
 ## Waveform visualization
 
 The optional waveform panel is deliberately deferred. It does not fetch or

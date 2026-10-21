@@ -4,11 +4,14 @@ export function initLayout(ctx) {
   var els = ctx.els;
   var state = ctx.state;
   var PLAYLIST_COLUMN_KEYS = ['index', 'filename', 'path', 'reorder'];
+  // Same 16px drag floor as the file browser (BROWSE_COLUMN_MIN_WIDTHS): the
+  // 14px column resizer stays inside the column and can still be grabbed.
+  // Default and saved widths are unchanged; this only lowers the floor.
   var PLAYLIST_COLUMN_MIN_WIDTHS = {
-    index: 48,
-    filename: 120,
-    path: 150,
-    reorder: 56
+    index: 16,
+    filename: 16,
+    path: 16,
+    reorder: 16
   };
   var PLAYLIST_COLUMN_GAP_PX = 16;
   var PLAYLIST_COLUMN_HORIZONTAL_PADDING_PX = 16;
@@ -713,8 +716,14 @@ export function initLayout(ctx) {
   document.addEventListener('DOMContentLoaded', function () {
     applyPendingMusicPaneRestore();
   });
+  // Only this pane's own playlist header: a document-wide query bound the
+  // hidden other player's layout to these handles too, so a music column drag
+  // also refit (at width 0, i.e. every column at its floor) and persisted the
+  // video playlist widths, and vice versa.
   Array.prototype.forEach.call(
-    document.querySelectorAll('.music-playlist-column-resizer[data-music-playlist-column-resizer]'),
+    els.playlistTableEl && typeof els.playlistTableEl.querySelectorAll === 'function'
+      ? els.playlistTableEl.querySelectorAll('.music-playlist-column-resizer[data-music-playlist-column-resizer]')
+      : [],
     function (handle) {
       handle.addEventListener('pointerdown', function (ev) {
         startPlaylistColumnResize(handle.getAttribute('data-music-playlist-column-resizer') || '', ev);

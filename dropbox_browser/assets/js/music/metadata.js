@@ -55,10 +55,21 @@ export function createMetadataController(ctx) {
     }
   }
 
+  // Media-session hook: playback.js owns the session snapshot; metadata only
+  // tells it that title, artist or artwork changed (owner-only update).
+  function notifyMediaSessionMetadata() {
+    if (ctx.playbackApi && typeof ctx.playbackApi.refreshMediaSessionMetadata === 'function') {
+      ctx.playbackApi.refreshMediaSessionMetadata();
+    }
+  }
+
   function revokeCurrentArtObjectUrl() {
     if (!state.currentArtObjectUrl) return;
     URL.revokeObjectURL(state.currentArtObjectUrl);
     state.currentArtObjectUrl = null;
+    state.currentArtMime = '';
+    // Never leave a revoked object URL on the system media card.
+    notifyMediaSessionMetadata();
   }
 
   function setCoverArtImage(art) {
@@ -83,6 +94,7 @@ export function createMetadataController(ctx) {
     }
     blob = new Blob([art.bytes], {type: art.mime});
     state.currentArtObjectUrl = URL.createObjectURL(blob);
+    state.currentArtMime = art.mime;
     els.coverArtEl.src = state.currentArtObjectUrl;
     els.coverArtEl.hidden = false;
     els.coverArtEl.classList.remove('hidden');
@@ -92,6 +104,7 @@ export function createMetadataController(ctx) {
       byteLength: art.bytes.length,
       objectUrl: state.currentArtObjectUrl,
     });
+    notifyMediaSessionMetadata();
     return true;
   }
 
@@ -114,10 +127,14 @@ export function createMetadataController(ctx) {
   function applyMetadataResult(metadata) {
     setTextOrFallback(els.songTitleEl, metadata && metadata.title, state.metadataTitleUnknown);
     setTextOrFallback(els.songArtistEl, metadata && metadata.artist, state.metadataArtistUnknown);
+    // Embedded tags replace the playlist display name on the system card.
+    state.mediaSessionTitle = metadata && metadata.title ? String(metadata.title) : '';
+    state.mediaSessionArtist = metadata && metadata.artist ? String(metadata.artist) : '';
     if (!setCoverArtImage(metadata && metadata.art ? metadata.art : null)) {
       setCoverArtPlaceholderState(metadata && metadata.art ? 'unsupported' : 'empty');
     }
     scheduleNowPlayingMarqueeRefresh();
+    notifyMediaSessionMetadata();
   }
 
   function metadataExtension(song) {
@@ -502,6 +519,8 @@ export function createMetadataController(ctx) {
 
   function resetNowPlayingForSong(song) {
     state.scrubberDragging = false;
+    state.mediaSessionTitle = '';
+    state.mediaSessionArtist = '';
     ctx.playbackApi.resetProgressDisplay();
     setCurrentFilename(song || null);
     if (song) showMetadataPlaceholders();
