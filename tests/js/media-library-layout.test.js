@@ -308,10 +308,12 @@ test("playlist column widths include index default and upgrade old saves without
   const parts = grid.split(/\s+/).map((part) => Number.parseFloat(part));
   assert.equal(parts.length, 4);
   // Index uses the default (or scaled from it); filename/path still come from the old save.
-  assert.ok(parts[0] >= 48);
-  assert.ok(parts[1] >= 120);
-  assert.ok(parts[2] >= 150);
-  assert.ok(parts[3] >= 56);
+  assert.ok(parts[0] >= 16);
+  assert.ok(parts[1] >= 16);
+  assert.ok(parts[2] >= 16);
+  assert.ok(parts[3] >= 16);
+  // Saved filename/path keep their saved proportions (not raised to an old floor).
+  assert.ok(parts[1] < parts[2]);
 
   // No prior saved data: defaults still produce a four-column grid with index first.
   // listWidth 648 => available column total 616 (648 - 16 gap - 16 padding), matching
@@ -368,7 +370,8 @@ test("music and video hosts default playlist widths include index", async () => 
   assert.match(videoTemplate, /data-music-playlist-column-resizer="index"/);
   assert.match(musicTemplate, /<span>Index<\/span>/);
   assert.match(videoTemplate, /<span>Index<\/span>/);
-  assert.match(css, /--music-playlist-grid-columns:\s*52px /);
+  assert.match(css, /--music-playlist-grid-columns:\s*52px minmax\(16px, 0\.9fr\) minmax\(16px, 1\.1fr\) 56px;/);
+  assert.match(css, /--music-playlist-grid-min-width:\s*96px;/);
   assert.match(css, /\.music-playlist-entry\.current\s+\.music-playlist-filename-cell::before/);
   assert.doesNotMatch(css, /\.music-playlist-entry\.current\s*>\s*div:first-child::before/);
 });
@@ -451,4 +454,36 @@ test("bottom panel bootstrapping gate waits for music and video layout ready sig
   assert.match(videoJs, /markBottomPanelMediaLayoutReady\(\s*['"]video['"]\s*\)/);
   // Must not invent a new toolbar status node for the bootstrap timer.
   assert.doesNotMatch(bottomPaneJs, /createElement\(/);
+});
+
+test("playlist columns can be dragged down to the 16px browse-column floor and keep that width", async () => {
+  for (const settingKey of ["music-playlist-column-widths", "video-playlist-column-widths"]) {
+    const settings = createMemorySettings();
+    installLayoutGlobals(settings);
+    const {initLayout} = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/layout.js");
+    const ctx = buildLayoutCtx(settings, {
+      playlistColumnWidthSettingKey: settingKey,
+      defaultPlaylistColumnWidths: {index: 52, filename: 220, path: 340, reorder: 56},
+    });
+    ctx.els.playlistListEl.clientWidth = 1000;
+    initLayout(ctx);
+
+    const applied = ctx.layoutApi.applyPlaylistColumnWidths({index: 2, filename: 5, path: 920, reorder: 1}, true);
+    assert.equal(applied.index, 16, settingKey);
+    assert.equal(applied.filename, 16, settingKey);
+    assert.equal(applied.reorder, 16, settingKey);
+    assert.equal(applied.index + applied.filename + applied.path + applied.reorder, 1000 - 16 - 16);
+    assert.deepEqual(settings.store[settingKey], applied);
+
+    // Reload: the saved narrow widths come back instead of the old 48/120/150/56 floors.
+    installLayoutGlobals(settings);
+    const reloadCtx = buildLayoutCtx(settings, {
+      playlistColumnWidthSettingKey: settingKey,
+      defaultPlaylistColumnWidths: {index: 52, filename: 220, path: 340, reorder: 56},
+    });
+    reloadCtx.els.playlistListEl.clientWidth = 1000;
+    initLayout(reloadCtx);
+    const grid = reloadCtx.els.playlistTableEl.style.getPropertyValue("--music-playlist-grid-columns");
+    assert.match(grid, /^16px 16px \d+px 16px$/, settingKey);
+  }
 });

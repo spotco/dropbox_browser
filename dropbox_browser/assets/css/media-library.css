@@ -491,8 +491,10 @@
 }
 
 .music-playlist-table {
-  --music-playlist-grid-columns: 52px minmax(120px, 0.9fr) minmax(150px, 1.1fr) 56px;
-  --music-playlist-grid-min-width: 394px;
+  /* Pre-init template only; layout.js writes pixel widths with 16px floors.
+     Min width = 4 x 16px floors + 16px gap + 16px horizontal padding. */
+  --music-playlist-grid-columns: 52px minmax(16px, 0.9fr) minmax(16px, 1.1fr) 56px;
+  --music-playlist-grid-min-width: 96px;
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;

@@ -226,9 +226,103 @@ async function checkNarrowPaneDividerExtremes(page, { prefix }) {
   expect(layout.playlist.width).toBeGreaterThan(100);
 }
 
+// ---- Active-playlist column floors (16px, same as the file browser) ----
+
+const PLAYLIST_COLUMN_KEYS = ["index", "filename", "path", "reorder"];
+const PLAYLIST_COLUMN_FLOOR_PX = 16;
+
+async function playlistColumnState(page, prefix) {
+  return page.evaluate((p) => {
+    const table = document.getElementById(`${p}-playlist-table`);
+    const value = getComputedStyle(table).getPropertyValue("--music-playlist-grid-columns").trim();
+    const headings = Array.from(table.querySelectorAll(".music-playlist-heading .music-playlist-column-heading"))
+      .map((heading) => heading.getBoundingClientRect().width);
+    const handles = {};
+    table.querySelectorAll(".music-playlist-column-resizer").forEach((handle) => {
+      const rect = handle.getBoundingClientRect();
+      const column = handle.closest(".music-playlist-column-heading").getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const hit = document.elementFromPoint(cx, cy);
+      handles[handle.getAttribute("data-music-playlist-column-resizer")] = {
+        width: rect.width,
+        height: rect.height,
+        insideColumn: rect.left >= column.left - 0.5 && rect.right <= column.right + 0.5,
+        hit: hit === handle,
+        cx,
+        cy,
+      };
+    });
+    return {
+      widths: value.split(/\s+/).map((part) => Number.parseFloat(part)),
+      headings,
+      handles,
+    };
+  }, prefix);
+}
+
+async function dragPlaylistColumn(page, prefix, key, dx) {
+  const state = await playlistColumnState(page, prefix);
+  const handle = state.handles[key];
+  await page.mouse.move(handle.cx, handle.cy);
+  await page.mouse.down();
+  await page.mouse.move(handle.cx + dx, handle.cy, { steps: 8 });
+  await page.mouse.up();
+  return playlistColumnState(page, prefix);
+}
+
+function expectHandlesUsable(state, label) {
+  for (const key of ["index", "filename", "path"]) {
+    const handle = state.handles[key];
+    expect(handle.width, `${label} ${key} handle width`).toBeCloseTo(14, 0);
+    expect(handle.insideColumn, `${label} ${key} handle stays inside its column`).toBe(true);
+    expect(handle.hit, `${label} ${key} handle is the topmost element at its centre`).toBe(true);
+  }
+}
+
+// Drag every playlist divider until it stops: each column stops at 16px with
+// its 14px handle fully inside and clickable, and the narrow widths survive a
+// reload (separate settings keys for music and video).
+async function checkPlaylistColumnFloors(page, { prefix, reopen, settingKey }) {
+  const table = page.locator(`#${prefix}-playlist-table`);
+  await expect(table).toBeVisible();
+  await expect.poll(async () => (await playlistColumnState(page, prefix)).widths.length).toBe(4);
+
+  let state = await dragPlaylistColumn(page, prefix, "index", -2000);
+  expect(state.widths[0], "index stops at the 16px floor").toBeCloseTo(PLAYLIST_COLUMN_FLOOR_PX, 0);
+  state = await dragPlaylistColumn(page, prefix, "filename", -2000);
+  expect(state.widths[1], "filename stops at the 16px floor").toBeCloseTo(PLAYLIST_COLUMN_FLOOR_PX, 0);
+  state = await dragPlaylistColumn(page, prefix, "path", 4000);
+  expect(state.widths[3], "reorder stops at the 16px floor").toBeCloseTo(PLAYLIST_COLUMN_FLOOR_PX, 0);
+  expect(state.widths[2]).toBeGreaterThan(PLAYLIST_COLUMN_FLOOR_PX);
+  // The rendered header cells match the floors (no stylesheet minmax floor).
+  expect(state.headings[0]).toBeCloseTo(PLAYLIST_COLUMN_FLOOR_PX, 0);
+  expect(state.headings[1]).toBeCloseTo(PLAYLIST_COLUMN_FLOOR_PX, 0);
+  expect(state.headings[3]).toBeCloseTo(PLAYLIST_COLUMN_FLOOR_PX, 0);
+  expectHandlesUsable(state, prefix);
+
+  // A 16px column's handle can still be grabbed and dragged back out (the
+  // neighbour gives up the width), then pushed back down to the floor.
+  state = await dragPlaylistColumn(page, prefix, "index", 40);
+  expect(state.widths[0]).toBeGreaterThan(PLAYLIST_COLUMN_FLOOR_PX + 30);
+  state = await dragPlaylistColumn(page, prefix, "index", -2000);
+  expect(state.widths[0]).toBeCloseTo(PLAYLIST_COLUMN_FLOOR_PX, 0);
+  state = await dragPlaylistColumn(page, prefix, "filename", -2000);
+  expect(state.widths[1]).toBeCloseTo(PLAYLIST_COLUMN_FLOOR_PX, 0);
+
+  const saved = await page.evaluate((key) => Settings.get(key, null), settingKey);
+  expect(saved).toMatchObject({ index: 16, filename: 16, reorder: 16 });
+  const savedWidths = PLAYLIST_COLUMN_KEYS.map((key) => saved[key]);
+
+  await reopen(page);
+  await expect.poll(async () => (await playlistColumnState(page, prefix)).widths).toEqual(savedWidths);
+  expectHandlesUsable(await playlistColumnState(page, prefix), `${prefix} after reload`);
+}
+
 module.exports = {
   checkRowContextMenuNearEdges,
   checkWidePaneDividerExtremes,
   checkNarrowPaneDividerExtremes,
+  checkPlaylistColumnFloors,
   paneLayout,
 };

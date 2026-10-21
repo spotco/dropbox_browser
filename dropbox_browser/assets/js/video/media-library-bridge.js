@@ -98,6 +98,7 @@ export function initMediaLibraryBridge(ctx) {
     if (ctx.playbackApi && typeof ctx.playbackApi.syncForActiveItem === 'function') {
       void ctx.playbackApi.syncForActiveItem();
     }
+    if (typeof ctx.releaseVideoMediaSession === 'function') ctx.releaseVideoMediaSession();
   }
 
   function playPlaylistIndex(index) {

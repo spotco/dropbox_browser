@@ -17,6 +17,9 @@ function syncPaneMode(mode) {
     var localSessionId = String(ctx.state.compatibilitySessionId || '');
     void ctx.stopCompatibilitySession(localSessionId);
     ctx.resetPlaybackSurface();
+    // Clears the system media card only while video still owns it; a music
+    // session (and the music element) is left alone.
+    if (typeof ctx.releaseVideoMediaSession === 'function') ctx.releaseVideoMediaSession();
     ctx.renderAudioTrackSelector(null, null);
     ctx.renderSubtitleTrackSelector(null, null);
     return;

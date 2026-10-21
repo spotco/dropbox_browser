@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -30,6 +32,8 @@ TRACK_SPECS: list[dict[str, Any]] = [
         "codec": "flac",
         "title": "FLAC Fixture Title",
         "artist": "FLAC Fixture Artist",
+        # Embedded front cover (FLAC PICTURE block) for media-session artwork.
+        "cover": True,
     },
     {
         "path": "music/Oga Track.oga",
@@ -52,8 +56,59 @@ TRACK_SPECS: list[dict[str, Any]] = [
 ]
 
 
-def generate_track(output_path: Path, *, frequency: str, codec: str, title: str, artist: str) -> None:
+def cover_picture_block_base64(output_path: Path) -> str:
+    """Return a base64 FLAC PICTURE block holding a 64x64 red PNG front cover."""
+    png_path = output_path.with_suffix(".cover.png")
+    proc = subprocess.run(
+        [
+            str(FFMPEG_EXE),
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=64x64:d=1",
+            "-frames:v",
+            "1",
+            str(png_path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=60,
+        cwd=str(REPO_ROOT),
+    )
+    if proc.returncode != 0 or not png_path.is_file():
+        raise SystemExit(proc.stderr.decode("utf-8", "replace").strip() or "ffmpeg cover failed")
+    data = png_path.read_bytes()
+    png_path.unlink()
+    mime = b"image/png"
+    block = b"".join([
+        struct.pack(">I", 3),  # front cover
+        struct.pack(">I", len(mime)),
+        mime,
+        struct.pack(">I", 0),  # empty description
+        struct.pack(">IIII", 64, 64, 24, 0),
+        struct.pack(">I", len(data)),
+        data,
+    ])
+    return base64.b64encode(block).decode("ascii")
+
+
+def generate_track(
+    output_path: Path,
+    *,
+    frequency: str,
+    codec: str,
+    title: str,
+    artist: str,
+    cover: bool = False,
+) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    cover_args: list[str] = []
+    if cover:
+        # Front cover as a METADATA_BLOCK_PICTURE comment (pure metadata). An
+        # attached-picture stream would make Chromium refuse the file.
+        cover_args = ["-metadata", f"METADATA_BLOCK_PICTURE={cover_picture_block_base64(output_path)}"]
     proc = subprocess.run(
         [
             str(FFMPEG_EXE),
@@ -62,6 +117,7 @@ def generate_track(output_path: Path, *, frequency: str, codec: str, title: str,
             "lavfi",
             "-i",
             f"sine=frequency={frequency}:duration={DURATION_SECONDS}",
+            *cover_args,
             "-c:a",
             codec,
             "-metadata",
@@ -105,6 +161,7 @@ def main() -> int:
             codec=str(spec["codec"]),
             title=str(spec["title"]),
             artist=str(spec["artist"]),
+            cover=bool(spec.get("cover", False)),
         )
         entries.append({
             "path": rel_path,

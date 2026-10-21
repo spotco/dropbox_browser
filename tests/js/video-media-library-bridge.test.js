@@ -54,3 +54,37 @@ test("video playlist starts publish the shared asset and playlist message", asyn
 
   assert.deepEqual(messages, ['Playing "Episode01.mkv" from playlist "Weekend Watch".']);
 });
+
+test("video playlist clearCurrentSong releases the video media session", async () => {
+  const {initMediaLibraryBridge} = await importBridgeModule();
+  let releases = 0;
+  const ctx = {
+    state: {
+      activePlaylist: {name: "Weekend Watch"},
+      activeQueueIndex: 0,
+      currentPlaylistIndex: 0,
+      loopPlaylist: false,
+      loopQueue: false,
+      playlist: [{filename: "a.mkv", remote_path: "videos/a.mkv", stream_path: "videos/a.mkv"}],
+      selectedQueueIndex: 0,
+      shuffleEnabled: false,
+      shuffleSequence: [],
+      shuffleCursor: -1,
+    },
+    els: {shuffleButton: null},
+    playbackApi: {syncForActiveItem() {}},
+    playlistApi: {renderPlaylist() {}, resetShuffleBag() {}},
+    releaseVideoMediaSession() {
+      releases += 1;
+    },
+    setStatus() {},
+  };
+  initMediaLibraryBridge(ctx);
+  ctx.playbackApi.clearCurrentSong();
+  assert.equal(releases, 1);
+  assert.equal(ctx.state.activeQueueIndex, -1);
+  // Advancing past the end of the playlist goes through the same path.
+  ctx.playbackApi.playPlaylistIndex(0);
+  ctx.playNextFromPlaylist();
+  assert.equal(releases, 2);
+});
