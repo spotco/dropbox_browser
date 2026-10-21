@@ -2,7 +2,7 @@ import {formatPlaybackTime, setPlaylistPlaybackStatus} from '../media-library/sh
 import {
   bindMediaSession,
   claimMediaSession,
-  MEDIA_SESSION_SEEK_STEP_SECONDS,
+
   releaseMediaSession,
   updateMediaSession
 } from '../media-library/media-session.js';
@@ -200,8 +200,7 @@ export function initPlayback(ctx) {
       position: finiteCurrentTime(),
       duration: duration,
       playbackRate: 1,
-      canSeek: duration !== null && duration > 0,
-      seekStepSeconds: MEDIA_SESSION_SEEK_STEP_SECONDS
+      canSeek: duration !== null && duration > 0
     };
   }
 
@@ -250,11 +249,6 @@ export function initPlayback(ctx) {
     claimMusicMediaSession();
   }
 
-  function seekMusicBy(deltaSeconds) {
-    var delta = Number(deltaSeconds);
-    if (!Number.isFinite(delta)) return;
-    seekMusicTo(finiteCurrentTime() + delta);
-  }
 
   function clampVolume(value) {
     if (!Number.isFinite(value)) return state.defaultVolume;
@@ -597,7 +591,6 @@ export function initPlayback(ctx) {
     pause: pausePlayback,
     next: playNextSong,
     previous: playPreviousSong,
-    seekBy: seekMusicBy,
     seekTo: seekMusicTo
   });
   if (typeof window !== 'undefined' && window && typeof window.addEventListener === 'function') {

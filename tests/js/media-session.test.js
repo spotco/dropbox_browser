@@ -27,6 +27,7 @@ class FakeMediaMetadata {
 function createFakeSession(options = {}) {
   const session = {
     handlers: new Map(),
+    handlerWrites: [],
     metadataWrites: [],
     stateWrites: [],
     positionCalls: [],
@@ -50,6 +51,7 @@ function createFakeSession(options = {}) {
       if (options.unsupportedActions && options.unsupportedActions.includes(action)) {
         throw new TypeError(`unsupported action ${action}`);
       }
+      this.handlerWrites.push([action, handler ? "function" : null]);
       if (handler) this.handlers.set(action, handler);
       else this.handlers.delete(action);
     },
@@ -82,7 +84,7 @@ function recorder() {
     pause: () => calls.push(["pause"]),
     next: () => calls.push(["next"]),
     previous: () => calls.push(["previous"]),
-    seekBy: (delta) => calls.push(["seekBy", delta]),
+
     seekTo: (seconds) => calls.push(["seekTo", seconds]),
   };
   return {calls, actions};
@@ -100,7 +102,6 @@ function musicSnapshot(overrides = {}) {
     duration: 200,
     playbackRate: 1,
     canSeek: true,
-    seekStepSeconds: 15,
   }, overrides);
 }
 
@@ -139,9 +140,11 @@ test("a playing snapshot claims and writes metadata, playback state and clamped 
   assert.deepEqual(session.metadata.artwork, [{src: "blob:cover", type: "image/png"}]);
   assert.equal(session.playbackState, "playing");
   assert.deepEqual(session.positionCalls.at(-1), {duration: 200, playbackRate: 1, position: 200});
-  for (const action of ["play", "pause", "previoustrack", "nexttrack", "seekbackward", "seekforward", "seekto"]) {
+  for (const action of ["play", "pause", "previoustrack", "nexttrack", "seekto"]) {
     assert.equal(typeof session.handlers.get(action), "function", action);
   }
+  assert.equal(session.handlers.has("seekbackward"), false);
+  assert.equal(session.handlers.has("seekforward"), false);
 });
 
 test("a paused or position update from a non-owner is ignored", async () => {
@@ -204,6 +207,7 @@ test("missing or non-finite duration skips setPositionState and seek handlers", 
   assert.equal(session.positionCalls.length, 0);
   assert.equal(session.handlers.has("seekto"), false);
   assert.equal(session.handlers.has("seekbackward"), false);
+  assert.equal(session.handlers.has("seekforward"), false);
   assert.equal(session.handlers.has("nexttrack"), true);
   assert.equal(session.handlers.has("previoustrack"), true);
 
@@ -212,10 +216,12 @@ test("missing or non-finite duration skips setPositionState and seek handlers", 
   mod.updateMediaSession("music", {duration: 10, position: Number.NaN}, {flush: true});
   assert.equal(session.positionCalls.length, 0);
 
-  // Duration arrives: seek handlers appear and position is written.
+  // Duration arrives: seekto appears (interval seeks never do) and position is written.
   mod.updateMediaSession("music", {duration: 180, position: 3, canSeek: true}, {flush: true});
   assert.equal(session.positionCalls.length, 1);
   assert.equal(typeof session.handlers.get("seekto"), "function");
+  assert.equal(session.handlers.has("seekbackward"), false);
+  assert.equal(session.handlers.has("seekforward"), false);
 });
 
 test("position below zero and above duration is clamped", async () => {
@@ -235,35 +241,39 @@ test("a throwing setPositionState or setActionHandler does not throw outward", a
   assert.equal(mod.mediaSessionOwner(), "music");
   // Unsupported actions did not block the others.
   assert.equal(typeof session.handlers.get("nexttrack"), "function");
-  assert.equal(typeof session.handlers.get("seekforward"), "function");
+  assert.equal(typeof session.handlers.get("play"), "function");
   assert.equal(session.handlers.has("seekto"), false);
   assert.ok(session.positionCalls.length >= 1);
   assert.doesNotThrow(() => mod.releaseMediaSession("music"));
 });
 
-test("seek backward/forward use details.seekOffset, then the snapshot step", async () => {
+test("seekbackward/seekforward are never registered and are cleared on every claim (iOS track buttons)", async () => {
   const {mod, session} = await setup();
   const music = recorder();
+  const video = recorder();
   mod.bindMediaSession("music", music.actions);
-  mod.updateMediaSession("music", musicSnapshot({seekStepSeconds: 15}));
+  mod.bindMediaSession("video", video.actions);
+  // A handler left over from an earlier page state.
+  session.handlers.set("seekforward", () => {});
+  session.handlers.set("seekbackward", () => {});
 
-  session.handlers.get("seekbackward")({action: "seekbackward", seekOffset: 5});
-  session.handlers.get("seekforward")({action: "seekforward", seekOffset: 30});
-  session.handlers.get("seekbackward")({action: "seekbackward"});
-  session.handlers.get("seekforward")({action: "seekforward"});
-  session.handlers.get("seekforward")();
+  mod.updateMediaSession("music", musicSnapshot({duration: null, canSeek: false}));
+  assert.equal(session.handlers.has("seekbackward"), false);
+  assert.equal(session.handlers.has("seekforward"), false);
+  mod.updateMediaSession("music", {duration: 200, position: 5, canSeek: true}, {flush: true});
+  // Owner handover and claiming back clear them again.
+  mod.updateMediaSession("video", musicSnapshot({title: "Episode 1"}));
+  session.handlers.set("seekforward", () => {});
+  mod.claimMediaSession("music");
+  assert.equal(session.handlers.has("seekforward"), false);
+  mod.releaseMediaSession("music");
 
-  mod.updateMediaSession("music", {seekStepSeconds: Number.NaN}, {flush: true});
-  session.handlers.get("seekforward")({action: "seekforward"});
-
-  assert.deepEqual(music.calls, [
-    ["seekBy", -5],
-    ["seekBy", 30],
-    ["seekBy", -15],
-    ["seekBy", 15],
-    ["seekBy", 15],
-    ["seekBy", 15],
-  ]);
+  const intervalWrites = session.handlerWrites.filter(([action]) => action === "seekbackward" || action === "seekforward");
+  assert.ok(intervalWrites.length >= 6);
+  assert.ok(intervalWrites.every(([, handler]) => handler === null));
+  assert.equal(session.handlerWrites.some(([action, handler]) => action === "seekto" && handler === "function"), true);
+  assert.deepEqual(music.calls, []);
+  assert.deepEqual(video.calls, []);
 });
 
 test("seekto forwards seekTime and ignores a missing time", async () => {
@@ -293,7 +303,8 @@ test("release by the owner clears the session; release by the other kind does no
   assert.equal(mod.mediaSessionOwner(), "music");
   assert.equal(session.metadata.title, "Song");
   assert.equal(session.playbackState, "playing");
-  assert.equal(session.handlers.size, 7);
+  // play, pause, previoustrack, nexttrack, seekto (no interval seeks).
+  assert.equal(session.handlers.size, 5);
 
   assert.equal(mod.releaseMediaSession("music"), true);
   assert.equal(mod.mediaSessionOwner(), null);

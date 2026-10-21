@@ -11,7 +11,7 @@ import {
 import {
   bindMediaSession,
   claimMediaSession,
-  MEDIA_SESSION_SEEK_STEP_SECONDS,
+
   releaseMediaSession,
   updateMediaSession,
 } from '../media-library/media-session.js';
@@ -349,7 +349,7 @@ function playNextVideo() {
   ));
 }
 
-// Step and system-media-control seeks share the progress slider's restart
+// In-page 15 s steps and system media control scrubs share the progress slider's restart
 // queue: while a compatibility restart is in flight only the latest target is
 // kept in requestedSeekSeconds, and the completing restart replays it
 // ('scrub-deferred'). Rapid seeks never stack HLS sessions or sync tokens.
@@ -452,7 +452,6 @@ function videoMediaSessionSnapshot() {
     duration: hasDuration ? duration : null,
     playbackRate: 1,
     canSeek: hasDuration,
-    seekStepSeconds: MEDIA_SESSION_SEEK_STEP_SECONDS,
   };
 }
 
@@ -1019,7 +1018,6 @@ async function toggleFullWindowMode() {
     pause: pauseVideoFromTransport,
     next: playNextVideo,
     previous: playPreviousVideo,
-    seekBy: seekBySeconds,
     seekTo: seekVideoTo,
   });
   if (typeof window !== 'undefined' && window && typeof window.addEventListener === 'function') {

@@ -1063,6 +1063,8 @@ class WebUiTests(AppTestCase):
         self.assertIn("import {formatPlaybackTime, setPlaylistPlaybackStatus} from '../media-library/shared.js';", music_playback_js)
         self.assertIn("} from '../media-library/media-session.js';", music_playback_js)
         self.assertIn("bindMediaSession('music', {", music_playback_js)
+        # Interval seek handlers would replace iOS lock screen track buttons.
+        self.assertNotIn("seekBy:", music_playback_js)
         self.assertIn("releaseMediaSession('music');", music_playback_js)
         self.assertIn("ctx.playbackApi.refreshMediaSessionMetadata();", music_metadata_js)
         self.assertIn("window.addEventListener('resize', function () {", music_entry_js)
@@ -1319,6 +1321,8 @@ class WebUiTests(AppTestCase):
         self.assertIn("import {initCompatibility} from './video/compatibility.js';", video_js)
         self.assertIn("} from '../media-library/media-session.js';", video_controls_js)
         self.assertIn("bindMediaSession('video', {", video_controls_js)
+        self.assertNotIn("seekBy:", video_controls_js)
+        self.assertNotIn("MEDIA_SESSION_SEEK_STEP_SECONDS", video_controls_js)
         self.assertIn("requestVideoSeekRestart(target, 'media-session-seek');", video_controls_js)
         self.assertIn("function requestVideoSeekRestart(target, reason)", video_controls_js)
         self.assertIn("if (!ctx.state.paneActive) return false;", video_controls_js)

@@ -12,15 +12,20 @@
  *   owner clears it.
  * - Every browser call is guarded: a missing API makes every call a no-op and
  *   an unsupported action handler cannot block the others.
+ * - Only seekto (scrubbing) is registered for seeking. seekbackward and
+ *   seekforward are never registered (and are cleared on every claim): iOS
+ *   replaces the previous/next track buttons with skip-interval buttons
+ *   whenever they have handlers.
  *
  * This module must not import from music/ or video/.
  */
 
-export var MEDIA_SESSION_SEEK_STEP_SECONDS = 15;
 export var MEDIA_SESSION_POSITION_THROTTLE_MS = 1000;
 
 var TRANSPORT_ACTIONS = ['play', 'pause', 'previoustrack', 'nexttrack'];
-var SEEK_ACTIONS = ['seekbackward', 'seekforward', 'seekto'];
+var SEEK_ACTIONS = ['seekto'];
+// Never registered; cleared so no earlier handler keeps iOS on skip buttons.
+var INTERVAL_SEEK_ACTIONS = ['seekbackward', 'seekforward'];
 var PLAYBACK_STATES = {playing: true, paused: true, none: true};
 
 var bindings = Object.create(null);
@@ -88,18 +93,10 @@ function callAction(kind, name, args) {
   }
 }
 
-function seekStepSeconds(kind) {
-  var snapshot = snapshots[kind] || {};
-  var step = snapshot.seekStepSeconds;
-  return isFiniteNumber(step) && step > 0 ? step : MEDIA_SESSION_SEEK_STEP_SECONDS;
-}
-
-function seekOffsetSeconds(kind, details) {
-  var offset = details ? details.seekOffset : undefined;
-  return isFiniteNumber(offset) && offset > 0 ? offset : seekStepSeconds(kind);
-}
-
 function installTransportHandlers(session, kind) {
+  INTERVAL_SEEK_ACTIONS.forEach(function (action) {
+    setActionHandler(session, action, null);
+  });
   setActionHandler(session, 'play', function () {
     callAction(kind, 'play');
   });
@@ -127,12 +124,6 @@ function syncSeekHandlers(session, kind, force) {
   }
   // details.fastSeek is ignored: neither player has a fast-seek path that is
   // safe to prefer over its normal seek.
-  setActionHandler(session, 'seekbackward', function (details) {
-    callAction(kind, 'seekBy', [-seekOffsetSeconds(kind, details)]);
-  });
-  setActionHandler(session, 'seekforward', function (details) {
-    callAction(kind, 'seekBy', [seekOffsetSeconds(kind, details)]);
-  });
   setActionHandler(session, 'seekto', function (details) {
     if (!details || !isFiniteNumber(details.seekTime)) return;
     callAction(kind, 'seekTo', [details.seekTime]);
@@ -140,7 +131,7 @@ function syncSeekHandlers(session, kind, force) {
 }
 
 function clearAllHandlers(session) {
-  TRANSPORT_ACTIONS.concat(SEEK_ACTIONS).forEach(function (action) {
+  TRANSPORT_ACTIONS.concat(SEEK_ACTIONS, INTERVAL_SEEK_ACTIONS).forEach(function (action) {
     setActionHandler(session, action, null);
   });
 }

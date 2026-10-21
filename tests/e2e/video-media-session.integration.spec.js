@@ -103,14 +103,20 @@ test("video publishes the active item to the Media Session with a captured frame
   await expect.poll(async () => (await mediaSessionState(page)).playbackState).toBe("paused");
   await expect(page.locator("#video-play-toggle")).toHaveAttribute("aria-label", /Play/);
 
-  // A forward step without seekOffset is 15 seconds through the compatibility
-  // restart; the card shows the target right away instead of jumping back.
-  const before = (await mediaSessionState(page)).position.position;
-  expect(await invokeMediaSessionAction(page, "seekforward")).toBe(true);
-  await expect
-    .poll(async () => (await mediaSessionState(page)).position?.position ?? 0)
-    .toBeGreaterThanOrEqual(Math.min(before + 15, 23) - 0.5);
-  await expect.poll(async () => (await videoState(page)).progress, { timeout: 45000 }).toBeGreaterThanOrEqual(Math.min(before + 15, 23) - 1);
+  // No interval seek handlers (iOS would replace previous/next track with
+  // skip buttons); previous/next track are registered instead.
+  expect(await invokeMediaSessionAction(page, "seekforward")).toBe(false);
+  expect(await invokeMediaSessionAction(page, "seekbackward")).toBe(false);
+  session = await mediaSessionState(page);
+  expect(session.intervalSeekEverRegistered).toBe(false);
+  expect(session.handlers).toContain("nexttrack");
+  expect(session.handlers).toContain("previoustrack");
+
+  // A forward scrub goes through the compatibility restart; the card shows
+  // the target right away instead of jumping back.
+  expect(await invokeMediaSessionAction(page, "seekto", { seekTime: 16 })).toBe(true);
+  await expect.poll(async () => (await mediaSessionState(page)).position?.position ?? 0).toBeGreaterThanOrEqual(15.5);
+  await expect.poll(async () => (await videoState(page)).progress, { timeout: 45000 }).toBeGreaterThanOrEqual(15);
 
   // Scrub from the OS card: seekto restarts at the requested time.
   expect(await invokeMediaSessionAction(page, "seekto", { seekTime: 4 })).toBe(true);

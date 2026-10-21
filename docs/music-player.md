@@ -108,8 +108,12 @@ seek and scrub back to the page.
   (`state.currentArtObjectUrl`); no new request is made for it, and revoking
   that URL on a song change republishes without it.
 - Previous and next call the pane buttons' functions (shuffle and loop apply).
-  Seek back/forward use the browser's `seekOffset`, otherwise 15 seconds;
-  scrubbing sets `audio.currentTime` like the progress slider.
+  Scrubbing (`seekto`, registered once the duration is known) sets
+  `audio.currentTime` like the progress slider.
+- `seekbackward` / `seekforward` are deliberately never registered (and are
+  cleared on every claim), for music and video alike: iOS shows skip-interval
+  buttons instead of previous/next track on the lock screen whenever those
+  handlers exist.
 - Updates ride on the existing audio events (no timer); position writes are
   throttled to about once per second except on claim, seek, pause or track
   change.

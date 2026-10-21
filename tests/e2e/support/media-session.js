@@ -17,6 +17,7 @@ async function installMediaSessionRecorder(page) {
       _metadata: null,
       _playbackState: "none",
       handlers: {},
+      handlerLog: [],
       metadataLog: [],
       stateLog: [],
       positions: [],
@@ -35,6 +36,7 @@ async function installMediaSessionRecorder(page) {
         this.stateLog.push(value);
       },
       setActionHandler(action, handler) {
+        this.handlerLog.push([action, handler ? "function" : null]);
         if (handler) this.handlers[action] = handler;
         else delete this.handlers[action];
       },
@@ -64,6 +66,9 @@ async function mediaSessionState(page) {
       artwork: current ? current.artwork : null,
       playbackState: fake.playbackState,
       handlers: Object.keys(fake.handlers).sort(),
+      // iOS swaps previous/next for skip-interval buttons whenever these exist.
+      intervalSeekEverRegistered: fake.handlerLog.some(([action, handler]) =>
+        (action === "seekbackward" || action === "seekforward") && handler !== null),
       position: fake.positions.length ? fake.positions[fake.positions.length - 1] : null,
       positionCount: fake.positions.length,
       titles: fake.metadataLog.map((entry) => (entry ? entry.title : null)),
@@ -81,13 +86,13 @@ async function invokeMediaSessionAction(page, action, details = {}) {
   }, { name: action, extra: details });
 }
 
+// Every action the players register once the duration is known. seekbackward
+// and seekforward are deliberately absent (iOS lock screen track buttons).
 const ALL_MEDIA_SESSION_ACTIONS = [
   "nexttrack",
   "pause",
   "play",
   "previoustrack",
-  "seekbackward",
-  "seekforward",
   "seekto",
 ];
 

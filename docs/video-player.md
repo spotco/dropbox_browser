@@ -402,7 +402,7 @@ required:
 | `ctx.playNextFromPlaylist` / `playPreviousFromPlaylist` | `media-library-bridge.js` | Transport next/prev with shuffle+loop |
 | `ctx.subtitlesApi.applyForSeek(...)` | `subtitles.js` | Post-seek subtitle remount |
 | `ctx.paneApi.syncPaneMode(mode)` | `pane.js` | Bottom pane mode changes |
-| `bindMediaSession('video', actions)` | `media-library/media-session.js`, bound from `controls.js` | System media controls (play/pause, prev/next, 15 s steps, scrub) |
+| `bindMediaSession('video', actions)` | `media-library/media-session.js`, bound from `controls.js` | System media controls (play/pause, prev/next, scrub; no interval seek handlers) |
 | `ctx.releaseVideoMediaSession()` | `controls.js` | Pane deactivate, cleared playlist item, pagehide (no-op when music owns the session) |
 | `DropboxBrowserLogPanel` | `log.js` | Shared bottom-panel height and full-page shell state |
 
@@ -413,11 +413,16 @@ Video publishes the active item through the shared Media Session owner in
 single-owner rules). Title is `activeItemTitle`; artwork is one frame drawn
 from the playing element to a small canvas (about 512 px) once per item, never
 the thumbnail endpoint (a poster miss there is a remote FFmpeg run). Nothing is
-published during probe, placeholder or HLS preparation. OS seeks never touch
-`videoEl.currentTime`: steps call `seekBySeconds` (15 s default) and scrubs
-call `restartCompatibilityAt(..., 'media-session-seek')` with the same clamps,
-and the card shows the requested time during the restart. Leaving the video
-pane still stops the HLS session and only clears a video-owned card.
+published during probe, placeholder or HLS preparation. Previous and next
+track call the same playlist/queue functions as the pane's previous/next
+buttons. OS scrubs (`seekto`) never touch `videoEl.currentTime`: they call
+`restartCompatibilityAt(..., 'media-session-seek')` with the same clamps as
+the in-page 15 s steps (queued as the latest target while a restart is in
+flight), and the card shows the requested time during the restart.
+`seekbackward` / `seekforward` are never registered, because iOS replaces the
+previous/next track buttons with skip-interval buttons whenever they have
+handlers; the in-page 15 s buttons are unchanged. Leaving the video pane
+still stops the HLS session and only clears a video-owned card.
 
 ### Playback Modes
 

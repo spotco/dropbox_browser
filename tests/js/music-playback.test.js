@@ -31,7 +31,7 @@ async function importPlaybackModuleFromWorkspace() {
   // Recording stand-in for the shared media-session owner.
   const mediaSessionSource = [
     "const log = globalThis.__musicMediaSessionLog || (globalThis.__musicMediaSessionLog = {calls: [], actions: null});",
-    "export const MEDIA_SESSION_SEEK_STEP_SECONDS = 15;",
+
     "export function bindMediaSession(kind, actions) { log.actions = actions; log.calls.push(['bind', kind]); }",
     "export function claimMediaSession(kind) { log.calls.push(['claim', kind]); return true; }",
     "export function updateMediaSession(kind, snapshot, options) { log.calls.push(['update', kind, Object.assign({}, snapshot), Object.assign({}, options || {})]); }",
@@ -397,7 +397,7 @@ test("initPlayback publishes media-session claim, pause, seek and release from p
     assert.deepEqual(log.calls[0], ["bind", "music"]);
     assert.deepEqual(
       Object.keys(log.actions).sort(),
-      ["next", "pause", "play", "previous", "seekBy", "seekTo"],
+      ["next", "pause", "play", "previous", "seekTo"],
     );
     assert.equal(typeof windowListeners.get("pagehide"), "function");
     assert.equal(typeof windowListeners.get("beforeunload"), "function");
@@ -408,7 +408,7 @@ test("initPlayback publishes media-session claim, pause, seek and release from p
     assert.equal(lastUpdate().title, "alpha.mp3");
     assert.equal(lastUpdate().artist, "");
     assert.equal(lastUpdate().canSeek, false);
-    assert.equal(lastUpdate().seekStepSeconds, 15);
+    assert.equal("seekStepSeconds" in lastUpdate(), false);
     assert.equal(lastUpdate().playbackRate, 1);
     assert.equal(lastUpdate().flush, true);
 
@@ -434,19 +434,18 @@ test("initPlayback publishes media-session claim, pause, seek and release from p
     assert.equal(lastUpdate().position, 50);
     assert.equal(lastUpdate().flush, true);
 
-    // OS seek actions seek the audio element (clamped) and claim.
+    // OS scrubs seek the audio element (clamped) and claim. There is no
+    // interval-seek action (iOS would hide previous/next track).
     const claimsBefore = claims();
-    log.actions.seekBy(15);
-    assert.equal(audio.currentTime, 65);
-    log.actions.seekBy(-1000);
-    assert.equal(audio.currentTime, 0);
     log.actions.seekTo(500);
     assert.equal(audio.currentTime, 200);
+    log.actions.seekTo(-1000);
+    assert.equal(audio.currentTime, 0);
     log.actions.seekTo(42);
     assert.equal(audio.currentTime, 42);
     log.actions.seekTo(Number.NaN);
     assert.equal(audio.currentTime, 42);
-    assert.equal(claims(), claimsBefore + 4);
+    assert.equal(claims(), claimsBefore + 3);
 
     // Embedded metadata and cover art replace the display name.
     ctx.state.mediaSessionTitle = "Real Title";

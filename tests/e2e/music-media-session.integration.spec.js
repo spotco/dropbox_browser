@@ -118,10 +118,11 @@ test("music publishes the playing song to the Media Session and follows its acti
   await expect.poll(async () => (await audioState(page)).currentTime).toBeCloseTo(1.25, 1);
   await expect.poll(async () => (await mediaSessionState(page)).position?.position ?? -1).toBeCloseTo(1.25, 1);
   expect((await mediaSessionState(page)).playbackState).toBe("paused");
-  // No seekOffset: the 15 second default, clamped at the start.
-  expect(await invokeMediaSessionAction(page, "seekbackward")).toBe(true);
-  await expect.poll(async () => (await audioState(page)).currentTime).toBeCloseTo(0, 1);
-  expect(await invokeMediaSessionAction(page, "seekforward", { seekOffset: 0.5 })).toBe(true);
+  // No interval seek handlers, so iOS keeps previous/next track buttons.
+  expect(await invokeMediaSessionAction(page, "seekbackward")).toBe(false);
+  expect(await invokeMediaSessionAction(page, "seekforward", { seekOffset: 0.5 })).toBe(false);
+  expect((await mediaSessionState(page)).intervalSeekEverRegistered).toBe(false);
+  expect(await invokeMediaSessionAction(page, "seekto", { seekTime: 0.5 })).toBe(true);
   await expect.poll(async () => (await audioState(page)).currentTime).toBeCloseTo(0.5, 1);
 
   expect(await invokeMediaSessionAction(page, "play")).toBe(true);

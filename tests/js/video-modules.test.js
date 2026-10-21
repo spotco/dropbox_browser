@@ -370,8 +370,25 @@ test("video media-session seeks go through the compatibility restart, not videoE
     assert.equal(session.playbackState, "playing");
     assert.deepEqual(session.positionCalls.at(-1), {duration: 600, playbackRate: 1, position: 100});
 
-    session.handlers.get("seekforward")({action: "seekforward"});
-    session.handlers.get("seekbackward")({action: "seekbackward", seekOffset: 5});
+    // Only seekto is registered for seeking: iOS would swap previous/next for
+    // skip-interval buttons if seekbackward/seekforward had handlers.
+    assert.equal(typeof session.handlers.get("seekto"), "function");
+    assert.equal(session.handlers.has("seekbackward"), false);
+    assert.equal(session.handlers.has("seekforward"), false);
+    for (const action of ["play", "pause", "previoustrack", "nexttrack"]) {
+      assert.equal(typeof session.handlers.get(action), "function", action);
+    }
+    const trackCalls = [];
+    ctx.state.playlist = [{path: "videos/Episode A.mkv"}];
+    ctx.playNextFromPlaylist = () => trackCalls.push("next");
+    ctx.playPreviousFromPlaylist = () => trackCalls.push("previous");
+    session.handlers.get("nexttrack")();
+    session.handlers.get("previoustrack")();
+    assert.deepEqual(trackCalls, ["next", "previous"]);
+
+    // In-page 15 s steps still restart; OS scrubs use the same restart path.
+    ctx.seekVideoBySeconds(15);
+    ctx.seekVideoBySeconds(-5);
     session.handlers.get("seekto")({action: "seekto", seekTime: 300});
     session.handlers.get("seekto")({action: "seekto", seekTime: 5000});
     session.handlers.get("seekto")({action: "seekto"});
@@ -461,7 +478,6 @@ test("video pane deactivation releases only a video-owned media session", async 
       pause: () => musicCalls.push("pause"),
       next() {},
       previous() {},
-      seekBy() {},
       seekTo() {},
     });
 
@@ -518,7 +534,7 @@ test("video pane deactivation releases only a video-owned media session", async 
     if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
   }
 });
-test("OS seeks during a pending compatibility restart keep one restart in flight plus the latest target", async () => {
+test("in-page steps and OS scrubs during a pending compatibility restart keep one restart in flight plus the latest target", async () => {
   const originalWindow = global.window;
   const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
   try {
@@ -537,11 +553,11 @@ test("OS seeks during a pending compatibility restart keep one restart in flight
     };
     videoEl.dispatch("playing");
 
-    session.handlers.get("seekforward")({action: "seekforward"});
-    session.handlers.get("seekforward")({action: "seekforward"});
-    session.handlers.get("seekforward")({action: "seekforward", seekOffset: 30});
+    ctx.seekVideoBySeconds(15);
+    ctx.seekVideoBySeconds(15);
+    ctx.seekVideoBySeconds(30);
     session.handlers.get("seekto")({action: "seekto", seekTime: 400});
-    session.handlers.get("seekbackward")({action: "seekbackward"});
+    ctx.seekVideoBySeconds(-15);
     session.handlers.get("seekto")({action: "seekto", seekTime: 250});
 
     // One in-flight restart; every later seek only replaced the deferred target.
