@@ -331,6 +331,14 @@ class FolderCacheManager:
         with self._lock:
             self._advance_revision_locked()
             self._generation[remote_path] = self._generation.get(remote_path, 0) + 1
+            # Retire any staged background flush for this path under the
+            # same lock the flush uses for its final epoch check +
+            # replace: bumping the write epoch makes the staged snapshot
+            # stale so it is discarded instead of recreating the file
+            # unlinked below, and dropping the pending dirty write keeps
+            # a not-yet-started flush from writing the record either.
+            self._cache_write_epoch[remote_path] = self._cache_write_epoch.get(remote_path, 0) + 1
+            self._dirty_cache_writes.pop(remote_path, None)
             self._acc.pop(remote_path, None)
             self._direct_done.pop(remote_path, None)
             self._pending_children.pop(remote_path, None)
@@ -448,6 +456,11 @@ class FolderCacheManager:
         """Flush one cache record to disk immediately."""
         with self._lock:
             self._advance_revision_locked()
+            # This synchronous write supersedes any staged background
+            # flush for the path: advance the write epoch so the older
+            # staged snapshot is discarded at its final check instead of
+            # replacing the record written here.
+            self._cache_write_epoch[remote_path] = self._cache_write_epoch.get(remote_path, 0) + 1
             data = self._cache_record_data_locked(remote_path, complete)
             # Write while still holding the lock: this synchronous seam
             # must be atomic against invalidate/cleanup unlinks (which
@@ -522,10 +535,16 @@ class FolderCacheManager:
                     with self._lock:
                         current_epoch = self._cache_write_epoch.get(remote_path, 0)
                         if current_epoch != epoch:
-                            self._mark_cache_dirty_locked(
-                                remote_path,
-                                self._is_disk_complete_locked(remote_path),
-                            )
+                            # Superseded by a newer valid state: requeue a
+                            # flush of the current state. Invalidated with
+                            # no live record: drop the stale snapshot -
+                            # requeueing here would resurrect the path as
+                            # an empty record built from missing state.
+                            if remote_path in self._acc:
+                                self._mark_cache_dirty_locked(
+                                    remote_path,
+                                    self._is_disk_complete_locked(remote_path),
+                                )
                             self._trace_locked(
                                 "cache_write_skipped_stale",
                                 remote_path,
