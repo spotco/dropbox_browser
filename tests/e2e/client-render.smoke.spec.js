@@ -40,6 +40,16 @@ async function dragBrowseColumnResizer(page, columnKey, deltaX) {
   await page.mouse.up();
 }
 
+// Restored per PR review (e2e-dedup-faster follow-up): the fitted-width
+// wait is used by the drag-cascade test below.
+async function waitForBrowseColumnsFitted(page, minShellWidth = 0) {
+  await expect.poll(async () => {
+    const metrics = await browseColumnMetrics(page);
+    const total = Object.values(metrics.currentWidths).reduce((sum, width) => sum + Number(width || 0), 0);
+    return metrics.shellClientWidth >= minShellWidth && Math.abs(total - metrics.shellClientWidth) <= 2;
+  }, { message: "browse columns refitted to the table width" }).toBe(true);
+}
+
 async function expectPlaylistDialogCoversBottomPanelContent(page, dialog) {
   const metrics = await page.locator(dialog).evaluate((dialogElement) => {
     const panel = document.getElementById("log-panel");
@@ -656,6 +666,67 @@ test("client-render shrinks saved browse columns to the viewport without overwri
   expect(resetMetrics.preferredWidths).toEqual({});
   expect(resetMetrics.storage).toEqual({ preferred: {} });
   expect(resetMetrics.currentWidths.name).toBeLessThan(widenedMetrics.currentWidths.name);
+});
+
+// Restored per PR review: successive 16px floors, repeated dragging past
+// full exhaustion as a no-op, and unchanged current/preferred widths
+// through real browser handles after a viewport refit are DOM/persistence
+// interactions the JS algorithm unit tests do not cover.
+test("client-render column dragging cascades through successive columns until they reach the handle minimum", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 820 });
+  await page.goto("/");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+
+  const seededColumns = {
+    name: 260,
+    type: 120,
+    status: 140,
+    size: 120,
+    date: 220,
+    view: 80,
+    sync: 160,
+  };
+  await page.evaluate((preferred) => {
+    window.localStorage.setItem(
+      "dropbox-browser.browse-column-widths-v1",
+      JSON.stringify({ preferred }),
+    );
+  }, seededColumns);
+  await page.reload();
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+
+  const beforeDrag = await browseColumnMetrics(page);
+  await dragBrowseColumnResizer(page, "name", 220);
+  const afterCascade = await browseColumnMetrics(page);
+
+  expect(afterCascade.currentWidths.name).toBeGreaterThan(beforeDrag.currentWidths.name);
+  expect(afterCascade.currentWidths.type).toBeLessThan(beforeDrag.currentWidths.type);
+  expect(afterCascade.currentWidths.status).toBeLessThan(beforeDrag.currentWidths.status);
+  expect(afterCascade.currentWidths.type).toBe(16);
+  expect(afterCascade.currentWidths.status).toBeLessThan(beforeDrag.currentWidths.status);
+  expect(afterCascade.currentWidths.size).toBe(beforeDrag.currentWidths.size);
+
+  // Leave enough pointer travel to reach the full width on a wide desktop.
+  // The window 'resize' event (which refits the columns to the wider table)
+  // fires asynchronously after setViewportSize; wait for that refit before
+  // dragging, otherwise a late refit spreads the extra width back over the
+  // squeezed columns (16px -> ~40px) after the drag.
+  await page.setViewportSize({ width: 4000, height: 820 });
+  await waitForBrowseColumnsFitted(page, 3000);
+  await dragBrowseColumnResizer(page, "name", 5000);
+  const fullyExhausted = await browseColumnMetrics(page);
+
+  expect(fullyExhausted.currentWidths.type).toBe(16);
+  expect(fullyExhausted.currentWidths.status).toBe(16);
+  expect(fullyExhausted.currentWidths.size).toBe(16);
+  expect(fullyExhausted.currentWidths.date).toBe(16);
+  expect(fullyExhausted.currentWidths.view).toBe(16);
+  expect(fullyExhausted.currentWidths.sync).toBe(16);
+
+  await dragBrowseColumnResizer(page, "name", 400);
+  const beyondExhausted = await browseColumnMetrics(page);
+  expect(beyondExhausted.currentWidths).toEqual(fullyExhausted.currentWidths);
+  expect(beyondExhausted.preferredWidths).toEqual(fullyExhausted.preferredWidths);
 });
 
 test("client-render can transfer most of the table width between Date and Name while minimum-width draggers stay usable", async ({ page }) => {

@@ -562,16 +562,22 @@ test("video full-window expands a partial bottom pane and restores it on exit", 
     .toBe(null);
 });
 
-// Dedup (e2e-dedup-faster): the context-menu flip, playlist-column
-// floor and narrow-divider checks run the shared media-pane-ui helpers
-// against the shared media-library component; they are covered once by
-// the music player suite (music-player.integration.spec.js), which uses
-// the same helpers and component. The wide-divider check below is kept
-// for video: it proves the video pane ids and the separate
-// video-media-library-pane-widths settings key are wired correctly.
+// Dedup (e2e-dedup-faster): the exhaustive shared-component geometry
+// (full context-menu/submenu flips, all narrow-divider drags) runs once
+// against the music player suite via the shared media-pane-ui helpers.
+// Per PR review, the video file keeps compact video-specific checks:
+// the playlist-column floors below assert the video DOM, the
+// video-playlist-column-widths key, and isolation from the music key;
+// the context-menu and narrow-divider tests are smoke versions (video
+// menu element + corner flip clamp; two collapse drags, no restore
+// drags) that prove the video ids/wiring without repeating the full
+// geometry matrix.
 const {
   checkWidePaneDividerExtremes,
+  checkPlaylistColumnFloors,
+  paneLayout,
 } = require("./support/media-pane-ui");
+const { queueLibraryFile } = require("./support/video_library");
 
 test("video pane dividers collapse each pane to ~1px, stay grabbable and persist", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
@@ -581,4 +587,86 @@ test("video pane dividers collapse each pane to ~1px, stay grabbable and persist
     reopen: openVideoPane,
     widthsSettingKey: "video-media-library-pane-widths",
   });
+});
+
+test("video playlist columns drag down to the 16px floor with grabbable handles and persist", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await openVideoPane(page);
+  await checkPlaylistColumnFloors(page, {
+    prefix: "video",
+    reopen: openVideoPane,
+    settingKey: "video-playlist-column-widths",
+  });
+  // The music player's playlist widths are a separate key and are not written.
+  expect(await page.evaluate(() => Settings.get("music-playlist-column-widths", null))).toBeNull();
+});
+
+test("video playlist context menu flips inside the viewport at the bottom-right corner (smoke)", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await openVideoPane(page);
+  await queueLibraryFile(page, "multiline.mkv");
+  await expect(page.locator("#video-playlist-list .music-playlist-entry").first()).toBeVisible();
+  await setBottomPaneHeight(page, 230);
+
+  const entry = page.locator("#video-playlist-list .music-playlist-entry").first();
+  await entry.evaluate((row) => {
+    row.dispatchEvent(new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+      clientX: document.documentElement.clientWidth - 2,
+      clientY: document.documentElement.clientHeight - 2,
+    }));
+  });
+
+  const menu = page.locator("#video-playlist-context-menu");
+  await expect(menu).toBeVisible();
+  const geometry = await menu.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      viewportWidth: document.documentElement.clientWidth,
+      viewportHeight: document.documentElement.clientHeight,
+    };
+  });
+  expect(geometry.left).toBeGreaterThanOrEqual(0);
+  expect(geometry.top).toBeGreaterThanOrEqual(0);
+  expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+  expect(geometry.bottom).toBeLessThanOrEqual(geometry.viewportHeight + 1);
+
+  await page.keyboard.press("Escape");
+  if (await menu.isVisible()) {
+    await page.mouse.click(5, 5);
+  }
+  await expect(menu).toBeHidden();
+});
+
+test("narrow video pane dividers collapse playback and library to ~1px and stay grabbable (smoke)", async ({ page }) => {
+  await page.setViewportSize({ width: 560, height: 760 });
+  await openVideoPane(page);
+
+  async function dragResizerBy(selector, dx, dy) {
+    const handle = await page.locator(selector).boundingBox();
+    expect(handle, `${selector} has a box`).not.toBeNull();
+    const x = handle.x + handle.width / 2;
+    const y = handle.y + handle.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + dx / 2, y + dy / 2, { steps: 4 });
+    await page.mouse.move(x + dx, y + dy, { steps: 4 });
+    await page.mouse.up();
+  }
+
+  await dragResizerBy("#video-resizer-playlist-playback", 0, 4000);
+  let layout = await paneLayout(page, "video");
+  expect(layout.playback.height, "playback row collapses to ~1px").toBeLessThanOrEqual(2.5);
+  expect(layout.playlistPlaybackResizerHit, "playback divider stays reachable").toBe(true);
+
+  await dragResizerBy("#video-resizer-library-playlist", -4000, 0);
+  layout = await paneLayout(page, "video");
+  expect(layout.library.width, "library column collapses to ~1px").toBeLessThanOrEqual(2.5);
+  expect(layout.libraryPlaylistResizerHit).toBe(true);
 });

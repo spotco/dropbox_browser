@@ -51,24 +51,10 @@ test("client-render virtualizes large browse listings and updates the visible wi
   // a bare getByText strict-mode flaky on spzeni1.
   await expect(page.locator(".entry-name", { hasText: "2024-03-01 0001.jpg" })).toBeVisible();
 
-  // Folded from the deleted client-render.row-height.spec.js
-  // (e2e-dedup-faster): virtualized rows stay single-line at a uniform
-  // height. That file booted its own server only for these CSS reads;
-  // the equality/nowrap invariant is fixture-independent (its absolute
-  // 49px came from its long-filename fixture).
-  const firstRows = page.locator("tr[data-browse-row-id]");
-  const firstBox = await firstRows.nth(0).boundingBox();
-  const secondBox = await firstRows.nth(1).boundingBox();
-  const thirdBox = await firstRows.nth(2).boundingBox();
-  expect(firstBox).not.toBeNull();
-  expect(secondBox).not.toBeNull();
-  expect(thirdBox).not.toBeNull();
-  expect(firstBox.height).toBe(secondBox.height);
-  expect(secondBox.height).toBe(thirdBox.height);
-  for (const selector of [".status", ".col-size", ".col-date"]) {
-    await expect(firstRows.nth(0).locator(selector)).toHaveCSS("white-space", "nowrap");
-  }
-
+  // Row-height/nowrap/title invariants live in
+  // client-render.row-height.spec.js (restored per PR review: the
+  // equality/nowrap checks here were not a substitute for the
+  // long-filename fixture's absolute 49px and title fidelity checks).
   await scrollBrowseToBottom(page);
 
   await expect.poll(async () => await page.locator("body").getAttribute("data-browse-visible-range")).not.toBe(initialRange);
