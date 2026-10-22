@@ -544,6 +544,14 @@ async function readActiveVideoSessions(page) {
   return payload && Array.isArray(payload.active_sessions) ? payload.active_sessions : [];
 }
 
+// A session only appears in /status after the server finishes its
+// create work (probe + ffmpeg spawn through the tagged /file stream).
+// Under full distributed-lane load that once exceeded the old 15s
+// budget (the queue-wrap test saw only the previous session for the
+// whole poll), so the session-state polls below allow 30s. They still
+// return on first match, so healthy runs are unaffected.
+const SESSION_STATE_POLL_TIMEOUT_MS = 30000;
+
 async function waitForActiveVideoSession(page, expectedPath) {
   let matchingSession = null;
   await expect
@@ -551,7 +559,7 @@ async function waitForActiveVideoSession(page, expectedPath) {
       const sessions = await readActiveVideoSessions(page);
       matchingSession = sessions.find((session) => session && session.path === expectedPath) || null;
       return matchingSession ? matchingSession.session_id : "";
-    }, { timeout: 15000 })
+    }, { timeout: SESSION_STATE_POLL_TIMEOUT_MS })
     .not.toBe("");
   return matchingSession;
 }
@@ -572,7 +580,7 @@ async function expectOnlyActiveVideoSession(page, expectedPath, absentSessionId,
         };
       }
       return sessions.map((session) => session && session.path).filter(Boolean);
-    }, { timeout: 15000 })
+    }, { timeout: SESSION_STATE_POLL_TIMEOUT_MS })
     .toEqual(expectedSessionId
       ? { expectedSession: true, unexpectedLivePaths: [] }
       : [expectedPath]);
@@ -581,7 +589,7 @@ async function expectOnlyActiveVideoSession(page, expectedPath, absentSessionId,
       .poll(async () => {
         const sessions = await readActiveVideoSessions(page);
         return sessions.map((session) => session && session.session_id).filter(Boolean);
-      }, { timeout: 15000 })
+      }, { timeout: SESSION_STATE_POLL_TIMEOUT_MS })
       .not.toContain(absentSessionId);
   }
 }
@@ -594,7 +602,7 @@ async function expectOnlyActiveVideoClientSession(page, expectedPath, clientId) 
         .filter((session) => session && session.client_id === clientId)
         .map((session) => session.path)
         .filter(Boolean);
-    }, { timeout: 15000 })
+    }, { timeout: SESSION_STATE_POLL_TIMEOUT_MS })
     .toEqual([expectedPath]);
 }
 
