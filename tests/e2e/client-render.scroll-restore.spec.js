@@ -170,7 +170,12 @@ test("client-render restores scroll on Back, Forward and re-entering a visited f
     return best ? best.path : null;
   }, [targetPath, BIG_CHILD_PATH]);
   expect(freshPath).toMatch(/^Scroll Root\/Folder \d\d$/);
-  await page.locator(`tr[data-row-path="${freshPath}"] a.name`).click();
+  // Right after the scroll jump the virtual list can briefly render the
+  // same row twice (recycled window + settling render); wait for the
+  // click target to be unambiguous before clicking.
+  const freshLink = page.locator(`tr[data-row-path="${freshPath}"] a.name`);
+  await expect.poll(async () => freshLink.count(), { timeout: 5000 }).toBe(1);
+  await freshLink.click();
   await waitForFolderReady(page, freshPath, 1);
   expect(await readBrowseScrollTop(page)).toBe(0);
 });
