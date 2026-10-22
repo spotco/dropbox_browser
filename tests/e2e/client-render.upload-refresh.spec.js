@@ -154,23 +154,14 @@ test("a persistently failing Dropbox listing shows local rows as Unknown with a 
   await expect(page).toHaveURL(new RegExp(`path=${folder}`));
 });
 
-test("the in-place refresh right after an upload keeps Dropbox-only files when the first listing is throttled", async ({ page }) => {
-  test.setTimeout(30000);
-  const uploaded = `${FOLDER}/upload-a.txt`;
-  armLsjsonFaultsAfterNextUpload(1);
-
-  await uploadThroughUi(page, uploaded);
-
-  await expect.poll(consumedFaultCount, { message: "the post-upload lsjson failure should be hit" }).toBe(1);
-  await expect(
-    row(page, DROPBOX_ONLY),
-    `rows after the post-upload refresh: ${await describeRows(page)}`,
-  ).toHaveCount(1);
-  await expect(row(page, uploaded).locator(".status")).toHaveText("Synced");
-  await expect(row(page, LOCAL_ONLY).locator(".status")).toHaveText("Local Only");
-  await expect(listingWarning(page)).toHaveCount(0);
-});
-
+// Folded (e2e-dedup-faster pass 2): the former standalone "in-place
+// refresh right after an upload keeps Dropbox-only files when the first
+// listing is throttled" test is now phase 1 of this test — its
+// assertions run immediately after the same throttled post-upload
+// refresh, before any reload, against the same single-fault arming.
+// Phase 2 keeps the healthy-reload recovery assertions. The
+// persistent-throttling and initial local-only tests stay separate
+// (different fault shapes).
 test("once Dropbox recovers, reloading shows the Dropbox listing again instead of a cached local-only view", async ({ page }) => {
   test.setTimeout(30000);
   const uploaded = `${FOLDER}/upload-b.txt`;
@@ -180,7 +171,17 @@ test("once Dropbox recovers, reloading shows the Dropbox listing again instead o
   await uploadThroughUi(page, uploaded);
   await expect.poll(consumedFaultCount, { message: "the post-upload lsjson failure should be hit" }).toBe(1);
 
-  // Dropbox is healthy from here on; plain reloads must recover.
+  // Phase 1: the in-place refresh itself kept the Dropbox-only row,
+  // marked the upload Synced, and showed no listing warning.
+  await expect(
+    row(page, DROPBOX_ONLY),
+    `rows after the post-upload refresh: ${await describeRows(page)}`,
+  ).toHaveCount(1);
+  await expect(row(page, uploaded).locator(".status")).toHaveText("Synced");
+  await expect(row(page, LOCAL_ONLY).locator(".status")).toHaveText("Local Only");
+  await expect(listingWarning(page)).toHaveCount(0);
+
+  // Phase 2: Dropbox is healthy from here on; plain reloads must recover.
   await page.reload();
   await waitForFolderReady(page);
   await page.reload();

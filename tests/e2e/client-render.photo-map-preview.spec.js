@@ -193,22 +193,20 @@ test("grouped Photo Map restores the selected member after dismissing its full p
   await expect(page.locator("#photo-map-preview-overlay")).toBeHidden();
   await expect(page.locator(".photo-map-group-selection-details")).toBeVisible();
   await expect(historyMember).toHaveAttribute("aria-pressed", "true");
-});
 
-test("grouped Photo Map returns to the grid and accepts another real member click", async ({page}) => {
-  await mockGroupMedia(page);
-  await openSyntheticGroupedPopup(page);
-  const olderMember = page.locator('[data-photo-map-group-member-path="Camera Uploads/group-older.jpg"]');
-  const newerMember = page.locator('[data-photo-map-group-member-path="Camera Uploads/group-newer.jpg"]');
-  await olderMember.click();
-  await expect(page.locator(".photo-map-group-selection-details")).toBeVisible();
+  // Phase 3 (folded from the former "returns to the grid and accepts
+  // another real member click" test, e2e-dedup-faster pass 2): the
+  // distinct details-popup branch — the "Close preview" button inside
+  // the selected-member details (not the full preview overlay's close)
+  // clears the selection, and a different member can then be selected
+  // with a real click.
   await page.getByRole("button", {name: "Close preview"}).click();
   await expect(page.locator(".photo-map-group-selection-details")).toHaveCount(0);
-  await expect(olderMember).toHaveAttribute("aria-pressed", "false");
+  await expect(historyMember).toHaveAttribute("aria-pressed", "false");
 
-  await newerMember.click();
+  await selectedMember.click();
   await expect(page.locator(".photo-map-group-selection-details")).toBeVisible();
-  await expect(newerMember).toHaveAttribute("aria-pressed", "true");
+  await expect(selectedMember).toHaveAttribute("aria-pressed", "true");
 });
 
 test("grouped Photo Map keeps loaded photo and short-video thumbnails plus grid scroll after preview close", async ({page}) => {

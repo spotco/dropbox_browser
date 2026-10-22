@@ -92,26 +92,6 @@ test.afterAll(async () => {
   server = null;
 });
 
-test("client-render mode fetches and renders browse rows from the listing endpoint", async ({ page }) => {
-  const pageErrors = [];
-  page.on("pageerror", (error) => {
-    pageErrors.push(String(error));
-  });
-
-  await page.goto("/");
-
-  await expect(page).toHaveTitle(/SDB: Dropbox/);
-  await expect(page.locator("body")).toHaveAttribute("data-client-render", "1");
-  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
-  await expect(page.locator("body")).toHaveAttribute("data-browse-endpoint", "/browse/endpoints/listing");
-  await expect(page.locator("#browse-rows .empty")).toHaveCount(0);
-  await expect.poll(async () => await page.locator("#browse-rows tr").count()).toBeGreaterThan(0);
-  await expect(page.locator("#browse-rows .entry-name").first()).toBeVisible();
-  await expect(page.locator('#browse-rows a[href^="/file?"]').first()).toBeVisible();
-  await expect(page.locator('#browse-rows a[href^="/download?"]').first()).toBeVisible();
-  expect(pageErrors).toEqual([]);
-});
-
 test("client-render keeps a minimized music-mode bottom panel minimized on load and restores it from the toolbar", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto("/");
@@ -317,9 +297,20 @@ test("client-render filter bar toggles from the top action row and persists", as
   await expect(page.locator("#browse-filter-toggle")).toHaveText("Hide Filters");
   await expect(page.locator("#browse-filter-bar")).toBeVisible();
 
+  // Folded in (e2e-dedup-faster pass 2): the former standalone
+  // "hiding the filter bar clears active filters and restores all
+  // rows" test continues from this same visible state — apply a
+  // filter, then hide the bar and expect the filter cleared.
+  await page.locator("#browse-filter-query").fill("remote");
+  await expect(page.locator("#browse-rows .entry-name")).toHaveCount(1);
+  await expect.poll(async () => (await page.url()).includes("q=remote")).toBe(true);
+
   await page.locator("#browse-filter-toggle").click();
   await expect(page.locator("#browse-filter-toggle")).toHaveText("Show Filters");
   await expect(page.locator("#browse-filter-bar")).toBeHidden();
+  await expect(page.locator("#browse-rows .entry-name")).toHaveCount(3);
+  await expect(page.locator("body")).toHaveAttribute("data-browse-filter-active", "0");
+  await expect(page).not.toHaveURL(/(?:\?|&)q=/);
 
   await page.reload();
   await expect(page.locator("#browse-filter-toggle")).toHaveText("Show Filters");
@@ -359,15 +350,6 @@ test("client-render persists sort per folder without sort or direction URL param
   expect(listingUrls[2]).toContain("sort=date");
 });
 
-test("client-render deep link loads the requested folder", async ({ page }) => {
-  await page.goto("/?path=folder");
-
-  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
-  await expect(page.locator("body")).toHaveAttribute("data-current-folder-path", "folder");
-  await expect(page).toHaveURL(/\?path=folder/);
-  await expect(page.getByText("nested.txt")).toBeVisible();
-});
-
 test("client-render refresh reloads listing in place without a full page reload", async ({ page }) => {
   const listingUrls = [];
   let refreshPostCount = 0;
@@ -404,9 +386,26 @@ test("client-render folder navigation uses history without a full page reload", 
   page.on("request", (request) => {
     if (request.url().includes("/browse/endpoints/listing")) listingRequestCount += 1;
   });
+  const pageErrors = [];
+  page.on("pageerror", (error) => {
+    pageErrors.push(String(error));
+  });
 
   await page.goto("/");
+
+  // Phase 1 (folded from "mode fetches and renders browse rows from
+  // the listing endpoint", e2e-dedup-faster pass 2): the initial load
+  // is fully checked before any navigation happens.
+  await expect(page).toHaveTitle(/SDB: Dropbox/);
+  await expect(page.locator("body")).toHaveAttribute("data-client-render", "1");
   await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-endpoint", "/browse/endpoints/listing");
+  await expect(page.locator("#browse-rows .empty")).toHaveCount(0);
+  await expect.poll(async () => await page.locator("#browse-rows tr").count()).toBeGreaterThan(0);
+  await expect(page.locator("#browse-rows .entry-name").first()).toBeVisible();
+  await expect(page.locator('#browse-rows a[href^="/file?"]').first()).toBeVisible();
+  await expect(page.locator('#browse-rows a[href^="/download?"]').first()).toBeVisible();
+  expect(pageErrors).toEqual([]);
   await expect.poll(() => listingRequestCount).toBe(1);
 
   await page.getByRole("link", { name: "folder" }).click();
@@ -426,12 +425,23 @@ test("client-render folder navigation uses history without a full page reload", 
   await expect(page.locator("body")).toHaveAttribute("data-current-folder-path", "folder");
   await expect(page.getByText("nested.txt")).toBeVisible();
   await expect.poll(() => listingRequestCount).toBe(4);
-});
 
-test("client-render ignores legacy sort and direction URL parameters", async ({ page }) => {
+  // Phase 2 (folded from "deep link loads the requested folder"): a
+  // genuinely fresh cold goto of the folder deep link — not warm
+  // in-app navigation — with the same URL/path/content assertions.
+  await page.goto("/?path=folder");
+  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
+  await expect(page.locator("body")).toHaveAttribute("data-current-folder-path", "folder");
+  await expect(page).toHaveURL(/\?path=folder/);
+  await expect(page.getByText("nested.txt")).toBeVisible();
+  await expect.poll(() => listingRequestCount).toBe(5);
+
+  // Phase 3 (folded from "ignores legacy sort and direction URL
+  // parameters"): a cold goto carrying the legacy parameters; they
+  // must be stripped and the default name/asc sort applied. No sort
+  // was changed earlier in this test, so no persisted per-folder sort
+  // interferes.
   await page.goto("/?sort=date&dir=desc");
-  // After long suites the first paint can land before the browse client marks
-  // ready; give it the same headroom as other client-render navigations.
   await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready", {timeout: 15000});
   await expect(page.locator("body")).toHaveAttribute("data-current-sort-key", "name");
   await expect(page.locator("body")).toHaveAttribute("data-current-sort-direction", "asc");
@@ -498,22 +508,6 @@ test("client-render active filter deep links auto-show the filter bar and stay a
   await expect(page.locator("#browse-filter-bar")).toBeHidden();
   await expect(page.locator("#browse-rows .entry-name")).toHaveCount(1);
   await expect(page.locator("#browse-rows .entry-name").first()).toHaveText("nested.txt");
-});
-
-test("client-render hiding the filter bar clears active filters and restores all rows", async ({ page }) => {
-  await page.goto("/");
-  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
-
-  await page.locator("#browse-filter-toggle").click();
-  await page.locator("#browse-filter-query").fill("remote");
-  await expect(page.locator("#browse-rows .entry-name")).toHaveCount(1);
-  await expect.poll(async () => (await page.url()).includes("q=remote")).toBe(true);
-
-  await page.locator("#browse-filter-toggle").click();
-  await expect(page.locator("#browse-filter-bar")).toBeHidden();
-  await expect(page.locator("#browse-rows .entry-name")).toHaveCount(3);
-  await expect(page.locator("body")).toHaveAttribute("data-browse-filter-active", "0");
-  await expect(page).not.toHaveURL(/(?:\?|&)q=/);
 });
 
 test("client-render restores each folder's persisted filter state on navigation and popstate", async ({ page }) => {
