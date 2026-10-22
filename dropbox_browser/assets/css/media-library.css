@@ -1113,6 +1113,58 @@ body.music-playlist-column-resizing {
   display: flex;
 }
 
+/* Touch opens toggle submenus in place. Hover would stick after a tap and
+   the flyout is awkward to reach on a narrow screen. */
+#music-player-pane .music-context-menu.music-context-menu-touch button,
+#video-player-pane .music-context-menu.music-context-menu-touch button {
+  min-height: 44px;
+  padding-bottom: 10px;
+  padding-top: 10px;
+}
+
+.music-context-menu.music-context-menu-touch {
+  max-height: calc(100vh - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.music-context-menu.music-context-menu-touch .music-context-menu-group:hover > .music-context-submenu {
+  display: none;
+}
+
+.music-context-menu.music-context-menu-touch .music-context-submenu {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  left: auto;
+  margin-top: 2px;
+  min-width: 0;
+  padding: 0 0 0 8px;
+  position: static;
+  right: auto;
+  top: auto;
+}
+
+.music-context-menu.music-context-menu-touch .music-context-menu-group.music-context-submenu-open > .music-context-submenu,
+.music-context-menu.music-context-menu-touch .music-context-menu-group:focus-within > .music-context-submenu {
+  display: flex;
+}
+
+.music-context-menu.music-context-menu-touch .music-context-menu-group.music-context-submenu-open > .music-context-menu-parent .music-context-menu-arrow {
+  transform: rotate(90deg);
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .music-tree-row,
+  .music-playlist-entry {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+    touch-action: manipulation;
+  }
+}
+
 @media (max-width: 860px) {
   .music-player-shell {
     grid-template-columns: minmax(180px, 1fr) 8px minmax(180px, 1fr);

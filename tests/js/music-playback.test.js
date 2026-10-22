@@ -21,7 +21,6 @@ async function importPlaybackModuleFromWorkspace() {
     "    resetNowPlayingForSong() {},",
     "    maybeStartCurrentSongMetadataLoad() {},",
     "    scheduleNowPlayingMarqueeRefresh() {},",
-    "    resumeDeferredArtworkLoad() {},",
     "    showUnknownMetadata() {}",
     "  };",
     "}",

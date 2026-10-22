@@ -1,5 +1,5 @@
 import {clearObject, formatShortDateTime, itemCount, plural} from './shared.js';
-import {showContextMenuAt} from './context-menu-position.js';
+import {bindTouchLongPress, showContextMenuAt, touchDoubleTapSuppressesNativeDblclick} from './context-menu-position.js';
 import {mediaKindPresentation} from './media-kind.js';
 import {
   compareLibraryNames,
@@ -11,6 +11,18 @@ import {
 
 function libraryConfig(ctx) {
   return (ctx && ctx.mediaLibraryConfig) || {};
+}
+
+var LIBRARY_TOUCH_CONTROL_SELECTOR = 'button, a, input, textarea, select, label';
+
+// Song rows only. Folder rows and the expand button are not an add-and-play target.
+export function libraryTouchDoubleTapNodeId(target) {
+  var row;
+  if (!target || typeof target.closest !== 'function') return '';
+  if (target.closest(LIBRARY_TOUCH_CONTROL_SELECTOR)) return '';
+  row = target.closest('.music-tree-row');
+  if (!row || !row.dataset || row.dataset.nodeKind !== 'song' || !row.dataset.nodeId) return '';
+  return row.dataset.nodeId;
 }
 
 function readCurrentFolderPath(ctx, state) {
@@ -194,6 +206,9 @@ export function initLibrary(ctx) {
     });
     if (kind === 'song') {
       row.addEventListener('dblclick', function () {
+        // Touch add-and-play is handled on the second short tap. A native
+        // dblclick from that same touch must not add the song again.
+        if (touchDoubleTapSuppressesNativeDblclick()) return;
         ctx.playlistApi.addSongToPlaylistAndPlay(node);
       });
     }
@@ -682,5 +697,27 @@ export function initLibrary(ctx) {
       toggleLibrarySort(button.getAttribute('data-library-sort-key'));
     });
   });
-  if (els.treeEl) els.treeEl.addEventListener('keydown', handleLibrarySelectAllShortcut);
+  if (els.treeEl) {
+    els.treeEl.addEventListener('keydown', handleLibrarySelectAllShortcut);
+    bindTouchLongPress(els.treeEl, function (info) {
+      var row = info.target && typeof info.target.closest === 'function'
+        ? info.target.closest('.music-tree-row')
+        : null;
+      if (!row || !row.dataset || !row.dataset.nodeId) return;
+      openLibraryContextMenu({
+        preventDefault: function () {},
+        stopPropagation: function () {},
+        clientX: info.clientX,
+        clientY: info.clientY
+      }, row.dataset.nodeId, row.dataset.nodeKind);
+    }, {
+      doubleTapKey: libraryTouchDoubleTapNodeId,
+      onDoubleTap: function (ev) {
+        var nodeId = libraryTouchDoubleTapNodeId(ev.target);
+        var node = nodeId ? libraryNodesById()[nodeId] : null;
+        if (!node) return;
+        ctx.playlistApi.addSongToPlaylistAndPlay(node);
+      }
+    });
+  }
 }

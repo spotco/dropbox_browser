@@ -15,6 +15,7 @@ import {initSubtitles} from './video/subtitles.js';
 import {initControls} from './video/controls.js';
 import {initPlayback} from './video/playback.js';
 import {initPane} from './video/pane.js';
+import {contextMenuEventShouldDismiss} from './media-library/context-menu-position.js';
 
 (function () {
   var pane = document.getElementById('video-player-pane');
@@ -490,7 +491,8 @@ import {initPane} from './video/pane.js';
   ctx.renderLibrary();
   ctx.renderQueue();
 
-  document.addEventListener('click', function () {
+  document.addEventListener('click', function (ev) {
+    if (!contextMenuEventShouldDismiss(ev)) return;
     if (ctx.libraryApi && ctx.libraryApi.hideLibraryContextMenu) ctx.libraryApi.hideLibraryContextMenu();
     if (ctx.playlistApi && ctx.playlistApi.hidePlaylistContextMenu) ctx.playlistApi.hidePlaylistContextMenu();
     if (ctx.playlistApi && ctx.playlistApi.hidePlaylistLoadContextMenu) ctx.playlistApi.hidePlaylistLoadContextMenu();
