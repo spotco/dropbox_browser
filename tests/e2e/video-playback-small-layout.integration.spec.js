@@ -562,34 +562,16 @@ test("video full-window expands a partial bottom pane and restores it on exit", 
     .toBe(null);
 });
 
+// Dedup (e2e-dedup-faster): the context-menu flip, playlist-column
+// floor and narrow-divider checks run the shared media-pane-ui helpers
+// against the shared media-library component; they are covered once by
+// the music player suite (music-player.integration.spec.js), which uses
+// the same helpers and component. The wide-divider check below is kept
+// for video: it proves the video pane ids and the separate
+// video-media-library-pane-widths settings key are wired correctly.
 const {
-  checkRowContextMenuNearEdges,
   checkWidePaneDividerExtremes,
-  checkNarrowPaneDividerExtremes,
-  checkPlaylistColumnFloors,
 } = require("./support/media-pane-ui");
-const { queueLibraryFile } = require("./support/video_library");
-
-test("video context menus near the bottom-right edge flip so every item and submenu stays visible", async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 720 });
-  await openVideoPane(page);
-  await queueLibraryFile(page, "multiline.mkv");
-  await expect(page.locator("#video-playlist-list .music-playlist-entry").first()).toBeVisible();
-  await setBottomPaneHeight(page, 230);
-
-  await checkRowContextMenuNearEdges(page, {
-    rowSelector: "#video-playlist-list .music-playlist-entry",
-    menuSelector: "#video-playlist-context-menu",
-    submenuParentLabel: "Copy",
-    label: "video playlist",
-  });
-  await checkRowContextMenuNearEdges(page, {
-    rowSelector: "#video-library-tree .music-tree-row",
-    menuSelector: "#video-library-context-menu",
-    submenuParentLabel: "Select",
-    label: "video library",
-  });
-});
 
 test("video pane dividers collapse each pane to ~1px, stay grabbable and persist", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
@@ -599,22 +581,4 @@ test("video pane dividers collapse each pane to ~1px, stay grabbable and persist
     reopen: openVideoPane,
     widthsSettingKey: "video-media-library-pane-widths",
   });
-});
-
-test("video playlist columns drag down to the 16px floor with grabbable handles and persist", async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 720 });
-  await openVideoPane(page);
-  await checkPlaylistColumnFloors(page, {
-    prefix: "video",
-    reopen: openVideoPane,
-    settingKey: "video-playlist-column-widths",
-  });
-  // The music player's playlist widths are a separate key and are not written.
-  expect(await page.evaluate(() => Settings.get("music-playlist-column-widths", null))).toBeNull();
-});
-
-test("narrow video pane dividers collapse each pane to ~1px and stay grabbable", async ({ page }) => {
-  await page.setViewportSize({ width: 560, height: 760 });
-  await openVideoPane(page);
-  await checkNarrowPaneDividerExtremes(page, { prefix: "video" });
 });

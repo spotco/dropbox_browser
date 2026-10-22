@@ -48,8 +48,7 @@ const TEST_SHARDS = {
     "video play toggle keeps intended state during compatibility seek loading",
     "video controls follow standard hover and idle visibility behavior",
     "video fullscreen keeps the scrubber overlay visible and functional",
-    "clear cache button recovers track selectors from stale server and client probe cache",
-    "clear cache button reloads track selectors after stale client probe cache",
+    "clear cache button recovers track selectors from stale server and client probe cache, including after a reload",
     "ignores incomplete probe disk cache and still loads track selectors",
     "falls back to probing the remote file when cached header bytes are corrupt",
     "loaded HLS segment average reflects fragment load timing",
@@ -3684,7 +3683,6 @@ test("video fullscreen keeps the scrubber overlay visible and functional", async
     });
 });
 
-
 async function seedIncompleteProbeCache(request, relPath) {
   const response = await request.post("/__integration/seed-probe-cache", {
     form: {
@@ -3713,7 +3711,7 @@ async function seedCorruptHeaderCache(request, relPath) {
   return payload;
 }
 
-test("clear cache button recovers track selectors from stale server and client probe cache", async ({ page }) => {
+test("clear cache button recovers track selectors from stale server and client probe cache, including after a reload", async ({ page }) => {
   test.setTimeout(60000);
 
   await installHlsStub(page);
@@ -3765,21 +3763,10 @@ test("clear cache button recovers track selectors from stale server and client p
     audioOptionCount: 2,
     subtitleOptionCount: 4,
   });
-});
 
-test("clear cache button reloads track selectors after stale client probe cache", async ({ page }) => {
-  test.setTimeout(60000);
-
-  await installHlsStub(page);
-  await openVideoPane(page);
-  await playLibraryFile(page, "alpha.mkv");
-  await waitForVisibleVideo(page);
-  await waitForPlaybackSurfaceWithoutOverlay(page);
-  await expectTrackSelectors(page, {
-    audioOptionCount: 2,
-    subtitleOptionCount: 4,
-  });
-
+  // Phase 2 (merged from the former standalone reload test,
+  // e2e-dedup-faster): with healthy selectors, poison only the client
+  // probe cache, reload, and the same Clear Cache recovery must work.
   await page.evaluate(() => {
     const path = "Videos/alpha.mkv";
     const stalePayload = {

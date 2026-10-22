@@ -262,6 +262,54 @@ Keep the split intentional:
 - `tests/js/` for focused JavaScript behavior that does not need a full browser.
 - `tests/e2e/` for end-to-end browser and server interactions.
 
+## E2E deduplication (branch `e2e-dedup-faster`)
+
+The Playwright suite went from 157 tests in 26 files to 133 tests in 24
+files by removing duplicated behaviour, not coverage. Every removed case
+either repeated an assertion already made by a kept test, or had its
+assertions folded into a kept test (noted inline at each fold site with
+an `e2e-dedup-faster` comment):
+
+- Bottom-panel persistence was tested in three files; the mode matrix
+  in `client-render.log-panel-persistence.spec.js` now runs in full only
+  for `server-log`, with the startup-overwrite-sensitive cases kept for
+  the other modes, and the duplicate in
+  `client-render.horizontal-scrollbar.spec.js` was removed.
+- `client-render.scroll-restore.spec.js`: Back/Forward/re-enter and
+  reload/breadcrumb are sequential phases of two tests (8 → 5).
+- `client-render.photo-map-preview.spec.js`: close-button and
+  browser-history preview dismissal are two phases of one test (6 → 5).
+- `support/video-subtitle-switch-suite.js`: the two Clear Cache tests
+  are phases of one test; the recovery shard goes 11 → 10.
+- Shared `media-pane-ui` helper checks (context-menu flip, playlist
+  column floors, narrow dividers) run once, against the music player;
+  the video file keeps the wide-divider check that proves its own pane
+  ids and settings key.
+- Static CSS/meta reads were folded onto a shared page load:
+  `client-render.mobile-overscroll.spec.js` (4 → 2) and the row-height
+  assertions from the deleted `client-render.row-height.spec.js` now
+  live in `client-render.virtualization.spec.js`.
+- The narrow-layout snapshots in `music-player.integration.spec.js`
+  are phases of one test (the music file's test count drops by 4), and
+  the format matrix from the deleted
+  `music-formats.integration.spec.js` runs in
+  `music-media-session.integration.spec.js`, which already used the
+  same fixture and helpers.
+- Removed as supersets/unit-covered: the first
+  `video-subtitle-startup-wait` test (the kept test asserts the same
+  subtitle-wait state plus full coverage), the styled-font size-parity
+  test (`sanitize_srt_text` is unit-tested in
+  `tests/test_video_burnin.py`), and the browse-column cascade test
+  (the cascade algorithm is unit-tested in
+  `tests/js/browse-columns.test.js`; the kept transfer test still
+  drives every other column to the 16px floor).
+
+Deliberately kept despite surface similarity: the two probe-cache
+recovery tests (different server fallback branches), the
+`sync-in-place-refresh` / `upload-refresh` pair (different fault
+injection: HTTP 500 vs rclone throttling, different listing states),
+and both media-session suites (opposite pane-hide behaviour).
+
 ## Regression Workflow
 
 When a regression can be represented in the test harness:

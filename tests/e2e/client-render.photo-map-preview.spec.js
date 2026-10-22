@@ -163,7 +163,7 @@ test.beforeEach(async ({page}) => {
   });
 });
 
-test("grouped Photo Map restores the selected member after dismissing its full preview", async ({page}) => {
+test("grouped Photo Map restores the selected member after dismissing its full preview (close button and browser history)", async ({page}) => {
   await mockGroupMedia(page);
   await openSyntheticGroupedPopup(page);
   const selectedMember = page.locator('[data-photo-map-group-member-path="Camera Uploads/group-older.jpg"]');
@@ -179,13 +179,12 @@ test("grouped Photo Map restores the selected member after dismissing its full p
   await expect(page.locator("#photo-map-preview-overlay")).toBeHidden();
   await expect(page.locator(".photo-map-group-selection-details")).toBeVisible();
   await expect(selectedMember).toHaveAttribute("aria-pressed", "true");
-});
 
-test("grouped Photo Map restores the selected member when browser history closes its preview", async ({page}) => {
-  await mockGroupMedia(page);
-  await openSyntheticGroupedPopup(page);
-  const selectedMember = page.locator('[data-photo-map-group-member-path="Camera Uploads/group-newer.jpg"]');
-  await selectedMember.click();
+  // Phase 2 (merged from the former browser-history test,
+  // e2e-dedup-faster): same restore invariant when the preview is
+  // closed via history instead of the close button, on another member.
+  const historyMember = page.locator('[data-photo-map-group-member-path="Camera Uploads/group-newer.jpg"]');
+  await historyMember.click();
   await page.locator(".photo-map-group-selection a.photo-map-preview-link").click();
   await expect(page.locator("#photo-map-preview-overlay")).toBeVisible();
 
@@ -193,7 +192,7 @@ test("grouped Photo Map restores the selected member when browser history closes
 
   await expect(page.locator("#photo-map-preview-overlay")).toBeHidden();
   await expect(page.locator(".photo-map-group-selection-details")).toBeVisible();
-  await expect(selectedMember).toHaveAttribute("aria-pressed", "true");
+  await expect(historyMember).toHaveAttribute("aria-pressed", "true");
 });
 
 test("grouped Photo Map returns to the grid and accepts another real member click", async ({page}) => {

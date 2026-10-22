@@ -337,53 +337,6 @@ async function waitForMountedSubtitleTrack(page, streamIndex) {
     });
 }
 
-test("compatibility playback shows subtitle-wait during natural delayed subtitle extraction", async ({ page }) => {
-  test.setTimeout(90000);
-
-  await installHlsStub(page);
-  await openVideoPane(page);
-
-  const alphaRow = await libraryRow(page, "alpha.mkv");
-  const initialSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
-  await alphaRow.dblclick();
-  await initialSession;
-  await waitForLoadingOverlayVisible(page);
-  await expect
-    .poll(async () => readSubtitleSelectorState(page), { timeout: 10000 })
-    .toMatchObject({
-      value: "3",
-      options: expect.arrayContaining([
-        expect.objectContaining({ value: "3" }),
-      ]),
-    });
-
-  await expect
-    .poll(async () => {
-      const history = await readOverlayHistory(page);
-      return history.some((entry) => {
-        return entry.visible && (
-          String(entry.loadingReason || "") === "subtitle-wait"
-          || String(entry.title || "").includes("Waiting for subtitles")
-          || String(entry.meta || "").includes("Waiting for subtitles")
-        );
-      });
-    }, { timeout: 10000 })
-    .toBe(true);
-
-  const overlayHistory = await readOverlayHistory(page);
-  expect(overlayHistory.some((entry) => entry.visible && entry.loadingReason === "subtitle-wait")).toBe(true);
-  const duringWaitPlayback = await readPlaybackState(page);
-  expect(duringWaitPlayback).toMatchObject({
-    paused: true,
-    currentTime: 0,
-  });
-
-  await waitForMountedSubtitleTrack(page, 3);
-  await waitForLoadingOverlayHidden(page);
-  await waitForVisibleVideo(page);
-  await expectPlayToggleState(page, "Pause");
-});
-
 test("compatibility playback reaches full subtitle coverage after delayed subtitle extraction", async ({ page }) => {
   test.setTimeout(90000);
 
