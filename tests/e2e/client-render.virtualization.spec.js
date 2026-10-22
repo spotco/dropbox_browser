@@ -46,7 +46,10 @@ test("client-render virtualizes large browse listings and updates the visible wi
 
   const initialRenderCount = Number(await page.locator("body").getAttribute("data-browse-render-count"));
   expect(initialRenderCount).toBeLessThan(40);
-  await expect(page.getByText("2024-03-01 0001.jpg")).toBeVisible();
+  // Scoped to the row's entry-name span: the bottom log panel can
+  // contain rclone log lines mentioning the same filename, which made
+  // a bare getByText strict-mode flaky on spzeni1.
+  await expect(page.locator(".entry-name", { hasText: "2024-03-01 0001.jpg" })).toBeVisible();
 
   // Folded from the deleted client-render.row-height.spec.js
   // (e2e-dedup-faster): virtualized rows stay single-line at a uniform
