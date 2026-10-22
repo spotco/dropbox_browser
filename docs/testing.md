@@ -264,11 +264,13 @@ Keep the split intentional:
 
 ## E2E deduplication (branch `e2e-dedup-faster`)
 
-The Playwright suite went from 157 tests in 26 files to 133 tests in 24
-files by removing duplicated behaviour, not coverage. Every removed case
-either repeated an assertion already made by a kept test, or had its
-assertions folded into a kept test (noted inline at each fold site with
-an `e2e-dedup-faster` comment):
+The Playwright suite went from 157 tests in 26 files to 133 tests in
+24 files by removing duplicated behaviour, not coverage. PR review
+then restored four checks (below) and a second conservative pass
+folded eight more, landing at 131 tests in 25 files. Every removed
+case either repeated an assertion already made by a kept test, or had
+its assertions folded into a kept test (noted inline at each fold
+site with an `e2e-dedup-faster` comment):
 
 - Bottom-panel persistence was tested in three files; the mode matrix
   in `client-render.log-panel-persistence.spec.js` now runs in full only
