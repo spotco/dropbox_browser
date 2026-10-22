@@ -281,34 +281,67 @@ an `e2e-dedup-faster` comment):
   browser-history preview dismissal are two phases of one test (6 → 5).
 - `support/video-subtitle-switch-suite.js`: the two Clear Cache tests
   are phases of one test; the recovery shard goes 11 → 10.
-- Shared `media-pane-ui` helper checks (context-menu flip, playlist
-  column floors, narrow dividers) run once, against the music player;
-  the video file keeps the wide-divider check that proves its own pane
-  ids and settings key.
+- Shared `media-pane-ui` helper checks run once in full, against the
+  music player; the video file keeps the wide-divider check plus
+  compact video-specific checks (see the PR-review restorations below).
 - Static CSS/meta reads were folded onto a shared page load:
-  `client-render.mobile-overscroll.spec.js` (4 → 2) and the row-height
-  assertions from the deleted `client-render.row-height.spec.js` now
-  live in `client-render.virtualization.spec.js`.
+  `client-render.mobile-overscroll.spec.js` (4 → 2).
 - The narrow-layout snapshots in `music-player.integration.spec.js`
   are phases of one test (the music file's test count drops by 4), and
   the format matrix from the deleted
   `music-formats.integration.spec.js` runs in
   `music-media-session.integration.spec.js`, which already used the
   same fixture and helpers.
-- Removed as supersets/unit-covered: the first
-  `video-subtitle-startup-wait` test (the kept test asserts the same
-  subtitle-wait state plus full coverage), the styled-font size-parity
-  test (`sanitize_srt_text` is unit-tested in
-  `tests/test_video_burnin.py`), and the browse-column cascade test
-  (the cascade algorithm is unit-tested in
-  `tests/js/browse-columns.test.js`; the kept transfer test still
-  drives every other column to the 16px floor).
+- Removed as a superset: the first `video-subtitle-startup-wait` test
+  (the kept test asserts the same subtitle-wait state plus full
+  coverage).
 
 Deliberately kept despite surface similarity: the two probe-cache
 recovery tests (different server fallback branches), the
 `sync-in-place-refresh` / `upload-refresh` pair (different fault
 injection: HTTP 500 vs rclone throttling, different listing states),
 and both media-session suites (opposite pane-hide behaviour).
+
+### PR-review restorations (old → new mapping)
+
+Four removals from the first pass were judged coverage losses on
+review and are restored; the unit tests named in the first pass do not
+exercise these integration paths.
+
+| Removed in pass 1 | Restored as | Assertions / fixtures preserved |
+| --- | --- | --- |
+| Video playlist-column, context-menu and narrow-divider tests (`video-playback-small-layout`) | Column floors restored verbatim via `checkPlaylistColumnFloors` with the `video-playlist-column-widths` key and the assertion that `music-playlist-column-widths` is never written; context-menu and narrow-divider return as compact smokes (corner-flip clamp on `#video-playlist-context-menu`; two collapse drags via `paneLayout`) | Video DOM ids, video settings keys and initialization; exhaustive shared geometry stays music-only |
+| Styled-font size-parity test (`video-subtitle-size-parity`) | Same test, same file (kept separate from the forced-burn-in test: different fixture file `styled-font.mkv`, own session-body assertion, both playbacks would still be paid inside one 240s budget) | Full ASS → SRT → sanitizer → FFmpeg → rendered-frame path; measured text-size ratio 0.75–1.33 vs overlay; `subtitle_display_height_px` in the forced session body |
+| `client-render.row-height.spec.js` (folded into `virtualization`) | Spec restored verbatim with its `audio-downloads-long.json` fixture; the virtualization fold was reverted | Absolute 49px row height, uniform heights, `.status`/`.col-size`/`.col-date` `nowrap`, filename `title` attribute and visible text fidelity for the long filename |
+| Browse-column cascade test (`client-render.smoke`) | Same test restored verbatim, with its `waitForBrowseColumnsFitted` helper | Successive 16px floors through real handles, drag past full exhaustion as a no-op, unchanged current/preferred widths after a viewport refit |
+
+### Second pass (PR follow-up)
+
+Seven further folds plus one investigated merge, all test-only. Each
+row lists the surviving location and what had to be preserved; the
+fault-injection, cold-start and persistence properties called out in
+the review are noted explicitly.
+
+| Old test | Surviving test / phase | Preserved |
+| --- | --- | --- |
+| upload-refresh: "in-place refresh right after an upload keeps Dropbox-only files when the first listing is throttled" | Phase 1 of "once Dropbox recovers, reloading shows the Dropbox listing again…" | Same single-fault arming (`armLsjsonFaultsAfterNextUpload(1)`); Dropbox-only row kept, upload `Synced`, local-only status, no warning — all asserted **before** any reload; phase 2 keeps the two healthy reloads. Persistent-throttling and initial local-only tests stay separate |
+| smoke: "hiding the filter bar clears active filters and restores all rows" | Middle phase of "filter bar toggles from the top action row and persists" | Visible-state and hidden-state reload persistence (toggle test), filter fill → 1 row + `q=remote` URL, hide → 3 rows, `data-browse-filter-active=0`, `q` removed from URL |
+| topbar: "column header row stays visible and aligned while main scrolls" | Trailing phases of "top bar shows only the breadcrumb title…" | 85px height, breadcrumb/toggle non-overlap, missing legacy `thead`, alignment at initial/middle/bottom scroll. Narrow/minimized, sorting and drag-extremes tests untouched |
+| photo-map-preview: "returns to the grid and accepts another real member click" | Phase 3 of "restores the selected member after dismissing its full preview…" | The details-popup branch specifically: `Close preview` **inside the details** (not the overlay close) → details gone, `aria-pressed=false` → real click on a member → details visible, `aria-pressed=true` |
+| smoke: "mode fetches and renders browse rows from the listing endpoint" | Phase 1 of "folder navigation uses history without a full page reload" | Title, `data-client-render`, endpoint attribute, no empty state, preview (`/file?`) and download links, zero page errors — all on the initial load, before navigation |
+| smoke: "deep link loads the requested folder" | Phase 2 of the navigation test | A genuinely fresh `page.goto('/?path=folder')` (new document), URL/`data-current-folder-path`/`nested.txt` assertions — not warm in-app navigation |
+| smoke: "ignores legacy sort and direction URL parameters" | Phase 3 of the navigation test | Cold `page.goto('/?sort=date&dir=desc')`; parameters stripped from the URL, `data-current-sort-key=name`, direction `asc`. No sort is changed earlier in the host test, so no persisted per-folder sort interferes |
+| switch suite: "Space shortcut toggles playback…" + "controls stay visible and usable in fullscreen" | Single test "video controls and Space shortcut work in embedded and fullscreen modes without hijacking text inputs" (core shard 10 → 9) | One HLS-stub setup (`fragmentCount: 4, playlistFragmentCount: 5`), alpha playback + bravo queued; embedded Space, text-input exemption, fullscreen geometry/control state, fullscreen Space, loop/next/previous navigation, back-15 seek — in that order |
+
+Discarded candidate: sharing one server across the four
+`camera-uploads-large.json` specs (`file-search`, `virtualization`,
+`horizontal-scrollbar`, `topbar-column-header`). Playwright isolates
+spec files in separate workers, so sharing would need an external
+daemon or merging the files. Measured on spzeni1, the four specs cost
+6.0s / ~9s / 8.1s / 13.0s of test time in total and run on different
+distributed lanes in parallel; server boot is only ~1–2s of each.
+Merging them into one lane would serialize ~35s of tests to save
+~4–6s of boots — a net wall-clock loss, plus cross-test state risk.
 
 ## Regression Workflow
 

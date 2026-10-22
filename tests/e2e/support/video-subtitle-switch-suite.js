@@ -21,8 +21,7 @@ const TEST_SHARDS = {
     "delayed prior client stop cannot stop a newer session",
     "switching during delayed subtitle extraction ignores the old item response",
     "video controls seek backward and forward by 15 seconds in embedded playback",
-    "video Space shortcut toggles playback in embedded and fullscreen modes without hijacking text inputs",
-    "video controls stay visible and usable in fullscreen",
+    "video controls and Space shortcut work in embedded and fullscreen modes without hijacking text inputs",
   ]),
   subtitles: new Set([
     "video playback loads tracks, switches tracks, and hides video before subtitle teardown",
@@ -2017,53 +2016,16 @@ test("video controls seek backward and forward by 15 seconds in embedded playbac
   await expectControlsOverlayVisible(page);
 });
 
-test("video Space shortcut toggles playback in embedded and fullscreen modes without hijacking text inputs", async ({ page }) => {
-  test.setTimeout(90000);
-
-  await installHlsStub(page, { fragmentCount: 4, playlistFragmentCount: 5 });
-  await openVideoPane(page);
-
-  const alphaSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
-  await playLibraryFile(page, "alpha.mkv");
-  await alphaSession;
-  await waitForScrubberReady(page);
-
-  await expectPlayToggleState(page, "Pause");
-  await page.keyboard.press("Space");
-  await expectPlayToggleState(page, "Play");
-  await page.keyboard.press("Space");
-  await expectPlayToggleState(page, "Pause");
-
-  await ensureTrackPanelOpen(page);
-  await page.locator("#video-subtitle-font-size").focus();
-  await page.keyboard.press("Space");
-  await expectPlayToggleState(page, "Pause");
-
-  const surface = page.locator("#video-playback-surface");
-  await surface.hover({ position: { x: 40, y: 40 } });
-  await expectControlsOverlayVisible(page);
-  await surface.dblclick({ position: { x: 48, y: 48 } });
-
-  await expect
-    .poll(async () => readFullscreenPlaybackState(page), { timeout: 10000 })
-    .toMatchObject({
-      fullscreenElementId: "video-playback-stage",
-      fullscreenLabel: "Exit fullscreen",
-    });
-
-  await page.keyboard.press("Space");
-  await expectPlayToggleState(page, "Play");
-  await page.keyboard.press("Space");
-  await expectPlayToggleState(page, "Pause");
-
-  await page.evaluate(async () => {
-    if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
-      await document.exitFullscreen();
-    }
-  });
-});
-
-test("video controls stay visible and usable in fullscreen", async ({ page }) => {
+// Folded (e2e-dedup-faster pass 2, PR follow-up candidate 8): the
+// former "Space shortcut toggles playback in embedded and fullscreen
+// modes without hijacking text inputs" and "controls stay visible and
+// usable in fullscreen" tests shared the same HLS-stub setup, alpha
+// playback and fullscreen entry. This single scenario still covers, in
+// order: embedded Space toggling, the text-input focus exemption,
+// fullscreen control geometry, fullscreen Space toggling, queue
+// navigation (loop/next/previous) and the seek-back check, all against
+// one playback session.
+test("video controls and Space shortcut work in embedded and fullscreen modes without hijacking text inputs", async ({ page }) => {
   test.setTimeout(90000);
 
   await installHlsStub(page, { fragmentCount: 4, playlistFragmentCount: 5 });
@@ -2075,11 +2037,25 @@ test("video controls stay visible and usable in fullscreen", async ({ page }) =>
   await queueLibraryFile(page, "bravo.mkv");
   await waitForScrubberReady(page);
 
+  // Embedded Space toggling.
+  await expectPlayToggleState(page, "Pause");
+  await page.keyboard.press("Space");
+  await expectPlayToggleState(page, "Play");
+  await page.keyboard.press("Space");
+  await expectPlayToggleState(page, "Pause");
+
+  // Space must not hijack text inputs.
+  await ensureTrackPanelOpen(page);
+  await page.locator("#video-subtitle-font-size").focus();
+  await page.keyboard.press("Space");
+  await expectPlayToggleState(page, "Pause");
+
   const surface = page.locator("#video-playback-surface");
   await surface.hover({ position: { x: 40, y: 40 } });
   await expectControlsOverlayVisible(page);
   await surface.dblclick({ position: { x: 48, y: 48 } });
 
+  // Fullscreen control geometry and state.
   await expect
     .poll(async () => readFullscreenPlaybackState(page), { timeout: 10000 })
     .toMatchObject({
@@ -2107,6 +2083,12 @@ test("video controls stay visible and usable in fullscreen", async ({ page }) =>
     back15: { visible: true, disabled: false },
     forward15: { visible: true, disabled: false },
   });
+
+  // Fullscreen Space toggling.
+  await page.keyboard.press("Space");
+  await expectPlayToggleState(page, "Play");
+  await page.keyboard.press("Space");
+  await expectPlayToggleState(page, "Pause");
 
   await clickVideoControl(page, "video-loop-toggle");
   await expectVideoControlState(page, { loop: { pressed: "true" }, previous: { disabled: false } });
