@@ -65,13 +65,19 @@ async function audioState(page) {
 }
 
 async function waitForPlaying(page, filename) {
+  // 30s, not 15s: starting a track goes through the server media
+  // pipeline, and on the slowest distributed lane (2011 Mac mini
+  // under full parallel load) the second track's start once exceeded
+  // 15s. The poll returns on first match, so healthy runs are
+  // unaffected. (The video media-session spec already allows 45s
+  // for the equivalent playing-state wait.)
   await expect
     .poll(async () => page.evaluate((expected) => {
       const audio = document.getElementById("music-audio");
       const current = document.querySelector("#music-playlist-list .music-playlist-entry.current");
       const name = current?.querySelector(".music-playlist-filename-cell")?.textContent?.trim() || "";
       return Boolean(name === expected && audio && !audio.paused && audio.readyState >= 2);
-    }, filename), { timeout: 15000 })
+    }, filename), { timeout: 30000 })
     .toBe(true);
 }
 
