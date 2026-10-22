@@ -409,8 +409,10 @@ class FolderCacheManager:
             # been rewritten with a fresh record after the invalidation
             # (cache writes replace the file atomically). Re-read and
             # re-check under the lock, which also serializes the unlink
-            # against _write_cache_record, so a record written after the
-            # cutoff is never deleted by a stale decision.
+            # against the final-path writes (the flush replace and
+            # _write_cache both happen under the same lock), so a record
+            # written after the cutoff is never deleted by a stale
+            # decision.
             with self._lock:
                 try:
                     data = json.loads(cache_file.read_text(encoding="utf-8"))
@@ -440,20 +442,21 @@ class FolderCacheManager:
         )
 
     def _write_cache_record(self, remote_path: str, data: dict, target_path: Path | None = None) -> None:
-        # Serialize final-path replacement against invalidate/cleanup
-        # unlinks (which re-check under the same lock): a record written
-        # after an invalidation cutoff must not be deleted by a cleanup
-        # pass that decided from a stale read. The lock is an RLock and
-        # the flush path's private temp writes are cheap to include.
-        with self._lock:
-            write_json_atomic(target_path or self._cache_path(remote_path), data)
+        write_json_atomic(target_path or self._cache_path(remote_path), data)
 
     def _write_cache(self, remote_path: str, complete: bool) -> None:
         """Flush one cache record to disk immediately."""
         with self._lock:
             self._advance_revision_locked()
             data = self._cache_record_data_locked(remote_path, complete)
-        self._write_cache_record(remote_path, data)
+            # Write while still holding the lock: this synchronous seam
+            # must be atomic against invalidate/cleanup unlinks (which
+            # re-check under the same lock), so a record written after
+            # an invalidation cutoff is never deleted by a stale
+            # cleanup decision. The background flush path deliberately
+            # does the opposite - its slow I/O stays outside the lock
+            # and only the final replace is taken under it.
+            self._write_cache_record(remote_path, data)
 
     def _mark_cache_dirty_locked(self, remote_path: str, complete: bool) -> None:
         """Mark one cache record for disk flush after the lock is released."""
