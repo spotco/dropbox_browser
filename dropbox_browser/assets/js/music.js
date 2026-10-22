@@ -5,6 +5,7 @@ import {PlaylistStore} from './media-library/playlist-store.js';
 import {RecentStore} from './media-library/recent-store.js';
 import {initPlayback} from './music/playback.js';
 import {initWaveformController} from './music/waveform/controller.js';
+import {contextMenuEventShouldDismiss} from './media-library/context-menu-position.js';
 
 (function () {
   var pane = document.getElementById('music-player-pane');
@@ -175,8 +176,6 @@ import {initWaveformController} from './music/waveform/controller.js';
       metadataLoadedRemotePath: null,
       metadataChunkSize: 262144,
       currentArtObjectUrl: null,
-      pendingArtworkRemotePath: null,
-      windowFocused: document.hasFocus ? document.hasFocus() : true,
       metadataTitleLoading: 'Loading title...',
       metadataArtistLoading: 'Loading artist...',
       metadataTitleUnknown: 'Title unavailable',
@@ -244,7 +243,8 @@ import {initWaveformController} from './music/waveform/controller.js';
   ctx.waveformApi = initWaveformController(ctx);
   initLibrary(ctx);
 
-  document.addEventListener('click', function () {
+  document.addEventListener('click', function (ev) {
+    if (!contextMenuEventShouldDismiss(ev)) return;
     ctx.libraryApi.hideLibraryContextMenu();
     ctx.playlistApi.hidePlaylistContextMenu();
     ctx.playlistApi.hidePlaylistLoadContextMenu();
@@ -285,30 +285,22 @@ import {initWaveformController} from './music/waveform/controller.js';
 
   syncPlayerStatusBarForPaneMode(Settings.get('bottom-pane-mode', 'server-log'));
 
+  // Cover art and an expanded waveform keep loading while the window is
+  // blurred or the tab is hidden. Library polling still pauses.
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden) {
       ctx.layoutApi.flushDeferredMusicPaneUpdates();
       ctx.layoutApi.resumeLibraryUpdates();
       ctx.playbackApi.repaintPlaybackDisplay();
-      ctx.state.windowFocused = document.hasFocus ? document.hasFocus() : true;
-      ctx.playbackApi.metadata.resumeDeferredArtworkLoad();
-      if (ctx.waveformApi) ctx.waveformApi.activate();
     }
     else {
-      ctx.state.windowFocused = false;
       ctx.libraryApi.stopPolling();
       ctx.layoutApi.clearPlaybackUiPaintTimer();
-      if (ctx.waveformApi) ctx.waveformApi.deactivate();
     }
   });
   window.addEventListener('focus', function () {
-    ctx.state.windowFocused = true;
     ctx.layoutApi.flushDeferredMusicPaneUpdates();
     ctx.playbackApi.repaintPlaybackDisplay();
-    ctx.playbackApi.metadata.resumeDeferredArtworkLoad();
-  });
-  window.addEventListener('blur', function () {
-    ctx.state.windowFocused = false;
   });
   window.addEventListener('resize', function () {
     ctx.layoutApi.restoreMusicPanePercents();

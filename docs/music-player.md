@@ -30,7 +30,13 @@ list. There are no music-specific server metadata or waveform endpoints.
 The shared UI in `assets/js/media-library/` provides:
 
 - a recursive tree with expansion, sibling selection, shift-range selection,
-  and context-menu add/play actions;
+  and context-menu add/play actions. Right-click opens the menu. A touch
+  long-press opens the same menu on library rows and active-playlist rows.
+  Touch menus toggle submenus by tap; mouse menus keep hover flyouts. A second
+  short tap on a library song adds it and starts playback, the same as a
+  desktop double-click. A second short tap on an active-playlist row plays
+  that row. Both use `touch-action: manipulation`, so the browser does not
+  emit `dblclick` for that touch;
 - an active playlist with deduplication by normalized stream path;
 - drag reorder, multi-select remove, and playlist context actions;
 - named saved playlists, load/rename/delete, overwrite confirmation, and
@@ -86,8 +92,9 @@ parses:
 Embedded artwork extraction supports ID3 APIC, MP4 cover atoms, and the
 Vorbis/FLAC `METADATA_BLOCK_PICTURE` comment/block for browser-supported image
 MIME types. Artwork is held as a temporary object URL and is revoked when the
-song changes. Metadata and artwork are best-effort; playback does not depend
-on them.
+song changes. The cover request runs with the metadata read and does not wait
+for window focus or for the tab to be visible. Metadata and artwork are
+best-effort; playback does not depend on them.
 
 ## System media controls
 
@@ -134,8 +141,9 @@ The flow is:
    playback controller.
 
 The worker yields in short slices so playback remains responsive. Closing the
-panel, changing songs, leaving the pane, or starting a newer request aborts the
-old request and suppresses late results. Completed summaries are packed into a
+panel, changing songs, leaving the music pane, or starting a newer request
+aborts the old request and suppresses late results. Blurring the window or
+hiding the tab does not abort an expanded panel. Completed summaries are packed into a
 browser-local cache under `music-waveform-cache`, bounded by
 `MusicWaveformCacheEntryLimit`; identity includes path, size, and modification
 time. **Reload waveform** discards the active cached summary and recomputes it.

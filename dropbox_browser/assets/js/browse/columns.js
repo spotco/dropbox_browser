@@ -45,14 +45,16 @@ function minWidthForKey(key, columnMinWidths) {
   return DEFAULT_COLUMN_MIN_WIDTH;
 }
 
-function readSetting(key, defaultValue) {
-  if (!window.Settings || typeof window.Settings.get !== 'function') return defaultValue;
-  return window.Settings.get(key, defaultValue);
+function readSetting(key, defaultValue, win) {
+  var host = win || window;
+  if (!host.Settings || typeof host.Settings.get !== 'function') return defaultValue;
+  return host.Settings.get(key, defaultValue);
 }
 
-function writeSetting(key, value) {
-  if (!window.Settings || typeof window.Settings.set !== 'function') return;
-  window.Settings.set(key, value);
+function writeSetting(key, value, win) {
+  var host = win || window;
+  if (!host.Settings || typeof host.Settings.set !== 'function') return;
+  host.Settings.set(key, value);
 }
 
 export function clampColumnWidth(key, value, columnMinWidths) {
@@ -233,8 +235,8 @@ export function writeBrowseColumnWidths(table, widths) {
   return normalized;
 }
 
-function readPersistedBrowseColumnWidths() {
-  var stored = readSetting(STORAGE_KEY, {});
+function readPersistedBrowseColumnWidths(win) {
+  var stored = readSetting(STORAGE_KEY, {}, win);
   if (!stored || typeof stored !== 'object') return {};
   if (stored.preferred && typeof stored.preferred === 'object') {
     return normalizeStoredColumnWidths(stored.preferred);
@@ -242,12 +244,12 @@ function readPersistedBrowseColumnWidths() {
   return normalizeStoredColumnWidths(stored);
 }
 
-function writePersistedBrowseColumnWidths(widths) {
-  writeSetting(STORAGE_KEY, {preferred: normalizeStoredColumnWidths(widths)});
+function writePersistedBrowseColumnWidths(widths, win) {
+  writeSetting(STORAGE_KEY, {preferred: normalizeStoredColumnWidths(widths)}, win);
 }
 
-function clearPersistedBrowseColumnWidths() {
-  writePersistedBrowseColumnWidths({});
+function clearPersistedBrowseColumnWidths(win) {
+  writePersistedBrowseColumnWidths({}, win);
 }
 
 function columnKeysFromTable(table) {
@@ -274,8 +276,12 @@ export function initBrowseColumnResizing(options) {
   if (headTable && typeof headTable.querySelectorAll !== 'function') headTable = null;
 
   var columnKeys = columnKeysFromTable(table);
-  var preferredWidths = readPersistedBrowseColumnWidths();
+  var preferredWidths = readPersistedBrowseColumnWidths(win);
   var widths = applyBrowseColumnWidths(table, preferredWidths);
+  // Full-window mode hides the browse shell, so this first measurement can be
+  // 0 and every column sits on its minimum. Record it so a later real width
+  // (minimizing the pane does not fire window resize) can refit.
+  var lastAvailableWidth = measureAvailableTableWidth(table);
   var activeDrag = null;
   var tableHead = headTable
     ? initBrowseTableHead({document: doc, window: win, headTable: headTable, bodyTable: table})
@@ -290,9 +296,18 @@ export function initBrowseColumnResizing(options) {
 
   function fitWidthsToTable() {
     widths = applyBrowseColumnWidths(table, preferredWidths);
+    lastAvailableWidth = measureAvailableTableWidth(table);
     syncHeadTable();
     onWidthsChanged(widths);
     return widths;
+  }
+
+  function requestFitWidthsToTable() {
+    if (activeDrag) {
+      fitPendingAfterDrag = true;
+      return;
+    }
+    fitWidthsToTable();
   }
 
   function writeCurrentWidths() {
@@ -310,7 +325,7 @@ export function initBrowseColumnResizing(options) {
     win.removeEventListener('pointerup', activeDrag.end);
     win.removeEventListener('pointercancel', activeDrag.end);
     preferredWidths = normalizeStoredColumnWidths(widths, columnKeys);
-    writePersistedBrowseColumnWidths(preferredWidths);
+    writePersistedBrowseColumnWidths(preferredWidths, win);
     activeDrag = null;
     if (fitPendingAfterDrag) {
       fitPendingAfterDrag = false;
@@ -375,13 +390,22 @@ export function initBrowseColumnResizing(options) {
   // widths (that would snap the columns back under the pointer); refit once
   // the drag has committed its widths instead.
   var fitPendingAfterDrag = false;
-  win.addEventListener('resize', function () {
-    if (activeDrag) {
-      fitPendingAfterDrag = true;
-      return;
-    }
-    fitWidthsToTable();
-  });
+  win.addEventListener('resize', requestFitWidthsToTable);
+  if (typeof win.ResizeObserver === 'function') {
+    var shell = table.parentElement || table;
+    var shellObserver = new win.ResizeObserver(function () {
+      var next = measureAvailableTableWidth(table);
+      if (next === lastAvailableWidth) return;
+      // A hidden shell is not a real layout. Keep the last fitted widths and
+      // refit once it is measurable again.
+      if (!next) {
+        lastAvailableWidth = 0;
+        return;
+      }
+      requestFitWidthsToTable();
+    });
+    if (shell && typeof shellObserver.observe === 'function') shellObserver.observe(shell);
+  }
 
   var api = {
     getWidths: function () {
@@ -396,7 +420,7 @@ export function initBrowseColumnResizing(options) {
     },
     reset: function () {
       preferredWidths = {};
-      clearPersistedBrowseColumnWidths();
+      clearPersistedBrowseColumnWidths(win);
       fitWidthsToTable();
       return Object.assign({}, widths);
     },

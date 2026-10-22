@@ -302,7 +302,11 @@ Video uses the same recursive library + active playlist model as music:
 
 Host markup IDs are `#video-*` (`video_player.html`). User flow: open Video Player
 → **Load Current Folder** → expand tree → add/dblclick items into the active
-playlist → play via transport or playlist context menu.
+playlist → play via transport or playlist context menu. Right-click opens the
+library and active-playlist menus. A touch long-press opens the same menus,
+and those touch menus toggle submenus by tap. A second short tap on a library
+item adds it and starts playback, the same as a desktop double-click. A second
+short tap on the same active-playlist row plays that item.
 
 Full-window mode has two layers: the generic bottom-panel controller owns the
 page-shell full-page state, while video controls own the focused playback layout

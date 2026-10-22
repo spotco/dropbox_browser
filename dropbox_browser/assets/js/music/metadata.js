@@ -372,29 +372,8 @@ export function createMetadataController(ctx) {
     return '/file?path=' + encodeURIComponent(song.stream_path) + '&source=remote';
   }
 
-  function artworkFetchAllowed() {
-    return !document.hidden && state.windowFocused;
-  }
-
-  function songMayHaveEmbeddedArt(song) {
-    var extension = metadataExtension(song);
-    return extension === '.mp3' || extension === '.m4a' || extension === '.m4b' || extension === '.aac' || extension === '.mp4' ||
-      extension === '.ogg' || extension === '.oga' || extension === '.opus' || extension === '.flac';
-  }
-
   function maybeResolveCoverArt(song, requestId, extension, buffers) {
     if (!song || !song.remote_path) return Promise.resolve(null);
-    if (!artworkFetchAllowed()) {
-      if (songMayHaveEmbeddedArt(song)) state.pendingArtworkRemotePath = song.remote_path;
-      metadataLog('coverart-deferred', {
-        remotePath: song.remote_path,
-        extension: extension,
-        documentHidden: document.hidden,
-        windowFocused: state.windowFocused,
-      });
-      return Promise.resolve(null);
-    }
-    state.pendingArtworkRemotePath = null;
     metadataLog('coverart-resolve-start', {
       remotePath: song.remote_path,
       extension: extension,
@@ -438,9 +417,6 @@ export function createMetadataController(ctx) {
       streamPath: song && song.stream_path ? song.stream_path : '',
       extension: extension,
       requestId: requestId,
-      artworkAllowed: artworkFetchAllowed(),
-      documentHidden: document.hidden,
-      windowFocused: state.windowFocused,
     });
     showMetadataPlaceholders();
     fetchMetadataBytes(url, extension)
@@ -492,25 +468,6 @@ export function createMetadataController(ctx) {
     startMetadataLoad(song);
   }
 
-  function resumeDeferredArtworkLoad() {
-    var song = ctx.playbackApi.currentSong();
-    metadataLog('coverart-resume-check', {
-      hasSong: !!song,
-      remotePath: song && song.remote_path ? song.remote_path : '',
-      pendingRemotePath: state.pendingArtworkRemotePath,
-      artworkAllowed: artworkFetchAllowed(),
-      documentHidden: document.hidden,
-      windowFocused: state.windowFocused,
-    });
-    if (!artworkFetchAllowed() || !song || !song.remote_path) return;
-    if (state.pendingArtworkRemotePath !== song.remote_path) return;
-    metadataLog('coverart-resume-start', {
-      remotePath: song.remote_path,
-    });
-    state.metadataLoadedRemotePath = null;
-    startMetadataLoad(song);
-  }
-
   function setCurrentFilename(song) {
     if (!els.currentFilenameEl) return;
     els.currentFilenameEl.textContent = song ? (song.display_name || 'Unknown song') : 'No song selected';
@@ -540,7 +497,6 @@ export function createMetadataController(ctx) {
     refreshNowPlayingMarqueeStates: refreshNowPlayingMarqueeStates,
     resetNowPlayingForSong: resetNowPlayingForSong,
     revokeCurrentArtObjectUrl: revokeCurrentArtObjectUrl,
-    resumeDeferredArtworkLoad: resumeDeferredArtworkLoad,
     scheduleNowPlayingMarqueeRefresh: scheduleNowPlayingMarqueeRefresh,
     setCoverArtImage: setCoverArtImage,
     setCoverArtPlaceholderState: setCoverArtPlaceholderState,

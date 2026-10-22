@@ -1,5 +1,5 @@
 import {clearObject, formatShortDateTime} from './shared.js';
-import {showContextMenuAt} from './context-menu-position.js';
+import {bindTouchLongPress, showContextMenuAt, touchDoubleTapSuppressesNativeDblclick} from './context-menu-position.js';
 import {formatMediaItemCount, mediaKindPresentation} from './media-kind.js';
 import {
   createVirtualRowRecycler,
@@ -1364,7 +1364,11 @@ export function initPlaylist(ctx) {
   }
 
   function handlePlaylistListDoubleClick(ev) {
-    var row = playlistRowFromEventTarget(ev.target);
+    var row;
+    // Touch play is handled on the second short tap. A native dblclick, when
+    // a browser still emits one, would start the song a second time.
+    if (touchDoubleTapSuppressesNativeDblclick()) return;
+    row = playlistRowFromEventTarget(ev.target);
     if (!row || playlistDragSuppressed()) {
       if (row && playlistDragSuppressed()) {
         ev.preventDefault();
@@ -2133,6 +2137,30 @@ export function initPlaylist(ctx) {
     els.playlistListEl.addEventListener('dblclick', handlePlaylistListDoubleClick);
     els.playlistListEl.addEventListener('contextmenu', handlePlaylistListContextMenu);
     els.playlistListEl.addEventListener('pointerdown', handlePlaylistListPointerDown);
+    bindTouchLongPress(els.playlistListEl, function (info) {
+      var row = playlistRowFromEventTarget(info.target);
+      if (!row) return;
+      openPlaylistContextMenu({
+        preventDefault: function () {},
+        stopPropagation: function () {},
+        clientX: info.clientX,
+        clientY: info.clientY
+      }, row.dataset.remotePath);
+    }, {
+      doubleTapKey: function (target) {
+        var handle = target && typeof target.closest === 'function'
+          ? target.closest('.music-playlist-drag-handle')
+          : null;
+        var row = playlistRowFromEventTarget(target);
+        if (handle || !row) return '';
+        return row.dataset.remotePath || '';
+      },
+      onDoubleTap: function (ev) {
+        var row = playlistRowFromEventTarget(ev.target);
+        if (!row || playlistDragSuppressed()) return;
+        ctx.playbackApi.playPlaylistRemotePath(row.dataset.remotePath);
+      }
+    });
     els.playlistListEl.addEventListener('scroll', handlePlaylistListScroll, {passive: true});
     els.playlistListEl.addEventListener('keydown', handlePlaylistSelectAllShortcut);
     if (typeof ResizeObserver === 'function') {

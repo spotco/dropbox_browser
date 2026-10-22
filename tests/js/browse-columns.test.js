@@ -260,3 +260,173 @@ test("fitColumnWidthsToTotal gives extra default width to the name column when n
   assert.ok(widths.name > widths.view);
   assert.ok(widths.date > widths.type);
 });
+
+function sumWidths(widths) {
+  return Object.values(widths).reduce((sum, value) => sum + value, 0);
+}
+
+function installListenerTarget(target) {
+  const listeners = new Map();
+  target.addEventListener = (type, fn) => {
+    if (!listeners.has(type)) listeners.set(type, []);
+    listeners.get(type).push(fn);
+  };
+  target.removeEventListener = (type, fn) => {
+    const list = listeners.get(type) || [];
+    const index = list.indexOf(fn);
+    if (index >= 0) list.splice(index, 1);
+  };
+  target.dispatch = (type, event) => {
+    (listeners.get(type) || []).slice().forEach((fn) => fn(event));
+  };
+  return target;
+}
+
+function createBrowseColumnHarness(columns, availableWidth) {
+  const observers = [];
+  const store = {
+    "browse-column-widths-v1": {
+      preferred: {
+        name: 16, type: 16, status: 16, size: 16, date: 16, view: 16, sync: 16,
+      },
+    },
+  };
+  const win = installListenerTarget({
+    Settings: {
+      get(key, fallback) {
+        return Object.prototype.hasOwnProperty.call(store, key) ? store[key] : fallback;
+      },
+      set(key, value) {
+        store[key] = value;
+      },
+    },
+    ResizeObserver: function ResizeObserver(callback) {
+      this.callback = callback;
+      observers.push(this);
+    },
+  });
+  win.ResizeObserver.prototype.observe = function observe() {};
+  win.ResizeObserver.prototype.disconnect = function disconnect() {};
+
+  const cols = columns.BROWSE_COLUMN_KEYS.map((key) => ({
+    getAttribute(name) {
+      return name === "data-browse-column" ? key : "";
+    },
+    style: {
+      width: "",
+      removeProperty(name) {
+        if (name === "width") this.width = "";
+      },
+    },
+  }));
+  const shell = {
+    clientWidth: availableWidth,
+    getBoundingClientRect() {
+      return {width: this.clientWidth, height: this.clientWidth ? 40 : 0};
+    },
+  };
+  const nameHandle = {
+    classList: {add() {}, remove() {}},
+    getAttribute(name) {
+      return name === "data-browse-column-resizer" ? "name" : "";
+    },
+    closest(selector) {
+      return String(selector).includes("browse-column-resizer") ? nameHandle : null;
+    },
+    setPointerCapture() {},
+    getBoundingClientRect() {
+      return {left: 40, right: 54, top: 0, bottom: 39, width: 14, height: 39};
+    },
+  };
+  const table = installListenerTarget({
+    parentElement: shell,
+    querySelectorAll(selector) {
+      if (selector === "col[data-browse-column]") return cols;
+      return [];
+    },
+  });
+  const doc = {
+    body: {classList: {add() {}, remove() {}}},
+    querySelector() {
+      return null;
+    },
+  };
+  const api = columns.initBrowseColumnResizing({document: doc, window: win, table});
+  return {
+    api,
+    observers,
+    shell,
+    dragName(delta) {
+      table.dispatch("pointerdown", {
+        target: nameHandle,
+        currentTarget: table,
+        clientX: 47,
+        clientY: 10,
+        pointerId: 1,
+        preventDefault() {},
+      });
+      win.dispatch("pointermove", {clientX: 47 + delta, clientY: 10, pointerId: 1});
+      win.dispatch("pointerup", {clientX: 47 + delta, clientY: 10, pointerId: 1});
+    },
+    notifyShellResize() {
+      observers.forEach((observer) => observer.callback());
+    },
+  };
+}
+
+test("browse columns loaded while the shell is hidden become resizable once it has a width", async () => {
+  const columns = await importModuleFromWorkspace("dropbox_browser/assets/js/browse/columns.js");
+  const harness = createBrowseColumnHarness(columns, 0);
+
+  assert.equal(sumWidths(harness.api.getWidths()), 16 * columns.BROWSE_COLUMN_KEYS.length);
+  assert.equal(harness.observers.length, 1);
+
+  harness.shell.clientWidth = 328;
+  harness.notifyShellResize();
+
+  const fitted = harness.api.getWidths();
+  assert.equal(sumWidths(fitted), 328);
+  assert.deepEqual(harness.api.getPreferredWidths(), {
+    name: 16, type: 16, status: 16, size: 16, date: 16, view: 16, sync: 16,
+  });
+  harness.dragName(80);
+  const dragged = harness.api.getWidths();
+  assert.ok(dragged.name > fitted.name);
+  assert.equal(sumWidths(dragged), 328);
+  columns.BROWSE_COLUMN_KEYS.forEach((key) => {
+    assert.ok(dragged[key] >= columns.BROWSE_COLUMN_MIN_WIDTHS[key]);
+  });
+});
+
+test("browse columns loaded with the shell already visible stay resizable", async () => {
+  const columns = await importModuleFromWorkspace("dropbox_browser/assets/js/browse/columns.js");
+  const harness = createBrowseColumnHarness(columns, 328);
+  const fitted = harness.api.getWidths();
+
+  assert.equal(sumWidths(fitted), 328);
+  harness.dragName(80);
+  const dragged = harness.api.getWidths();
+  assert.ok(dragged.name > fitted.name);
+  assert.equal(sumWidths(dragged), 328);
+  columns.BROWSE_COLUMN_KEYS.forEach((key) => {
+    assert.ok(dragged[key] >= columns.BROWSE_COLUMN_MIN_WIDTHS[key]);
+  });
+});
+
+test("hiding the browse shell does not leave columns stuck at the minimum when it is shown again", async () => {
+  const columns = await importModuleFromWorkspace("dropbox_browser/assets/js/browse/columns.js");
+  const harness = createBrowseColumnHarness(columns, 400);
+
+  harness.shell.clientWidth = 0;
+  harness.notifyShellResize();
+  harness.shell.clientWidth = 360;
+  harness.notifyShellResize();
+
+  const fitted = harness.api.getWidths();
+  assert.equal(sumWidths(fitted), 360);
+  harness.dragName(40);
+  assert.ok(harness.api.getWidths().name > fitted.name);
+  columns.BROWSE_COLUMN_KEYS.forEach((key) => {
+    assert.ok(harness.api.getWidths()[key] >= columns.BROWSE_COLUMN_MIN_WIDTHS[key]);
+  });
+});
