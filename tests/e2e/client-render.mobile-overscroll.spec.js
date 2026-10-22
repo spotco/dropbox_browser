@@ -35,16 +35,18 @@ async function openRoot(page) {
   await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
 }
 
-test("mobile viewport keeps pinch zoom enabled", async ({ page }) => {
+// Dedup (e2e-dedup-faster): the viewport-meta, root-overscroll and
+// media-scroller checks are static computed-style reads on the same page
+// load, so they share one page instead of three server/page cycles.
+// Every original assertion is kept; only the pinch-gesture test below
+// still gets its own page.
+test("mobile overscroll preconditions: pinch zoom enabled, document never scrolls or chains, media scrollers contain overscroll", async ({ page }) => {
   await openRoot(page);
   const content = await page.locator('meta[name="viewport"]').getAttribute("content");
   expect(content).toContain("width=device-width");
   expect(content).not.toMatch(/user-scalable\s*=\s*(no|0)/i);
   expect(content).not.toMatch(/maximum-scale/i);
-});
 
-test("mobile root never chains vertical overscroll and the document itself does not scroll", async ({ page }) => {
-  await openRoot(page);
   const styles = await page.evaluate(() => {
     const pick = (element) => {
       const style = getComputedStyle(element);
@@ -72,10 +74,7 @@ test("mobile root never chains vertical overscroll and the document itself does 
   expect(styles.bodyHeight).toBeLessThanOrEqual(styles.innerHeight + 0.5);
   expect(styles.rootScrollable).toBeLessThanOrEqual(0);
   expect(styles.mainScrollable).toBeGreaterThan(0);
-});
 
-test("mobile media scrollers contain their overscroll too", async ({ page }) => {
-  await openRoot(page);
   await page.locator("#bottom-pane-mode").selectOption("music-player");
   await expect(page.locator("#music-player-pane")).toBeVisible();
   const values = await page.evaluate(() => ["#music-library-tree", "#music-playlist-list", "#music-playback-pane"]

@@ -256,7 +256,13 @@ async function mediaToolbarLayoutSnapshot(page, panePrefix) {
   }, panePrefix);
 }
 
-test("narrow music toolbars wrap without clipping or overlap", async ({ page }) => {
+test("narrow music layouts: toolbars wrap, playlist and library stay usable, shared scrollbar styles apply", async ({ page }) => {
+  // Dedup (e2e-dedup-faster): five standalone narrow-layout tests each
+  // paid a full page load for read-only layout snapshots at two
+  // viewports. They now run as sequential phases on one page; every
+  // original assertion is kept verbatim inside its phase block.
+  // Phase: narrow music toolbars wrap without clipping or overlap
+  {
   await page.setViewportSize({width: 700, height: 700});
   await openMusicPlayer(page);
 
@@ -266,9 +272,11 @@ test("narrow music toolbars wrap without clipping or overlap", async ({ page }) 
   expect(snapshots.every((snapshot) => !snapshot.childrenOverlap)).toBe(true);
   expect(snapshots.every((snapshot) => !snapshot.buttonsOverlap)).toBe(true);
   expect(snapshots.every((snapshot) => !snapshot.buttonOutside)).toBe(true);
-});
-
-test("very narrow playlist keeps its list visible while action strips stay usable", async ({ page }) => {
+  }
+  // Phase: very narrow playlist keeps its list visible while action strips stay usable
+  {
+  // The narrow layout is latched at page load, so re-open at 374px
+  // (the standalone test loaded directly at this width).
   await page.setViewportSize({width: 374, height: 749});
   await openMusicPlayer(page);
 
@@ -310,11 +318,9 @@ test("very narrow playlist keeps its list visible while action strips stay usabl
   expect(snapshot.boxes.secondary.bottom).toBeLessThanOrEqual(snapshot.boxes.table.top + 0.5);
   expect(snapshot.actionStrip.scrollWidth).toBeGreaterThan(snapshot.actionStrip.clientWidth);
   expect(snapshot.secondaryStrip.scrollWidth).toBeGreaterThan(snapshot.secondaryStrip.clientWidth);
-});
-
-test("narrow music library keeps rows horizontally scrollable with the player scrollbar style", async ({ page }) => {
-  await page.setViewportSize({width: 374, height: 749});
-  await openMusicPlayer(page);
+  }
+  // Phase: narrow music library keeps rows horizontally scrollable with the player scrollbar style
+  {
   await loadCompleteLibrary(page);
 
   const snapshot = await page.evaluate(() => {
@@ -333,11 +339,9 @@ test("narrow music library keeps rows horizontally scrollable with the player sc
   expect(snapshot.scrollWidth).toBeGreaterThan(snapshot.clientWidth);
   expect(snapshot.scrollbarHeight).toBe("12px");
   expect(snapshot.thumbBackground).toContain("linear-gradient");
-});
-
-test("very narrow music library keeps controls in one styled scroll strip", async ({ page }) => {
-  await page.setViewportSize({width: 374, height: 749});
-  await openMusicPlayer(page);
+  }
+  // Phase: very narrow music library keeps controls in one styled scroll strip
+  {
 
   const snapshot = await page.evaluate(() => {
     const toolbar = document.querySelector(".music-library-toolbar");
@@ -362,11 +366,9 @@ test("very narrow music library keeps controls in one styled scroll strip", asyn
   expect(snapshot.sortWrap).toBe("nowrap");
   expect(snapshot.scrollbarHeight).toBe("12px");
   expect(snapshot.thumbBackground).toContain("linear-gradient");
-});
-
-test("music playback controls use the shared scrollbar style when they overflow", async ({ page }) => {
-  await page.setViewportSize({width: 374, height: 749});
-  await openMusicPlayer(page);
+  }
+  // Phase: music playback controls use the shared scrollbar style when they overflow
+  {
 
   const snapshot = await page.evaluate(() => {
     const pane = document.querySelector("#music-playback-pane");
@@ -391,6 +393,7 @@ test("music playback controls use the shared scrollbar style when they overflow"
   expect(snapshot.trackBackground).toBe("rgb(22, 32, 51)");
   expect(snapshot.thumbBackground).toContain("linear-gradient");
   expect(snapshot.thumbBorder).toBe("2px");
+  }
 });
 
 test("narrow music pane dividers resize and persist separately from wide pane sizes", async ({ page }) => {

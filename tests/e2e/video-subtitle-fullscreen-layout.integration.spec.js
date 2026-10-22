@@ -168,12 +168,19 @@ async function seekToMultilineCue(page) {
 }
 
 async function enterStageFullscreen(page) {
-  await page.evaluate(async () => {
+  await page.evaluate(() => {
     const stage = document.getElementById("video-playback-stage");
     if (!stage || typeof stage.requestFullscreen !== "function") {
       throw new Error("video playback stage cannot enter fullscreen");
     }
-    await stage.requestFullscreen();
+    // Do not await the requestFullscreen() promise: under heavy load
+    // it can stay pending indefinitely even though the fullscreen
+    // change itself happens (observed as a 120s test timeout on a
+    // loaded lane). The poll below is the actual bound.
+    const request = stage.requestFullscreen();
+    if (request && typeof request.catch === "function") {
+      request.catch(() => {});
+    }
   });
   await expect
     .poll(async () => page.evaluate(() => document.fullscreenElement?.id || ""), { timeout: 10000 })
@@ -182,9 +189,14 @@ async function enterStageFullscreen(page) {
 }
 
 async function exitStageFullscreen(page) {
-  await page.evaluate(async () => {
+  await page.evaluate(() => {
     if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
-      await document.exitFullscreen();
+      // Same unbounded-promise hazard as enterStageFullscreen: fire
+      // the exit and let the state poll below bound the wait.
+      const request = document.exitFullscreen();
+      if (request && typeof request.catch === "function") {
+        request.catch(() => {});
+      }
     }
   });
   await expect

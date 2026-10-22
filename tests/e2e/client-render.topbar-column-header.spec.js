@@ -80,6 +80,19 @@ async function headerMetrics(page) {
   }, COLUMN_KEYS);
 }
 
+// After a scroll, the virtual list rebinds its rows asynchronously;
+// on a slow machine the fixed settle in scrollMainTo can elapse before
+// a body row exists to measure. Poll until every column has a body
+// cell, then assert on the settled metrics (same assertions, no race).
+async function headerMetricsWhenCellsReady(page) {
+  let metrics = null;
+  await expect.poll(async () => {
+    metrics = await headerMetrics(page);
+    return metrics.columns.every((column) => column.cellLeft !== null);
+  }, { timeout: 10000, message: "virtual list rebinds rows for the new scroll position" }).toBe(true);
+  return metrics;
+}
+
 function expectHeaderRowInsideTopbar(metrics) {
   expect(metrics.headerTop).toBe(0);
   for (const column of metrics.columns) {
@@ -130,22 +143,22 @@ test("top bar shows only the breadcrumb title and keeps its original height", as
   expectHeaderAlignedWithCells(metrics);
   // The body table no longer carries its own header row.
   await expect(page.locator("table[data-browse-table] thead")).toHaveCount(0);
-});
 
-test("column header row stays visible and aligned while main scrolls", async ({ page }) => {
-  await openCameraUploads(page);
-  const before = await headerMetrics(page);
+  // Folded in (e2e-dedup-faster pass 2): the former "column header row
+  // stays visible and aligned while main scrolls" test continues from
+  // this same initial state — header height, containment and cell
+  // alignment at middle and bottom scroll positions.
   await scrollMainTo(page, 0.5);
-  const middle = await headerMetrics(page);
+  const middle = await headerMetricsWhenCellsReady(page);
   expect(middle.headerHeight).toBe(TOPBAR_HEIGHT);
   expectHeaderRowInsideTopbar(middle);
   expectHeaderAlignedWithCells(middle);
   for (let index = 0; index < COLUMN_KEYS.length; index += 1) {
-    expect(middle.columns[index].top).toBe(before.columns[index].top);
+    expect(middle.columns[index].top).toBe(metrics.columns[index].top);
   }
 
   await scrollMainTo(page, 1);
-  const bottom = await headerMetrics(page);
+  const bottom = await headerMetricsWhenCellsReady(page);
   expectHeaderRowInsideTopbar(bottom);
   expectHeaderAlignedWithCells(bottom);
 });

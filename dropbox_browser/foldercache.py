@@ -331,6 +331,14 @@ class FolderCacheManager:
         with self._lock:
             self._advance_revision_locked()
             self._generation[remote_path] = self._generation.get(remote_path, 0) + 1
+            # Retire any staged background flush for this path under the
+            # same lock the flush uses for its final epoch check +
+            # replace: bumping the write epoch makes the staged snapshot
+            # stale so it is discarded instead of recreating the file
+            # unlinked below, and dropping the pending dirty write keeps
+            # a not-yet-started flush from writing the record either.
+            self._cache_write_epoch[remote_path] = self._cache_write_epoch.get(remote_path, 0) + 1
+            self._dirty_cache_writes.pop(remote_path, None)
             self._acc.pop(remote_path, None)
             self._direct_done.pop(remote_path, None)
             self._pending_children.pop(remote_path, None)
@@ -344,10 +352,13 @@ class FolderCacheManager:
             stale_children = [child for child, parent in self._parent.items() if parent == remote_path]
             for child in stale_children:
                 self._parent.pop(child, None)
-        try:
-            self._cache_path(remote_path).unlink(missing_ok=True)
-        except Exception:
-            pass
+            # Unlink under the lock so it is serialized against
+            # _write_cache_record: a record rewritten concurrently with
+            # the invalidation must not be deleted by this unlink.
+            try:
+                self._cache_path(remote_path).unlink(missing_ok=True)
+            except Exception:
+                pass
 
     def invalidate_tree(self, remote_path: str) -> list[str]:
         """Forget cached and in-memory metadata for a folder and known descendants."""
@@ -396,15 +407,36 @@ class FolderCacheManager:
                 continue
             cached_path = data.get("remote_path")
             cached_at = data.get("cached_at", 0)
-            if (
+            if not (
                 isinstance(cached_path, str)
                 and _same_or_child_path(cached_path, remote_path)
                 and cached_at <= invalidated_at
             ):
+                continue
+            # The read above is only a candidate scan: the file may have
+            # been rewritten with a fresh record after the invalidation
+            # (cache writes replace the file atomically). Re-read and
+            # re-check under the lock, which also serializes the unlink
+            # against the final-path writes (the flush replace and
+            # _write_cache both happen under the same lock), so a record
+            # written after the cutoff is never deleted by a stale
+            # decision.
+            with self._lock:
                 try:
-                    cache_file.unlink(missing_ok=True)
+                    data = json.loads(cache_file.read_text(encoding="utf-8"))
                 except Exception:
-                    pass
+                    continue
+                cached_path = data.get("remote_path")
+                cached_at = data.get("cached_at", 0)
+                if (
+                    isinstance(cached_path, str)
+                    and _same_or_child_path(cached_path, remote_path)
+                    and cached_at <= invalidated_at
+                ):
+                    try:
+                        cache_file.unlink(missing_ok=True)
+                    except Exception:
+                        pass
 
     def _cache_record_data_locked(self, remote_path: str, complete: bool) -> dict:
         """Build one cache record snapshot from the current in-memory state."""
@@ -424,8 +456,20 @@ class FolderCacheManager:
         """Flush one cache record to disk immediately."""
         with self._lock:
             self._advance_revision_locked()
+            # This synchronous write supersedes any staged background
+            # flush for the path: advance the write epoch so the older
+            # staged snapshot is discarded at its final check instead of
+            # replacing the record written here.
+            self._cache_write_epoch[remote_path] = self._cache_write_epoch.get(remote_path, 0) + 1
             data = self._cache_record_data_locked(remote_path, complete)
-        self._write_cache_record(remote_path, data)
+            # Write while still holding the lock: this synchronous seam
+            # must be atomic against invalidate/cleanup unlinks (which
+            # re-check under the same lock), so a record written after
+            # an invalidation cutoff is never deleted by a stale
+            # cleanup decision. The background flush path deliberately
+            # does the opposite - its slow I/O stays outside the lock
+            # and only the final replace is taken under it.
+            self._write_cache_record(remote_path, data)
 
     def _mark_cache_dirty_locked(self, remote_path: str, complete: bool) -> None:
         """Mark one cache record for disk flush after the lock is released."""
@@ -491,10 +535,16 @@ class FolderCacheManager:
                     with self._lock:
                         current_epoch = self._cache_write_epoch.get(remote_path, 0)
                         if current_epoch != epoch:
-                            self._mark_cache_dirty_locked(
-                                remote_path,
-                                self._is_disk_complete_locked(remote_path),
-                            )
+                            # Superseded by a newer valid state: requeue a
+                            # flush of the current state. Invalidated with
+                            # no live record: drop the stale snapshot -
+                            # requeueing here would resurrect the path as
+                            # an empty record built from missing state.
+                            if remote_path in self._acc:
+                                self._mark_cache_dirty_locked(
+                                    remote_path,
+                                    self._is_disk_complete_locked(remote_path),
+                                )
                             self._trace_locked(
                                 "cache_write_skipped_stale",
                                 remote_path,

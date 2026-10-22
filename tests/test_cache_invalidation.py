@@ -10,6 +10,9 @@ from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from unittest import mock
+
+from dropbox_browser import foldercache as foldercache_module
 from dropbox_browser.errors import BrowserError
 from dropbox_browser.foldercache import DIFF_CACHE_SCHEMA_VERSION
 from dropbox_browser.listingcache import ListingCacheManager
@@ -1488,3 +1491,142 @@ class CacheInvalidationTests(AppTestCase):
             sum(1 for call in rclone.calls if call["target"] == "dropbox:dropbox_browser_test"),
             2,
         )
+
+
+class FolderCacheFlushInvalidationRaceTests(AppTestCase):
+    """Deterministic regression tests for the background-flush race:
+    `_flush_dirty_cache_writes` snapshots a record and writes it to a
+    private temp file outside the lock. If `invalidate()` runs while
+    that temp write is in flight, the staged flush must not recreate
+    the invalidated record when it reaches the final-path replace.
+
+    Each test gates the temp-file write on threading events (no sleeps
+    or probabilistic scheduling): the flush is provably paused after
+    its snapshot, invalidation happens on the main thread, and only
+    then is the flush released.
+    """
+
+    def _seed_dirty_record(self, cache, remote_path: str, size: int) -> None:
+        with cache._lock:
+            cache._acc[remote_path] = {
+                "size": size,
+                "count": 1,
+                "mtime": 1700000000.0,
+                "file_statuses": {},
+                "direct_items": [],
+                "direct_files": [],
+                "direct_folders": [],
+            }
+            cache._direct_done[remote_path] = 1.0
+            cache._mark_cache_dirty_locked(remote_path, True)
+
+    def _run_gated_flush(self, cache):
+        """Start a flush thread whose temp-file write blocks until released.
+
+        Returns (flush_thread, release). The caller must set `release`
+        (in a finally block) so the flush thread can always finish.
+        """
+        original_write = foldercache_module.write_json_atomic
+        temp_write_started = threading.Event()
+        release = threading.Event()
+
+        def gated_write(path, payload):
+            if str(path).endswith(".tmp"):
+                temp_write_started.set()
+                if not release.wait(timeout=30):
+                    raise TimeoutError("gated cache flush was never released")
+            return original_write(path, payload)
+
+        patcher = mock.patch.object(foldercache_module, "write_json_atomic", gated_write)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        flush_thread = threading.Thread(target=cache._flush_dirty_cache_writes, daemon=True)
+        flush_thread.start()
+        self.assertTrue(
+            temp_write_started.wait(timeout=10),
+            "background flush never reached its temp-file write",
+        )
+        return flush_thread, release
+
+    def test_invalidate_during_staged_flush_does_not_resurrect_record(self) -> None:
+        app = self._build_app(SimulatedRclone(), local_root=None, workers=1)
+        cache = app.folder_cache
+        remote_path = "dropbox:folder"
+        self._seed_dirty_record(cache, remote_path, size=111)
+
+        flush_thread, release = self._run_gated_flush(cache)
+        try:
+            # Invalidation must not wait for the in-flight temp-file I/O:
+            # the gate above would hold it for up to 30s if it did.
+            started_at = time.perf_counter()
+            cache.invalidate(remote_path)
+            self.assertLess(time.perf_counter() - started_at, 5.0)
+        finally:
+            release.set()
+        flush_thread.join(timeout=10)
+        self.assertFalse(flush_thread.is_alive())
+
+        self.assertFalse(
+            cache._cache_path(remote_path).exists(),
+            "stale staged flush resurrected an invalidated cache record",
+        )
+        self.assertIsNone(cache.get(remote_path))
+        with cache._lock:
+            self.assertNotIn(remote_path, cache._dirty_cache_writes)
+
+    def test_staged_flush_does_not_overwrite_fresh_record_after_invalidate(self) -> None:
+        app = self._build_app(SimulatedRclone(), local_root=None, workers=1)
+        cache = app.folder_cache
+        remote_path = "dropbox:folder"
+        self._seed_dirty_record(cache, remote_path, size=111)
+
+        flush_thread, release = self._run_gated_flush(cache)
+        try:
+            cache.invalidate(remote_path)
+            # A fresh valid record B is written synchronously while the
+            # stale flush of record A is still staged. Seed B's in-memory
+            # state directly, without _mark_cache_dirty_locked: the
+            # synchronous _write_cache seam itself must supersede the
+            # staged flush's epoch, not an incidental dirty mark.
+            with cache._lock:
+                cache._acc[remote_path] = {
+                    "size": 222,
+                    "count": 1,
+                    "mtime": 1700000000.0,
+                    "file_statuses": {},
+                    "direct_items": [],
+                    "direct_files": [],
+                    "direct_folders": [],
+                }
+                cache._direct_done[remote_path] = 1.0
+            cache._write_cache(remote_path, True)
+        finally:
+            release.set()
+        flush_thread.join(timeout=10)
+        self.assertFalse(flush_thread.is_alive())
+
+        record = cache.get(remote_path)
+        self.assertIsNotNone(record)
+        self.assertEqual(record["size"], 222)
+        on_disk = json.loads(cache._cache_path(remote_path).read_text(encoding="utf-8"))
+        self.assertEqual(on_disk["size"], 222)
+
+    def test_invalidate_tree_during_staged_flush_does_not_resurrect_descendant(self) -> None:
+        app = self._build_app(SimulatedRclone(), local_root=None, workers=1)
+        cache = app.folder_cache
+        child_path = "dropbox:parent/child"
+        self._seed_dirty_record(cache, child_path, size=111)
+
+        flush_thread, release = self._run_gated_flush(cache)
+        try:
+            cache.invalidate_tree("dropbox:parent")
+        finally:
+            release.set()
+        flush_thread.join(timeout=10)
+        self.assertFalse(flush_thread.is_alive())
+
+        self.assertFalse(
+            cache._cache_path(child_path).exists(),
+            "stale staged flush resurrected a tree-invalidated cache record",
+        )
+        self.assertIsNone(cache.get(child_path))

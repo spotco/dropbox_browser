@@ -290,7 +290,6 @@ test("forced burn-in subtitle size matches the WebVTT overlay size on screen", a
   await waitForCompatibilityReady(page);
   mark(t0, "ready");
 
-
   const sessionBodies = [];
   page.on("request", (request) => {
     if (request.method() !== "POST") return;
@@ -356,7 +355,13 @@ test("forced burn-in subtitle size matches the WebVTT overlay size on screen", a
   expect(ratio).toBeLessThan(1.25);
 });
 
-
+// Restored per PR review: the Python sanitize_srt_text unit tests do not
+// cover this end-to-end ASS -> SRT -> sanitizer -> FFmpeg -> rendered
+// frame path, so the styled-font size-parity assertion lives here again.
+// It stays a separate test (not a phase of the forced-burn-in test)
+// because it plays a different fixture file and asserts on its own
+// session request body; merging would couple two failure domains inside
+// one 240s budget while still paying both playbacks.
 test("styled-font ASS burn-in matches overlay size (sanitizer strips font markup)", async ({ page }) => {
   test.setTimeout(240000);
 
@@ -429,7 +434,6 @@ test("styled-font ASS burn-in matches overlay size (sanitizer strips font markup
     .toBeGreaterThan(0.75);
   expect(ratio).toBeLessThan(1.33);
 });
-
 
 test("subtitle background box toggle applies to both WebVTT overlay and forced burn-in", async ({ page }) => {
   test.setTimeout(240000);

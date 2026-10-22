@@ -21,8 +21,7 @@ const TEST_SHARDS = {
     "delayed prior client stop cannot stop a newer session",
     "switching during delayed subtitle extraction ignores the old item response",
     "video controls seek backward and forward by 15 seconds in embedded playback",
-    "video Space shortcut toggles playback in embedded and fullscreen modes without hijacking text inputs",
-    "video controls stay visible and usable in fullscreen",
+    "video controls and Space shortcut work in embedded and fullscreen modes without hijacking text inputs",
   ]),
   subtitles: new Set([
     "video playback loads tracks, switches tracks, and hides video before subtitle teardown",
@@ -48,8 +47,7 @@ const TEST_SHARDS = {
     "video play toggle keeps intended state during compatibility seek loading",
     "video controls follow standard hover and idle visibility behavior",
     "video fullscreen keeps the scrubber overlay visible and functional",
-    "clear cache button recovers track selectors from stale server and client probe cache",
-    "clear cache button reloads track selectors after stale client probe cache",
+    "clear cache button recovers track selectors from stale server and client probe cache, including after a reload",
     "ignores incomplete probe disk cache and still loads track selectors",
     "falls back to probing the remote file when cached header bytes are corrupt",
     "loaded HLS segment average reflects fragment load timing",
@@ -546,6 +544,14 @@ async function readActiveVideoSessions(page) {
   return payload && Array.isArray(payload.active_sessions) ? payload.active_sessions : [];
 }
 
+// A session only appears in /status after the server finishes its
+// create work (probe + ffmpeg spawn through the tagged /file stream).
+// Under full distributed-lane load that once exceeded the old 15s
+// budget (the queue-wrap test saw only the previous session for the
+// whole poll), so the session-state polls below allow 30s. They still
+// return on first match, so healthy runs are unaffected.
+const SESSION_STATE_POLL_TIMEOUT_MS = 30000;
+
 async function waitForActiveVideoSession(page, expectedPath) {
   let matchingSession = null;
   await expect
@@ -553,7 +559,7 @@ async function waitForActiveVideoSession(page, expectedPath) {
       const sessions = await readActiveVideoSessions(page);
       matchingSession = sessions.find((session) => session && session.path === expectedPath) || null;
       return matchingSession ? matchingSession.session_id : "";
-    }, { timeout: 15000 })
+    }, { timeout: SESSION_STATE_POLL_TIMEOUT_MS })
     .not.toBe("");
   return matchingSession;
 }
@@ -574,7 +580,7 @@ async function expectOnlyActiveVideoSession(page, expectedPath, absentSessionId,
         };
       }
       return sessions.map((session) => session && session.path).filter(Boolean);
-    }, { timeout: 15000 })
+    }, { timeout: SESSION_STATE_POLL_TIMEOUT_MS })
     .toEqual(expectedSessionId
       ? { expectedSession: true, unexpectedLivePaths: [] }
       : [expectedPath]);
@@ -583,7 +589,7 @@ async function expectOnlyActiveVideoSession(page, expectedPath, absentSessionId,
       .poll(async () => {
         const sessions = await readActiveVideoSessions(page);
         return sessions.map((session) => session && session.session_id).filter(Boolean);
-      }, { timeout: 15000 })
+      }, { timeout: SESSION_STATE_POLL_TIMEOUT_MS })
       .not.toContain(absentSessionId);
   }
 }
@@ -596,7 +602,7 @@ async function expectOnlyActiveVideoClientSession(page, expectedPath, clientId) 
         .filter((session) => session && session.client_id === clientId)
         .map((session) => session.path)
         .filter(Boolean);
-    }, { timeout: 15000 })
+    }, { timeout: SESSION_STATE_POLL_TIMEOUT_MS })
     .toEqual([expectedPath]);
 }
 
@@ -2018,53 +2024,16 @@ test("video controls seek backward and forward by 15 seconds in embedded playbac
   await expectControlsOverlayVisible(page);
 });
 
-test("video Space shortcut toggles playback in embedded and fullscreen modes without hijacking text inputs", async ({ page }) => {
-  test.setTimeout(90000);
-
-  await installHlsStub(page, { fragmentCount: 4, playlistFragmentCount: 5 });
-  await openVideoPane(page);
-
-  const alphaSession = waitForSessionPost(page, (body) => body.includes("path=Videos%2Falpha.mkv"));
-  await playLibraryFile(page, "alpha.mkv");
-  await alphaSession;
-  await waitForScrubberReady(page);
-
-  await expectPlayToggleState(page, "Pause");
-  await page.keyboard.press("Space");
-  await expectPlayToggleState(page, "Play");
-  await page.keyboard.press("Space");
-  await expectPlayToggleState(page, "Pause");
-
-  await ensureTrackPanelOpen(page);
-  await page.locator("#video-subtitle-font-size").focus();
-  await page.keyboard.press("Space");
-  await expectPlayToggleState(page, "Pause");
-
-  const surface = page.locator("#video-playback-surface");
-  await surface.hover({ position: { x: 40, y: 40 } });
-  await expectControlsOverlayVisible(page);
-  await surface.dblclick({ position: { x: 48, y: 48 } });
-
-  await expect
-    .poll(async () => readFullscreenPlaybackState(page), { timeout: 10000 })
-    .toMatchObject({
-      fullscreenElementId: "video-playback-stage",
-      fullscreenLabel: "Exit fullscreen",
-    });
-
-  await page.keyboard.press("Space");
-  await expectPlayToggleState(page, "Play");
-  await page.keyboard.press("Space");
-  await expectPlayToggleState(page, "Pause");
-
-  await page.evaluate(async () => {
-    if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
-      await document.exitFullscreen();
-    }
-  });
-});
-
-test("video controls stay visible and usable in fullscreen", async ({ page }) => {
+// Folded (e2e-dedup-faster pass 2, PR follow-up candidate 8): the
+// former "Space shortcut toggles playback in embedded and fullscreen
+// modes without hijacking text inputs" and "controls stay visible and
+// usable in fullscreen" tests shared the same HLS-stub setup, alpha
+// playback and fullscreen entry. This single scenario still covers, in
+// order: embedded Space toggling, the text-input focus exemption,
+// fullscreen control geometry, fullscreen Space toggling, queue
+// navigation (loop/next/previous) and the seek-back check, all against
+// one playback session.
+test("video controls and Space shortcut work in embedded and fullscreen modes without hijacking text inputs", async ({ page }) => {
   test.setTimeout(90000);
 
   await installHlsStub(page, { fragmentCount: 4, playlistFragmentCount: 5 });
@@ -2076,11 +2045,25 @@ test("video controls stay visible and usable in fullscreen", async ({ page }) =>
   await queueLibraryFile(page, "bravo.mkv");
   await waitForScrubberReady(page);
 
+  // Embedded Space toggling.
+  await expectPlayToggleState(page, "Pause");
+  await page.keyboard.press("Space");
+  await expectPlayToggleState(page, "Play");
+  await page.keyboard.press("Space");
+  await expectPlayToggleState(page, "Pause");
+
+  // Space must not hijack text inputs.
+  await ensureTrackPanelOpen(page);
+  await page.locator("#video-subtitle-font-size").focus();
+  await page.keyboard.press("Space");
+  await expectPlayToggleState(page, "Pause");
+
   const surface = page.locator("#video-playback-surface");
   await surface.hover({ position: { x: 40, y: 40 } });
   await expectControlsOverlayVisible(page);
   await surface.dblclick({ position: { x: 48, y: 48 } });
 
+  // Fullscreen control geometry and state.
   await expect
     .poll(async () => readFullscreenPlaybackState(page), { timeout: 10000 })
     .toMatchObject({
@@ -2109,6 +2092,12 @@ test("video controls stay visible and usable in fullscreen", async ({ page }) =>
     forward15: { visible: true, disabled: false },
   });
 
+  // Fullscreen Space toggling.
+  await page.keyboard.press("Space");
+  await expectPlayToggleState(page, "Play");
+  await page.keyboard.press("Space");
+  await expectPlayToggleState(page, "Pause");
+
   await clickVideoControl(page, "video-loop-toggle");
   await expectVideoControlState(page, { loop: { pressed: "true" }, previous: { disabled: false } });
 
@@ -2126,9 +2115,14 @@ test("video controls stay visible and usable in fullscreen", async ({ page }) =>
   await clickVideoControl(page, "video-back-15");
   await expectPlaybackNearSeconds(page, 3, 1);
 
-  await page.evaluate(async () => {
+  await page.evaluate(() => {
     if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
-      await document.exitFullscreen();
+      // Fire-and-forget: the exitFullscreen() promise can stay pending
+      // indefinitely under load; the state poll after this bounds it.
+      const request = document.exitFullscreen();
+      if (request && typeof request.catch === "function") {
+        request.catch(() => {});
+      }
     }
   });
   await expect
@@ -3671,9 +3665,14 @@ test("video fullscreen keeps the scrubber overlay visible and functional", async
     expect(fullscreenState.controlRects[id].height).toBeGreaterThan(0);
   }
 
-  await page.evaluate(async () => {
+  await page.evaluate(() => {
     if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
-      await document.exitFullscreen();
+      // Fire-and-forget: the exitFullscreen() promise can stay pending
+      // indefinitely under load; the state poll after this bounds it.
+      const request = document.exitFullscreen();
+      if (request && typeof request.catch === "function") {
+        request.catch(() => {});
+      }
     }
   });
   await expect
@@ -3683,7 +3682,6 @@ test("video fullscreen keeps the scrubber overlay visible and functional", async
       fullscreenLabel: "Fullscreen",
     });
 });
-
 
 async function seedIncompleteProbeCache(request, relPath) {
   const response = await request.post("/__integration/seed-probe-cache", {
@@ -3713,7 +3711,7 @@ async function seedCorruptHeaderCache(request, relPath) {
   return payload;
 }
 
-test("clear cache button recovers track selectors from stale server and client probe cache", async ({ page }) => {
+test("clear cache button recovers track selectors from stale server and client probe cache, including after a reload", async ({ page }) => {
   test.setTimeout(60000);
 
   await installHlsStub(page);
@@ -3765,21 +3763,10 @@ test("clear cache button recovers track selectors from stale server and client p
     audioOptionCount: 2,
     subtitleOptionCount: 4,
   });
-});
 
-test("clear cache button reloads track selectors after stale client probe cache", async ({ page }) => {
-  test.setTimeout(60000);
-
-  await installHlsStub(page);
-  await openVideoPane(page);
-  await playLibraryFile(page, "alpha.mkv");
-  await waitForVisibleVideo(page);
-  await waitForPlaybackSurfaceWithoutOverlay(page);
-  await expectTrackSelectors(page, {
-    audioOptionCount: 2,
-    subtitleOptionCount: 4,
-  });
-
+  // Phase 2 (merged from the former standalone reload test,
+  // e2e-dedup-faster): with healthy selectors, poison only the client
+  // probe cache, reload, and the same Clear Cache recovery must work.
   await page.evaluate(() => {
     const path = "Videos/alpha.mkv";
     const stalePayload = {

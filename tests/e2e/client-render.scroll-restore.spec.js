@@ -84,7 +84,7 @@ async function pickVisibleFolderRowPath(page) {
   });
 }
 
-test("client-render restores the folder scroll position when Back returns from a child folder", async ({ page }) => {
+test("client-render restores scroll on Back, Forward and re-entering a visited folder; a never-visited folder starts at the top", async ({ page }) => {
   await page.goto(`/?path=${encodeURIComponent(ROOT_PATH)}`);
   await waitForFolderReady(page, ROOT_PATH, 41);
   await expect(page.locator("body")).toHaveAttribute("data-browse-virtualized", "1");
@@ -118,17 +118,14 @@ test("client-render restores the folder scroll position when Back returns from a
 
   await expectScrollTopNear(page, savedScrollTop);
   await expect(page.locator(`${targetRowSelector} .entry-name`, { hasText: targetName })).toBeInViewport();
-});
 
-test("client-render restores the child folder scroll position on Forward after Back", async ({ page }) => {
-  await page.goto(`/?path=${encodeURIComponent(ROOT_PATH)}`);
-  await waitForFolderReady(page, ROOT_PATH, 41);
-  expect(await readBrowseScrollTop(page)).toBe(0);
-
+  // Forward and re-enter phases (merged from their standalone tests,
+  // e2e-dedup-faster; same restore invariant, different triggers).
+  // The Big Child has enough rows of its own to scroll.
+  await setBrowseScrollTop(page, 0);
   await page.locator(`tr[data-row-path="${BIG_CHILD_PATH}"] a.name`).click();
   await waitForFolderReady(page, BIG_CHILD_PATH, 40);
   expect(await readBrowseScrollTop(page)).toBe(0);
-
   const childScrollTop = await setBrowseScrollTop(page, 700);
   expect(childScrollTop).toBeGreaterThan(600);
 
@@ -139,8 +136,50 @@ test("client-render restores the child folder scroll position on Forward after B
   await page.goForward();
   await waitForFolderReady(page, BIG_CHILD_PATH, 40);
   await expectScrollTopNear(page, childScrollTop);
+
+  // Re-entering the visited child by link restores its scroll too.
+  await clickBreadcrumb(page, ROOT_PATH);
+  await waitForFolderReady(page, ROOT_PATH, 41);
+  await page.locator(`tr[data-row-path="${BIG_CHILD_PATH}"] a.name`).click();
+  await waitForFolderReady(page, BIG_CHILD_PATH, 40);
+  await expectScrollTopNear(page, childScrollTop);
+
+  // A never-visited folder starts at the top (the root offset, saved
+  // just before the click, must not leak into it).
+  await clickBreadcrumb(page, ROOT_PATH);
+  await waitForFolderReady(page, ROOT_PATH, 41);
+  const rootScrollTop = await setBrowseScrollTop(page, 900);
+  expect(rootScrollTop).toBeGreaterThan(800);
+  await expect
+    .poll(async () => await page.locator("body").getAttribute("data-browse-visible-range"))
+    .not.toMatch(/^0:/);
+  const freshPath = await page.evaluate((visited) => {
+    const main = document.querySelector("main");
+    const viewport = main.getBoundingClientRect();
+    const middle = viewport.top + viewport.height / 2;
+    let best = null;
+    document.querySelectorAll('tr[data-row-kind="folder"][data-row-path]').forEach((row) => {
+      if (row.hidden) return;
+      const path = row.getAttribute("data-row-path");
+      if (visited.includes(path)) return;
+      const rect = row.getBoundingClientRect();
+      if (rect.top < viewport.top || rect.bottom > viewport.bottom) return;
+      const distance = Math.abs((rect.top + rect.bottom) / 2 - middle);
+      if (!best || distance < best.distance) best = { path, distance };
+    });
+    return best ? best.path : null;
+  }, [targetPath, BIG_CHILD_PATH]);
+  expect(freshPath).toMatch(/^Scroll Root\/Folder \d\d$/);
+  // The virtual list keeps a zero-size spare copy of one row in the
+  // same tbody (verified by DOM dump on spzeni1), so scope the click
+  // to the visible copy instead of the strict first match.
+  const freshLink = page.locator(`tr[data-row-path="${freshPath}"] a.name:visible`);
+  await freshLink.click();
+  await waitForFolderReady(page, freshPath, 1);
+  expect(await readBrowseScrollTop(page)).toBe(0);
 });
-test("client-render keeps the folder scroll position across a page reload", async ({ page }) => {
+
+test("client-render keeps the folder scroll position across a page reload and a breadcrumb return", async ({ page }) => {
   await page.goto(`/?path=${encodeURIComponent(ROOT_PATH)}`);
   await waitForFolderReady(page, ROOT_PATH, 41);
 
@@ -150,6 +189,22 @@ test("client-render keeps the folder scroll position across a page reload", asyn
   await page.reload();
   await waitForFolderReady(page, ROOT_PATH, 41);
   await expectScrollTopNear(page, savedScrollTop);
+
+  // Breadcrumb phase (merged from its standalone test,
+  // e2e-dedup-faster): a breadcrumb click is a pushed history entry,
+  // not Back, and restores the parent folder's saved scroll.
+  const targetPath = await pickVisibleFolderRowPath(page);
+  expect(targetPath).toMatch(/^Scroll Root\/Folder \d\d$/);
+  await page.locator(`tr[data-row-path="${targetPath}"] a.name`).click();
+  await waitForFolderReady(page, targetPath, 1);
+  expect(await readBrowseScrollTop(page)).toBe(0);
+  const historyLength = await page.evaluate(() => window.history.length);
+
+  await clickBreadcrumb(page, ROOT_PATH);
+  await waitForFolderReady(page, ROOT_PATH, 41);
+  expect(await page.evaluate(() => window.history.length)).toBe(historyLength + 1);
+  await expectScrollTopNear(page, savedScrollTop);
+  await expect(page.locator(`tr[data-row-path="${targetPath}"] .entry-name`)).toBeInViewport();
 });
 test("client-render an in-place refresh during a pending folder navigation keeps the history entry and Back restores the scroll", async ({ page }) => {
   // The refresh-cache link and the listing-warning Refresh button refresh the
@@ -242,53 +297,6 @@ async function scrollRootAndPickFolder(page) {
   expect(targetPath).toMatch(/^Scroll Root\/Folder \d\d$/);
   return { savedScrollTop, targetPath };
 }
-
-test("client-render clicking the parent breadcrumb restores the parent folder scroll position", async ({ page }) => {
-  const { savedScrollTop, targetPath } = await scrollRootAndPickFolder(page);
-  await page.locator(`tr[data-row-path="${targetPath}"] a.name`).click();
-  await waitForFolderReady(page, targetPath, 1);
-  expect(await readBrowseScrollTop(page)).toBe(0);
-  const historyLength = await page.evaluate(() => window.history.length);
-
-  await clickBreadcrumb(page, ROOT_PATH);
-  await waitForFolderReady(page, ROOT_PATH, 41);
-  // A breadcrumb click is a new (pushed) history entry, not Back.
-  expect(await page.evaluate(() => window.history.length)).toBe(historyLength + 1);
-  await expectScrollTopNear(page, savedScrollTop);
-  await expect(page.locator(`tr[data-row-path="${targetPath}"] .entry-name`)).toBeInViewport();
-});
-
-test("client-render re-entering a visited child folder restores it and a never-visited folder starts at the top", async ({ page }) => {
-  await page.goto(`/?path=${encodeURIComponent(ROOT_PATH)}`);
-  await waitForFolderReady(page, ROOT_PATH, 41);
-  await page.locator(`tr[data-row-path="${BIG_CHILD_PATH}"] a.name`).click();
-  await waitForFolderReady(page, BIG_CHILD_PATH, 40);
-  expect(await readBrowseScrollTop(page)).toBe(0);
-  const childScrollTop = await setBrowseScrollTop(page, 700);
-  expect(childScrollTop).toBeGreaterThan(600);
-
-  await clickBreadcrumb(page, ROOT_PATH);
-  await waitForFolderReady(page, ROOT_PATH, 41);
-  await expectScrollTopNear(page, 0);
-
-  await page.locator(`tr[data-row-path="${BIG_CHILD_PATH}"] a.name`).click();
-  await waitForFolderReady(page, BIG_CHILD_PATH, 40);
-  await expectScrollTopNear(page, childScrollTop);
-
-  await clickBreadcrumb(page, ROOT_PATH);
-  await waitForFolderReady(page, ROOT_PATH, 41);
-  const rootScrollTop = await setBrowseScrollTop(page, 900);
-  await expect
-    .poll(async () => await page.locator("body").getAttribute("data-browse-visible-range"))
-    .not.toMatch(/^0:/);
-  const freshPath = await pickVisibleFolderRowPath(page);
-  expect(freshPath).toMatch(/^Scroll Root\/Folder \d\d$/);
-  await page.locator(`tr[data-row-path="${freshPath}"] a.name`).click();
-  await waitForFolderReady(page, freshPath, 1);
-  // Never visited: starts at the top (the root's offset must not leak in).
-  expect(await readBrowseScrollTop(page)).toBe(0);
-  expect(rootScrollTop).toBeGreaterThan(800);
-});
 
 test("client-render a reveal target wins over the folder's saved scroll position", async ({ page }) => {
   const { savedScrollTop, targetPath } = await scrollRootAndPickFolder(page);

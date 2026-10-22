@@ -143,22 +143,6 @@ test("bottom panel drag does not snap to full page, while the topbar button stil
     .toBe(42);
 });
 
-test("bottom panel height and selected pane survive reload", async ({ page }) => {
-  await page.goto("/?path=Camera%20Uploads");
-  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
-
-  await page.evaluate(() => {
-    Settings.set("log-height", 280);
-    Settings.set("bottom-pane-mode", "file-search");
-  });
-  await page.reload();
-  await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");
-  await expect(page.locator("#bottom-pane-mode")).toHaveValue("file-search");
-  await expect
-    .poll(async () => page.locator("#log-panel").evaluate((node) => Math.round(node.getBoundingClientRect().height)))
-    .toBe(280);
-});
-
 test("bottom panel full-window state survives reload without restoring video full-window", async ({ page }) => {
   await page.goto("/?path=Camera%20Uploads");
   await expect(page.locator("body")).toHaveAttribute("data-browse-client", "ready");

@@ -80,6 +80,13 @@ test.beforeEach(async ({ page }) => {
   await reloadAndWait(page);
 });
 
+// Dedup (e2e-dedup-faster): the panel drag/minimize/persistence code path
+// is shared by all three pane modes, so the full behaviour matrix runs
+// once, in server-log mode. The other modes keep only the cases where
+// their own late startup code could overwrite the restored state:
+// minimize-survives-reload for every mode (music/video startup expanding
+// a minimized panel was the original regression), plus the
+// below-the-music-minimum height for the music player.
 for (const mode of ["server-log", "music-player", "video-player"]) {
   test.describe(`bottom panel in ${mode} mode`, () => {
     test.beforeEach(async ({ page }) => {
@@ -99,7 +106,7 @@ for (const mode of ["server-log", "music-player", "video-player"]) {
       await expect(page.locator("#log-panel")).toHaveAttribute("data-minimized", "true");
     });
 
-    test("a dragged height survives a reload", async ({ page }) => {
+    if (mode === "server-log") test("a dragged height survives a reload", async ({ page }) => {
       const dragged = await dragPanelToHeight(page, 460);
       expect(Math.abs(dragged - 460)).toBeLessThanOrEqual(TOLERANCE);
       await expectStablePanelHeight(page, dragged, "drag should resize the panel");
@@ -108,7 +115,7 @@ for (const mode of ["server-log", "music-player", "video-player"]) {
       await expectStablePanelHeight(page, dragged, "dragged height should be restored after reload");
     });
 
-    test("a small dragged height (below the music player minimum) survives a reload", async ({ page }) => {
+    if (mode !== "video-player") test("a small dragged height (below the music player minimum) survives a reload", async ({ page }) => {
       const dragged = await dragPanelToHeight(page, 200);
       expect(Math.abs(dragged - 200)).toBeLessThanOrEqual(TOLERANCE);
       await expectStablePanelHeight(page, dragged, "drag should resize the panel");
@@ -117,7 +124,7 @@ for (const mode of ["server-log", "music-player", "video-player"]) {
       await expectStablePanelHeight(page, dragged, "small dragged height should be restored after reload");
     });
 
-    test("restoring from minimized returns to the last expanded height, also across reloads", async ({ page }) => {
+    if (mode === "server-log") test("restoring from minimized returns to the last expanded height, also across reloads", async ({ page }) => {
       const dragged = await dragPanelToHeight(page, 430);
       await expectStablePanelHeight(page, dragged, "drag should resize the panel");
 
