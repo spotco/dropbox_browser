@@ -80,6 +80,19 @@ async function headerMetrics(page) {
   }, COLUMN_KEYS);
 }
 
+// After a scroll, the virtual list rebinds its rows asynchronously;
+// on a slow machine the fixed settle in scrollMainTo can elapse before
+// a body row exists to measure. Poll until every column has a body
+// cell, then assert on the settled metrics (same assertions, no race).
+async function headerMetricsWhenCellsReady(page) {
+  let metrics = null;
+  await expect.poll(async () => {
+    metrics = await headerMetrics(page);
+    return metrics.columns.every((column) => column.cellLeft !== null);
+  }, { timeout: 10000, message: "virtual list rebinds rows for the new scroll position" }).toBe(true);
+  return metrics;
+}
+
 function expectHeaderRowInsideTopbar(metrics) {
   expect(metrics.headerTop).toBe(0);
   for (const column of metrics.columns) {
@@ -136,7 +149,7 @@ test("top bar shows only the breadcrumb title and keeps its original height", as
   // this same initial state — header height, containment and cell
   // alignment at middle and bottom scroll positions.
   await scrollMainTo(page, 0.5);
-  const middle = await headerMetrics(page);
+  const middle = await headerMetricsWhenCellsReady(page);
   expect(middle.headerHeight).toBe(TOPBAR_HEIGHT);
   expectHeaderRowInsideTopbar(middle);
   expectHeaderAlignedWithCells(middle);
@@ -145,7 +158,7 @@ test("top bar shows only the breadcrumb title and keeps its original height", as
   }
 
   await scrollMainTo(page, 1);
-  const bottom = await headerMetrics(page);
+  const bottom = await headerMetricsWhenCellsReady(page);
   expectHeaderRowInsideTopbar(bottom);
   expectHeaderAlignedWithCells(bottom);
 });
