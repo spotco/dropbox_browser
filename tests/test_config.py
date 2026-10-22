@@ -200,7 +200,14 @@ class ThumbnailConfigTests(unittest.TestCase):
             "ThumbnailMaxInputBytes": 1234,
             "ThumbnailTimeoutSeconds": 9,
         }
-        with patch.object(config_module, "find_vendored_magick", return_value=None):
+        # Patch both discovery seams: _discover_tool falls back to
+        # shutil.which, so on a machine with a system ImageMagick the
+        # vendored patch alone does not make magick "missing" and the
+        # test used to fail there.
+        with (
+            patch.object(config_module, "find_vendored_magick", return_value=None),
+            patch.object(config_module.shutil, "which", return_value=None),
+        ):
             thumbnail_config = config_module.load_thumbnail_config(app_config)
 
         self.assertFalse(thumbnail_config.enabled)

@@ -2107,9 +2107,14 @@ test("video controls and Space shortcut work in embedded and fullscreen modes wi
   await clickVideoControl(page, "video-back-15");
   await expectPlaybackNearSeconds(page, 3, 1);
 
-  await page.evaluate(async () => {
+  await page.evaluate(() => {
     if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
-      await document.exitFullscreen();
+      // Fire-and-forget: the exitFullscreen() promise can stay pending
+      // indefinitely under load; the state poll after this bounds it.
+      const request = document.exitFullscreen();
+      if (request && typeof request.catch === "function") {
+        request.catch(() => {});
+      }
     }
   });
   await expect
@@ -3652,9 +3657,14 @@ test("video fullscreen keeps the scrubber overlay visible and functional", async
     expect(fullscreenState.controlRects[id].height).toBeGreaterThan(0);
   }
 
-  await page.evaluate(async () => {
+  await page.evaluate(() => {
     if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
-      await document.exitFullscreen();
+      // Fire-and-forget: the exitFullscreen() promise can stay pending
+      // indefinitely under load; the state poll after this bounds it.
+      const request = document.exitFullscreen();
+      if (request && typeof request.catch === "function") {
+        request.catch(() => {});
+      }
     }
   });
   await expect
