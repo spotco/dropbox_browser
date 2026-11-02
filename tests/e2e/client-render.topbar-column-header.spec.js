@@ -163,30 +163,40 @@ test("top bar shows only the breadcrumb title and keeps its original height", as
   expectHeaderAlignedWithCells(bottom);
 });
 
-test("header stays aligned with the log panel minimized and at a narrow width", async ({ page }) => {
+test("header stays aligned with the log panel minimized and wraps when the path is clipped", async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem("dropbox-browser.log-panel-minimized", "true");
   });
   await page.setViewportSize({ width: 900, height: 700 });
   await openCameraUploads(page);
   await scrollMainTo(page, 0.5);
+  await expect(page.locator("header.browse-topbar")).toHaveClass(/is-tight/);
   const metrics = await headerMetrics(page);
-  expect(metrics.headerHeight).toBe(TOPBAR_HEIGHT);
+  expect(metrics.headerHeight).toBeGreaterThan(TOPBAR_HEIGHT);
   expectHeaderRowInsideTopbar(metrics);
   expectHeaderAlignedWithCells(metrics);
-  const overlap = await page.evaluate(() => {
+  const wrapped = await page.evaluate(() => {
     const crumb = document.querySelector(".browse-topbar-breadcrumb").getBoundingClientRect();
     const toggles = document.querySelector(".sync-toggles").getBoundingClientRect();
-    return { crumbRight: crumb.right, togglesLeft: toggles.left, togglesRight: toggles.right, width: window.innerWidth };
+    const up = document.querySelector("#browse-up-level").getBoundingClientRect();
+    return {
+      crumbBottom: crumb.bottom,
+      togglesTop: toggles.top,
+      togglesRight: toggles.right,
+      upWidth: up.width,
+      width: window.innerWidth,
+    };
   });
-  expect(overlap.crumbRight).toBeLessThanOrEqual(overlap.togglesLeft);
-  expect(overlap.togglesRight).toBeLessThanOrEqual(overlap.width);
+  expect(wrapped.togglesTop).toBeGreaterThanOrEqual(wrapped.crumbBottom - 1);
+  expect(wrapped.togglesRight).toBeLessThanOrEqual(wrapped.width);
+  expect(wrapped.upWidth).toBeGreaterThan(0);
 
   // Restoring the bottom panel changes <main>'s height; alignment must hold.
   await page.locator("#bottom-pane-minimize").click();
   await page.waitForTimeout(250);
   const restored = await headerMetrics(page);
-  expect(restored.headerHeight).toBe(TOPBAR_HEIGHT);
+  await expect(page.locator("header.browse-topbar")).toHaveClass(/is-tight/);
+  expect(restored.headerHeight).toBeGreaterThan(TOPBAR_HEIGHT);
   expectHeaderAlignedWithCells(restored);
 });
 

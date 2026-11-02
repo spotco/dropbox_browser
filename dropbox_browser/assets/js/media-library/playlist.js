@@ -1904,10 +1904,14 @@ export function initPlaylist(ctx) {
     }
     destroyPlaylistVirtualRecycler();
     resetPlaylistVirtualState();
+    // Rebuilding the rows clears the scroller. Playback only changes the
+    // current-row marker, so keep the user's place in a short playlist.
+    var preservedScrollTop = els.playlistListEl.scrollTop;
     els.playlistListEl.textContent = '';
     state.playlist.forEach(function (song, index) {
       els.playlistListEl.appendChild(createPlaylistRow(song, index, false));
     });
+    if (preservedScrollTop) els.playlistListEl.scrollTop = preservedScrollTop;
     setPlaylistVirtualDataset(null, state.playlist.length);
     paintPlaylistSelection();
   }
