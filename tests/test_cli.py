@@ -144,7 +144,7 @@ class CliShutdownTests(unittest.TestCase):
                 result = cli.main()
 
         self.assertEqual(result, 0)
-        self.assertEqual(len(created_servers), 1)
+        self.assertEqual(len(created_servers), 2)
         server = created_servers[0]
         self.assertTrue(server.daemon_threads)
         self.assertFalse(server.block_on_close)
@@ -247,7 +247,7 @@ class CliShutdownTests(unittest.TestCase):
                 result = cli.main()
 
         self.assertEqual(result, 0)
-        self.assertEqual(len(created_servers), 1)
+        self.assertEqual(len(created_servers), 2)
         self.assertIn("app.shutdown", steps)
         self.assertIn("server.shutdown", steps)
         self.assertIn("server.server_close", steps)
@@ -381,7 +381,7 @@ class CliShutdownTests(unittest.TestCase):
                 result = cli.main()
 
         self.assertEqual(result, 0)
-        self.assertEqual(len(created_servers), 1)
+        self.assertEqual(len(created_servers), 2)
         self.assertIn("Thumbnails disabled: vendored ImageMagick not found", stdout.getvalue())
         self.assertIn("Video compatibility playback unavailable", stdout.getvalue())
 

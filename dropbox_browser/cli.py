@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import signal
+import socket
 import ssl
 import sys
 import threading
@@ -96,6 +97,28 @@ def warn_if_python_too_old() -> None:
     warning = python_version_warning()
     if warning:
         print(f"Warning: {warning}", file=sys.stderr)
+
+
+def listen_hosts(host: str) -> list[str]:
+    """Loopback binds include both IPv4 and IPv6 so localhost does not refuse one of them."""
+    if host in {"127.0.0.1", "localhost", "::1"}:
+        return ["127.0.0.1", "::1"]
+    return [host]
+
+
+class _BrowserHTTPServer(ThreadingHTTPServer):
+    request_queue_size = 128
+
+
+class _IPv6BrowserHTTPServer(_BrowserHTTPServer):
+    address_family = socket.AF_INET6
+
+
+def make_http_server(host: str, port: int) -> ThreadingHTTPServer:
+    if not isinstance(ThreadingHTTPServer, type):
+        return ThreadingHTTPServer((host, port), RequestHandler)
+    server_cls = _IPv6BrowserHTTPServer if ":" in host else _BrowserHTTPServer
+    return server_cls((host, port), RequestHandler)
 
 
 def binds_all_interfaces(host: str) -> bool:
@@ -194,7 +217,7 @@ def create_https_server(
     *,
     internal_http_port: int,
 ) -> ThreadingHTTPServer:
-    https_server = ThreadingHTTPServer(address, RequestHandler)
+    https_server = make_http_server(address[0], address[1])
     _configure_server(https_server, app, app_config, internal_http_port=internal_http_port)
     try:
         tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -248,14 +271,14 @@ def print_listen_urls(
 def _abort_startup(
     *,
     app: DropboxBrowser,
-    http_server: ThreadingHTTPServer | None,
-    https_server: ThreadingHTTPServer | None,
+    http_servers: list[ThreadingHTTPServer],
+    https_servers: list[ThreadingHTTPServer],
     message: str,
     code: int = 1,
 ) -> int:
-    if https_server is not None:
+    for https_server in https_servers:
         https_server.server_close()
-    if http_server is not None:
+    for http_server in http_servers:
         http_server.server_close()
     app.shutdown()
     print(message, file=sys.stderr)
@@ -392,37 +415,67 @@ def main() -> int:
         int(app_config.get("VideoProbeAnalyzeDurationUs", 3_000_000) or 3_000_000),
     )
     app.sync_jobs = SyncJobManager(app, workers=int(app_config["SyncJobWorkers"]))
-    server = ThreadingHTTPServer((args.host, http_port), RequestHandler)
-    _configure_server(server, app, app_config, internal_http_port=http_port)
+    http_servers: list[ThreadingHTTPServer] = []
+    for bind_host in listen_hosts(args.host):
+        try:
+            bound = make_http_server(bind_host, http_port)
+        except OSError as error:
+            if bind_host == "::1" and http_servers:
+                print(f"WARNING: IPv6 localhost listener unavailable: {error}", file=sys.stderr)
+                continue
+            raise
+        _configure_server(bound, app, app_config, internal_http_port=http_port)
+        http_servers.append(bound)
+    server = http_servers[0]
 
-    https_server: ThreadingHTTPServer | None = None
-    https_thread: threading.Thread | None = None
+    https_servers: list[ThreadingHTTPServer] = []
+    https_threads: list[threading.Thread] = []
     if serve_https and tls_material is not None:
         cert_path, key_path = tls_material
-        try:
-            https_server = create_https_server(
-                (args.host, https_port),
-                app,
-                app_config,
-                cert_path,
-                key_path,
-                internal_http_port=http_port,
-            )
-        except (OSError, ssl.SSLError, ValueError, OverflowError, FileNotFoundError) as error:
-            if https_server is not None:
-                https_server.server_close()
-                https_server = None
-            if https_required or not https_optional:
-                return _abort_startup(
-                    app=app,
-                    http_server=server,
-                    https_server=None,
-                    message=f"could not start HTTPS listener: {error}",
+        https_error: BaseException | None = None
+        for bind_host in listen_hosts(args.host):
+            https_server: ThreadingHTTPServer | None = None
+            try:
+                https_server = create_https_server(
+                    (bind_host, https_port),
+                    app,
+                    app_config,
+                    cert_path,
+                    key_path,
+                    internal_http_port=http_port,
                 )
-            print(
-                f"WARNING: HTTPS listener unavailable; continuing with HTTP only: {error}",
-                file=sys.stderr,
+            except OSError as error:
+                if bind_host == "::1":
+                    print(f"WARNING: IPv6 localhost HTTPS listener unavailable: {error}", file=sys.stderr)
+                    if https_server is not None:
+                        https_server.server_close()
+                    continue
+                https_error = error
+                if https_server is not None:
+                    https_server.server_close()
+                break
+            except (ssl.SSLError, ValueError, OverflowError, FileNotFoundError) as error:
+                https_error = error
+                if https_server is not None:
+                    https_server.server_close()
+                break
+            https_servers.append(https_server)
+        if https_error is not None and (https_required or not https_optional):
+            return _abort_startup(
+                app=app,
+                http_servers=http_servers,
+                https_servers=https_servers,
+                message=f"could not start HTTPS listener: {https_error}",
             )
+        if https_error is not None or not https_servers:
+            if https_error is not None:
+                print(
+                    f"WARNING: HTTPS listener unavailable; continuing with HTTP only: {https_error}",
+                    file=sys.stderr,
+                )
+            for extra in https_servers:
+                extra.server_close()
+            https_servers = []
             https_port = None
 
     stop_signal: int | None = None
@@ -438,26 +491,26 @@ def main() -> int:
             app_shutdown_done = True
             app.shutdown()
 
+    def stop_listeners() -> None:
+        for listener in http_servers:
+            listener.shutdown()
+        for listener in https_servers:
+            listener.shutdown()
+
     def request_shutdown(signum: int, _frame: object) -> None:
         nonlocal stop_signal
         stop_signal = signum
         if shutdown_started.is_set():
             return
         shutdown_started.set()
-
-        def begin_shutdown() -> None:
-            server.shutdown()
-            if https_server is not None:
-                https_server.shutdown()
-
-        threading.Thread(target=begin_shutdown, daemon=True, name="http-server-shutdown").start()
+        threading.Thread(target=stop_listeners, daemon=True, name="http-server-shutdown").start()
 
     print_listen_urls(
         host=args.host,
         http_port=http_port,
-        https_port=https_port if https_server is not None else None,
+        https_port=https_port if https_servers else None,
         remote=args.remote,
-        self_signed_https=self_signed_https and https_server is not None,
+        self_signed_https=self_signed_https and bool(https_servers),
     )
     print(f"Comparing with local folder: {local_root}")
     if thumbnail_config.enabled:
@@ -486,13 +539,23 @@ def main() -> int:
     if hasattr(signal, "SIGTERM"):
         previous_sigterm = signal.getsignal(signal.SIGTERM)
         signal.signal(signal.SIGTERM, request_shutdown)
-    if https_server is not None:
-        https_thread = threading.Thread(
-            target=https_server.serve_forever,
-            name="dropbox-browser-https",
+    if https_servers:
+        for https_server in https_servers:
+            https_threads.append(
+                threading.Thread(
+                    target=https_server.serve_forever,
+                    name="dropbox-browser-https",
+                    daemon=True,
+                )
+            )
+        for https_thread in https_threads:
+            https_thread.start()
+    for extra_server in http_servers[1:]:
+        threading.Thread(
+            target=extra_server.serve_forever,
+            name="dropbox-browser-http-ipv6",
             daemon=True,
-        )
-        https_thread.start()
+        ).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -503,15 +566,14 @@ def main() -> int:
             signal.signal(signal.SIGTERM, previous_sigterm)
         if stop_signal is not None:
             print(f"\nStopped by signal {stop_signal}.")
-        if https_server is not None:
-            https_server.shutdown()
-        server.shutdown()
+        stop_listeners()
         shutdown_app_once()
-        if https_server is not None:
+        for https_server in https_servers:
             https_server.server_close()
-        if https_thread is not None:
+        for https_thread in https_threads:
             https_thread.join(timeout=5)
-        server.server_close()
+        for http_server in http_servers:
+            http_server.server_close()
     return 0
 
 

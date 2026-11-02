@@ -226,7 +226,7 @@ class HttpsStartupFailureTests(unittest.TestCase):
                 result = cli.main()
 
         self.assertEqual(result, 0)
-        self.assertEqual(len(created_servers), 1)
+        self.assertEqual(len(created_servers), 2)
         self.assertIn("continuing with HTTP only", stderr.getvalue())
         app.shutdown.assert_called_once()
 
