@@ -164,6 +164,12 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
         raise BrowserError(HTTPStatus.FORBIDDEN, "Only localhost clients may access this server.")
 
+    def _internal_http_base_url(self) -> str:
+        port = getattr(self.server, "internal_http_port", None)
+        if port is None:
+            port = int(self.server.server_address[1])  # type: ignore[attr-defined]
+        return f"http://127.0.0.1:{int(port)}"
+
     def do_GET(self) -> None:
         try:
             self._enforce_localhost_only_access()
@@ -660,8 +666,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         descriptor = service.descriptor_for_path(rel_path, source)
         input_url = None
         if source == "remote":
-            port = int(self.server.server_address[1])  # type: ignore[attr-defined]
-            input_url = f"http://127.0.0.1:{port}/file?" + urlencode({
+            input_url = self._internal_http_base_url() + "/file?" + urlencode({
                 "path": rel_path,
                 "source": "remote",
             })
@@ -1399,8 +1404,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 raise BrowserError(HTTPStatus.BAD_REQUEST, "Only remote video probe is supported.")
             rel_path = clean_rel_path(params.get("path", [""])[0])
             resolved_rel_path, file_size = self._resolve_remote_file(rel_path)
-            port = int(self.server.server_address[1])  # type: ignore[attr-defined]
-            base_url = f"http://127.0.0.1:{port}"
+            base_url = self._internal_http_base_url()
             payload = probe_remote_media(
                 self.app,
                 rel_path=resolved_rel_path,
@@ -1415,8 +1419,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 raise BrowserError(HTTPStatus.BAD_REQUEST, "Only remote subtitle extraction is supported.")
             rel_path = clean_rel_path(params.get("path", [""])[0])
             resolved_rel_path, file_size = self._resolve_remote_file(rel_path)
-            port = int(self.server.server_address[1])  # type: ignore[attr-defined]
-            base_url = f"http://127.0.0.1:{port}"
+            base_url = self._internal_http_base_url()
             payload = extract_all_remote_subtitles_to_webvtt(
                 self.app,
                 rel_path=resolved_rel_path,
@@ -1445,8 +1448,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 subtitle_stream_index = int(track_raw)
             except ValueError as exc:
                 raise BrowserError(HTTPStatus.BAD_REQUEST, "Subtitle track must be an integer stream index.") from exc
-            port = int(self.server.server_address[1])  # type: ignore[attr-defined]
-            base_url = f"http://127.0.0.1:{port}"
+            base_url = self._internal_http_base_url()
             body, language = extract_remote_subtitles_to_webvtt(
                 self.app,
                 rel_path=resolved_rel_path,
@@ -1481,8 +1483,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             window_duration_seconds = parse_subtitle_window_duration_seconds(params.get("duration", [""])[0])
             window_status = params.get("window_status", ["requested"])[0].strip() or "requested"
             playback_sync_token = parse_playback_sync_token(params.get("playback_sync_token", [""])[0])
-            port = int(self.server.server_address[1])  # type: ignore[attr-defined]
-            base_url = f"http://127.0.0.1:{port}"
+            base_url = self._internal_http_base_url()
             payload = extract_remote_subtitle_window_to_webvtt(
                 self.app,
                 rel_path=resolved_rel_path,
@@ -1573,8 +1574,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 force_video_transcode = params.get("force_video_transcode", [""])[0].strip() == "1"
                 force_audio_transcode = params.get("force_audio_transcode", [""])[0].strip() == "1"
                 transition_token = parse_video_transition_token(params.get("transition_token", [""])[0])
-                port = int(self.server.server_address[1])  # type: ignore[attr-defined]
-                base_url = f"http://127.0.0.1:{port}"
+                base_url = self._internal_http_base_url()
                 payload = video_session_manager(self.app).create_session(
                     rel_path=resolved_rel_path,
                     base_url=base_url,

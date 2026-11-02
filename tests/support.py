@@ -249,6 +249,8 @@ class TestServer:
         self.server.log_requests = False  # type: ignore[attr-defined]
         self.server.cache_static_assets = True  # type: ignore[attr-defined]
         self.server.localhost_only_access = True  # type: ignore[attr-defined]
+        _, port = self.server.server_address
+        self.server.internal_http_port = int(port)  # type: ignore[attr-defined]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True, name="test-http-server")
         self.thread.start()
         return self

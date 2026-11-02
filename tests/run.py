@@ -36,7 +36,7 @@ GROUPS: dict[str, list[str]] = {
     ],
     "photo-map-cache": ["tests.test_photo_map_cache"],
     "client-log": ["tests.test_clientlog"],
-    "cli": ["tests.test_cli"],
+    "cli": ["tests.test_cli", "tests.test_https_listeners"],
     "names": ["tests.test_listing_merge_names", "tests.test_windows_names"],
     "windows-names": ["tests.test_listing_merge_names", "tests.test_windows_names"],
     "rclone": ["tests.test_rclone"],

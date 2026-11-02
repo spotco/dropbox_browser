@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import os
 import signal
+import ssl
 import sys
 import threading
 import time
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from socket import gethostname
 
 from .config import (
     find_default_config,
@@ -20,6 +23,7 @@ from .config import (
     python_version_warning,
 )
 from .clientlog import client_log_config
+from .dev_tls import DevTlsUnavailable, default_dev_tls_directory, ensure_dev_tls_material
 from .foldercache import FolderCacheManager
 from .handlers import RequestHandler
 from . import logoutput, workertrace
@@ -27,6 +31,9 @@ from .listingcache import ListingCacheManager
 from .rclone import RcloneClient, write_retry_policy_from_config
 from .services import DropboxBrowser
 from .syncjobs import SyncJobManager
+
+MIN_PORT = 1
+MAX_PORT = 65535
 
 
 def parse_args() -> argparse.Namespace:
@@ -43,6 +50,45 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Enable the client-rendered browse shell.",
     )
+    parser.add_argument(
+        "--https",
+        action="store_true",
+        help="Also serve HTTPS on --https-port (default: --port + 1) using generated dev TLS material.",
+    )
+    parser.add_argument(
+        "--https-port",
+        type=int,
+        default=None,
+        help="HTTPS listen port (default: --port + 1, or DROPBOX_BROWSER_HTTPS_PORT).",
+    )
+    parser.add_argument(
+        "--https-optional",
+        action="store_true",
+        help="Keep HTTP available if HTTPS cannot be prepared or started.",
+    )
+    parser.add_argument(
+        "--https-required",
+        action="store_true",
+        help="Exit if HTTPS cannot be prepared or started.",
+    )
+    parser.add_argument(
+        "--tls-dir",
+        type=Path,
+        default=None,
+        help="Directory for auto-generated dev TLS material (default: Temp/dev-https).",
+    )
+    parser.add_argument(
+        "--tls-cert",
+        type=Path,
+        default=None,
+        help="Optional PEM server certificate (default: generate under --tls-dir).",
+    )
+    parser.add_argument(
+        "--tls-key",
+        type=Path,
+        default=None,
+        help="Optional PEM server private key (default: generate under --tls-dir).",
+    )
     return parser.parse_args()
 
 
@@ -52,9 +98,201 @@ def warn_if_python_too_old() -> None:
         print(f"Warning: {warning}", file=sys.stderr)
 
 
+def binds_all_interfaces(host: str) -> bool:
+    return host in ("", "0.0.0.0", "::")
+
+
+def resolve_listen_ports(
+    http_port: int,
+    https_port: int | None,
+    *,
+    enable_https: bool,
+) -> tuple[int, int | None]:
+    if not (MIN_PORT <= http_port <= MAX_PORT):
+        raise ValueError(f"HTTP port must be between {MIN_PORT} and {MAX_PORT}, not {http_port}")
+    if not enable_https:
+        return http_port, None
+    resolved_https = https_port
+    if resolved_https is None:
+        env_port = os.environ.get("DROPBOX_BROWSER_HTTPS_PORT", "").strip()
+        if env_port:
+            try:
+                resolved_https = int(env_port)
+            except ValueError as exc:
+                raise ValueError(f"DROPBOX_BROWSER_HTTPS_PORT must be an integer, not {env_port!r}") from exc
+        else:
+            resolved_https = http_port + 1
+    if not (MIN_PORT <= resolved_https <= MAX_PORT):
+        raise ValueError(
+            f"HTTPS port must be between {MIN_PORT} and {MAX_PORT}, not {resolved_https} "
+            f"(HTTP port is {http_port})"
+        )
+    if resolved_https == http_port:
+        raise ValueError("HTTP and HTTPS ports must be different")
+    return http_port, resolved_https
+
+
+def dev_tls_directory(args: argparse.Namespace) -> Path:
+    if args.tls_dir is not None:
+        return args.tls_dir
+    env_dir = os.environ.get("DROPBOX_BROWSER_TLS_DIR", "").strip()
+    if env_dir:
+        return Path(env_dir)
+    return default_dev_tls_directory()
+
+
+def resolve_tls_material(
+    args: argparse.Namespace,
+    *,
+    https_required: bool,
+) -> tuple[Path, Path] | None:
+    if (args.tls_cert is None) != (args.tls_key is None):
+        raise ValueError("--tls-cert and --tls-key must be supplied together")
+    if args.tls_cert is not None and args.tls_key is not None:
+        cert_path = args.tls_cert.resolve()
+        key_path = args.tls_key.resolve()
+        if not cert_path.is_file():
+            raise FileNotFoundError(f"--tls-cert is not a file: {cert_path}")
+        if not key_path.is_file():
+            raise FileNotFoundError(f"--tls-key is not a file: {key_path}")
+        return cert_path, key_path
+
+    tls_dir = dev_tls_directory(args).resolve()
+    try:
+        return ensure_dev_tls_material(tls_dir)
+    except DevTlsUnavailable as error:
+        if https_required:
+            raise
+        print(f"WARNING: {error}", file=sys.stderr)
+        print("WARNING: HTTPS is unavailable; continuing with HTTP only.", file=sys.stderr)
+        return None
+
+
+def _configure_server(
+    server: ThreadingHTTPServer,
+    app: DropboxBrowser,
+    app_config: dict[str, object],
+    *,
+    internal_http_port: int,
+) -> None:
+    server.app = app  # type: ignore[attr-defined]
+    server.log_requests = bool(app_config["LogHttpRequests"])  # type: ignore[attr-defined]
+    server.cache_static_assets = bool(app_config.get("CacheStaticAssets", True))  # type: ignore[attr-defined]
+    server.localhost_only_access = bool(app_config.get("LocalhostOnlyAccess", True))  # type: ignore[attr-defined]
+    server.internal_http_port = int(internal_http_port)  # type: ignore[attr-defined]
+    server.daemon_threads = True  # type: ignore[attr-defined]
+    if hasattr(server, "block_on_close"):
+        server.block_on_close = False  # type: ignore[attr-defined]
+
+
+def create_https_server(
+    address: tuple[str, int],
+    app: DropboxBrowser,
+    app_config: dict[str, object],
+    cert_path: Path,
+    key_path: Path,
+    *,
+    internal_http_port: int,
+) -> ThreadingHTTPServer:
+    https_server = ThreadingHTTPServer(address, RequestHandler)
+    _configure_server(https_server, app, app_config, internal_http_port=internal_http_port)
+    try:
+        tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
+        https_server.socket = tls.wrap_socket(https_server.socket, server_side=True)
+    except (OSError, ssl.SSLError, ValueError, OverflowError):
+        https_server.server_close()
+        raise
+    return https_server
+
+
+def print_listen_urls(
+    *,
+    host: str,
+    http_port: int,
+    https_port: int | None,
+    remote: str,
+    self_signed_https: bool,
+) -> None:
+    print(f"Listening for {remote} on http://127.0.0.1:{http_port}/ (localhost HTTP)")
+    if binds_all_interfaces(host):
+        hostname = gethostname()
+        if hostname and hostname.lower() != "localhost":
+            print(
+                f"  LAN HTTP when LocalhostOnlyAccess is false: "
+                f"http://{hostname}:{http_port}/"
+            )
+    elif host not in ("127.0.0.1", "localhost", "::1"):
+        print(f"  HTTP bind address: http://{host}:{http_port}/")
+
+    if https_port is None:
+        return
+
+    print(f"Listening for {remote} on https://127.0.0.1:{https_port}/ (localhost HTTPS)")
+    if binds_all_interfaces(host):
+        hostname = gethostname()
+        if hostname and hostname.lower() != "localhost":
+            print(
+                f"  LAN HTTPS when LocalhostOnlyAccess is false: "
+                f"https://{hostname}:{https_port}/"
+            )
+    elif host not in ("127.0.0.1", "localhost", "::1"):
+        print(f"  HTTPS bind address: https://{host}:{https_port}/")
+    if self_signed_https:
+        print(
+            "  Browsers will warn: local self-signed development certificate "
+            "(not automatically trusted)."
+        )
+
+
+def _abort_startup(
+    *,
+    app: DropboxBrowser,
+    http_server: ThreadingHTTPServer | None,
+    https_server: ThreadingHTTPServer | None,
+    message: str,
+    code: int = 1,
+) -> int:
+    if https_server is not None:
+        https_server.server_close()
+    if http_server is not None:
+        http_server.server_close()
+    app.shutdown()
+    print(message, file=sys.stderr)
+    return code
+
+
+def _https_required(args: argparse.Namespace) -> bool:
+    return bool(args.https_required) or os.environ.get("DROPBOX_BROWSER_REQUIRE_HTTPS") == "1"
+
+
 def main() -> int:
     warn_if_python_too_old()
     args = parse_args()
+    serve_https = bool(args.https)
+    https_required = _https_required(args)
+    https_optional = bool(args.https_optional) or (serve_https and not https_required)
+
+    try:
+        http_port, https_port = resolve_listen_ports(args.port, args.https_port, enable_https=serve_https)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+
+    tls_material: tuple[Path, Path] | None = None
+    self_signed_https = False
+    if serve_https:
+        try:
+            tls_material = resolve_tls_material(args, https_required=https_required)
+        except (ValueError, FileNotFoundError, DevTlsUnavailable) as error:
+            print(str(error), file=sys.stderr)
+            return 2 if isinstance(error, ValueError) else 1
+        if tls_material is None:
+            serve_https = False
+            https_port = None
+        elif args.tls_cert is None and args.tls_key is None:
+            self_signed_https = True
+
     started_at = time.time()
     app_config = load_app_config()
     thumbnail_config = load_thumbnail_config(app_config)
@@ -68,7 +306,8 @@ def main() -> int:
         started_at=started_at,
         metadata={
             "host": args.host,
-            "port": args.port,
+            "port": http_port,
+            "https_port": https_port,
             "remote": args.remote,
             "local_root": str(local_root),
             "client_render": bool(getattr(args, "client_render", False)),
@@ -153,16 +392,51 @@ def main() -> int:
         int(app_config.get("VideoProbeAnalyzeDurationUs", 3_000_000) or 3_000_000),
     )
     app.sync_jobs = SyncJobManager(app, workers=int(app_config["SyncJobWorkers"]))
-    server = ThreadingHTTPServer((args.host, args.port), RequestHandler)
-    server.app = app  # type: ignore[attr-defined]
-    server.log_requests = bool(app_config["LogHttpRequests"])  # type: ignore[attr-defined]
-    server.cache_static_assets = bool(app_config.get("CacheStaticAssets", True))  # type: ignore[attr-defined]
-    server.localhost_only_access = bool(app_config.get("LocalhostOnlyAccess", True))  # type: ignore[attr-defined]
-    server.daemon_threads = True  # type: ignore[attr-defined]
-    if hasattr(server, "block_on_close"):
-        server.block_on_close = False  # type: ignore[attr-defined]
+    server = ThreadingHTTPServer((args.host, http_port), RequestHandler)
+    _configure_server(server, app, app_config, internal_http_port=http_port)
+
+    https_server: ThreadingHTTPServer | None = None
+    https_thread: threading.Thread | None = None
+    if serve_https and tls_material is not None:
+        cert_path, key_path = tls_material
+        try:
+            https_server = create_https_server(
+                (args.host, https_port),
+                app,
+                app_config,
+                cert_path,
+                key_path,
+                internal_http_port=http_port,
+            )
+        except (OSError, ssl.SSLError, ValueError, OverflowError, FileNotFoundError) as error:
+            if https_server is not None:
+                https_server.server_close()
+                https_server = None
+            if https_required or not https_optional:
+                return _abort_startup(
+                    app=app,
+                    http_server=server,
+                    https_server=None,
+                    message=f"could not start HTTPS listener: {error}",
+                )
+            print(
+                f"WARNING: HTTPS listener unavailable; continuing with HTTP only: {error}",
+                file=sys.stderr,
+            )
+            https_port = None
+
     stop_signal: int | None = None
     shutdown_started = threading.Event()
+    app_shutdown_lock = threading.Lock()
+    app_shutdown_done = False
+
+    def shutdown_app_once() -> None:
+        nonlocal app_shutdown_done
+        with app_shutdown_lock:
+            if app_shutdown_done:
+                return
+            app_shutdown_done = True
+            app.shutdown()
 
     def request_shutdown(signum: int, _frame: object) -> None:
         nonlocal stop_signal
@@ -172,14 +446,19 @@ def main() -> int:
         shutdown_started.set()
 
         def begin_shutdown() -> None:
-            try:
-                app.shutdown()
-            finally:
-                server.shutdown()
+            server.shutdown()
+            if https_server is not None:
+                https_server.shutdown()
 
         threading.Thread(target=begin_shutdown, daemon=True, name="http-server-shutdown").start()
 
-    print(f"Serving {args.remote} at http://{args.host}:{args.port}/")
+    print_listen_urls(
+        host=args.host,
+        http_port=http_port,
+        https_port=https_port if https_server is not None else None,
+        remote=args.remote,
+        self_signed_https=self_signed_https and https_server is not None,
+    )
     print(f"Comparing with local folder: {local_root}")
     if thumbnail_config.enabled:
         print(
@@ -207,6 +486,13 @@ def main() -> int:
     if hasattr(signal, "SIGTERM"):
         previous_sigterm = signal.getsignal(signal.SIGTERM)
         signal.signal(signal.SIGTERM, request_shutdown)
+    if https_server is not None:
+        https_thread = threading.Thread(
+            target=https_server.serve_forever,
+            name="dropbox-browser-https",
+            daemon=True,
+        )
+        https_thread.start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -217,7 +503,14 @@ def main() -> int:
             signal.signal(signal.SIGTERM, previous_sigterm)
         if stop_signal is not None:
             print(f"\nStopped by signal {stop_signal}.")
-        app.shutdown()
+        if https_server is not None:
+            https_server.shutdown()
+        server.shutdown()
+        shutdown_app_once()
+        if https_server is not None:
+            https_server.server_close()
+        if https_thread is not None:
+            https_thread.join(timeout=5)
         server.server_close()
     return 0
 

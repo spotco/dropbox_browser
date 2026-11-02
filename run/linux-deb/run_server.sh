@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the Dropbox browser HTTP server on Debian/Ubuntu Linux.
+# Start the Dropbox browser HTTP and HTTPS servers on Debian/Ubuntu Linux.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,4 +21,16 @@ if [[ ! -x "$REPO_ROOT/.tools/linux-x64/bin/rclone" ]]; then
   echo "warning: Linux rclone pack is missing; run $SCRIPT_DIR/setup_exe.sh first." >&2
 fi
 
-exec "$PYTHON_EXE" -m dropbox_browser.cli --host 0.0.0.0 --port 8000 --remote dropbox: "$@"
+PORT="${DROPBOX_BROWSER_HTTP_PORT:-8000}"
+HTTPS_ARGS=(--https)
+if [[ "${DROPBOX_BROWSER_REQUIRE_HTTPS:-0}" == "1" ]]; then
+  HTTPS_ARGS+=(--https-required)
+else
+  HTTPS_ARGS+=(--https-optional)
+fi
+TLS_DIR_ARGS=()
+if [[ -n "${DROPBOX_BROWSER_TLS_DIR:-}" ]]; then
+  TLS_DIR_ARGS=(--tls-dir "$DROPBOX_BROWSER_TLS_DIR")
+fi
+
+exec "$PYTHON_EXE" -m dropbox_browser.cli --host 0.0.0.0 --port "$PORT" --remote dropbox: "${HTTPS_ARGS[@]}" "${TLS_DIR_ARGS[@]}" "$@"

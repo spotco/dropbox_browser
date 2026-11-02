@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 call "%~dp0_repo_root.bat" || exit /b 1
 pushd "%REPO_ROOT%"
 call "%~dp0_find_python.bat"
@@ -9,8 +9,16 @@ if not defined PYTHON_EXE (
   exit /b 1
 )
 
+set "SERVER_ARGS=--remote dropbox: --https"
+if "%DROPBOX_BROWSER_REQUIRE_HTTPS%"=="1" (
+  set "SERVER_ARGS=%SERVER_ARGS% --https-required"
+) else (
+  set "SERVER_ARGS=%SERVER_ARGS% --https-optional"
+)
+if defined DROPBOX_BROWSER_HTTP_PORT set "SERVER_ARGS=%SERVER_ARGS% --port %DROPBOX_BROWSER_HTTP_PORT%"
+
 set "DROPBOX_BROWSER_PYTHON=%PYTHON_EXE%"
-"%PYTHON_EXE%" -c "import sys; sys.path.insert(0, r'%REPO_ROOT%'); from dropbox_browser.cli import main; raise SystemExit(main())" --remote dropbox: %*
+"%PYTHON_EXE%" -c "import sys; sys.path.insert(0, r'%REPO_ROOT%'); from dropbox_browser.cli import main; raise SystemExit(main())" %SERVER_ARGS% %*
 set "ERR=%ERRORLEVEL%"
 popd
 exit /b %ERR%
