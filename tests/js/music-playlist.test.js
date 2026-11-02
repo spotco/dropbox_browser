@@ -317,7 +317,11 @@ function createPlaylistDomNode(tagName) {
     },
     set(value) {
       this._textContent = String(value == null ? "" : value);
-      if (this._textContent === "") this.children = [];
+      if (this._textContent === "") {
+        this.children = [];
+        // Browsers reset scrollTop when a scroll container's contents are cleared.
+        this.scrollTop = 0;
+      }
     },
   });
   return node;
@@ -556,4 +560,122 @@ test("paintPlaylist virtualizes large active playlists and focuses late rows", a
   assert.ok(focusedRow);
   assert.equal(focusedRow.classList.contains("current"), true);
   assert.equal(playlistListEl.dataset.playlistVisibleRange, "235:250");
+});
+
+function createPlaylistTestContext(playlist, playlistListEl) {
+  const activePlaylistNameEl = createPlaylistDomNode("span");
+  const settingsStore = Object.create(null);
+  global.Settings = {
+    get(key, fallback) {
+      return Object.prototype.hasOwnProperty.call(settingsStore, key) ? settingsStore[key] : fallback;
+    },
+    set(key, value) {
+      settingsStore[key] = value;
+    },
+  };
+  global.document = {
+    activeElement: null,
+    createElement(tagName) {
+      return createPlaylistDomNode(tagName);
+    },
+  };
+  global.window = {
+    requestAnimationFrame(callback) {
+      callback();
+      return 1;
+    },
+    cancelAnimationFrame() {},
+  };
+
+  const state = {
+    playlist,
+    activePlaylist: {
+      name: "Scroll Test",
+      replaceSongs() {},
+      removeSongsByRemotePaths() {},
+      addSongs() { return 0; },
+    },
+    selectedPlaylistRemotePaths: Object.create(null),
+    playlistSelectionAnchor: null,
+    playlistContextRemotePath: null,
+    activePlaylistSavedName: null,
+    activePlaylistSavedSignature: "",
+    activePlaylistDirty: false,
+    playlistRenameMode: "rename",
+    playlistLoadSortKey: "last_modified",
+    playlistLoadSortDirection: "desc",
+    playlistLoadSortSettingKey: "music-playlist-load-sort",
+    playlistLoadFilterText: "",
+    playlistLoadFilterSettingKey: "music-playlist-load-filter",
+    selectedPersistedPlaylistName: null,
+    playlistLoadContextName: null,
+    recentSortKey: "played_at",
+    recentSortDirection: "desc",
+    recentSortSettingKey: "music-recent-sort",
+    selectedRecentId: null,
+    pendingPlaylistConfirmAction: null,
+    playlistSaveToastTimer: null,
+    currentPlaylistIndex: -1,
+    playlistRenderDirty: false,
+    playlistSelectionDirty: false,
+    pendingPlaylistFocusRemotePath: null,
+    shuffleBag: [],
+    shuffleSequence: [],
+    shuffleCursor: -1,
+  };
+  const ctx = {
+    els: {
+      playlistListEl,
+      activePlaylistNameEl,
+      playlistLoadConfirmButton: null,
+    },
+    state,
+    pane: {dataset: Object.create(null)},
+    mediaLibraryConfig: {mediaKind: "music"},
+    layoutApi: {
+      playbackUiMayPaint() {
+        return true;
+      },
+    },
+    playbackApi: {
+      playPlaylistRemotePath() {},
+      playPlaylistIndex() {},
+      clearCurrentSong() {},
+    },
+    setStatus() {},
+  };
+  return {ctx, state};
+}
+
+function simulatePlaybackMarkCurrent(ctx, index) {
+  ctx.state.currentPlaylistIndex = index;
+  ctx.playlistApi.renderPlaylist();
+}
+
+test("renderPlaylist keeps scroll position when playback marks a virtualized current row", async () => {
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist.js");
+  const playlistListEl = createPlaylistDomNode("div");
+  const playlist = Array.from({length: 250}, (_, index) => song(`music/track-${index}.mp3`));
+  playlistListEl.clientHeight = 90;
+  const {ctx} = createPlaylistTestContext(playlist, playlistListEl);
+  playlistModule.initPlaylist(ctx);
+  ctx.playlistApi.paintPlaylist();
+  playlistListEl.scrollTop = 2000;
+  ctx.playlistApi.paintPlaylist();
+  simulatePlaybackMarkCurrent(ctx, 125);
+  assert.equal(playlistListEl.scrollTop, 2000);
+  assert.notEqual(playlistListEl.dataset.playlistVisibleRange, "0:27");
+});
+
+test("renderPlaylist keeps scroll position when playback marks a non-virtual current row", async () => {
+  const playlistModule = await importModuleFromWorkspace("dropbox_browser/assets/js/media-library/playlist.js");
+  const playlistListEl = createPlaylistDomNode("div");
+  const playlist = Array.from({length: 8}, (_, index) => song(`music/track-${index}.mp3`));
+  playlistListEl.clientHeight = 90;
+  const {ctx} = createPlaylistTestContext(playlist, playlistListEl);
+  playlistModule.initPlaylist(ctx);
+  ctx.playlistApi.paintPlaylist();
+  playlistListEl.scrollTop = 120;
+  simulatePlaybackMarkCurrent(ctx, 4);
+  assert.equal(playlistListEl.scrollTop, 120);
 });
