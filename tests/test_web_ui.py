@@ -139,6 +139,8 @@ class WebUiTests(AppTestCase):
                 for key in ("name", "type", "status", "size", "date"):
                     self.assertIn(f'data-browse-sort="{key}"', header)
                 self.assertIn('class="sync-toggles"', header)
+                self.assertIn('id="browse-up-level"', header)
+                self.assertIn('aria-disabled="true"', header)
                 self.assertNotIn("<thead>", main)
                 self.assertNotIn("data-browse-column-resizer", main)
                 self.assertIn("data-browse-table", main)
@@ -165,6 +167,10 @@ class WebUiTests(AppTestCase):
             f'<span class="meta" dir="ltr">{local_root_prefix} <a href="/">{local_root.name}</a> \\ <a href="/?path=music">music</a> \\ <a href="/?path=music%2Fmixes">mixes</a></span>',
             html,
         )
+        self.assertIn('id="browse-up-level"', html)
+        self.assertIn('href="/?path=music"', html)
+        self.assertIn('aria-label="Up one level"', html)
+        self.assertNotIn('id="browse-up-level" href="/?path=music" title="Up one level" aria-label="Up one level" aria-disabled', html)
         self.assertNotIn('<nav class="breadcrumbs"><a href="/">Dropbox</a>', html)
         self.assertIn('<nav class="breadcrumbs"><a id="refresh-cache" class="refresh-link"', html)
 

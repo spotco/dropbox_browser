@@ -188,6 +188,15 @@ def _local_root_display_parts(local_root: Path) -> tuple[str, str]:
     return parent + os.sep, name
 
 
+def parent_folder_href(rel_path: str) -> str | None:
+    if not rel_path:
+        return None
+    parent = posixpath.dirname(rel_path.replace("\\", "/"))
+    if parent in ("", "."):
+        return "/"
+    return "/?" + urlencode({"path": parent})
+
+
 def header_meta_html(app: Any, rel_path: str) -> str:
     if not app.local_root:
         return f'{html.escape(app.remote)} / {breadcrumbs(rel_path)}'
@@ -368,6 +377,8 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         else "Local comparison disabled"
     )
     header_meta = header_meta_html(app, rel_path)
+    up_level_href = parent_folder_href(rel_path) or "/"
+    up_level_state = "" if parent_folder_href(rel_path) else ' aria-disabled="true" tabindex="-1"'
     msg_html = f'<p class="notice">{html.escape(msg)}</p>' if msg else ""
     current_local_folder = ""
     if app.local_root:
@@ -424,6 +435,8 @@ def page_html(app: Any, rel_path: str, entries: list[dict[str, Any]], sort_key: 
         icon_base_url=ICON_BASE_URL,
         page_title=html.escape(page_title),
         header_meta_html=header_meta,
+        up_level_href=html.escape(up_level_href, quote=True),
+        up_level_state=up_level_state,
         sync_toggles=sync_toggles,
         crumbs=crumbs,
         refresh_href=html.escape(refresh_href, quote=True),

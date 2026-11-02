@@ -70,7 +70,36 @@ header.browse-topbar {
   flex: 0 0 45px;
   gap: 24px;
   min-width: 0;
-  padding: 0 16px 0 18px;
+  padding: 0 16px 0 10px;
+}
+.browse-topbar-path {
+  align-items: center;
+  display: flex;
+  flex: 1 1 auto;
+  gap: 2px;
+  min-width: 0;
+}
+.browse-up-level {
+  align-items: center;
+  border-radius: 6px;
+  color: #174a7c;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 32px;
+  justify-content: center;
+  width: 32px;
+}
+.browse-up-level:hover {
+  background: #eef3f8;
+  text-decoration: none;
+}
+.browse-up-level:focus-visible {
+  outline: 2px solid #174a7c;
+  outline-offset: 1px;
+}
+.browse-up-level[aria-disabled="true"] {
+  color: #b7c0c8;
+  pointer-events: none;
 }
 /* direction: rtl makes a too-long path clip (with the ellipsis) on the left,
    so the current folder name stays visible; the inner .meta is dir="ltr". */
@@ -311,6 +340,40 @@ body.bottom-panel-full-window-mode #log-resizer {
   .browse-topbar-title-row {
     gap: 12px;
   }
+}
+/* Applied when the folder path would be clipped beside the sync toggles,
+   at any viewport width. */
+header.browse-topbar.is-tight {
+  flex-basis: auto;
+  height: auto;
+}
+.browse-topbar-title-row.is-tight {
+  align-items: stretch;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  height: auto;
+  min-height: 0;
+  padding-bottom: 6px;
+  padding-top: 6px;
+  row-gap: 4px;
+}
+.browse-topbar-title-row.is-tight .browse-topbar-path {
+  flex: 1 1 100%;
+}
+.browse-topbar-title-row.is-tight .sync-toggles {
+  flex: 1 1 100%;
+  justify-content: flex-start;
+}
+header.browse-topbar.is-tight .browse-topbar-columns {
+  flex: 0 0 40px;
+  height: 40px;
+}
+.browse-topbar-title-row.is-tight .browse-topbar-breadcrumb {
+  direction: ltr;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  text-overflow: clip;
 }
 .topbar-actions {
   align-items: center;

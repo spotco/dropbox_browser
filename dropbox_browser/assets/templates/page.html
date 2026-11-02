@@ -39,7 +39,14 @@
 <body class="has-log-panel bottom-panel-bootstrapping" data-bottom-panel-ready="0" style="$subtitle_style_attr" data-current-folder-path="$current_folder_attr" data-current-sort-key="$current_sort_key_attr" data-current-sort-direction="$current_sort_direction_attr" data-music-library-poll-delay-ms="$music_library_poll_delay_ms_attr" data-client-render="$client_render_attr" data-client-log-enabled="$client_log_enabled_attr" data-client-log-subsystems="$client_log_subsystems_attr">
   <header class="browse-topbar">
     <div class="browse-topbar-title-row">
-      <nav class="browse-topbar-breadcrumb" aria-label="Current folder"><span class="meta" dir="ltr">$header_meta_html</span></nav>
+      <div class="browse-topbar-path">
+        <a class="browse-up-level" id="browse-up-level" href="$up_level_href" title="Up one level" aria-label="Up one level"$up_level_state>
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+            <path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M12 19V6M6.5 11.5 12 6l5.5 5.5"/>
+          </svg>
+        </a>
+        <nav class="browse-topbar-breadcrumb" aria-label="Current folder"><span class="meta" dir="ltr">$header_meta_html</span></nav>
+      </div>
       $sync_toggles
     </div>
     <div class="browse-topbar-columns">

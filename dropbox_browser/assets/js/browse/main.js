@@ -54,6 +54,94 @@ function renderHeaderMetaHtml(page, breadcrumbs) {
   return items.join(' \\ ');
 }
 
+function updateUpLevelLink(breadcrumbs) {
+  var link = document.getElementById('browse-up-level');
+  if (!link) return;
+  var items = breadcrumbs || [];
+  if (items.length >= 2) {
+    var parent = items[items.length - 2] || {};
+    link.setAttribute('href', parent.href || '/');
+    link.removeAttribute('aria-disabled');
+    link.removeAttribute('tabindex');
+    return;
+  }
+  link.setAttribute('href', '/');
+  link.setAttribute('aria-disabled', 'true');
+  link.setAttribute('tabindex', '-1');
+}
+
+function scrollBreadcrumbToCurrentFolder(meta) {
+  var nav = meta && meta.parentElement;
+  if (!nav || nav.scrollWidth <= nav.clientWidth + 1) return;
+  nav.scrollLeft = nav.scrollWidth;
+}
+
+function contentWidth(node) {
+  if (!node) return 0;
+  var style = window.getComputedStyle(node);
+  var gap = parseFloat(style.columnGap || style.gap) || 0;
+  var width = 0;
+  var count = 0;
+  Array.prototype.forEach.call(node.children, function (child) {
+    width += child.getBoundingClientRect().width;
+    count += 1;
+  });
+  if (count > 1) width += gap * (count - 1);
+  return width;
+}
+
+function pathTextWidth(meta) {
+  if (!meta || typeof document.createRange !== 'function') return meta ? meta.scrollWidth : 0;
+  var range = document.createRange();
+  range.selectNodeContents(meta);
+  return range.getBoundingClientRect().width;
+}
+
+function syncTopbarFit() {
+  var header = document.querySelector('header.browse-topbar');
+  var row = document.querySelector('.browse-topbar-title-row');
+  var crumb = document.querySelector('.browse-topbar-breadcrumb');
+  var meta = crumb && crumb.querySelector('.meta');
+  if (!header || !row || !crumb || !meta) return;
+  var rowStyle = window.getComputedStyle(row);
+  var pad = (parseFloat(rowStyle.paddingLeft) || 0) + (parseFloat(rowStyle.paddingRight) || 0);
+  var rowGap = parseFloat(rowStyle.columnGap || rowStyle.gap) || 0;
+  var path = row.querySelector('.browse-topbar-path');
+  var pathGap = path ? (parseFloat(window.getComputedStyle(path).columnGap || window.getComputedStyle(path).gap) || 0) : 0;
+  var toggles = row.querySelector('.sync-toggles');
+  var up = row.querySelector('.browse-up-level');
+  var toggleWidth = contentWidth(toggles);
+  var upWidth = up ? up.getBoundingClientRect().width : 0;
+  var available = row.clientWidth - pad - toggleWidth - upWidth - pathGap - (toggles ? rowGap : 0);
+  var tight = pathTextWidth(meta) > available + 1;
+  var changed = header.classList.contains('is-tight') !== tight;
+  header.classList.toggle('is-tight', tight);
+  row.classList.toggle('is-tight', tight);
+  if (tight) scrollBreadcrumbToCurrentFolder(meta);
+  return changed;
+}
+
+function installTopbarFit() {
+  var row = document.querySelector('.browse-topbar-title-row');
+  if (!row || row.dataset.topbarFit === '1') return;
+  row.dataset.topbarFit = '1';
+  var frame = 0;
+  function schedule() {
+    if (frame) return;
+    frame = window.requestAnimationFrame(function () {
+      frame = 0;
+      syncTopbarFit();
+    });
+  }
+  schedule();
+  if (typeof ResizeObserver === 'function') {
+    var observer = new ResizeObserver(schedule);
+    observer.observe(row);
+    return;
+  }
+  window.addEventListener('resize', schedule);
+}
+
 function updatePageShell(payload) {
   var page = payload.page || {};
   var meta = document.querySelector('header .meta');
@@ -67,6 +155,8 @@ function updatePageShell(payload) {
   if (meta) {
     meta.innerHTML = renderHeaderMetaHtml(page, payload.breadcrumbs || []);
   }
+  updateUpLevelLink(payload.breadcrumbs || []);
+  syncTopbarFit();
   if (refreshLink) {
     refreshLink.setAttribute('href', page.refresh_href || refreshLink.getAttribute('href') || '/');
     refreshLink.setAttribute('title', 'Refresh cached metadata for this folder');
@@ -495,6 +585,7 @@ function isModifiedClick(event) {
 }
 
 function initBrowse() {
+  installTopbarFit();
   var body = document.body;
   if (!body || body.dataset.clientRender !== '1') return;
   var mount = document.getElementById('browse-rows');
@@ -1447,6 +1538,10 @@ function initBrowse() {
 
     var link = event.target && event.target.closest ? event.target.closest('a') : null;
     if (!link || state.loading) return;
+    if (link.getAttribute('aria-disabled') === 'true') {
+      event.preventDefault();
+      return;
+    }
     if (isModifiedClick(event) || !shouldInterceptBrowseLink(link)) return;
     var nextState = readBrowseHref(link.href || link.getAttribute('href') || '');
     if (!nextState) return;
