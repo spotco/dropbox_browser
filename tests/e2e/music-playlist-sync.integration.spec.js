@@ -12,7 +12,7 @@ const VIDEO_SYNC_PATH = "folder/dev_test_video_playlists.json";
 
 let server = null;
 
-test.describe.configure({ mode: "serial", timeout: 60000 });
+test.describe.configure({ mode: "serial", timeout: 120000 });
 test.use({ baseURL });
 
 function songPaths(count) {
@@ -91,6 +91,22 @@ async function readRemoteText(page, relPath) {
   return response.text();
 }
 
+async function expectSyncSummary(page, prefix, pattern) {
+  // Title and notice text are already in the page HTML. Wait until the dialog
+  // is actually shown, then until the remote read fills the summary. A busy
+  // distributed run can spend well over 20s behind other local requests.
+  const dialog = page.locator(`#${prefix}-playlist-sync-dialog`);
+  const summary = page.locator(`#${prefix}-playlist-sync-summary`);
+  const status = page.locator(`#${prefix}-player-status-text`);
+  await expect(dialog).toBeVisible({ timeout: 60000 });
+  try {
+    await expect(summary).toHaveValue(pattern, { timeout: 5000 });
+  } catch (error) {
+    const statusText = await status.innerText().catch(() => "");
+    throw new Error(`${error.message}\nplayer status: ${statusText}`);
+  }
+}
+
 async function loadSavedPlaylist(page, prefix, name) {
   await page.locator(`#${prefix}-playlist-load`).click();
   await expect(page.locator(`#${prefix}-playlist-load-title`)).toBeVisible();
@@ -151,7 +167,7 @@ test("pull replaces a linked playlist and discards a local removal", async ({ pa
   await page.locator("#music-playlist-sync-pull").click();
   await expect(page.locator("#music-playlist-sync-title")).toHaveText("Replace Local Saved Playlists from Dropbox");
   await expect(page.locator("#music-playlist-sync-notice")).toHaveText(/discards unsaved changes/);
-  await expect(page.locator("#music-playlist-sync-summary")).toHaveValue(/Changed "Favorites": added 5, removed 0/);
+  await expectSyncSummary(page, "music", /Changed "Favorites": added 5, removed 0/);
   await page.locator("#music-playlist-sync-confirm").click();
   await expect(page.locator("#music-playlist-sync-dialog")).toBeHidden();
   await expect(page.locator("#music-active-playlist-name")).toHaveText("Favorites");
@@ -174,7 +190,7 @@ test("pull resets the active playlist when the linked name is gone", async ({ pa
   await writeRemotePlaylist(page, syncPath, remote);
   await loadSavedPlaylist(page, "music", "Favorites");
   await page.locator("#music-playlist-sync-pull").click();
-  await expect(page.locator("#music-playlist-sync-summary")).toHaveValue(/Removed "Favorites"/);
+  await expectSyncSummary(page, "music", /Removed "Favorites"/);
   await page.locator("#music-playlist-sync-confirm").click();
   await expect(page.locator("#music-active-playlist-name")).toHaveText("New Playlist");
   await expect(page.locator("#music-playlist-list .music-playlist-entry")).toHaveCount(0);
@@ -188,7 +204,7 @@ test("cancel and a no-change summary leave both sides alone", async ({ page }) =
   await writeRemotePlaylist(page, syncPath, same);
   await loadSavedPlaylist(page, "music", "Favorites");
   await page.locator("#music-playlist-sync-pull").click();
-  await expect(page.locator("#music-playlist-sync-summary")).toHaveValue(/No playlist changes/);
+  await expectSyncSummary(page, "music", /No playlist changes/);
   await expect(page.locator("#music-playlist-sync-confirm")).toBeDisabled();
   await page.locator("#music-playlist-sync-cancel").click();
   await expect(page.locator("#music-playlist-list .music-playlist-entry")).toHaveCount(2);
@@ -217,7 +233,7 @@ test("push writes the confirmed export and a missing file is not an empty pull",
   await page.locator("#bottom-pane-mode").selectOption("music-player");
   await page.locator("#music-playlist-sync-push").click();
   await expect(page.locator("#music-playlist-sync-title")).toHaveText("Replace Dropbox Saved Playlists from Local");
-  await expect(page.locator("#music-playlist-sync-summary")).toHaveValue(/Added "Favorites" \(4 items\)/);
+  await expectSyncSummary(page, "music", /Added "Favorites" \(4 items\)/);
   await page.locator("#music-playlist-sync-confirm").click();
   await expect(page.locator("#music-player-status-text")).toContainText("Replaced the Dropbox playlist file");
   const remoteText = await readRemoteText(page, syncPath);
@@ -268,7 +284,7 @@ test("blank sync path disables the buttons and video uses its own file", async (
   const musicBefore = await page.evaluate(() => localStorage.getItem("dropbox-browser.music-playlists"));
   await loadSavedPlaylist(page, "video", "Clips");
   await page.locator("#video-playlist-sync-push").click();
-  await expect(page.locator("#video-playlist-sync-summary")).toHaveValue(/Added "Clips"/);
+  await expectSyncSummary(page, "video", /Added "Clips"/);
   await page.locator("#video-playlist-sync-confirm").click();
   await expect(page.locator("#video-player-status")).toContainText("Replaced the Dropbox playlist file");
   const remoteText = await readRemoteText(page, VIDEO_SYNC_PATH);

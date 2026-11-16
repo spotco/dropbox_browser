@@ -91,10 +91,28 @@ function contentWidth(node) {
 }
 
 function pathTextWidth(meta) {
-  if (!meta || typeof document.createRange !== 'function') return meta ? meta.scrollWidth : 0;
-  var range = document.createRange();
-  range.selectNodeContents(meta);
-  return range.getBoundingClientRect().width;
+  // The breadcrumb is direction:rtl. A DOM range inside that box reports the
+  // stretched flex width in some browsers, which makes a short path look
+  // clipped and wraps the top bar. Measure the text on its own instead.
+  if (!meta || !document.body) return 0;
+  var probe = document.createElement('span');
+  var style = window.getComputedStyle(meta);
+  probe.style.position = 'absolute';
+  probe.style.left = '-9999px';
+  probe.style.top = '0';
+  probe.style.visibility = 'hidden';
+  probe.style.whiteSpace = 'nowrap';
+  probe.style.direction = 'ltr';
+  probe.style.font = style.font;
+  probe.style.letterSpacing = style.letterSpacing;
+  probe.style.fontWeight = style.fontWeight;
+  probe.style.fontSize = style.fontSize;
+  probe.style.fontFamily = style.fontFamily;
+  probe.textContent = meta.textContent || '';
+  document.body.appendChild(probe);
+  var width = probe.getBoundingClientRect().width;
+  probe.remove();
+  return width;
 }
 
 function syncTopbarFit() {
@@ -134,6 +152,9 @@ function installTopbarFit() {
     });
   }
   schedule();
+  if (document.fonts && typeof document.fonts.ready === 'object' && typeof document.fonts.ready.then === 'function') {
+    document.fonts.ready.then(schedule);
+  }
   if (typeof ResizeObserver === 'function') {
     var observer = new ResizeObserver(schedule);
     observer.observe(row);
@@ -391,7 +412,7 @@ function currentBrowsePageHref(state) {
     sort: state.sort,
     dir: state.dir,
     filters: getEffectiveBrowseFilters(state),
-  });
+  }, window.location.search);
 }
 
 function createVirtualState() {

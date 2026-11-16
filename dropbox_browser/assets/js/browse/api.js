@@ -64,10 +64,31 @@ export function buildBrowseListingEndpoint(state) {
   return '/browse/endpoints/listing' + (query ? '?' + query : '');
 }
 
-export function buildBrowsePageHref(state) {
+var BROWSE_OWNED_QUERY_KEYS = {
+  path: true,
+  reveal: true,
+  sort: true,
+  dir: true,
+  refresh: true,
+  q: true,
+  kind: true,
+  status: true,
+  type: true,
+};
+
+function appendUnmanagedQueryParams(params, currentSearch) {
+  var current = new URLSearchParams(String(currentSearch || '').replace(/^\?/, ''));
+  current.forEach(function (value, key) {
+    if (BROWSE_OWNED_QUERY_KEYS[key] || params.has(key)) return;
+    params.append(key, value);
+  });
+  return params;
+}
+
+export function buildBrowsePageHref(state, currentSearch) {
   var normalized = normalizeBrowseState(state);
   var params = appendStateParams(new URLSearchParams(), normalized, false);
   appendFilterParams(params, normalized.filters);
-  var query = params.toString();
-  return '/?' + query;
+  appendUnmanagedQueryParams(params, currentSearch);
+  return '/?' + params.toString();
 }

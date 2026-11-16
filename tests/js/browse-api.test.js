@@ -50,6 +50,20 @@ test("buildBrowsePageHref omits sort and direction params", async () => {
     browseApi.buildBrowsePageHref({ path: "Music/Album", reveal: "Music/Album/Track.m4a" }),
     "/?path=Music%2FAlbum&reveal=Music%2FAlbum%2FTrack.m4a",
   );
+  assert.equal(
+    browseApi.buildBrowsePageHref(
+      { path: "folder" },
+      "?path=folder&music_playlist_sync_path=folder%2Fplaylists.json&video_playlist_sync_path=folder%2Fvideos.json",
+    ),
+    "/?path=folder&music_playlist_sync_path=folder%2Fplaylists.json&video_playlist_sync_path=folder%2Fvideos.json",
+  );
+  assert.equal(
+    browseApi.buildBrowsePageHref(
+      { path: "folder", filters: { query: "mix" } },
+      "?q=old&music_playlist_sync_path=kept.json",
+    ),
+    "/?path=folder&q=mix&music_playlist_sync_path=kept.json",
+  );
 });
 
 test("buildFolderInfoQuery appends repeated paths and current folder", async () => {

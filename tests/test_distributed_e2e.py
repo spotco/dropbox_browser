@@ -129,6 +129,52 @@ class DistributedE2ETests(unittest.TestCase):
         self.assertEqual(workers[0].branch, "master")
         self.assertEqual(workers[0].schedule_weight, 2.4)
 
+    def test_project_map_ignores_notes_worker_list_and_local_policy(self) -> None:
+        def host_for(nickname):  # noqa: ANN001
+            if nickname == "missing-host":
+                raise KeyError(nickname)
+            return SimpleNamespace(
+                nickname=nickname,
+                host=f"{nickname}.example",
+                user="spotco",
+                label=nickname,
+                never_remote=False,
+                hardware=SimpleNamespace(os="Linux", model="", cpu="", notes=""),
+                defaults=SimpleNamespace(schedule_weight=1.0),
+            )
+
+        project = SimpleNamespace(
+            workers={"surfacebook3": object(), "retired": object(), "missing-host": object()},
+            get=lambda nickname: SimpleNamespace(
+                repo="/repo",
+                git="git",
+                path_prefix="",
+                browser="",
+                extra={"platform": "linux", "branch": "master"},
+            ),
+        )
+
+        class Policy:
+            def is_blocked(self, *names):  # noqa: ANN001
+                return "retired" in names
+
+        package = SimpleNamespace(
+            load_project=lambda name, root: project,
+            load_hosts=lambda root: SimpleNamespace(get=host_for),
+            load_local_policy=lambda root, hosts: Policy(),
+        )
+        shared = SimpleNamespace(root=Path("."), package=package)
+
+        workers, skipped = runner.load_workers(
+            shared,
+            {"project": "dropbox_browser", "workers": [{"nickname": "only-notes"}]},
+        )
+
+        self.assertEqual([worker.nickname for worker in workers], ["surfacebook3"])
+        self.assertTrue(any("LOCAL_NOTES worker list ignored" in message for message in skipped))
+        self.assertTrue(any("retired" in message and "remote policy" in message for message in skipped))
+        self.assertTrue(any("missing-host" in message for message in skipped))
+
     def test_clean_shared_checkout_uses_builtin_worker_adapter(self) -> None:
         host = SimpleNamespace(
             nickname="surfacebook3",

@@ -284,6 +284,9 @@ def browse_table_html(*, rows_html: str, tbody_attrs: str = "") -> str:
 
 def browse_script_tags(client_render: bool) -> str:
     tags = [
+        # Playlist sync reads its file path from the opening URL. Capture it
+        # before browse modules replace the history entry.
+        '<script>window.__dropboxBrowserInitialSearch=window.location.search;</script>',
         '<script src="/assets/js/settings.js"></script>',
         '<script src="/assets/js/client-log.js"></script>',
         '<script src="/assets/js/bottom-pane.js"></script>',

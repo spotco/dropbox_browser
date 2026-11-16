@@ -30,7 +30,7 @@ import {contextMenuEventShouldDismiss} from './media-library/context-menu-positi
       playlistTitlePrefix: 'Active Playlist:',
       playlistSyncPath: resolvePlaylistSyncPath(
         'dropbox_browser_music_playlists.json',
-        window.location.search,
+        window.__dropboxBrowserInitialSearch || window.location.search,
         'music_playlist_sync_path'
       )
     },

@@ -130,20 +130,23 @@ npm run test:e2e:remote
 
 `npm run test:e2e` is the default full E2E command. It runs
 `tools/run_distributed_e2e.py` in automatic mode across the local lane and every
-reachable compatible Windows or macOS Intel worker selected by the shared
-configuration. Linux workers are supported when their application adapter or
-private project-map checkout and browser dependencies pass preflight. Automatic mode fails closed
-when distributed setup or all remote workers are unavailable; it never silently
-claims a local-only run as distributed. Use `npm run test:e2e:local` to force a
-local-only diagnostic, or
+reachable compatible Windows, Linux, or macOS Intel worker selected by the
+shared project map. Before probing SSH, the runner wakes hosts whose shared
+power policy is enabled and waits until each one answers or its readiness
+timeout expires. The gitignored per-machine remote policy in the shared
+checkout then allows or denies those workers for this computer. Automatic mode
+fails closed when distributed setup or all remote workers are unavailable; it
+never silently claims a local-only run as distributed. Use
+`npm run test:e2e:local` to force a local-only diagnostic, or
 `npm run test:e2e:remote` when remote execution is required and a missing or
 unusable remote setup should fail the command. The gitignored
-`LOCAL_NOTES.md` selects the shared root, project name, and local lane. Worker
-checkout/runtime settings belong in the application adapter or an ignored
-local `projects/dropbox_browser.json` copy; credentials remain in the shared
-worker checkout. A clean sptmp2 clone uses Dropbox’s built-in adapter when no
-private map exists. The product source dynamically links the shared SDK when
-it is present and does not vendor or name a private inventory repository.
+`LOCAL_NOTES.md` selects the shared root, project name, coordination owner, and
+local lane. It does not replace the worker pool. Worker checkout and runtime
+settings belong in the shared project map or, when that map is absent, the
+built-in application adapter. Credentials remain in the shared worker checkout.
+A clean shared clone uses Dropbox’s built-in adapter when no project map
+exists. The product source dynamically links the shared SDK when it is present
+and does not vendor that checkout.
 
 Workers may use an installed browser instead of Playwright's bundled Chromium.
 Set the worker's private `browser` path when needed; the distributed runner

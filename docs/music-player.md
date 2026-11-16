@@ -47,7 +47,9 @@ The shared UI in `assets/js/media-library/` provides:
   dialog title stays "Load Playlist: Songs". Music opts in with
   `dropbox_browser_music_playlists.json`. A page query
   `music_playlist_sync_path` replaces that path for the load; an empty
-  value turns sync off. Pull reads `GET /file?source=remote`, replaces the
+  value turns sync off. Browse history keeps that query (and
+  `video_playlist_sync_path`) when it updates the folder URL, and the
+  opening search string is snapshotted before those modules run. Pull reads `GET /file?source=remote`, replaces the
   saved collection with `importPersistedPlaylists`, and reloads a linked
   active playlist or resets it to New Playlist. Push exports once, writes
   those bytes with `POST /local-file`, then uses `POST /sync`. A failed

@@ -54,7 +54,6 @@ DEFAULT_POLL_SECONDS = 2.0
 # not provide a private map; synchronization remains in the shared API.
 DEFAULT_WORKER_CONFIGS: tuple[dict[str, Any], ...] = (
     {"id": "mac-pro", "nickname": "MacPro2013", "label": "Mac-Pro", "repo": "/home/spotco/dev/dropbox_browser", "git": "git", "path_prefix": "/home/spotco/.local/node/bin:/home/spotco/.local/bin:/usr/local/bin:/usr/bin:/bin", "browser": "/usr/bin/google-chrome", "platform": "linux", "branch": "master", "schedule_weight": 2.1},
-    {"id": "spmba2014", "nickname": "spmba2014", "label": "spmba2014", "repo": "/home/spotco/dev/dropbox_browser", "git": "git", "path_prefix": "/home/spotco/.local/share/mise/shims:/home/spotco/.local/bin:/usr/local/bin:/usr/bin:/bin", "browser": "/usr/bin/chromium", "platform": "linux", "branch": "master", "schedule_weight": 1.1},
     {"id": "spotcomba2016", "nickname": "SpotcoMba2016", "label": "SpotcoMba2016", "repo": "/Users/betty/dev/dropbox_browser", "git": "git", "path_prefix": "/usr/local/bin:/Users/betty/.local/bin:/usr/bin:/bin", "platform": "macos-intel", "branch": "master", "schedule_weight": 1.4},
     {"id": "macmini2011", "nickname": "macmini2011", "label": "macmini2011", "repo": "/home/spotco/dev/dropbox_browser", "git": "git", "path_prefix": "/home/spotco/.local/node/bin:/home/spotco/.local/bin:/usr/local/bin:/usr/bin:/bin", "browser": "", "platform": "linux", "branch": "master", "schedule_weight": 2.4},
     {"id": "surfacebook3", "nickname": "surfacebook3", "label": "surfacebook3", "repo": "E:/dev/dropbox_browser", "git": "git", "path_prefix": "", "browser": "", "platform": "windows", "branch": "master", "schedule_weight": 2.4},
@@ -140,9 +139,10 @@ def _host_by_nickname(hosts: Any, nickname: str) -> Any:
 def load_workers(shared: Any, settings: dict[str, Any]) -> tuple[list[RemoteWorker], list[str]]:
     """Resolve worker adapters and exclude unsupported platforms.
 
-    A private project map or the built-in application adapter owns worker
-    checkout/runtime settings. A worker list in LOCAL_NOTES remains accepted
-    as a compatibility override for machines with custom private notes.
+    The shared project map owns checkout and runtime settings. The gitignored
+    per-machine remote policy in the shared checkout decides which of those
+    workers this computer will use. A worker list in LOCAL_NOTES is ignored
+    once that map loads, so one machine cannot grow a second topology.
     """
 
     workers_raw = settings.get("workers")
@@ -154,14 +154,11 @@ def load_workers(shared: Any, settings: dict[str, Any]) -> tuple[list[RemoteWork
     except Exception as exc:  # noqa: BLE001 - legacy notes can still work without a map
         project_error = str(exc)
 
-    if isinstance(workers_raw, list):
-        worker_entries: list[dict[str, Any]] = [
-            raw for raw in workers_raw if isinstance(raw, dict)
-        ]
-    elif project is not None:
+    if project is not None:
+        worker_entries = [{"nickname": nickname} for nickname in project.workers]
+    elif isinstance(workers_raw, list):
         worker_entries = [
-            {"id": nickname.casefold(), "nickname": nickname}
-            for nickname in project.workers
+            raw for raw in workers_raw if isinstance(raw, dict)
         ]
     else:
         # A clean sptmp2 clone has no tracked project JSON. Keep the
@@ -176,6 +173,19 @@ def load_workers(shared: Any, settings: dict[str, Any]) -> tuple[list[RemoteWork
         skipped.append(
             f"project map unavailable; using built-in Dropbox worker adapter: {project_error}"
         )
+    elif isinstance(workers_raw, list):
+        skipped.append(
+            "LOCAL_NOTES worker list ignored; the shared project map and "
+            "per-machine remote policy select workers"
+        )
+    policy = None
+    load_policy = getattr(shared.package, "load_local_policy", None)
+    if load_policy is not None:
+        try:
+            policy = load_policy(root=shared.root, hosts=hosts)
+        except Exception as exc:  # noqa: BLE001 - a mismatched machine policy must fail closed
+            raise RunnerError(f"local remote policy failed: {exc}") from exc
+    locality = getattr(shared, "locality", None)
     for index, raw in enumerate(worker_entries):
         if not isinstance(raw, dict):
             skipped.append(f"worker entry {index} is not an object")
@@ -198,8 +208,19 @@ def load_workers(shared: Any, settings: dict[str, Any]) -> tuple[list[RemoteWork
         except RunnerError as exc:
             skipped.append(str(exc))
             continue
-        if bool(getattr(host_entry, "never_remote", False)):
+        if bool(getattr(host_entry, "never_remote", False)) or bool(getattr(host_entry, "local_only", False)):
             skipped.append(f"{nickname}: inventory marks this host local-only")
+            continue
+        if locality is not None and locality.is_this_machine_host(getattr(host_entry, "host", "")):
+            skipped.append(f"{nickname}: this machine stays on the local lane")
+            continue
+        if policy is not None and policy.is_blocked(
+            nickname,
+            raw.get("id"),
+            getattr(host_entry, "label", None),
+            getattr(host_entry, "host", None),
+        ):
+            skipped.append(f"{nickname}: blocked by the per-machine remote policy")
             continue
         platform = str(
             raw.get("platform")
@@ -872,9 +893,18 @@ def run(args: argparse.Namespace) -> int:
             timeout=5,
             connect_timeout=5,
             coordination_owner=coord_owner or None,
+            ensure_awake=True,
         )
         for line in shared.availability.format_plan_lines(availability_plan):
             print(line, flush=True)
+        for result in getattr(availability_plan, "wake_results", []) or []:
+            elapsed = (
+                f" in {result.elapsed_ms / 1000:.1f}s"
+                if getattr(result, "elapsed_ms", None) is not None
+                else ""
+            )
+            detail = f": {result.detail}" if getattr(result, "detail", None) else ""
+            print(f"wake: {result.host_key} {result.status}{elapsed}{detail}", flush=True)
     except Exception as exc:  # noqa: BLE001 - normalize availability failures
         fail(f"remote availability setup failed: {exc}")
 
