@@ -2,6 +2,7 @@
 
 Date: 2026-11-15
 Revised: 2026-11-15
+Final review: 2026-11-15
 Branch: continue on `dev-playlist-sync`
 
 ## Scope
@@ -46,11 +47,15 @@ itself. Ordinary request errors are enough.
 - Read the Dropbox file with `GET /file?source=remote` before the popup.
   OK applies the payload that was validated and summarized. It does not
   read the file again. Cancel imports nothing and uploads nothing.
-- A remote 404 on Pull is an error. Nothing is imported. A remote 404 on
-  Push means the remote collection is empty: every local saved playlist is
-  listed as added, and OK creates the file. Any other read, network, or
-  server error stops the action. It must not be treated as an empty file
-  or as a 404.
+- A remote 404 is a missing file only when absence was established.
+  `GET /file` must not turn an rclone `BAD_GATEWAY` into 404 just because
+  the parent listing fell back to local-only rows after a remote failure
+  (`local_only_after_remote_error`, or a stale listing). Preserve that
+  remote error. A genuine 404 on Pull is an error and nothing is imported.
+  A genuine 404 on Push means the remote collection is empty: every local
+  saved playlist is listed as added, and OK creates the file. Any other
+  read, network, or server error stops the action. It must not be treated
+  as an empty file or as a 404.
 - Importer and validation errors stop the action before the live store is
   modified. No popup is offered for a payload that failed validation.
 - The popup has OK and Cancel at the top, then a scrolling text box. OK is
@@ -118,8 +123,11 @@ then calls `syncQueueFromPlaylist`. `loadPlaylistByName` calls
 `syncPlaylistState` before it restores `currentPlaylistIndex`, so the
 video queue can still hold the old index. After either loader returns,
 call `ctx.syncPlaylistState()` once more so the video queue sees the
-loader's final index. Do not call `playPlaylistIndex` or
-`playPlaylistRemotePath`. Those start playback and record Recent history.
+loader's final index. `syncQueueFromPlaylist` must set
+`selectedQueueIndex` to that same active index. Leaving the old selected
+index in place is wrong once the playing index has moved. Do not call
+`playPlaylistIndex` or `playPlaylistRemotePath`. Those start playback and
+record Recent history.
 The existing loader is the playback policy: keep the current music element
 or video session only when the playing path is still in the list; stop
 when it is not. Shuffle is cleared because both loaders call
@@ -159,8 +167,9 @@ controller refs, active playlist, and playback stay as they were.
 The existing importer already rejects a non-object payload, a missing
 `playlists` array, a playlist that is not an object, a missing `songs`
 array, and a song that is not a non-blank path string. Sync uses those
-errors as-is. It does not add a version gate. Manual Import does not have
-one either.
+errors as-is. Before that import, sync rejects a payload whose `version`
+is present and is not `PLAYLIST_EXPORT_VERSION`. A missing `version` stays
+valid, matching older exports. Manual Import is unchanged.
 
 After the temporary import succeeds, reject the payload when two
 playlists have the same `name`. `findPersistedPlaylistByName` and
@@ -218,8 +227,10 @@ not touched.
    on the existing status line.
 
 If the local write succeeds and the upload fails, leave the local file in
-place and report that Dropbox was not updated. Do not write a rollback
-file. The next confirmed push can retry. Do not add locking around this.
+place. Report the upload failure and say the remote state was not
+verified. Do not claim the Dropbox file is unchanged. Do not write a
+rollback file. The next confirmed push can retry. Do not add locking
+around this.
 
 Push does not call `loadPlaylistByName`, `loadNewPlaylist`, or `persist`.
 The saved collection is already what was exported.
@@ -249,8 +260,13 @@ playlist-specific.
   file afterward.
 - Do not call rclone. Do not add a browse upload control.
 
-The app stays localhost-only through the existing access check. Document
-that a caller who can already reach this server and send
+`LocalhostOnlyAccess` stays default true. A non-loopback peer is rejected
+until that setting is false. Document that trusted remote access is
+`LocalhostOnlyAccess: false` in `config_local.json` plus a non-loopback
+bind such as `--host 0.0.0.0`. That is not authentication. The existing
+access-control test covers a non-loopback peer when the flag is off.
+
+A caller who can already reach this server and send
 `enable_write_dropbox=1` can overwrite any file under the local Dropbox
 folder. That is the same trusted-server boundary as sync, extended to
 bytes supplied by the browser. It is not a public upload endpoint.
@@ -348,7 +364,8 @@ Push, local write fails:
 Push, upload fails after the local write:
 
 - Browser store stays unchanged. The local file has the confirmed bytes.
-  Dropbox still has the previous file. Status says the upload failed.
+  Status says the upload failed and that the remote state was not
+  verified. Do not claim the Dropbox file is unchanged.
 
 Cancel on either popup:
 
@@ -394,8 +411,9 @@ Cancel on either popup:
 - [ ] Add Node tests that a blank `activePlaylistSavedName` does not
   resolve to a saved playlist named "New Playlist".
 - [ ] Add Node tests that validation uses a temporary store: malformed
-  JSON, a bad playlist entry, and duplicate names leave the live store,
-  saved-name link, and active songs unchanged.
+  JSON, a bad playlist entry, duplicate names, and an explicit
+  unsupported `version` leave the live store unchanged. A missing
+  `version` still imports.
 - [ ] Add Node tests that music and video keep separate storage keys and
   separate sync paths.
 - [ ] Add a Python test that `POST /local-file` rejects a missing write
@@ -404,6 +422,10 @@ Cancel on either popup:
   atomically replaces the local file. A failed replace leaves the
   previous bytes. Then `POST /sync` that file through the fake rclone
   and assert the remote bytes match the confirmed export.
+- [ ] Add a Python regression test that a remote stat `BAD_GATEWAY`
+  followed by a local-only fallback listing stays a remote error on
+  `GET /file`, and is not reported as 404. A successful parent listing
+  that does not contain the file is still 404.
 
 ### Shared client behavior
 

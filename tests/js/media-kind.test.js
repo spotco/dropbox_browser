@@ -15,6 +15,7 @@ test("media kind presentation supplies music labels and export filename", async 
   assert.equal(presentation.itemNounSingular, "song");
   assert.equal(presentation.itemNounPlural, "songs");
   assert.equal(presentation.playlistItemsLabel, "Songs");
+  assert.equal(presentation.playlistLoadButtonLabel, "Playlists");
   assert.equal(presentation.playlistLoadLabel, "Load Playlist: Songs");
   assert.equal(presentation.playlistExportFilename, "dropbox_browser_music_playlists.json");
   assert.equal(mod.formatMediaItemCount(1, "music"), "1 song");
@@ -28,6 +29,7 @@ test("media kind presentation supplies video labels and accepts the singular ali
   assert.equal(presentation.itemNounSingular, "video");
   assert.equal(presentation.itemNounPlural, "videos");
   assert.equal(presentation.playlistItemsLabel, "Videos");
+  assert.equal(presentation.playlistLoadButtonLabel, "Playlists");
   assert.equal(presentation.playlistLoadLabel, "Load Playlist: Videos");
   assert.equal(presentation.playlistExportFilename, "dropbox_browser_videos_playlists.json");
   assert.equal(mod.formatMediaItemCount(1, "videos"), "1 video");

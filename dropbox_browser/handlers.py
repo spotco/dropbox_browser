@@ -5,6 +5,7 @@ import ipaddress
 import mimetypes
 from pathlib import Path
 import posixpath
+import tempfile
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
@@ -18,7 +19,7 @@ from .music import MUSIC_ENDPOINT_PREFIX, handle_music_get
 from .namekeys import filename_compare_key
 from .photo_map_cache import normalize_cache_path
 from .paths import clean_rel_path, remote_target, safe_join_local
-from .services import DropboxBrowser, diff_label
+from .services import REMOTE_UNKNOWN_LISTING_SOURCES, DropboxBrowser, diff_label
 from .streaming import (
     RangeNotSatisfiable,
     StreamPlan,
@@ -66,10 +67,38 @@ from .views import (
 
 
 ASSET_DIR = Path(__file__).resolve().parent / "assets"
+
+
+def _write_bytes_atomic(path: Path, data: bytes) -> None:
+    """Replace path only after the full byte string is on disk in the same directory."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile("wb", dir=path.parent, delete=False) as tmp:
+            tmp.write(data)
+            tmp_path = Path(tmp.name)
+        delay = 0.02
+        for attempt in range(8):
+            try:
+                tmp_path.replace(path)
+                tmp_path = None
+                return
+            except PermissionError:
+                if attempt == 7:
+                    raise
+                time.sleep(delay)
+                delay *= 2
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 ASSET_ROUTE_PREFIX = "/assets/"
 PHOTO_MAP_ENDPOINT_PREFIX = "/photo-map/endpoints/"
 TAGGED_INPUT_COPY_BUFFER_SIZE = 2 * 1024 * 1024
 PHOTO_MAP_MAX_JSON_BODY_BYTES = 2 * 1024 * 1024
+LOCAL_FILE_MAX_BODY_BYTES = 8 * 1024 * 1024
 STATIC_ASSET_CACHE_MAX_AGE_SECONDS = 60 * 60
 
 
@@ -240,6 +269,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             parsed = urlparse(self.path)
             if parsed.path == "/sync":
                 self.handle_sync()
+            elif parsed.path == "/local-file":
+                self.handle_local_file()
             elif parsed.path == "/sync-batch-plan":
                 self.handle_sync_batch_plan()
             elif parsed.path == "/sync-batch":
@@ -355,11 +386,13 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def _resolve_remote_file(self, rel_path: str) -> tuple[str, int]:
         remote_path = remote_target(self.app.remote, rel_path)
+        stat_error: BrowserError | None = None
         try:
             item = self.app.rclone.stat(remote_path)
         except BrowserError as exc:
             if exc.status != HTTPStatus.BAD_GATEWAY:
                 raise
+            stat_error = exc
         else:
             if not item.get("IsDir"):
                 size = item.get("Size")
@@ -370,7 +403,8 @@ class RequestHandler(BaseHTTPRequestHandler):
         name = posixpath.basename(rel_path)
         normalized_name = filename_compare_key(name)
         normalized_match: dict | None = None
-        for entry in self.app.list_entries(parent):
+        listing = self.app._list_entries_with_state(parent)
+        for entry in listing.entries:
             if not entry.get("remote") or entry.get("is_dir"):
                 continue
             entry_name = entry.get("name")
@@ -390,6 +424,12 @@ class RequestHandler(BaseHTTPRequestHandler):
             entry_name = normalized_match.get("name")
             if isinstance(entry_name, str) and size is not None:
                 return (posixpath.join(parent, entry_name) if parent else entry_name, int(size))
+        # A failed live listing can come back as local-only or stale rows.
+        # Those rows do not prove the remote file is absent.
+        if listing.source in REMOTE_UNKNOWN_LISTING_SOURCES or listing.stale:
+            if stat_error is not None:
+                raise stat_error
+            raise BrowserError(HTTPStatus.BAD_GATEWAY, listing.remote_error or "Dropbox listing failed.")
         raise BrowserError(HTTPStatus.NOT_FOUND, "Remote file not found.")
 
     def _send_file_headers(
@@ -1756,6 +1796,41 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         if head_only:
             return
+        self.wfile.write(body)
+
+    def handle_local_file(self) -> None:
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        if params.get("enable_write_dropbox", [""])[0] != "1":
+            raise BrowserError(HTTPStatus.FORBIDDEN, "Enable write to Dropbox before writing a local file.")
+        if self.app.local_root is None:
+            raise BrowserError(HTTPStatus.BAD_REQUEST, "Local comparison is not configured.")
+        rel_path = clean_rel_path(params.get("path", [""])[0])
+        if not rel_path:
+            raise BrowserError(HTTPStatus.BAD_REQUEST, "A file path is required.")
+        destination = safe_join_local(self.app.local_root, rel_path)
+        raw_length = self.headers.get("Content-Length")
+        if raw_length is None:
+            raise BrowserError(HTTPStatus.BAD_REQUEST, "Content-Length is required.")
+        try:
+            length = int(raw_length)
+        except ValueError as exc:
+            raise BrowserError(HTTPStatus.BAD_REQUEST, "Invalid Content-Length.") from exc
+        if length < 0 or length > LOCAL_FILE_MAX_BODY_BYTES:
+            raise BrowserError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Local file request is too large.")
+        data = self.rfile.read(length)
+        if len(data) != length:
+            raise BrowserError(HTTPStatus.BAD_REQUEST, "Local file request ended before Content-Length.")
+        try:
+            _write_bytes_atomic(destination, data)
+        except OSError as exc:
+            raise BrowserError(HTTPStatus.INTERNAL_SERVER_ERROR, "Could not write the local file.") from exc
+        body = _json.dumps({"bytes": length, "path": rel_path}).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json")
+        self._send_no_store_headers()
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
         self.wfile.write(body)
 
     def handle_sync(self) -> None:

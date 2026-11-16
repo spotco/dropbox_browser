@@ -489,11 +489,13 @@ class WebUiTests(AppTestCase):
         self.assertIn('data-recent-sort-key="filename"', html)
         self.assertIn('data-recent-sort-key="playlist_name"', html)
         self.assertIn('id="music-playlist-controls"', html)
-        self.assertIn('id="music-playlist-load">Load Playlist: Songs</button>', html)
-        self.assertIn('id="music-playlist-rename">Rename Playlist</button>', html)
+        self.assertIn('id="music-playlist-load">Playlists</button>', html)
+        self.assertIn('id="music-playlist-rename">Rename</button>', html)
+        self.assertIn('id="music-playlist-sync-pull"', html)
+        self.assertIn('id="music-playlist-sync-push"', html)
         self.assertIn(
-            'id="music-playlist-load">Load Playlist: Songs</button>\n'
-            '          <button type="button" id="music-playlist-rename">Rename Playlist</button>',
+            'id="music-playlist-load">Playlists</button>\n'
+            '          <button type="button" id="music-playlist-rename">Rename</button>',
             html,
         )
         self.assertIn('id="music-playlist-save"', html)

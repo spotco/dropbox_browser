@@ -9,9 +9,13 @@ requests or a JSON error from the JSON endpoint handlers.
 ## Access and path rules
 
 `LocalhostOnlyAccess` defaults to `true`. The server rejects non-loopback peers
-even if it is bound with `--host 0.0.0.0`; set the setting to `false` only when
-the surrounding environment supplies its own access control. The application
-does not provide user authentication or TLS.
+even if it is bound with `--host 0.0.0.0`. To let a trusted machine on the
+network open the app, set `LocalhostOnlyAccess` to `false` in
+`config_local.json` and bind a reachable address, for example
+`--host 0.0.0.0`. Do not change the default. The flag is not authentication
+or TLS. A reachable server can write any file under the local Dropbox folder
+through `POST /local-file` when the request also sends
+`enable_write_dropbox=1`.
 
 Remote-relative paths pass through `clean_rel_path`: backslashes are treated as
 slashes, `.` segments are removed, and `..` segments are rejected. Local paths
@@ -83,6 +87,7 @@ endpoint root.
 
 | Method | Path | Body/parameters | Result |
 | --- | --- | --- | --- |
+| `POST` | `/local-file` | Query `path` and `enable_write_dropbox=1`. The body is raw bytes, up to 8 MiB, with `Content-Length`. | `200` after an atomic replace under the local Dropbox folder. This does not call rclone. |
 | `POST` | `/sync` | `path`, `kind=file`, `direction=local_to_dropbox` or `dropbox_to_local`, plus the matching explicit enable flag | `202` with an operation `id`. |
 | `POST` | `/sync-batch-plan` | `path`, `action`, `recursive=1`, and the matching enable flag | `202` with a plan-operation `id`; poll `/sync-status`. |
 | `POST` | `/sync-batch` | Same selection, plus a confirmed `plan_token` | `202` with operation `id` and total count. |
@@ -90,8 +95,20 @@ endpoint root.
 | `POST` | `/refresh-cache` | `path`, optional `recursive=1` | `202` with invalidated paths; the client reloads the listing. |
 | `POST` | `/client-log` | Form fields including `subsystem`, `level`, `message`, and JSON `details` | `200` with whether the event was accepted. |
 
+`POST /local-file` is a general local write, not a playlist endpoint and not
+a Dropbox upload. `path` goes through `clean_rel_path` and `safe_join_local`.
+A missing write gate is 403. A missing local folder, a missing
+`Content-Length`, or a parent segment is 400. A body larger than 8 MiB is
+413. The bytes are written to a temporary file in the destination directory
+and then moved into place. A failed replace leaves the previous file in
+place. A localhost caller who can send `enable_write_dropbox=1` can
+overwrite any file under the local Dropbox folder.
+
 Sync writes are gated in both the UI and handler. `local_to_dropbox` requires
 `enable_write_dropbox=1`; `dropbox_to_local` requires `enable_to_local=1`.
+`GET /file` reports 404 only when the remote file's absence is established.
+A failed rclone stat that falls back to a local-only or stale listing stays
+a remote error instead of becoming 404.
 Batch planning is a confirmation step and execution recomputes/validates the
 plan before enqueueing operations.
 

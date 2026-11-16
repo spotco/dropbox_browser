@@ -31,8 +31,10 @@
       </div>
       <div id="music-playlist-controls" class="music-playlist-toolbar music-playlist-toolbar-secondary">
         <div class="music-playlist-toolbar-group" role="group" aria-label="Playlist load and rename">
-          <button type="button" id="music-playlist-load">Load Playlist: Songs</button>
-          <button type="button" id="music-playlist-rename">Rename Playlist</button>
+          <button type="button" id="music-playlist-load">Playlists</button>
+          <button type="button" id="music-playlist-rename">Rename</button>
+          <button type="button" id="music-playlist-sync-pull" disabled>Sync Pull</button>
+          <button type="button" id="music-playlist-sync-push" disabled>Sync Push</button>
         </div>
         <div class="music-playlist-toolbar-group music-playlist-toolbar-save" role="group" aria-label="Playlist save">
           <button type="button" id="music-playlist-save">Save</button>
@@ -82,6 +84,20 @@
           <div class="music-playlist-modal-actions">
             <button type="button" id="music-playlist-rename-cancel">Cancel</button>
             <button type="button" id="music-playlist-rename-confirm">OK</button>
+          </div>
+        </div>
+      </div>
+      <div id="music-playlist-sync-dialog" class="music-playlist-modal music-playlist-modal-sync hidden" role="dialog" aria-modal="true" aria-labelledby="music-playlist-sync-title" hidden>
+        <div class="music-playlist-modal-card">
+          <div class="music-playlist-modal-header">
+            <h3 id="music-playlist-sync-title">Replace Local Saved Playlists from Dropbox</h3>
+          </div>
+          <div class="music-playlist-modal-actions">
+            <button type="button" id="music-playlist-sync-cancel">Cancel</button>
+            <button type="button" id="music-playlist-sync-confirm">OK</button>
+          </div>
+          <div class="music-playlist-modal-body">
+            <textarea id="music-playlist-sync-summary" class="music-playlist-sync-summary" readonly aria-label="Playlist sync summary"></textarea>
           </div>
         </div>
       </div>

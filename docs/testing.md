@@ -225,6 +225,17 @@ Shared client code for that surface lives under
 There is **no** shared music/video e2e suite; video keeps its own specs and
 updates selectors for the music-like library/playlist DOM.
 
+Playlist Dropbox sync is covered by `tests/js/playlist-sync.test.js`,
+`tests/test_playlist_sync_routes.py`, and
+`tests/e2e/music-playlist-sync.integration.spec.js`. The Playwright spec
+uses the fake rclone server and the query paths
+`folder/dev_test_music_playlists.json` and
+`folder/dev_test_video_playlists.json`. It must not read or write
+`dropbox_browser_music_playlists.json` or
+`dropbox_browser_videos_playlists.json`. A later check on a running local
+server uses `dropbox_browser/dev_test_music_playlists.json` and
+`dropbox_browser/dev_test_video_playlists.json` only.
+
 ### Video e2e fixtures
 
 Video-player integration tests may point `DROPBOX_BROWSER_E2E_FIXTURE` at a

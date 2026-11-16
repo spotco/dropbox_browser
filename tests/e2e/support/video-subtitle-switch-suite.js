@@ -1597,7 +1597,7 @@ test.afterAll(async () => {
 test("video playlist labels and export filename use video terminology", async ({ page }) => {
   await openVideoPane(page);
 
-  await expect(page.locator("#video-playlist-load")).toHaveText("Load Playlist: Videos");
+  await expect(page.locator("#video-playlist-load")).toHaveText("Playlists");
   await queueLibraryFile(page, "alpha.mkv");
   await page.locator("#video-playlist-save").click();
   await page.locator("#video-playlist-rename-input").fill("Video Export");

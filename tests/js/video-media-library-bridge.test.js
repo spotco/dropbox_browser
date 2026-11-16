@@ -55,6 +55,19 @@ test("video playlist starts publish the shared asset and playlist message", asyn
   assert.deepEqual(messages, ['Playing "Episode01.mkv" from playlist "Weekend Watch".']);
 });
 
+test("playlist replacement keeps the selected queue index on the active index", async () => {
+  const {queueIndexesAfterPlaylistSync} = await importBridgeModule();
+  const moved = queueIndexesAfterPlaylistSync(25, 19);
+  assert.equal(moved.currentPlaylistIndex, 19);
+  assert.equal(moved.activeQueueIndex, 19);
+  assert.equal(moved.selectedQueueIndex, 19);
+
+  const cleared = queueIndexesAfterPlaylistSync(0, 4);
+  assert.equal(cleared.currentPlaylistIndex, -1);
+  assert.equal(cleared.activeQueueIndex, -1);
+  assert.equal(cleared.selectedQueueIndex, -1);
+});
+
 test("video playlist clearCurrentSong releases the video media session", async () => {
   const {initMediaLibraryBridge} = await importBridgeModule();
   let releases = 0;

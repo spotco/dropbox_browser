@@ -2,6 +2,7 @@ import {initLayout} from './media-library/layout.js';
 import {initPlaylist} from './media-library/playlist.js';
 import {initLibrary} from './media-library/library.js';
 import {PlaylistStore} from './media-library/playlist-store.js';
+import {resolvePlaylistSyncPath} from './media-library/playlist-sync.js';
 import {RecentStore} from './media-library/recent-store.js';
 import {initPlayback} from './music/playback.js';
 import {initWaveformController} from './music/waveform/controller.js';
@@ -26,7 +27,12 @@ import {contextMenuEventShouldDismiss} from './media-library/context-menu-positi
       emptyLibraryNoItemsText: 'No supported cached songs found in this folder yet.',
       loadingLibraryText: 'Loading cached song library...',
       libraryTitle: 'Song Library',
-      playlistTitlePrefix: 'Active Playlist:'
+      playlistTitlePrefix: 'Active Playlist:',
+      playlistSyncPath: resolvePlaylistSyncPath(
+        'dropbox_browser_music_playlists.json',
+        window.location.search,
+        'music_playlist_sync_path'
+      )
     },
     els: {
       playerShell: pane.querySelector('.music-player-shell'),
@@ -47,6 +53,13 @@ import {contextMenuEventShouldDismiss} from './media-library/context-menu-positi
       playlistExportButton: document.getElementById('music-playlist-export'),
       playlistRenameButton: document.getElementById('music-playlist-rename'),
       playlistLoadButton: document.getElementById('music-playlist-load'),
+      playlistSyncPullButton: document.getElementById('music-playlist-sync-pull'),
+      playlistSyncPushButton: document.getElementById('music-playlist-sync-push'),
+      playlistSyncDialog: document.getElementById('music-playlist-sync-dialog'),
+      playlistSyncTitleEl: document.getElementById('music-playlist-sync-title'),
+      playlistSyncSummaryEl: document.getElementById('music-playlist-sync-summary'),
+      playlistSyncCancelButton: document.getElementById('music-playlist-sync-cancel'),
+      playlistSyncConfirmButton: document.getElementById('music-playlist-sync-confirm'),
       playlistSaveButton: document.getElementById('music-playlist-save'),
       playlistImportInput: document.getElementById('music-playlist-import-input'),
       playlistSaveToast: document.getElementById('music-playlist-save-toast'),

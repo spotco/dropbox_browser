@@ -711,7 +711,7 @@ test("playlist save, load, rename, overwrite, delete survive reload", async ({ p
   // New playlist, rename to same name, overwrite confirm
   await page.locator("#music-playlist-load").click();
   await expect(page.locator("#music-playlist-load-dialog")).toBeVisible();
-  await expect(page.locator("#music-playlist-load")).toHaveText("Load Playlist: Songs");
+  await expect(page.locator("#music-playlist-load")).toHaveText("Playlists");
   await expect(page.locator("#music-playlist-load-title")).toHaveText("Load Playlist: Songs");
   await page.locator("#music-playlist-load-new").click();
   // Dirty discard may prompt overwrite-style confirm

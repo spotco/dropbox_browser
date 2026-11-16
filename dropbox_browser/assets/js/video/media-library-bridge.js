@@ -10,6 +10,25 @@ import {
 } from '../music/shuffle-helpers.js';
 import {setPlaylistPlaybackStatus} from '../media-library/shared.js';
 
+export function queueIndexesAfterPlaylistSync(queueLength, currentPlaylistIndex) {
+  var length = Math.max(0, Number(queueLength) || 0);
+  var index = Number(currentPlaylistIndex);
+  var current = index;
+  var active = index;
+  if (!Number.isInteger(index) || index < -1) {
+    current = -1;
+    active = -1;
+  } else if (index >= length) {
+    current = length ? length - 1 : -1;
+    active = current;
+  }
+  return {
+    activeQueueIndex: active,
+    currentPlaylistIndex: current,
+    selectedQueueIndex: active,
+  };
+}
+
 export function initMediaLibraryBridge(ctx) {
   async function loadPlaybackStatus() {
     if (ctx.state.loadingPlaybackStatus) return;
@@ -68,21 +87,12 @@ export function initMediaLibraryBridge(ctx) {
 
   function syncQueueFromPlaylist() {
     var songs = Array.isArray(ctx.state.playlist) ? ctx.state.playlist : [];
+    var next;
     ctx.state.queue = songs.map(playlistSongToQueueItem).filter(Boolean);
-    var index = Number(ctx.state.currentPlaylistIndex);
-    // Preserve intentional "nothing playing" (-1). Only clamp invalid positive indexes.
-    if (!Number.isInteger(index) || index < -1) {
-      ctx.state.currentPlaylistIndex = -1;
-      ctx.state.activeQueueIndex = -1;
-    } else if (index >= ctx.state.queue.length) {
-      ctx.state.currentPlaylistIndex = ctx.state.queue.length ? ctx.state.queue.length - 1 : -1;
-      ctx.state.activeQueueIndex = ctx.state.currentPlaylistIndex;
-    } else {
-      ctx.state.activeQueueIndex = index;
-    }
-    if (ctx.state.selectedQueueIndex < -1 || ctx.state.selectedQueueIndex >= ctx.state.queue.length) {
-      ctx.state.selectedQueueIndex = ctx.state.activeQueueIndex;
-    }
+    next = queueIndexesAfterPlaylistSync(ctx.state.queue.length, ctx.state.currentPlaylistIndex);
+    ctx.state.currentPlaylistIndex = next.currentPlaylistIndex;
+    ctx.state.activeQueueIndex = next.activeQueueIndex;
+    ctx.state.selectedQueueIndex = next.selectedQueueIndex;
   }
 
   function clearCurrentSong() {

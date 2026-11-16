@@ -194,6 +194,23 @@ class SimulatedRclone:
         return copy.deepcopy(response.items) or []
 
     def stat(self, target: str) -> dict[str, Any]:
+        with self._lock:
+            scripted = bool(self._responses.get(target))
+            uploaded = self.cat_data.get(target)
+        # Uploads record bytes without a pre-scripted lsjson entry. Serve
+        # those from cat_data. A path with neither a script nor bytes is
+        # absent, matching an empty rclone stat.
+        if not scripted and uploaded is not None:
+            name = target.rsplit("/", 1)[-1]
+            return {
+                "Name": name,
+                "Path": name,
+                "IsDir": False,
+                "Size": len(uploaded),
+                "ModTime": "2024-01-01T12:00:00Z",
+            }
+        if not scripted:
+            raise BrowserError(HTTPStatus.NOT_FOUND, "Remote file not found.")
         response = self._execute_lsjson(
             target,
             ("lsjson", "--stat", "--no-modtime", "--no-mimetype", "--", target),

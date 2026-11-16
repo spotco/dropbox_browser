@@ -11,6 +11,21 @@ import {
   playlistNameFromFilename,
   playlistAbsolutePathKey
 } from './playlist-store.js';
+import {
+  LOCAL_WRITE_ERROR_MESSAGE,
+  PULL_HEADING,
+  PULL_NOTICE,
+  PUSH_HEADING,
+  PUSH_NOTICE,
+  REMOTE_MISSING_MESSAGE,
+  REMOTE_READ_ERROR_MESSAGE,
+  UPLOAD_UNVERIFIED_MESSAGE,
+  parsePlaylistExport,
+  pullActivePlaylistAction,
+  stringifyPlaylistExport,
+  summarizePlaylistChanges,
+  syncConfirmationText
+} from './playlist-sync.js';
 
 function copySelectedRemotePathMap(selectedRemotePaths) {
   var copied = Object.create(null);
@@ -276,9 +291,18 @@ export function initPlaylist(ctx) {
     els.activePlaylistNameEl.textContent = activePlaylistName();
   }
 
+  function playlistSyncPath() {
+    return String(cfg.playlistSyncPath || '').trim();
+  }
+
   function updatePlaylistMediaLabels() {
-    if (els.playlistLoadButton) els.playlistLoadButton.textContent = mediaPresentation.playlistLoadLabel;
+    if (els.playlistLoadButton) {
+      els.playlistLoadButton.textContent = mediaPresentation.playlistLoadButtonLabel || 'Playlists';
+    }
     if (els.playlistLoadTitleEl) els.playlistLoadTitleEl.textContent = mediaPresentation.playlistLoadLabel;
+    var syncDisabled = !playlistSyncPath();
+    if (els.playlistSyncPullButton) els.playlistSyncPullButton.disabled = syncDisabled;
+    if (els.playlistSyncPushButton) els.playlistSyncPushButton.disabled = syncDisabled;
   }
 
   function resetPlaylistSelections() {
@@ -318,11 +342,20 @@ export function initPlaylist(ctx) {
     state.selectedRecentId = null;
   }
 
+  function closeSyncDialog() {
+    state.playlistSyncMode = null;
+    state.playlistSyncPayload = null;
+    state.playlistSyncText = '';
+    setPlaylistModalVisible(els.playlistSyncDialog, false);
+    setPlaylistSyncBusy(false);
+  }
+
   function closePlaylistDialogs() {
     closeRenameDialog();
     closeOverwriteDialog();
     closeLoadDialog();
     closeRecentDialog();
+    closeSyncDialog();
   }
 
   function hidePlaylistSaveToast() {
@@ -1053,6 +1086,169 @@ export function initPlaylist(ctx) {
     });
     ctx.setStatus('Exported ' + state.persistedPlaylists.length + ' saved playlists.');
     return true;
+  }
+
+  function setPlaylistSyncBusy(isBusy) {
+    var disabled = !!isBusy || !playlistSyncPath();
+    if (els.playlistSyncPullButton) els.playlistSyncPullButton.disabled = disabled;
+    if (els.playlistSyncPushButton) els.playlistSyncPushButton.disabled = disabled;
+  }
+
+  function readRemotePlaylistFile(syncPath) {
+    return fetch('/file?path=' + encodeURIComponent(syncPath) + '&source=remote').then(function (response) {
+      if (response.status === 404) return {kind: 'missing'};
+      if (!response.ok) return {kind: 'error', message: REMOTE_READ_ERROR_MESSAGE};
+      return response.text().then(function (text) {
+        return {kind: 'ok', text: text};
+      });
+    }).catch(function () {
+      return {kind: 'error', message: REMOTE_READ_ERROR_MESSAGE};
+    });
+  }
+
+  function openSyncDialog(mode, summary) {
+    state.playlistSyncMode = mode;
+    if (els.playlistSyncTitleEl) {
+      els.playlistSyncTitleEl.textContent = mode === 'push' ? PUSH_HEADING : PULL_HEADING;
+    }
+    if (els.playlistSyncSummaryEl) {
+      els.playlistSyncSummaryEl.value = syncConfirmationText(mode === 'push' ? PUSH_NOTICE : PULL_NOTICE, summary.text);
+    }
+    if (els.playlistSyncConfirmButton) els.playlistSyncConfirmButton.disabled = !summary.hasChanges;
+    setPlaylistModalVisible(els.playlistSyncDialog, true);
+    if (els.playlistSyncConfirmButton && !els.playlistSyncConfirmButton.disabled && typeof els.playlistSyncConfirmButton.focus === 'function') {
+      window.setTimeout(function () {
+        els.playlistSyncConfirmButton.focus();
+      }, 0);
+    }
+  }
+
+  function applyPulledActivePlaylist() {
+    var action = pullActivePlaylistAction(state.activePlaylistSavedName, state.playlistStore.persistedPlaylists);
+    if (action === 'reload') loadPlaylistByName(state.activePlaylistSavedName);
+    else loadNewPlaylist();
+    ctx.syncPlaylistState();
+  }
+
+  function confirmSyncDialog() {
+    var mode = state.playlistSyncMode;
+    var payload = state.playlistSyncPayload;
+    var text = state.playlistSyncText;
+    var syncPath = playlistSyncPath();
+    if (!syncPath || !mode) return;
+    if (els.playlistSyncConfirmButton && els.playlistSyncConfirmButton.disabled) return;
+    closeSyncDialog();
+    setPlaylistSyncBusy(true);
+    if (mode === 'pull') {
+      try {
+        state.playlistStore.importPersistedPlaylists(payload);
+      } catch (err) {
+        setPlaylistSyncBusy(false);
+        ctx.setStatus((err && err.message) || 'Playlist import failed.');
+        return;
+      }
+      persistPlaylistStore();
+      applyPulledActivePlaylist();
+      setPlaylistSyncBusy(false);
+      ctx.setStatus('Replaced local saved playlists from Dropbox.');
+      return;
+    }
+    fetch('/local-file?path=' + encodeURIComponent(syncPath) + '&enable_write_dropbox=1', {
+      body: text,
+      headers: {'Content-Type': 'application/octet-stream'},
+      method: 'POST'
+    }).then(function (response) {
+      if (!response.ok) throw new Error(LOCAL_WRITE_ERROR_MESSAGE);
+      var fields = new URLSearchParams();
+      fields.set('direction', 'local_to_dropbox');
+      fields.set('enable_write_dropbox', '1');
+      fields.set('kind', 'file');
+      fields.set('path', syncPath);
+      return fetch('/sync', {body: fields, method: 'POST'}).then(function (syncResponse) {
+        if (!syncResponse.ok) throw new Error(UPLOAD_UNVERIFIED_MESSAGE);
+        return syncResponse.json();
+      });
+    }).then(function (payload) {
+      return pollPlaylistSyncStatus(payload && payload.id);
+    }).then(function () {
+      ctx.setStatus('Replaced the Dropbox playlist file from local saved playlists.');
+    }).catch(function (err) {
+      ctx.setStatus((err && err.message) || UPLOAD_UNVERIFIED_MESSAGE);
+    }).finally(function () {
+      setPlaylistSyncBusy(false);
+    });
+  }
+
+  function pollPlaylistSyncStatus(id) {
+    if (!id) return Promise.reject(new Error(UPLOAD_UNVERIFIED_MESSAGE));
+    return new Promise(function (resolve, reject) {
+      function poll() {
+        fetch('/sync-status?id=' + encodeURIComponent(id)).then(function (response) {
+          if (!response.ok) throw new Error(UPLOAD_UNVERIFIED_MESSAGE);
+          return response.json();
+        }).then(function (data) {
+          if (data.status === 'complete') {
+            if (data.errors && data.errors.length) {
+              reject(new Error(UPLOAD_UNVERIFIED_MESSAGE));
+              return;
+            }
+            resolve();
+            return;
+          }
+          if (data.status === 'error') {
+            reject(new Error(UPLOAD_UNVERIFIED_MESSAGE));
+            return;
+          }
+          window.setTimeout(poll, 300);
+        }).catch(function () {
+          reject(new Error(UPLOAD_UNVERIFIED_MESSAGE));
+        });
+      }
+      poll();
+    });
+  }
+
+  function beginPlaylistSync(mode) {
+    var syncPath = playlistSyncPath();
+    var confirmedExport;
+    var confirmedText;
+    if (!syncPath) {
+      ctx.setStatus('Playlist sync is off until a playlist file path is set.');
+      return;
+    }
+    var opened = false;
+    setPlaylistSyncBusy(true);
+    confirmedExport = state.playlistStore.exportPersistedPlaylists();
+    confirmedText = stringifyPlaylistExport(confirmedExport);
+    readRemotePlaylistFile(syncPath).then(function (remote) {
+      var remoteStore = null;
+      var beforePlaylists;
+      var afterPlaylists;
+      if (remote.kind === 'error') throw new Error(remote.message || REMOTE_READ_ERROR_MESSAGE);
+      if (remote.kind === 'missing') {
+        if (mode === 'pull') throw new Error(REMOTE_MISSING_MESSAGE);
+      } else {
+        remoteStore = parsePlaylistExport(remote.text, state.playlistStore.songFactory);
+      }
+      state.playlistSyncPayload = mode === 'pull' && remoteStore
+        ? remoteStore.exportPersistedPlaylists()
+        : confirmedExport;
+      state.playlistSyncText = confirmedText;
+      beforePlaylists = mode === 'push'
+        ? (remoteStore ? remoteStore.persistedPlaylists : [])
+        : state.playlistStore.persistedPlaylists;
+      afterPlaylists = mode === 'push'
+        ? state.playlistStore.persistedPlaylists
+        : (remoteStore ? remoteStore.persistedPlaylists : []);
+      openSyncDialog(mode, summarizePlaylistChanges(beforePlaylists, afterPlaylists));
+      opened = true;
+    }).catch(function (err) {
+      state.playlistSyncPayload = null;
+      state.playlistSyncText = '';
+      ctx.setStatus((err && err.message) || REMOTE_READ_ERROR_MESSAGE);
+    }).finally(function () {
+      if (!opened) setPlaylistSyncBusy(false);
+    });
   }
 
   function addSongsToPlaylist(songs) {
@@ -2002,6 +2198,30 @@ export function initPlaylist(ctx) {
   if (els.playlistLoadButton) {
     els.playlistLoadButton.addEventListener('click', function () {
       openLoadDialog();
+    });
+  }
+  if (els.playlistSyncPullButton) {
+    els.playlistSyncPullButton.addEventListener('click', function () {
+      beginPlaylistSync('pull');
+    });
+  }
+  if (els.playlistSyncPushButton) {
+    els.playlistSyncPushButton.addEventListener('click', function () {
+      beginPlaylistSync('push');
+    });
+  }
+  if (els.playlistSyncCancelButton) {
+    els.playlistSyncCancelButton.addEventListener('click', closeSyncDialog);
+  }
+  if (els.playlistSyncConfirmButton) {
+    els.playlistSyncConfirmButton.addEventListener('click', confirmSyncDialog);
+  }
+  if (els.playlistSyncDialog) {
+    els.playlistSyncDialog.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape') {
+        ev.preventDefault();
+        closeSyncDialog();
+      }
     });
   }
   if (els.recentButton) {

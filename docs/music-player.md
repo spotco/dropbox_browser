@@ -42,6 +42,17 @@ The shared UI in `assets/js/media-library/` provides:
 - named saved playlists, load/rename/delete, overwrite confirmation, and
   cancel-safe dialogs;
 - JSON export/import and M3U import/export;
+- Sync Pull and Sync Push for the saved-playlist collection. The buttons
+  are **Playlists**, **Rename**, **Sync Pull**, and **Sync Push**. The load
+  dialog title stays "Load Playlist: Songs". Music opts in with
+  `dropbox_browser_music_playlists.json`. A page query
+  `music_playlist_sync_path` replaces that path for the load; an empty
+  value turns sync off. Pull reads `GET /file?source=remote`, replaces the
+  saved collection with `importPersistedPlaylists`, and reloads a linked
+  active playlist or resets it to New Playlist. Push exports once, writes
+  those bytes with `POST /local-file`, then uses `POST /sync`. A failed
+  upload says the remote state was not verified. Video uses the same
+  controller with its own path and does not share this store;
 - a per-player Recent history with selectable records and restoration logic;
 - resizable library/playlist/playback panes and playlist columns.
 

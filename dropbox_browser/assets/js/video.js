@@ -3,6 +3,7 @@ import {initLayout} from './media-library/layout.js';
 import {initPlaylist} from './media-library/playlist.js';
 import {initLibrary as initMediaLibrary} from './media-library/library.js';
 import {PlaylistStore} from './media-library/playlist-store.js';
+import {resolvePlaylistSyncPath} from './media-library/playlist-sync.js';
 import {RecentStore} from './media-library/recent-store.js';
 import {initShared} from './video/shared.js';
 import {initCache} from './video/cache.js';
@@ -66,7 +67,12 @@ import {contextMenuEventShouldDismiss} from './media-library/context-menu-positi
       emptyLibraryNoItemsText: 'No supported cached videos found in this folder yet.',
       loadingLibraryText: 'Loading cached video library...',
       libraryTitle: 'Video Library',
-      playlistTitlePrefix: 'Active Playlist:'
+      playlistTitlePrefix: 'Active Playlist:',
+      playlistSyncPath: resolvePlaylistSyncPath(
+        'dropbox_browser_videos_playlists.json',
+        window.location.search,
+        'video_playlist_sync_path'
+      )
     },
     els: {
       statusEl: document.getElementById('video-player-status'),
@@ -140,6 +146,13 @@ import {contextMenuEventShouldDismiss} from './media-library/context-menu-positi
       playlistExportButton: document.getElementById('video-playlist-export'),
       playlistRenameButton: document.getElementById('video-playlist-rename'),
       playlistLoadButton: document.getElementById('video-playlist-load'),
+      playlistSyncPullButton: document.getElementById('video-playlist-sync-pull'),
+      playlistSyncPushButton: document.getElementById('video-playlist-sync-push'),
+      playlistSyncDialog: document.getElementById('video-playlist-sync-dialog'),
+      playlistSyncTitleEl: document.getElementById('video-playlist-sync-title'),
+      playlistSyncSummaryEl: document.getElementById('video-playlist-sync-summary'),
+      playlistSyncCancelButton: document.getElementById('video-playlist-sync-cancel'),
+      playlistSyncConfirmButton: document.getElementById('video-playlist-sync-confirm'),
       playlistSaveButton: document.getElementById('video-playlist-save'),
       playlistImportInput: document.getElementById('video-playlist-import-input'),
       playlistSaveToast: document.getElementById('video-playlist-save-toast'),

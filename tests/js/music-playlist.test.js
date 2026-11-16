@@ -19,8 +19,12 @@ async function importModuleFromWorkspace(relativePath) {
     const virtualListPath = path.resolve(path.dirname(absolutePath), "../browse/virtual-list.js");
     const virtualListSource = await fs.readFile(virtualListPath, "utf8");
     const virtualListUrl = `data:text/javascript;base64,${Buffer.from(virtualListSource, "utf8").toString("base64")}`;
+    const syncPath = path.resolve(path.dirname(absolutePath), "playlist-sync.js");
+    const syncSource = (await fs.readFile(syncPath, "utf8")).replace("'./playlist-store.js'", `'${storeUrl}'`);
+    const syncUrl = `data:text/javascript;base64,${Buffer.from(syncSource, "utf8").toString("base64")}`;
     source = source.replace("'./shared.js'", `'${sharedUrl}'`);
     source = source.replace("'./playlist-store.js'", `'${storeUrl}'`);
+    source = source.replace("'./playlist-sync.js'", `'${syncUrl}'`);
     source = source.replace("'./media-kind.js'", `'${mediaKindUrl}'`);
     source = source.replace("'../browse/virtual-list.js'", `'${virtualListUrl}'`);
     const menuPositionPath = path.resolve(path.dirname(absolutePath), "context-menu-position.js");

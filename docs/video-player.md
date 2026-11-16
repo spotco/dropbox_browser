@@ -294,7 +294,7 @@ Video uses the same recursive library + active playlist model as music:
 | Concern | Implementation |
 |---------|----------------|
 | Library tree UI, Load Current Folder, poll, sort, multi-select, context add | `media-library/library.js` |
-| Active playlist UI, save/load/rename/import/export, drag reorder, dedupe paths | `media-library/playlist.js` + `playlist-store.js` |
+| Active playlist UI, save/load/rename/import/export, Dropbox sync, drag reorder, dedupe paths | `media-library/playlist.js` + `playlist-store.js` + `playlist-sync.js` |
 | Library↔playlist resizers and playlist columns | `media-library/layout.js` |
 | Shared styles | `assets/css/media-library.css` (music-class names still used on video markup for parity) |
 | Video Settings keys | `video-playlists`, `video-library-sort`, `video-playlist-load-*`, `video-playlist-column-widths`, `video-media-library-pane-widths`, `video-narrow-pane-widths`, `video-narrow-pane-heights`, `video-shuffle-enabled`; loop stays `video-loop-queue` |

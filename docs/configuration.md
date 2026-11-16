@@ -37,7 +37,7 @@ the configured path exists as a file.
 | `DropboxFolder` | `./DropboxLocal` | Local tree compared with Dropbox. Empty or missing values fall back to `./DropboxLocal`; use `--local-root` to select another root for one run. |
 | `PythonPath` | empty (auto) | Interpreter setting retained for compatibility. Windows launchers always use `.tools/windows-x64/python/python.exe`; install it with `run\win\setup_exe.bat`. |
 | `RCloneConfig` | empty | Environment-expanded path. A path equal to rclone's native default is omitted from the command. |
-| `LocalhostOnlyAccess` | `true` | Rejects requests whose peer is not a loopback address. This is an access boundary, not authentication or TLS. |
+| `LocalhostOnlyAccess` | `true` | Rejects requests whose peer is not a loopback address. Leave this `true` unless another machine must open the server. Trusted remote access is `LocalhostOnlyAccess: false` in `config_local.json` together with a non-loopback bind such as `--host 0.0.0.0`. That only stops the loopback check. It is not authentication or TLS, and anyone who can reach the port can use the app, including playlist sync and `POST /local-file`. |
 | `CacheStaticAssets` | `true` | Sends one-hour public cache headers for HTML, CSS, JavaScript, icons, and other static assets. `false` restores no-store headers for development. |
 | `LogRcloneCommands` | `true` | Logs rclone command starts/completions. |
 | `LogHttpRequests` | `true` | Logs HTTP requests to normal server output. Polling endpoints are suppressed from that output. |
