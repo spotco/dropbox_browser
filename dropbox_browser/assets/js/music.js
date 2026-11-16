@@ -57,6 +57,7 @@ import {contextMenuEventShouldDismiss} from './media-library/context-menu-positi
       playlistSyncPushButton: document.getElementById('music-playlist-sync-push'),
       playlistSyncDialog: document.getElementById('music-playlist-sync-dialog'),
       playlistSyncTitleEl: document.getElementById('music-playlist-sync-title'),
+      playlistSyncNoticeEl: document.getElementById('music-playlist-sync-notice'),
       playlistSyncSummaryEl: document.getElementById('music-playlist-sync-summary'),
       playlistSyncCancelButton: document.getElementById('music-playlist-sync-cancel'),
       playlistSyncConfirmButton: document.getElementById('music-playlist-sync-confirm'),

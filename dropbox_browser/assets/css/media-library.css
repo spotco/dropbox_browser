@@ -527,6 +527,14 @@
    Overwrite/confirm is highest (280) so it always appears above load or rename
    when multiple modals are open simultaneously (e.g. dirty-load confirmation path).
 */
+.music-playlist-sync-notice {
+  color: #d7e4ef;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+  margin: 0;
+}
+
 .music-playlist-sync-summary {
   box-sizing: border-box;
   display: block;
@@ -636,6 +644,10 @@
   display: flex;
   gap: 8px;
   justify-content: flex-end;
+}
+
+.music-playlist-sync-actions {
+  justify-content: flex-start;
 }
 
 #music-playlist-load-new {

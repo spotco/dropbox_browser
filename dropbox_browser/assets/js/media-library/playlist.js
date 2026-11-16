@@ -23,8 +23,7 @@ import {
   parsePlaylistExport,
   pullActivePlaylistAction,
   stringifyPlaylistExport,
-  summarizePlaylistChanges,
-  syncConfirmationText
+  summarizePlaylistChanges
 } from './playlist-sync.js';
 
 function copySelectedRemotePathMap(selectedRemotePaths) {
@@ -277,6 +276,7 @@ export function initPlaylist(ctx) {
 
   function syncActivePlaylistDirtyState() {
     state.activePlaylistDirty = activePlaylistSignature() !== state.activePlaylistSavedSignature;
+    updatePlaylistSaveButton();
     return state.activePlaylistDirty;
   }
 
@@ -284,6 +284,21 @@ export function initPlaylist(ctx) {
     state.activePlaylistSavedName = savedName || activePlaylistName();
     state.activePlaylistSavedSignature = activePlaylistSignature();
     state.activePlaylistDirty = false;
+    updatePlaylistSaveButton();
+  }
+
+  function activePlaylistDiffersFromStored() {
+    var savedName = typeof state.activePlaylistSavedName === 'string' ? state.activePlaylistSavedName.trim() : '';
+    var storedPlaylist = savedName ? state.playlistStore.findPersistedPlaylistByName(savedName) : null;
+    if (!storedPlaylist) {
+      return activePlaylistSignature() !== playlistStateSignature(DEFAULT_PLAYLIST_NAME, []);
+    }
+    return activePlaylistSignature() !== playlistStateSignature(storedPlaylist.name, storedPlaylist.songs);
+  }
+
+  function updatePlaylistSaveButton() {
+    if (!els.playlistSaveButton) return;
+    els.playlistSaveButton.disabled = !activePlaylistDiffersFromStored();
   }
 
   function updateActivePlaylistName() {
@@ -380,9 +395,12 @@ export function initPlaylist(ctx) {
     els.playlistSaveToast.hidden = false;
     els.playlistSaveToast.classList.remove('hidden');
     if (state.playlistSaveToastTimer) window.clearTimeout(state.playlistSaveToastTimer);
-    state.playlistSaveToastTimer = window.setTimeout(function () {
-      hidePlaylistSaveToast();
-    }, durationMs);
+    state.playlistSaveToastTimer = null;
+    if (durationMs > 0) {
+      state.playlistSaveToastTimer = window.setTimeout(function () {
+        hidePlaylistSaveToast();
+      }, durationMs);
+    }
   }
 
   function showPlaylistSaveToast(savedPlaylist) {
@@ -609,6 +627,7 @@ export function initPlaylist(ctx) {
     state.activePlaylistSavedName = null;
     state.activePlaylistSavedSignature = activePlaylistSignature();
     state.activePlaylistDirty = false;
+    updatePlaylistSaveButton();
     resetPlaylistSelections();
     resetShuffleBag();
     state.currentPlaylistIndex = -1;
@@ -975,6 +994,7 @@ export function initPlaylist(ctx) {
     state.activePlaylistSavedName = null;
     state.activePlaylistSavedSignature = activePlaylistSignature();
     state.activePlaylistDirty = false;
+    updatePlaylistSaveButton();
     state.currentPlaylistIndex = -1;
     resetPlaylistSelections();
     resetShuffleBag();
@@ -1107,12 +1127,16 @@ export function initPlaylist(ctx) {
   }
 
   function openSyncDialog(mode, summary) {
+    hidePlaylistSaveToast();
     state.playlistSyncMode = mode;
     if (els.playlistSyncTitleEl) {
       els.playlistSyncTitleEl.textContent = mode === 'push' ? PUSH_HEADING : PULL_HEADING;
     }
+    if (els.playlistSyncNoticeEl) {
+      els.playlistSyncNoticeEl.textContent = mode === 'push' ? PUSH_NOTICE : PULL_NOTICE;
+    }
     if (els.playlistSyncSummaryEl) {
-      els.playlistSyncSummaryEl.value = syncConfirmationText(mode === 'push' ? PUSH_NOTICE : PULL_NOTICE, summary.text);
+      els.playlistSyncSummaryEl.value = summary.text;
     }
     if (els.playlistSyncConfirmButton) els.playlistSyncConfirmButton.disabled = !summary.hasChanges;
     setPlaylistModalVisible(els.playlistSyncDialog, true);
@@ -1139,18 +1163,23 @@ export function initPlaylist(ctx) {
     if (els.playlistSyncConfirmButton && els.playlistSyncConfirmButton.disabled) return;
     closeSyncDialog();
     setPlaylistSyncBusy(true);
+    showPlaylistToastMessage(mode === 'pull' ? 'Replacing local saved playlists...' : 'Uploading playlist to Dropbox...', {
+      durationMs: 0
+    });
     if (mode === 'pull') {
       try {
         state.playlistStore.importPersistedPlaylists(payload);
       } catch (err) {
         setPlaylistSyncBusy(false);
         ctx.setStatus((err && err.message) || 'Playlist import failed.');
+        showPlaylistErrorToast((err && err.message) || 'Playlist import failed.');
         return;
       }
       persistPlaylistStore();
       applyPulledActivePlaylist();
       setPlaylistSyncBusy(false);
       ctx.setStatus('Replaced local saved playlists from Dropbox.');
+      showPlaylistToastMessage('Replaced local saved playlists from Dropbox.');
       return;
     }
     fetch('/local-file?path=' + encodeURIComponent(syncPath) + '&enable_write_dropbox=1', {
@@ -1172,8 +1201,10 @@ export function initPlaylist(ctx) {
       return pollPlaylistSyncStatus(payload && payload.id);
     }).then(function () {
       ctx.setStatus('Replaced the Dropbox playlist file from local saved playlists.');
+      showPlaylistToastMessage('Replaced the Dropbox playlist file from local saved playlists.');
     }).catch(function (err) {
       ctx.setStatus((err && err.message) || UPLOAD_UNVERIFIED_MESSAGE);
+      showPlaylistErrorToast((err && err.message) || UPLOAD_UNVERIFIED_MESSAGE);
     }).finally(function () {
       setPlaylistSyncBusy(false);
     });
@@ -1214,10 +1245,12 @@ export function initPlaylist(ctx) {
     var confirmedText;
     if (!syncPath) {
       ctx.setStatus('Playlist sync is off until a playlist file path is set.');
+      showPlaylistErrorToast('Playlist sync is off until a playlist file path is set.');
       return;
     }
     var opened = false;
     setPlaylistSyncBusy(true);
+    showPlaylistToastMessage('Loading Dropbox playlist...', {durationMs: 0});
     confirmedExport = state.playlistStore.exportPersistedPlaylists();
     confirmedText = stringifyPlaylistExport(confirmedExport);
     readRemotePlaylistFile(syncPath).then(function (remote) {
@@ -1246,6 +1279,7 @@ export function initPlaylist(ctx) {
       state.playlistSyncPayload = null;
       state.playlistSyncText = '';
       ctx.setStatus((err && err.message) || REMOTE_READ_ERROR_MESSAGE);
+      showPlaylistErrorToast((err && err.message) || REMOTE_READ_ERROR_MESSAGE);
     }).finally(function () {
       if (!opened) setPlaylistSyncBusy(false);
     });

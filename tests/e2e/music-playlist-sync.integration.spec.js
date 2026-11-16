@@ -150,7 +150,7 @@ test("pull replaces a linked playlist and discards a local removal", async ({ pa
 
   await page.locator("#music-playlist-sync-pull").click();
   await expect(page.locator("#music-playlist-sync-title")).toHaveText("Replace Local Saved Playlists from Dropbox");
-  await expect(page.locator("#music-playlist-sync-summary")).toHaveValue(/discards unsaved changes/);
+  await expect(page.locator("#music-playlist-sync-notice")).toHaveText(/discards unsaved changes/);
   await expect(page.locator("#music-playlist-sync-summary")).toHaveValue(/Changed "Favorites": added 5, removed 0/);
   await page.locator("#music-playlist-sync-confirm").click();
   await expect(page.locator("#music-playlist-sync-dialog")).toBeHidden();

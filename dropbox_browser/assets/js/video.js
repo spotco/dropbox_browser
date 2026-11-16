@@ -150,6 +150,7 @@ import {contextMenuEventShouldDismiss} from './media-library/context-menu-positi
       playlistSyncPushButton: document.getElementById('video-playlist-sync-push'),
       playlistSyncDialog: document.getElementById('video-playlist-sync-dialog'),
       playlistSyncTitleEl: document.getElementById('video-playlist-sync-title'),
+      playlistSyncNoticeEl: document.getElementById('video-playlist-sync-notice'),
       playlistSyncSummaryEl: document.getElementById('video-playlist-sync-summary'),
       playlistSyncCancelButton: document.getElementById('video-playlist-sync-cancel'),
       playlistSyncConfirmButton: document.getElementById('video-playlist-sync-confirm'),

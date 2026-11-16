@@ -30,14 +30,12 @@
         </div>
       </div>
       <div id="music-playlist-controls" class="music-playlist-toolbar music-playlist-toolbar-secondary">
-        <div class="music-playlist-toolbar-group" role="group" aria-label="Playlist load and rename">
+        <div class="music-playlist-toolbar-group" role="group" aria-label="Playlist save, load, and sync">
+          <button type="button" id="music-playlist-save" disabled>Save</button>
           <button type="button" id="music-playlist-load">Playlists</button>
           <button type="button" id="music-playlist-rename">Rename</button>
           <button type="button" id="music-playlist-sync-pull" disabled>Sync Pull</button>
           <button type="button" id="music-playlist-sync-push" disabled>Sync Push</button>
-        </div>
-        <div class="music-playlist-toolbar-group music-playlist-toolbar-save" role="group" aria-label="Playlist save">
-          <button type="button" id="music-playlist-save">Save</button>
         </div>
       </div>
       <input
@@ -92,9 +90,10 @@
           <div class="music-playlist-modal-header">
             <h3 id="music-playlist-sync-title">Replace Local Saved Playlists from Dropbox</h3>
           </div>
-          <div class="music-playlist-modal-actions">
-            <button type="button" id="music-playlist-sync-cancel">Cancel</button>
+          <p id="music-playlist-sync-notice" class="music-playlist-sync-notice">This replaces the saved playlists in this browser. If this active playlist is linked to a saved playlist, it reloads from Dropbox and discards unsaved changes. Otherwise it resets to New Playlist.</p>
+          <div class="music-playlist-modal-actions music-playlist-sync-actions">
             <button type="button" id="music-playlist-sync-confirm">OK</button>
+            <button type="button" id="music-playlist-sync-cancel">Cancel</button>
           </div>
           <div class="music-playlist-modal-body">
             <textarea id="music-playlist-sync-summary" class="music-playlist-sync-summary" readonly aria-label="Playlist sync summary"></textarea>
