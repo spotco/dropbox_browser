@@ -286,8 +286,11 @@ test("refreshPlaylistColumnWidths refits fixed px columns after the list width c
   assert.notEqual(narrow, wide);
   assert.match(wide, /px /);
   const parts = wide.split(/\s+/).map((part) => Number.parseFloat(part));
+  const narrowParts = narrow.split(/\s+/).map((part) => Number.parseFloat(part));
   assert.equal(parts.length, 4);
   assert.ok(parts[0] + parts[1] + parts[2] + parts[3] > 300);
+  assert.equal(narrowParts[3], 56);
+  assert.equal(parts[3], 56);
 });
 
 test("playlist column widths include index default and upgrade old saves without wiping others", async () => {
@@ -368,8 +371,8 @@ test("music and video hosts default playlist widths include index", async () => 
   );
   assert.match(musicTemplate, /data-music-playlist-column-resizer="index"/);
   assert.match(videoTemplate, /data-music-playlist-column-resizer="index"/);
-  assert.match(musicTemplate, /<span>Index<\/span>/);
-  assert.match(videoTemplate, /<span>Index<\/span>/);
+  assert.match(musicTemplate, /<span title="Index">#<\/span>/);
+  assert.match(videoTemplate, /<span title="Index">#<\/span>/);
   assert.match(css, /--music-playlist-grid-columns:\s*52px minmax\(16px, 0\.9fr\) minmax\(16px, 1\.1fr\) 56px;/);
   assert.match(css, /--music-playlist-grid-min-width:\s*96px;/);
   assert.match(css, /\.music-playlist-entry\.current\s+\.music-playlist-filename-cell::before/);

@@ -242,13 +242,19 @@ async function mediaToolbarLayoutSnapshot(page, panePrefix) {
         .map(rectFor);
       const overlaps = (rects) => rects.some((left, index) =>
         rects.slice(index + 1).some((right) => intersects(left, right)));
+      const buttonNodes = Array.from(container.querySelectorAll("button"))
+        .filter((element) => getComputedStyle(element).display !== "none");
       return {
         selector,
         missing: false,
         clientWidth: container.clientWidth,
         scrollWidth: container.scrollWidth,
+        overflowX: getComputedStyle(container).overflowX,
+        flexWrap: getComputedStyle(container).flexWrap,
         childrenOverlap: overlaps(children),
         buttonsOverlap: overlaps(buttons),
+        buttonsClipped: buttonNodes.some((element) => element.scrollWidth > element.clientWidth + 1),
+        buttonFlexShrink: buttonNodes.some((element) => getComputedStyle(element).flexShrink !== "0"),
         buttonOutside: buttons.some((rect) =>
           rect.left < containerRect.left - 0.5 || rect.right > containerRect.right + 0.5),
       };
@@ -267,11 +273,18 @@ test("narrow music layouts: toolbars wrap, playlist and library stay usable, sha
   await openMusicPlayer(page);
 
   const snapshots = await mediaToolbarLayoutSnapshot(page, "music");
+  const library = snapshots[0];
+  const playlistRows = snapshots.slice(1);
   expect(snapshots.every((snapshot) => !snapshot.missing)).toBe(true);
-  expect(snapshots.every((snapshot) => snapshot.scrollWidth <= snapshot.clientWidth + 1)).toBe(true);
+  expect(library.scrollWidth).toBeLessThanOrEqual(library.clientWidth + 1);
+  expect(library.buttonOutside).toBe(false);
   expect(snapshots.every((snapshot) => !snapshot.childrenOverlap)).toBe(true);
   expect(snapshots.every((snapshot) => !snapshot.buttonsOverlap)).toBe(true);
-  expect(snapshots.every((snapshot) => !snapshot.buttonOutside)).toBe(true);
+  expect(playlistRows.every((snapshot) => snapshot.overflowX === "auto")).toBe(true);
+  expect(playlistRows.every((snapshot) => snapshot.flexWrap === "nowrap")).toBe(true);
+  expect(playlistRows.every((snapshot) => !snapshot.buttonsClipped)).toBe(true);
+  expect(playlistRows.every((snapshot) => !snapshot.buttonFlexShrink)).toBe(true);
+  expect(snapshots[2].scrollWidth).toBeGreaterThan(snapshots[2].clientWidth);
   }
   // Phase: very narrow playlist keeps its list visible while action strips stay usable
   {
@@ -301,23 +314,48 @@ test("narrow music layouts: toolbars wrap, playlist and library stay usable, sha
     });
     return {
       boxes,
-      primaryLayout: getComputedStyle(document.querySelector(selectors.primary)).display,
-      actionStrip: (() => {
-        const element = document.querySelector(".music-playlist-toolbar-actions");
-        return {clientWidth: element.clientWidth, scrollWidth: element.scrollWidth};
+      primaryStrip: (() => {
+        const element = document.querySelector(selectors.primary);
+        const button = element.querySelector("button");
+        return {
+          clientWidth: element.clientWidth,
+          scrollWidth: element.scrollWidth,
+          overflowX: getComputedStyle(element).overflowX,
+          flexWrap: getComputedStyle(element).flexWrap,
+          buttonWidth: button.getBoundingClientRect().width,
+          buttonClipped: button.scrollWidth > button.clientWidth + 1,
+        };
       })(),
       secondaryStrip: (() => {
         const element = document.querySelector(selectors.secondary);
-        return {clientWidth: element.clientWidth, scrollWidth: element.scrollWidth};
+        const buttons = Array.from(element.querySelectorAll("button"));
+        return {
+          clientWidth: element.clientWidth,
+          scrollWidth: element.scrollWidth,
+          overflowX: getComputedStyle(element).overflowX,
+          flexWrap: getComputedStyle(element).flexWrap,
+          labels: buttons.map((button) => button.textContent.trim()),
+          buttonWidths: buttons.map((button) => button.getBoundingClientRect().width),
+          buttonsClipped: buttons.some((button) => button.scrollWidth > button.clientWidth + 1),
+        };
       })(),
     };
   });
-  expect(snapshot.primaryLayout).toBe("grid");
   expect(snapshot.boxes.list.height).toBeGreaterThan(100);
   expect(snapshot.boxes.list.top).toBeGreaterThanOrEqual(snapshot.boxes.table.top);
   expect(snapshot.boxes.secondary.bottom).toBeLessThanOrEqual(snapshot.boxes.table.top + 0.5);
-  expect(snapshot.actionStrip.scrollWidth).toBeGreaterThan(snapshot.actionStrip.clientWidth);
+  expect(snapshot.primaryStrip.overflowX).toBe("auto");
+  expect(snapshot.primaryStrip.flexWrap).toBe("nowrap");
+  expect(snapshot.primaryStrip.scrollWidth).toBeGreaterThan(snapshot.primaryStrip.clientWidth);
+  expect(snapshot.primaryStrip.buttonClipped).toBe(false);
+  expect(snapshot.primaryStrip.buttonWidth).toBeGreaterThan(40);
+  expect(snapshot.secondaryStrip.overflowX).toBe("auto");
+  expect(snapshot.secondaryStrip.flexWrap).toBe("nowrap");
   expect(snapshot.secondaryStrip.scrollWidth).toBeGreaterThan(snapshot.secondaryStrip.clientWidth);
+  expect(snapshot.secondaryStrip.buttonsClipped).toBe(false);
+  expect(snapshot.secondaryStrip.labels).toEqual([
+    "Save", "Playlists", "Rename", "Import", "Export", "Sync Pull", "Sync Push",
+  ]);
   }
   // Phase: narrow music library keeps rows horizontally scrollable with the player scrollbar style
   {
@@ -1286,12 +1324,12 @@ test("json import and music settings survive reload", async ({ page }) => {
     return value.split(/\s+/).map((part) => Number.parseFloat(part));
   });
   expect(appliedColumns).toHaveLength(4);
-  // Column floors are 16px (PLAN_MEDIA_SESSION), so fitting may scale every
-  // column below its saved width; only the floor and ordering are stable.
+  // Filename and path still fit into the pane. The reorder column keeps its
+  // saved width so the drag buttons do not scale.
   expect(appliedColumns[0]).toBeGreaterThanOrEqual(16);
   expect(appliedColumns[1]).toBeGreaterThan(appliedColumns[0]);
   expect(appliedColumns[2]).toBeGreaterThan(appliedColumns[1]);
-  expect(appliedColumns[3]).toBeGreaterThanOrEqual(16);
+  expect(appliedColumns[3]).toBe(56);
 
   // Load-dialog filter restored; sort UI still reflects last clicked last_modified
   await page.locator("#music-playlist-load").click();

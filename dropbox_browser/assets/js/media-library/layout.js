@@ -439,12 +439,21 @@ export function initLayout(ctx) {
     var completed = completePlaylistColumnWidths(
       Object.assign({}, playlistColumnWidths, widths || {})
     );
-    var normalized = fitColumnWidthsToTotal(
-      PLAYLIST_COLUMN_KEYS,
+    // The reorder column holds a fixed-size drag button. Fit the other
+    // columns into the space that remains so that button never scales.
+    var reorderWidth = completed.reorder;
+    var fittedFlexible = fitColumnWidthsToTotal(
+      ['index', 'filename', 'path'],
       completed,
-      playlistColumnAvailableWidth(),
+      Math.max(0, playlistColumnAvailableWidth() - reorderWidth),
       PLAYLIST_COLUMN_MIN_WIDTHS
     );
+    var normalized = {
+      index: fittedFlexible.index,
+      filename: fittedFlexible.filename,
+      path: fittedFlexible.path,
+      reorder: reorderWidth
+    };
     var totalWidth = PLAYLIST_COLUMN_KEYS.reduce(function (sum, key) {
       return sum + normalized[key];
     }, 0);

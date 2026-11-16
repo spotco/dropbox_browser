@@ -23,17 +23,17 @@
           <h2 id="music-playlist-title">Active Playlist:</h2>
           <span id="music-active-playlist-name" class="music-active-playlist-name" data-default-name="New Playlist">New Playlist</span>
         </div>
-        <div class="music-playlist-toolbar-group music-playlist-toolbar-actions" role="group" aria-label="Playlist recents, import and export">
+        <div class="music-playlist-toolbar-group music-playlist-toolbar-actions" role="group" aria-label="Recent playback">
           <button type="button" id="music-playlist-recent" aria-label="Show recent music playback">Recent</button>
-          <button type="button" id="music-playlist-import">Import</button>
-          <button type="button" id="music-playlist-export">Export</button>
         </div>
       </div>
       <div id="music-playlist-controls" class="music-playlist-toolbar music-playlist-toolbar-secondary">
-        <div class="music-playlist-toolbar-group" role="group" aria-label="Playlist save, load, and sync">
+        <div class="music-playlist-toolbar-group" role="group" aria-label="Playlist save, load, import, export, and sync">
           <button type="button" id="music-playlist-save" disabled>Save</button>
           <button type="button" id="music-playlist-load">Playlists</button>
           <button type="button" id="music-playlist-rename">Rename</button>
+          <button type="button" id="music-playlist-import">Import</button>
+          <button type="button" id="music-playlist-export">Export</button>
           <button type="button" id="music-playlist-sync-pull" disabled>Sync Pull</button>
           <button type="button" id="music-playlist-sync-push" disabled>Sync Push</button>
         </div>
@@ -49,7 +49,7 @@
       <div id="music-playlist-table" class="music-playlist-table" role="table" aria-label="Active playlist">
         <div class="music-playlist-row music-playlist-heading" role="row">
           <div class="music-playlist-column-heading music-playlist-index-heading" role="columnheader">
-            <span>Index</span>
+            <span title="Index">#</span>
             <button type="button" class="music-playlist-column-resizer" data-music-playlist-column-resizer="index" aria-label="Resize index column"></button>
           </div>
           <div class="music-playlist-column-heading" role="columnheader">

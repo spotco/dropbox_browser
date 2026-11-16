@@ -496,7 +496,10 @@ class WebUiTests(AppTestCase):
         self.assertIn(
             'id="music-playlist-save" disabled>Save</button>\n'
             '          <button type="button" id="music-playlist-load">Playlists</button>\n'
-            '          <button type="button" id="music-playlist-rename">Rename</button>',
+            '          <button type="button" id="music-playlist-rename">Rename</button>\n'
+            '          <button type="button" id="music-playlist-import">Import</button>\n'
+            '          <button type="button" id="music-playlist-export">Export</button>\n'
+            '          <button type="button" id="music-playlist-sync-pull" disabled>Sync Pull</button>',
             html,
         )
         self.assertIn('id="music-playlist-save"', html)
@@ -586,7 +589,7 @@ class WebUiTests(AppTestCase):
         self.assertIn('<span>Add to Playlist</span>', html)
         self.assertIn('<span>Play</span>', html)
         self.assertIn('data-action="select-all"', html)
-        self.assertIn('<span>Index</span>', html)
+        self.assertIn('<span title="Index">#</span>', html)
         self.assertIn('<span>Absolute Path</span>', html)
         self.assertIn('class="music-playlist-column-resizer" data-music-playlist-column-resizer="index"', html)
         self.assertIn('class="music-playlist-column-resizer" data-music-playlist-column-resizer="filename"', html)

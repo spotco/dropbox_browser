@@ -226,6 +226,7 @@
 .music-playlist-list,
 .music-playback-pane,
 .music-library-toolbar,
+.music-playlist-toolbar-primary,
 .music-playlist-toolbar-actions,
 .music-playlist-toolbar-save,
 .music-playlist-toolbar-secondary {
@@ -241,6 +242,7 @@
 .music-playlist-list::-webkit-scrollbar,
 .music-playback-pane::-webkit-scrollbar,
 .music-library-toolbar::-webkit-scrollbar,
+.music-playlist-toolbar-primary::-webkit-scrollbar,
 .music-playlist-toolbar-actions::-webkit-scrollbar,
 .music-playlist-toolbar-save::-webkit-scrollbar,
 .music-playlist-toolbar-secondary::-webkit-scrollbar {
@@ -252,6 +254,7 @@
 .music-playlist-list::-webkit-scrollbar-track,
 .music-playback-pane::-webkit-scrollbar-track,
 .music-library-toolbar::-webkit-scrollbar-track,
+.music-playlist-toolbar-primary::-webkit-scrollbar-track,
 .music-playlist-toolbar-actions::-webkit-scrollbar-track,
 .music-playlist-toolbar-save::-webkit-scrollbar-track,
 .music-playlist-toolbar-secondary::-webkit-scrollbar-track {
@@ -262,6 +265,7 @@
 .music-playlist-list::-webkit-scrollbar-thumb,
 .music-playback-pane::-webkit-scrollbar-thumb,
 .music-library-toolbar::-webkit-scrollbar-thumb,
+.music-playlist-toolbar-primary::-webkit-scrollbar-thumb,
 .music-playlist-toolbar-actions::-webkit-scrollbar-thumb,
 .music-playlist-toolbar-save::-webkit-scrollbar-thumb,
 .music-playlist-toolbar-secondary::-webkit-scrollbar-thumb {
@@ -274,6 +278,7 @@
 .music-playlist-list::-webkit-scrollbar-thumb:hover,
 .music-playback-pane::-webkit-scrollbar-thumb:hover,
 .music-library-toolbar::-webkit-scrollbar-thumb:hover,
+.music-playlist-toolbar-primary::-webkit-scrollbar-thumb:hover,
 .music-playlist-toolbar-actions::-webkit-scrollbar-thumb:hover,
 .music-playlist-toolbar-save::-webkit-scrollbar-thumb:hover,
 .music-playlist-toolbar-secondary::-webkit-scrollbar-thumb:hover {
@@ -284,6 +289,7 @@
 .music-playlist-list::-webkit-scrollbar-corner,
 .music-playback-pane::-webkit-scrollbar-corner,
 .music-library-toolbar::-webkit-scrollbar-corner,
+.music-playlist-toolbar-primary::-webkit-scrollbar-corner,
 .music-playlist-toolbar-actions::-webkit-scrollbar-corner,
 .music-playlist-toolbar-save::-webkit-scrollbar-corner,
 .music-playlist-toolbar-secondary::-webkit-scrollbar-corner {
@@ -386,12 +392,14 @@
   border-bottom: 1px solid #26374b;
   display: flex;
   flex: 0 0 auto;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px;
   justify-content: space-between;
   max-width: 100%;
   min-height: 38px;
   min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior: contain;
   padding: 6px 8px;
 }
 
@@ -406,16 +414,16 @@
 .music-playlist-toolbar-group {
   align-items: center;
   display: flex;
-  flex-wrap: wrap;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
   gap: 6px;
-  max-width: 100%;
-  min-width: 0;
+  min-width: max-content;
 }
 
 .music-playlist-toolbar-title {
-  flex: 1 1 120px;
+  flex: 0 0 auto;
   color: #d7e4ef;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 4px;
 }
 
@@ -435,15 +443,13 @@
 
 .music-playlist-toolbar-actions,
 .music-playlist-toolbar-save {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   margin-left: auto;
 }
 
 .music-playlist-toolbar button {
-  max-width: 100%;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: 0 0 auto;
+  max-width: none;
 }
 
 .music-playlist-save-toast {
@@ -931,6 +937,11 @@
   overflow: visible;
 }
 
+.music-playlist-entry > .music-playlist-handle-cell {
+  min-width: 24px;
+  overflow: visible;
+}
+
 /* button. class keeps specificity above any host button base that includes
    the type selector (e.g. #video-player-pane .music-subpane button). */
 #music-player-pane button.music-playlist-column-resizer,
@@ -1000,7 +1011,8 @@ body.music-playlist-column-resizing {
   user-select: none;
 }
 
-.music-playlist-drag-handle {
+#music-player-pane button.music-playlist-drag-handle,
+#video-player-pane button.music-playlist-drag-handle {
   align-items: center;
   background: transparent;
   border: 0;
@@ -1008,28 +1020,36 @@ body.music-playlist-column-resizing {
   color: #89a2ba;
   cursor: grab;
   display: inline-flex;
+  flex: 0 0 auto;
   height: 24px;
   justify-content: center;
+  max-width: none;
   min-height: 24px;
   min-width: 24px;
   padding: 0;
   touch-action: none;
   transition: background-color 120ms ease, color 120ms ease, opacity 120ms ease;
+  width: 24px;
 }
 
-.music-playlist-drag-handle:hover,
-.music-playlist-drag-handle:focus-visible,
-.music-playlist-drag-handle.dragging {
+#music-player-pane button.music-playlist-drag-handle:hover,
+#music-player-pane button.music-playlist-drag-handle:focus-visible,
+#music-player-pane button.music-playlist-drag-handle.dragging,
+#video-player-pane button.music-playlist-drag-handle:hover,
+#video-player-pane button.music-playlist-drag-handle:focus-visible,
+#video-player-pane button.music-playlist-drag-handle.dragging {
   background: rgba(120, 174, 224, 0.14);
   border: 0;
   color: #dbeaf7;
 }
 
-.music-playlist-drag-handle.dragging {
+#music-player-pane button.music-playlist-drag-handle.dragging,
+#video-player-pane button.music-playlist-drag-handle.dragging {
   cursor: grabbing;
 }
 
-.music-playlist-drag-handle:focus-visible {
+#music-player-pane button.music-playlist-drag-handle:focus-visible,
+#video-player-pane button.music-playlist-drag-handle:focus-visible {
   outline: 1px solid #72a3c8;
   outline-offset: 1px;
 }
@@ -1284,9 +1304,8 @@ body.music-playlist-column-resizing {
   }
 }
 
-/* A narrow playlist pane cannot fit every action button beside its title.
-   Keep the title and action strips compact, then let the action strips scroll
-   horizontally instead of consuming the playlist's vertical list space. */
+/* A narrow playlist pane keeps both action rows on one line. Buttons stay at
+   their normal size and the row scrolls once they no longer fit. */
 @container music-playlist (max-width: 300px) {
   .music-playlist-toolbar {
     align-items: stretch;
@@ -1294,46 +1313,8 @@ body.music-playlist-column-resizing {
     padding: 4px 6px;
   }
 
-  .music-playlist-toolbar-primary {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    justify-content: stretch;
-  }
-
   .music-playlist-toolbar-title {
-    flex: 0 0 auto;
-    flex-wrap: nowrap;
     min-height: 28px;
-  }
-
-  .music-playlist-toolbar-actions,
-  .music-playlist-toolbar-save {
-    flex: 0 0 auto;
-    margin-left: 0;
-    max-width: 100%;
-    flex-wrap: nowrap;
-    min-width: 0;
-    overflow-x: auto;
-    padding-bottom: 2px;
-  }
-
-  .music-playlist-toolbar-actions button,
-  .music-playlist-toolbar-save button {
-    flex: 0 0 auto;
-  }
-
-  .music-playlist-toolbar-secondary {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-  }
-
-  .music-playlist-toolbar-secondary > .music-playlist-toolbar-group {
-    flex: 0 0 auto;
-    flex-wrap: nowrap;
-  }
-
-  .music-playlist-toolbar-secondary .music-playlist-toolbar-save {
-    flex: 0 0 auto;
   }
 }
 
